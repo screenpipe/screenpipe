@@ -1,0 +1,11 @@
+warning: function `admission_for_model` is never used
+  --> crates/screenpipe-core/src/workflows/pipeline.rs:47:4
+   |
+47 | fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
+   |    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-core` (lib) generated 1 warning
+   Compiling screenpipe-screen v0.4.53 (/home/ubuntu/redaction/source/crates/screenpipe-screen)
+    Finished `release` profile [optimized] target(s) in 1m 41s

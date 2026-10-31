@@ -1,0 +1,26 @@
+{
+  "native_exit": 0,
+  "distinct_allowed_targets": 12,
+  "accepted": 61,
+  "withheld": 9,
+  "leaked": 0,
+  "dimensions": [
+    "1024x768"
+  ],
+  "before": {
+    "rss": 2387968,
+    "handles": 52
+  },
+  "during_peak": {
+    "rss": 40755200.0,
+    "handles": 292.0
+  },
+  "recovery_last": {
+    "rss": 33439744,
+    "handles": 285
+  },
+  "unrecovered_rss_bytes": 31051776,
+  "unrecovered_handles": 233,
+  "closed_log_count": 0,
+  "eviction_log_count": 0
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "mode": "exclude",
+    "exit": 0,
+    "saved": 1800,
+    "rejected": 0,
+    "warmup": 20,
+    "median_ms": 105.95114650000001,
+    "p95_ms": 116.137959,
+    "wall_s": 439.30150075
+  }
+]

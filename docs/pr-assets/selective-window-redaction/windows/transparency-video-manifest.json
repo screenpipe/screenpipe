@@ -1,0 +1,25 @@
+{
+  "source": "outputs/redaction-validation/windows/guard-correctness/native-source.mp4",
+  "source_sha256": "e1e781f971513ea1afc7da53e859d334b0e278bff11c73327619b2e671189341",
+  "output": "outputs/redaction-validation/windows/videos/transparency-review.mp4",
+  "profile": "debug-dev; correctness evidence only, not performance",
+  "native_start_utc": "2026-10-31T02:09:21.776522+00:00",
+  "segments": [
+    {
+      "case": "alpha-a",
+      "source_offset_seconds": 591.223478,
+      "duration_seconds": 7.5,
+      "sample": "outputs/redaction-validation/windows/guard-correctness/alpha-a/snapshots/2026-10-31/1793413158756_m65537.jpg",
+      "caption": "Excluded background: magenta | Allowed foreground: 50% opacity"
+    },
+    {
+      "case": "alpha-b",
+      "source_offset_seconds": 604.223478,
+      "duration_seconds": 5.0,
+      "sample": "outputs/redaction-validation/windows/guard-correctness/alpha-b/snapshots/2026-10-31/1793413169233_m65537.jpg",
+      "caption": "Excluded background: red | Filtered pixels stay identical"
+    }
+  ],
+  "narration": "Windows is on the left. Stored screenshots are on the right. The excluded window changes from magenta to red. The saved foreground stays identical, with its correct transparency over black.",
+  "edits": "Two excerpts from native console recording, normal playback speed. Actual stored JPEG samples alongside. Unrelated setup/build time omitted. Narration and concise case captions added."
+}

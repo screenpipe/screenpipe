@@ -18,9 +18,11 @@ mod windows_harness {
             System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-                LoadCursorW, RegisterClassW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-                IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
-                WM_PAINT, WM_PRINT, WM_PRINTCLIENT, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                LoadCursorW, RegisterClassW, SetLayeredWindowAttributes, ShowWindow,
+                TranslateMessage, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, LWA_ALPHA, MSG, SW_MAXIMIZE,
+                SW_SHOW, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_PAINT, WM_PRINT,
+                WM_PRINTCLIENT, WNDCLASSW, WS_EX_LAYERED, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WS_VISIBLE,
             },
         },
     };
@@ -51,14 +53,14 @@ mod windows_harness {
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut paint);
-                let color = if windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                let state = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
                     hwnd,
                     WINDOW_LONG_PTR_INDEX(0),
-                ) == 1
-                {
-                    BLOCKED
-                } else {
-                    ALLOWED
+                );
+                let color = match state {
+                    1 => BLOCKED,
+                    2 => COLORREF(0x0000_00ff),
+                    _ => ALLOWED,
                 };
                 let brush = CreateSolidBrush(color);
                 FillRect(dc, &paint.rcPaint, brush);
@@ -69,14 +71,14 @@ mod windows_harness {
             WM_PRINT | WM_PRINTCLIENT => {
                 let mut client = RECT::default();
                 let _ = GetClientRect(hwnd, &mut client);
-                let color = if windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                let state = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
                     hwnd,
                     WINDOW_LONG_PTR_INDEX(0),
-                ) == 1
-                {
-                    BLOCKED
-                } else {
-                    ALLOWED
+                );
+                let color = match state {
+                    1 => BLOCKED,
+                    2 => COLORREF(0x0000_00ff),
+                    _ => ALLOWED,
                 };
                 let brush = CreateSolidBrush(color);
                 FillRect(HDC(wparam.0 as *mut _), &client, brush);
@@ -88,8 +90,9 @@ mod windows_harness {
         }
     }
 
-    pub fn run_window(blocked: bool, x: i32, y: i32) -> Result<()> {
+    pub fn run_window(kind: &str, x: i32, y: i32) -> Result<()> {
         unsafe {
+            let blocked = matches!(kind, "blocked" | "blocked-red" | "churn");
             let module = GetModuleHandleW(None).unwrap_or_default();
             let class_name = if blocked {
                 w!("PrivacyBlockedFixture")
@@ -106,17 +109,29 @@ mod windows_harness {
                 ..Default::default()
             };
             let _ = RegisterClassW(&class);
-            let title = if blocked {
+            let title = if kind == "blank" {
+                ""
+            } else if blocked {
                 "PrivacyBlocked"
             } else {
                 "PrivacyAllowed"
             };
             let title_wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+            let ex_style = if kind == "transparent" {
+                WS_EX_LAYERED
+            } else {
+                WINDOW_EX_STYLE::default()
+            };
+            let style = if kind == "borderless" || kind == "transparent" {
+                WS_POPUP | WS_VISIBLE
+            } else {
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE
+            };
             let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                ex_style,
                 class_name,
                 windows::core::PCWSTR(title_wide.as_ptr()),
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                style,
                 x,
                 y,
                 520,
@@ -130,10 +145,20 @@ mod windows_harness {
             windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
                 hwnd,
                 WINDOW_LONG_PTR_INDEX(0),
-                isize::from(blocked),
+                if kind == "blocked-red" {
+                    2
+                } else {
+                    isize::from(blocked)
+                },
             );
+            if kind == "transparent" {
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 128, LWA_ALPHA);
+            }
             let _ = ShowWindow(hwnd, SW_SHOW);
-            if blocked {
+            if kind == "maximized" {
+                let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+            if kind == "churn" {
                 let raw = hwnd.0 as usize;
                 thread::spawn(move || loop {
                     // Keep the synthetic fixture above the test runner while
@@ -168,10 +193,22 @@ mod windows_harness {
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let kind = args.next().ok_or_else(|| {
-        anyhow::anyhow!("usage: windows_privacy_fixture <allowed|blocked> <x> <y>")
+        anyhow::anyhow!(
+            "usage: windows_privacy_fixture <allowed|blocked|blocked-red|blank|borderless|transparent|maximized|churn> <x> <y>"
+        )
     })?;
     anyhow::ensure!(
-        kind == "allowed" || kind == "blocked",
+        matches!(
+            kind.as_str(),
+            "allowed"
+                | "blocked"
+                | "blocked-red"
+                | "blank"
+                | "borderless"
+                | "transparent"
+                | "maximized"
+                | "churn"
+        ),
         "unknown fixture window"
     );
     let x = args
@@ -182,7 +219,7 @@ fn main() -> anyhow::Result<()> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("missing y"))?
         .parse()?;
-    windows_harness::run_window(kind == "blocked", x, y)
+    windows_harness::run_window(&kind, x, y)
 }
 
 #[cfg(not(target_os = "windows"))]

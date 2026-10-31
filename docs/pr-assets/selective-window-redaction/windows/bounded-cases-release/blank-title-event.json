@@ -1,0 +1,14 @@
+{
+  "name": "blank-title",
+  "mode": "blank",
+  "fixture_original_path": "C:\\spdev\\release\\examples\\windows_privacy_fixture.exe",
+  "fixture_sha256": "d7c139a907273624d8ec5c66755890818acc1452c58ed6d4057bff82eb9d1137",
+  "exit": 0,
+  "pids": [
+    7272,
+    6336,
+    4908,
+    8252,
+    8676
+  ]
+}

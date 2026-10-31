@@ -1,0 +1,12 @@
+{
+  "command": "cargo build -p screenpipe-screen --example screenshot_redaction_probe --release",
+  "native_exit": 0,
+  "profile": "release",
+  "cargo_target_dir": "C:\\spdev",
+  "commit": "3bb684b71567885bef406bfc3186f9da1c25a3af",
+  "probe_source_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+  "original_path": "C:\\spdev\\release\\examples\\screenshot_redaction_probe.exe",
+  "sha256": "da81306a9cd9d3955a56d41f83544ecec30f7eeaa2534a1e82b05bf68a90e64c",
+  "copied_sha256": "da81306a9cd9d3955a56d41f83544ecec30f7eeaa2534a1e82b05bf68a90e64c",
+  "build_timestamp_utc": "2026-10-31T02:39:59.0505415Z"
+}

@@ -1223,8 +1223,12 @@ pub(crate) async fn event_driven_capture_loop(
         {
             Ok(Ok(output)) => {
                 state.mark_captured();
-                if let Some(ref mut comparer) = frame_comparer {
-                    let _ = comparer.compare(&output.image);
+                if !capture_params.window_filters.has_window_patterns()
+                    && !capture_params.window_filters.has_url_allowlist()
+                {
+                    if let Some(ref mut comparer) = frame_comparer {
+                        let _ = comparer.compare(&output.image);
+                    }
                 }
                 if let Some(ref result) = output.result {
                     last_content_hash = result.content_hash;
@@ -2137,11 +2141,16 @@ pub(crate) async fn event_driven_capture_loop(
                             consecutive_capture_errors = 0;
                         }
 
-                        // Feed the captured frame to comparer so we don't
-                        // re-trigger on the same visual state (reuses capture
-                        // image — no extra screenshot needed)
-                        if let Some(ref mut comparer) = frame_comparer {
-                            let _ = comparer.compare(&output.image);
+                        // The visual probe observes the display stream. A
+                        // redacted capture is a different image of a static
+                        // desktop; seeding it here would retrigger capture on
+                        // every probe. Let probes maintain their own reference.
+                        if !capture_params.window_filters.has_window_patterns()
+                            && !capture_params.window_filters.has_url_allowlist()
+                        {
+                            if let Some(ref mut comparer) = frame_comparer {
+                                let _ = comparer.compare(&output.image);
+                            }
                         }
 
                         // Frozen-stream detection: a live persistent stream
@@ -3054,6 +3063,81 @@ fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
     )
 }
 
+/// Preserve the redacted desktop when only the focused window is filtered.
+/// URL, incognito, built-in exclusions and DRM retain their existing gates.
+fn permits_redacted_desktop_without_focus(
+    filters: &WindowFilters,
+    config: &screenpipe_a11y::tree::TreeWalkerConfig,
+    pixels_verified: bool,
+    pause_on_drm: bool,
+) -> bool {
+    pixels_verified
+        && filters.has_window_patterns()
+        && config.ignored_urls.is_empty()
+        && config.included_urls.is_empty()
+        && !pause_on_drm
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RedactedFocusDecision {
+    Continue,
+    PixelsOnly,
+    Withhold,
+}
+
+fn redacted_focus_decision(
+    filters: &WindowFilters,
+    focus: Option<screenpipe_a11y::tree::FocusedWindowFilterResult>,
+    pixels_only_permitted: bool,
+) -> RedactedFocusDecision {
+    use screenpipe_a11y::tree::FocusedWindowFilterResult;
+    match focus {
+        Some(FocusedWindowFilterResult::Allowed {
+            app_name,
+            window_name,
+        }) if !app_name.is_empty() => {
+            if filters.is_valid(&app_name, &window_name) {
+                RedactedFocusDecision::Continue
+            } else if pixels_only_permitted {
+                RedactedFocusDecision::PixelsOnly
+            } else {
+                RedactedFocusDecision::Withhold
+            }
+        }
+        // A rejected or unavailable focus check must not fall through to the
+        // unknown-monitor OCR path, which has no focused metadata to gate.
+        _ => RedactedFocusDecision::Withhold,
+    }
+}
+
+async fn redacted_focus_check(
+    filters: &WindowFilters,
+    mut config: screenpipe_a11y::tree::TreeWalkerConfig,
+    pixels_only_permitted: bool,
+) -> RedactedFocusDecision {
+    // Retain a permit inside the blocking call even after timeout, so a stuck
+    // native metadata query cannot accumulate unbounded background workers.
+    static QUERY: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    let Ok(permit) = QUERY
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone()
+        .try_acquire_owned()
+    else {
+        return RedactedFocusDecision::Withhold;
+    };
+    config.ignored_windows.clear();
+    config.included_windows.clear();
+    let query = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        screenpipe_a11y::tree::check_focused_window_filters(config)
+    });
+    let focus = match tokio::time::timeout(Duration::from_millis(250), query).await {
+        Ok(Ok(Ok(focus))) => Some(focus),
+        _ => None,
+    };
+    redacted_focus_decision(filters, focus, pixels_only_permitted)
+}
+
 /// Perform a single event-driven capture.
 ///
 /// When `previous_content_hash` is `Some` and matches the current accessibility
@@ -3200,7 +3284,10 @@ async fn do_capture(
     // (prevents re-triggering on the same bad frame). The caller records the
     // matching telemetry counter from `corrupt`.
     if !screenshot_disabled && !skip_pixels_for_unknown_exclusions {
-        if let Some(kind) = frame_corruption(&image) {
+        if let Some(kind) = frame_corruption_with_privacy_padding(
+            &image,
+            params.window_filters.has_window_patterns(),
+        ) {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
                 // shows up in shared logs. Black is common (DRM / excluded window).
@@ -3220,6 +3307,76 @@ async fn do_capture(
                 corrupt: Some(kind),
             });
         }
+    }
+
+    // The native compositor has already removed every excluded window. An
+    // excluded focused window must not discard the other allowed windows.
+    // Persist only verified pixels: no focused identity, AX, OCR, URL, document
+    // path or reused element reference can escape through this narrow path.
+    let verified_filtered_pixels = !screenshot_disabled
+        && !skip_pixels_for_unknown_exclusions
+        && params.window_filters.has_window_patterns();
+    let focus_decision = if verified_filtered_pixels {
+        redacted_focus_check(
+            &params.window_filters,
+            params.tree_walker_config.clone(),
+            permits_redacted_desktop_without_focus(
+                &params.window_filters,
+                params.tree_walker_config,
+                true,
+                params.pause_on_drm_content,
+            ),
+        )
+        .await
+    } else {
+        RedactedFocusDecision::Continue
+    };
+    if focus_decision == RedactedFocusDecision::Withhold {
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+            corrupt: None,
+        });
+    }
+    if focus_decision == RedactedFocusDecision::PixelsOnly {
+        let _ = params
+            .tree_walker
+            .suspend_with_timeout(Duration::from_millis(250))
+            .await;
+        let ctx = CaptureContext {
+            db: params.db,
+            snapshot_writer: params.snapshot_writer,
+            image: Arc::new(image),
+            captured_at,
+            monitor_id: params.monitor_id,
+            device_name: params.device_name,
+            app_name: None,
+            window_name: None,
+            browser_url: None,
+            document_path: None,
+            focused: false,
+            capture_trigger: trigger.as_str(),
+            use_pii_removal: params.use_pii_removal,
+            languages: params.languages.to_vec(),
+            elements_ref_frame_id: None,
+            screenshot_disabled: false,
+            in_meeting,
+            monitor_hosts_focus: false,
+            ax_screenshot_coherent: false,
+            focused_window_bounds: None,
+        };
+        let result = paired_capture_deferred(&ctx).await?;
+        if let Some(sender) = params.semantic_tx {
+            sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
+        }
+        let image = Arc::try_unwrap(ctx.image).unwrap_or_else(|arc| (*arc).clone());
+        return Ok(CaptureOutput {
+            result: Some(result),
+            image,
+            elements_deduped: false,
+            corrupt: None,
+        });
     }
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
@@ -4162,6 +4319,26 @@ fn frame_corruption(image: &image::DynamicImage) -> Option<CorruptKind> {
     }
 }
 
+/// Privacy composition intentionally paints excluded surfaces black. A small
+/// allowed foreground window must still be durably recorded even when it
+/// occupies less than the corruption sampler's five-percent threshold.
+fn frame_corruption_with_privacy_padding(
+    image: &image::DynamicImage,
+    isolated_windows: bool,
+) -> Option<CorruptKind> {
+    let kind = frame_corruption(image)?;
+    if isolated_windows && matches!(kind, CorruptKind::Black) {
+        use image::GenericImageView;
+        if image
+            .pixels()
+            .any(|(_, _, p)| u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) >= 15)
+        {
+            return None;
+        }
+    }
+    Some(kind)
+}
+
 /// Convenience predicate used by tests.
 #[cfg(test)]
 fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
@@ -4171,6 +4348,70 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redacted_focus_rejections_cannot_fall_through_unknown_monitor_capture() {
+        use screenpipe_a11y::tree::{FocusedWindowFilterResult as Focus, SkipReason};
+        let filters = WindowFilters::new(&["PrivacyBlocked".into()], &[], &[]);
+        let allowed = |title: &str| {
+            Some(Focus::Allowed {
+                app_name: "Fixture".into(),
+                window_name: title.into(),
+            })
+        };
+        assert_eq!(
+            redacted_focus_decision(&filters, allowed("PrivacyAllowed"), true),
+            RedactedFocusDecision::Continue
+        );
+        assert_eq!(
+            redacted_focus_decision(&filters, allowed("PrivacyBlocked"), true),
+            RedactedFocusDecision::PixelsOnly
+        );
+        // URL/DRM policies cannot use the pixels-only exception.
+        assert_eq!(
+            redacted_focus_decision(&filters, allowed("PrivacyBlocked"), false),
+            RedactedFocusDecision::Withhold
+        );
+        for focus in [
+            None,
+            Some(Focus::NotFound),
+            Some(Focus::Skipped(SkipReason::Incognito)),
+            Some(Focus::Skipped(SkipReason::ExcludedApp)),
+        ] {
+            assert_eq!(
+                redacted_focus_decision(&filters, focus, true),
+                RedactedFocusDecision::Withhold
+            );
+        }
+    }
+
+    #[test]
+    fn redacted_desktop_requires_verified_pixels_and_window_only_policy() {
+        let filters = WindowFilters::new(&["PrivacyBlocked".into()], &[], &[]);
+        let empty = WindowFilters::new(&[], &[], &[]);
+        let mut config = screenpipe_a11y::tree::TreeWalkerConfig::default();
+        assert!(permits_redacted_desktop_without_focus(
+            &filters, &config, true, false
+        ));
+        assert!(!permits_redacted_desktop_without_focus(
+            &filters, &config, false, false
+        ));
+        assert!(!permits_redacted_desktop_without_focus(
+            &filters, &config, true, true
+        ));
+        assert!(!permits_redacted_desktop_without_focus(
+            &empty, &config, true, false
+        ));
+        config.ignored_urls = serde_json::from_str(r#"["private.example"]"#).unwrap();
+        assert!(!permits_redacted_desktop_without_focus(
+            &filters, &config, true, false
+        ));
+        config.ignored_urls.clear();
+        config.included_urls = serde_json::from_str(r#"[{"domain":"work.example"}]"#).unwrap();
+        assert!(!permits_redacted_desktop_without_focus(
+            &filters, &config, true, false
+        ));
+    }
 
     #[test]
     fn url_allowlist_masks_everything_outside_focused_window() {
@@ -5892,6 +6133,31 @@ mod tests {
         }
         let img = image::DynamicImage::ImageRgba8(buf);
         assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn privacy_redaction_preserves_small_allowed_foreground() {
+        let mut pixels = image::RgbaImage::from_pixel(1920, 1080, image::Rgba([0, 0, 0, 255]));
+        for y in 30..60 {
+            for x in 50..100 {
+                pixels.put_pixel(x, y, image::Rgba([200, 220, 230, 255]));
+            }
+        }
+        let image = image::DynamicImage::ImageRgba8(pixels);
+        assert_eq!(
+            frame_corruption_with_privacy_padding(&image, false),
+            Some(CorruptKind::Black)
+        );
+        assert_eq!(frame_corruption_with_privacy_padding(&image, true), None);
+        assert_eq!(
+            frame_corruption_with_privacy_padding(&solid(1920, 1080, [0, 0, 0]), true),
+            Some(CorruptKind::Black)
+        );
+        let green = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 150, 0]);
+        assert_eq!(
+            frame_corruption_with_privacy_padding(&green, true),
+            Some(CorruptKind::GreenBand)
+        );
     }
 
     #[test]

@@ -1,0 +1,98 @@
+{
+  "macos": {
+    "final_checks_passed": 17,
+    "stable_scene_cases": 16,
+    "attempts_per_stable_case": 12,
+    "simultaneous_multi_recorder": {
+      "passed": true,
+      "monitors": [
+        [
+          "monitor_1",
+          45
+        ],
+        [
+          "monitor_10",
+          22
+        ]
+      ],
+      "images": 65,
+      "marker_pixels": 0,
+      "all_images_useful": true,
+      "engine_source_sha256": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9"
+    },
+    "benchmarks_clean": [
+      {
+        "variant": "baseline",
+        "exit": 0,
+        "saved": 140,
+        "rejected": 0,
+        "marker_pixels": 0,
+        "warmup": 20,
+        "measured_frames": 120,
+        "median_ms": 66.674479,
+        "p95_ms": 69.085458,
+        "wall_s": 28.165175167000598
+      },
+      {
+        "variant": "candidate",
+        "exit": 0,
+        "saved": 140,
+        "rejected": 0,
+        "marker_pixels": 0,
+        "warmup": 20,
+        "measured_frames": 120,
+        "median_ms": 114.80658299999999,
+        "p95_ms": 122.038166,
+        "wall_s": 35.76393441699929
+      }
+    ]
+  },
+  "linux": {
+    "final_checks_passed": 17,
+    "stable_scene_cases": 16,
+    "attempts_per_stable_case": 12,
+    "simultaneous_multi_recorder": {
+      "passed": true,
+      "monitors": [
+        [
+          "monitor_78",
+          50
+        ],
+        [
+          "monitor_79",
+          50
+        ]
+      ],
+      "images": 101,
+      "marker_pixels": 0,
+      "all_images_useful": true,
+      "engine_source_sha256": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9"
+    },
+    "benchmarks_clean": [
+      {
+        "variant": "baseline",
+        "exit": 0,
+        "saved": 140,
+        "rejected": 0,
+        "marker_pixels": 0,
+        "warmup": 20,
+        "measured_frames": 120,
+        "median_ms": 13.247523,
+        "p95_ms": 15.830165000000001,
+        "wall_s": 25.80412214700027
+      },
+      {
+        "variant": "candidate",
+        "exit": 0,
+        "saved": 140,
+        "rejected": 0,
+        "marker_pixels": 0,
+        "warmup": 20,
+        "measured_frames": 120,
+        "median_ms": 39.355625,
+        "p95_ms": 41.949856000000004,
+        "wall_s": 29.855262303999552
+      }
+    ]
+  }
+}

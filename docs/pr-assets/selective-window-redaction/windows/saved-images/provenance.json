@@ -1,0 +1,44 @@
+[
+  {
+    "native_saved_path_suffix": "comparison-release/baseline-measured/snapshots/2026-10-31/1793414435475_m65537.jpg",
+    "sha256": "397f07a4891268f7a23454fc08e13246682b66d6f416d8bd219c7b142814de5b",
+    "role": "actual SnapshotWriter JPEG; unmodified bytes",
+    "path": "comparison-release/baseline-saved.jpg"
+  },
+  {
+    "native_saved_path_suffix": "comparison-release/candidate-measured/snapshots/2026-10-31/1793414525034_m65537.jpg",
+    "sha256": "efcd517d8276cac3f84d5d78532422439dc2314554e677ee39d49ce4cf73ebf5",
+    "role": "actual SnapshotWriter JPEG; unmodified bytes",
+    "path": "comparison-release/candidate-saved.jpg"
+  },
+  {
+    "native_saved_path_suffix": "bounded-cases-release/normal-five-window/snapshots/2026-10-31/1793414697621_m65537.jpg",
+    "sha256": "51bd31dcad46f80fd789c36b9757a2dfab158eec065f75cf04c9c51f79d813fb",
+    "role": "actual SnapshotWriter JPEG; unmodified bytes",
+    "path": "saved-images/normal-five-windows.jpg"
+  },
+  {
+    "native_saved_path_suffix": "alpha-ab-release-acceptance/a-filtered/snapshots/2026-10-31/1793414646967_m65537.jpg",
+    "sha256": "d69900988a2add51ddf77efb1d65a549a6956d62bdc6ded49c6a90ad805f9ab4",
+    "role": "actual SnapshotWriter JPEG; unmodified bytes",
+    "path": "saved-images/alpha-filtered.jpg"
+  },
+  {
+    "path": "saved-images/recorder-excluded-focus.jpg",
+    "native_saved_path_suffix": "final-engine-data/data/data/2026-10-31/1793416030132_m65537.jpg",
+    "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122",
+    "role": "actual recorder SnapshotWriter JPEG; unmodified bytes, SHA verified against native export"
+  },
+  {
+    "path": "saved-images/recorder-strict-include.jpg",
+    "native_saved_path_suffix": "strictinclude-engine-data/data/data/2026-10-31/1793416188873_m65537.jpg",
+    "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905",
+    "role": "actual recorder SnapshotWriter JPEG; unmodified bytes, SHA verified against native export"
+  },
+  {
+    "path": "saved-images/recorder-default-cadence.jpg",
+    "native_saved_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data\\data\\2026-10-31\\1793416846527_m65537.jpg",
+    "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b",
+    "role": "actual recorder SnapshotWriter JPEG; unmodified bytes, SHA verified against native export"
+  }
+]

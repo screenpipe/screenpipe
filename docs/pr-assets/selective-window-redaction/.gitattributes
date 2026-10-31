@@ -1,0 +1,2 @@
+*.png -filter -diff -merge
+*.mp4 -filter -diff -merge

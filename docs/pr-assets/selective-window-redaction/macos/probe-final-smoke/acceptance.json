@@ -1,0 +1,26 @@
+{
+  "probe_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+  "runtime_unchanged": true,
+  "build_exit": 0,
+  "binary_sha256": "bcc881400c02581b57b291d3ac2b85b50fd1ff0190834854a1cfef92ec139393",
+  "checks": [
+    {
+      "case": "exclude",
+      "exit": 0,
+      "passed": true,
+      "frames": 3
+    },
+    {
+      "case": "positive",
+      "exit": 0,
+      "passed": true,
+      "frames": 1
+    },
+    {
+      "case": "invalid",
+      "exit": 1,
+      "passed": true,
+      "frames": 0
+    }
+  ]
+}

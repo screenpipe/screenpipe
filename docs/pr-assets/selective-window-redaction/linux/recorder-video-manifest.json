@@ -1,0 +1,25 @@
+{
+  "source": "outputs/redaction-validation/linux/final-native/exclude/native-session.mp4",
+  "output": "outputs/redaction-validation/linux/videos/recorder-session-review.mp4",
+  "duration_seconds": 90.75,
+  "narration": "This is the real recorder on the native Linux X eleven guest. The desktop is on the left. A stored screenshot sample is on the right. First, an allowed window has focus. Then the excluded window has focus, and the rest of the desktop is still saved. Next, the incognito title triggers the stricter privacy gate, and no screenshot is stored. Finally, normal recording resumes. Captions identify each phase.",
+  "phases": [
+    {
+      "start": 0,
+      "case": "five"
+    },
+    {
+      "start": 32.33205842971802,
+      "case": "excluded_focus"
+    },
+    {
+      "start": 58.63225245475769,
+      "case": "incognito_focus"
+    },
+    {
+      "start": 74.87069821357727,
+      "case": "five"
+    }
+  ],
+  "edits": "Complete native source session retained on left; representative actual stored JPEG on right. No-snapshot phase shown explicitly. Narrated introduction and phase captions."
+}

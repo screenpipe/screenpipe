@@ -1,0 +1,117 @@
+warning: function `admission_for_model` is never used
+  --> crates/screenpipe-core/src/workflows/pipeline.rs:47:4
+   |
+47 | fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
+   |    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-core` (lib) generated 1 warning
+   Compiling screenpipe-engine v0.4.53 (/Users/louis/Documents/Codex/2026-10-30/cna-x20/work/screenpipe/crates/screenpipe-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+     Running unittests src/lib.rs (target/debug/deps/screenpipe_engine-3cdb747ff9466091)
+
+running 101 tests
+test event_driven_capture::tests::default_config_captures_key_and_clipboard_triggers ... ok
+test event_driven_capture::tests::capture_loop_silent_acceleration_starts_after_parking_and_survives_recovery ... ok
+test event_driven_capture::tests::checkpoint_gate_proceeds_on_floor_or_hd_active ... ok
+test event_driven_capture::tests::checkpoint_debounce_floor_is_independent_of_min_capture_interval ... ok
+test event_driven_capture::tests::high_fps_enter_then_exit_restores_baseline ... ok
+test event_driven_capture::tests::high_fps_baseline_change_when_idle_passes_through ... ok
+test event_driven_capture::tests::high_fps_baseline_change_during_override_persists_on_exit ... ok
+test event_driven_capture::tests::high_fps_power_profile_then_interval_change_then_exit ... ok
+test event_driven_capture::tests::high_fps_runtime_interval_change_while_active ... ok
+test event_driven_capture::tests::high_fps_no_change_returns_none ... ok
+test event_driven_capture::tests::capture_throttle_bypass_classification ... ok
+test event_driven_capture::tests::high_fps_redundant_calls_are_noops ... ok
+test event_driven_capture::tests::element_reference_cannot_cross_changed_text_or_scroll_geometry ... ok
+test event_driven_capture::tests::liveness_post_rebuild_seq_reset_is_healthy ... ok
+test event_driven_capture::tests::liveness_advance_resets_stall_clock ... ok
+test event_driven_capture::tests::blank_app_switch_queries_lightweight_focus ... ok
+test event_driven_capture::tests::lock_screen_app_detection_is_case_insensitive ... ok
+test event_driven_capture::tests::liveness_recovers_when_seq_flat_past_timeout ... ok
+test event_driven_capture::tests::meeting_caps_the_idle_capture_interval ... ok
+test event_driven_capture::tests::liveness_cooldown_prevents_thrash ... ok
+test event_driven_capture::tests::ascii_contains_matches_case_insensitively ... ok
+test event_driven_capture::tests::liveness_advancing_seq_never_recovers ... ok
+test event_driven_capture::tests::liveness_none_seq_never_recovers ... ok
+test event_driven_capture::tests::focus_cold_heartbeat_seed_requires_exact_token ... ok
+test event_driven_capture::tests::ocr_heavy_app_detection_is_case_insensitive ... ok
+test event_driven_capture::tests::power_profile_updates_idle_interval_without_a_pin ... ok
+test event_driven_capture::tests::capture_loop_silent_seed_requires_exact_token ... ok
+test event_driven_capture::tests::named_app_switch_keeps_fast_paths ... ok
+test event_driven_capture::tests::blank_app_switch_uses_recovered_metadata_without_tree ... ok
+test event_driven_capture::tests::non_focus_trigger_after_boundary_still_settles_windows_surface ... ok
+test event_driven_capture::tests::blank_app_switch_uses_recovered_app_for_pre_walk_gates ... ok
+test event_driven_capture::tests::hard_vs_soft_checkpoint_trigger_split ... ok
+test event_driven_capture::tests::defer_checkpoint_keeps_latest_trigger_and_accumulates_corr_ids ... ok
+test event_driven_capture::tests::capture_result_metrics_distinguish_hits_runs_and_noops ... ok
+test event_driven_capture::tests::incognito_setting_filters_resolved_title_when_tree_walk_is_unavailable ... ok
+test event_driven_capture::tests::resolve_capture_metadata_keeps_tree_values_when_lightweight_is_fallback_only ... ok
+test event_driven_capture::tests::resolve_capture_metadata_normalizes_blank_tree_values_without_lightweight_metadata ... ok
+test event_driven_capture::tests::resolve_capture_metadata_drops_stale_window_context_on_app_switch ... ok
+test event_driven_capture::tests::resolve_capture_metadata_normalizes_window_focus_trigger_title ... ok
+test event_driven_capture::tests::resolve_capture_metadata_prefers_lightweight_metadata_over_stale_tree_values ... ok
+test event_driven_capture::tests::resolve_capture_metadata_prefers_window_focus_trigger_title ... ok
+test event_driven_capture::tests::resolve_capture_metadata_uses_lightweight_metadata_when_tree_values_are_blank ... ok
+test event_driven_capture::tests::aggregate_and_per_monitor_liveness_advance_together ... ok
+test event_driven_capture::tests::reduce_drained_scroll_stop_message_collects_all_corr_ids ... ok
+test event_driven_capture::tests::resolve_capture_metadata_uses_lightweight_app_and_window_without_tree ... ok
+test event_driven_capture::tests::should_release_only_on_pause_entry_edge ... ok
+test event_driven_capture::tests::reduce_drained_clipboard_checkpoint_wins_even_when_legacy_gate_off ... ok
+test event_driven_capture::tests::reduce_drained_picks_latest_checkpoint_and_collects_corr_ids ... ok
+test event_driven_capture::tests::reduce_drained_keeps_checkpoint_over_trailing_click ... ok
+test event_driven_capture::tests::reduce_drained_keypress_checkpoint_wins_even_when_legacy_gate_off ... ok
+test event_driven_capture::tests::should_suspend_accessibility_only_on_focus_away_edge ... ok
+test event_driven_capture::tests::reduce_drained_latest_checkpoint_wins_among_checkpoints ... ok
+test event_driven_capture::tests::reduce_drained_gates_off_pass_through ... ok
+test event_driven_capture::tests::surface_transitions_request_current_pixels_without_raising_polling_cost ... ok
+test event_driven_capture::tests::reduce_drained_legacy_gates_do_not_skip_key_or_clipboard ... ok
+test event_driven_capture::tests::reduce_drained_scroll_stop_survives_a_capped_burst_batch ... ok
+test event_driven_capture::tests::test_capture_trigger_as_str ... ok
+test event_driven_capture::tests::test_debounce ... ok
+test event_driven_capture::tests::test_dedup_applies ... ok
+test event_driven_capture::tests::test_default_config ... ok
+test event_driven_capture::tests::test_empty_image_detected ... ok
+test event_driven_capture::tests::test_garbage_green_predicate ... ok
+test event_driven_capture::tests::resolved_incognito_fallback_respects_toggle_and_preserves_other_filters ... ok
+test event_driven_capture::tests::test_idle_capture_detection ... ok
+test event_driven_capture::tests::test_mark_captured_resets_timer ... ok
+test event_driven_capture::tests::redacted_focus_rejections_cannot_fall_through_unknown_monitor_capture ... ok
+test event_driven_capture::tests::test_all_black_frame_detected ... ok
+test event_driven_capture::tests::test_frame_with_visible_menubar_not_skipped ... ok
+test event_driven_capture::tests::test_pure_black_with_single_bright_pixel_still_black ... ok
+test event_driven_capture::tests::redacted_desktop_requires_verified_pixels_and_window_only_policy ... ok
+test event_driven_capture::tests::test_broadcast_multiple_receivers ... ok
+test event_driven_capture::tests::test_tiny_frame_not_green_corrupt ... ok
+test event_driven_capture::tests::capture_timeout_returns_elapsed_for_stuck_future ... ok
+test event_driven_capture::tests::test_trigger_channel ... ok
+test event_driven_capture::tests::test_trigger_receiver_recv_async ... ok
+test event_driven_capture::tests::url_allowlist_drops_stale_url_on_window_focus_race ... ok
+test event_driven_capture::tests::url_allowlist_masks_everything_outside_focused_window ... ok
+test event_driven_capture::tests::url_allowlist_rejects_invalid_focused_window_bounds ... ok
+test event_driven_capture::tests::user_idle_pin_survives_power_profile_change ... ok
+test event_driven_capture::tests::visual_check_keeps_existing_trigger_gate ... ok
+test event_driven_capture::tests::visual_check_runs_after_keyboard_activity_is_quiet ... ok
+test event_driven_capture::tests::visual_check_skips_while_keyboard_activity_is_recent ... ok
+test event_driven_capture::tests::warm_visual_wait_duration_tracks_remaining_cadence_with_backstop ... ok
+test event_driven_capture::tests::workflow_checkpoint_trigger_classification ... ok
+test event_driven_capture::tests::test_rgba_frame_sampled_correctly ... ok
+test event_driven_capture::tests::test_bottom_green_band_quarter_height_is_corrupt ... ok
+test event_driven_capture::tests::test_bottom_green_band_over_content_is_corrupt ... ok
+test event_driven_capture::tests::test_full_frame_green_not_flagged ... ok
+test event_driven_capture::tests::test_black_frame_is_corrupt ... ok
+test event_driven_capture::tests::test_dark_mode_not_corrupt ... ok
+test event_driven_capture::tests::test_normal_content_not_corrupt ... ok
+test event_driven_capture::tests::test_high_truncation_leaves_thin_top_content_still_corrupt ... ok
+test event_driven_capture::tests::test_drm_black_region_with_content_kept ... ok
+test event_driven_capture::tests::test_dark_mode_app_not_falsely_detected ... ok
+test event_driven_capture::tests::test_thin_green_dock_not_corrupt ... ok
+test event_driven_capture::tests::test_top_green_banner_not_corrupt ... ok
+test event_driven_capture::tests::test_normal_frame_not_detected ... ok
+test event_driven_capture::tests::test_textured_green_bottom_not_corrupt ... ok
+test event_driven_capture::tests::test_drm_fullscreen_black_skipped ... ok
+test event_driven_capture::tests::privacy_redaction_preserves_small_allowed_foreground ... ok
+test event_driven_capture::tests::frame_corruption_reports_kind_for_telemetry ... ok
+
+test result: ok. 101 passed; 0 failed; 0 ignored; 0 measured; 1682 filtered out; finished in 0.13s

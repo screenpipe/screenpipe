@@ -1,0 +1,63 @@
+{
+  "source_commit": "24e1403044156e4c1d3462c773a9d8de47617818",
+  "base_commit": "8e973189af39415d808d76416a7505a9579b69bd",
+  "files_sha256": {
+    "crates/screenpipe-engine/src/event_driven_capture.rs": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9",
+    "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+    "crates/screenpipe-screen/examples/windows_privacy_fixture.rs": "cb2e4d18383bbab3cd3101fda5512e17638453d14c4991cfe0b8dfc3444d2bca",
+    "crates/screenpipe-screen/src/screenshot_privacy.rs": "8b36fbe11fe333ec4388cea11fb6e68f53fa222299725d82279af780a48e1fbd",
+    "crates/screenpipe-screen/src/screenshot_privacy/linux.rs": "c8efcb64c16b51db8708a70712e8efd41f3c7cb9411bd6dbda357c1d26f1b66b",
+    "crates/screenpipe-screen/src/screenshot_privacy/macos.rs": "65969f4666d8700ee87c947308c9ea332d9a0890482fa1542f47df58bf5d446e",
+    "crates/screenpipe-screen/src/screenshot_privacy/scene.rs": "96d1bb46115fb83aa2379a7eb5976dcc197350e92daf7a799385408821da9417",
+    "crates/screenpipe-screen/src/screenshot_privacy/windows.rs": "39e046222ddf19e354619d42adfcaae2cb7149f0b413edbc5745ceee80bd5b6d",
+    "crates/screenpipe-screen/src/wgc_capture.rs": "aae27ee016b32fe65f306e5b14391aa47f32c9b25f4ae694a08f38a4dd3e69ab"
+  },
+  "macos_linux_acceptance_runtime_unchanged": true,
+  "final_probe_native_smoke_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+  "windows_prebuild_hash_receipt": [
+    {
+      "path": "crates/screenpipe-screen/src/screenshot_privacy/windows.rs",
+      "sha256": "39e046222ddf19e354619d42adfcaae2cb7149f0b413edbc5745ceee80bd5b6d",
+      "bytes": 19383
+    },
+    {
+      "path": "crates/screenpipe-screen/src/wgc_capture.rs",
+      "sha256": "aae27ee016b32fe65f306e5b14391aa47f32c9b25f4ae694a08f38a4dd3e69ab",
+      "bytes": 45656
+    },
+    {
+      "path": "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs",
+      "sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+      "bytes": 5552
+    },
+    {
+      "path": "crates/screenpipe-screen/examples/windows_privacy_fixture.rs",
+      "sha256": "cb2e4d18383bbab3cd3101fda5512e17638453d14c4991cfe0b8dfc3444d2bca",
+      "bytes": 8098
+    }
+  ],
+  "windows_final_release_acceptance": {
+    "status": "passed within documented native scope",
+    "engine_sha256": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+    "stored_jpegs_fully_audited": 40,
+    "excluded_focus_rows_verified": 19,
+    "default_cadence_seconds": 63.636916,
+    "negative_policy_cases": 3,
+    "negative_jpegs_and_rows": 0,
+    "details": "windows/README.md"
+  },
+  "windows_final_engine_build": {
+    "command": "cargo build -p screenpipe-engine --bin screenpipe --release",
+    "native_exit": 0,
+    "profile": "release",
+    "cargo_target_dir": "C:\\spdev",
+    "source_commit": "f81db6d822445f0f91da1cef114ea7ec027561a7",
+    "parent_engine_sha256": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9",
+    "windows_sha256": "39e046222ddf19e354619d42adfcaae2cb7149f0b413edbc5745ceee80bd5b6d",
+    "wgc_sha256": "aae27ee016b32fe65f306e5b14391aa47f32c9b25f4ae694a08f38a4dd3e69ab",
+    "original_path": "C:\\spdev\\release\\screenpipe.exe",
+    "sha256": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+    "copied_sha256": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+    "build_timestamp_utc": "2026-10-31T03:06:42.9908231Z"
+  }
+}

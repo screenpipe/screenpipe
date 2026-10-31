@@ -1,0 +1,10 @@
+{
+  "crates/screenpipe-engine/src/event_driven_capture.rs": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9",
+  "crates/screenpipe-screen/src/screenshot_privacy.rs": "8b36fbe11fe333ec4388cea11fb6e68f53fa222299725d82279af780a48e1fbd",
+  "crates/screenpipe-screen/src/screenshot_privacy/linux.rs": "c8efcb64c16b51db8708a70712e8efd41f3c7cb9411bd6dbda357c1d26f1b66b",
+  "crates/screenpipe-screen/src/screenshot_privacy/macos.rs": "65969f4666d8700ee87c947308c9ea332d9a0890482fa1542f47df58bf5d446e",
+  "crates/screenpipe-screen/src/screenshot_privacy/scene.rs": "96d1bb46115fb83aa2379a7eb5976dcc197350e92daf7a799385408821da9417",
+  "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs": "e328116676046986c29e08012c5842ff85b20c0c8240ee19a23e57393fa4c35a",
+  "target/release/screenpipe": "0e61afd2718a109a49aab4c0b28fd52cb043c66be4a67f5f9f7bc4a1b1f9a601",
+  "target/release/examples/screenshot_redaction_probe": "6fb9518ad5573a07fb0f367f9ed60200138f625f893348125ad5cda6cb227e64"
+}

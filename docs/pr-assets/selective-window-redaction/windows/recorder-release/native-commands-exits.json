@@ -1,0 +1,33 @@
+{
+  "commands": [
+    {
+      "exit": 0,
+      "profile": "debug-dev correctness only",
+      "command": "cargo test -p screenpipe-screen --profile debug-dev screenshot_privacy::windows::tests -- --nocapture"
+    },
+    {
+      "exit": 0,
+      "profile": "release",
+      "command": "cargo build -p screenpipe-screen --example screenshot_redaction_probe --example windows_privacy_fixture --release"
+    },
+    {
+      "exit": 0,
+      "worktree": "3bb684b71567885bef406bfc3186f9da1c25a3af",
+      "command": "cargo build -p screenpipe-screen --example screenshot_redaction_probe --release",
+      "profile": "release"
+    },
+    {
+      "exit": 0,
+      "profile": "release",
+      "command": "cargo build -p screenpipe-engine --bin screenpipe --release"
+    },
+    {
+      "command": "SCREENPIPE_DATA_DIR=DATA_DIR screenpipe db check",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    }
+  ]
+}

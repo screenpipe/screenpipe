@@ -1,0 +1,18 @@
+{
+  "samples": 419,
+  "rss_mib_min": 166.09375,
+  "rss_mib_max": 208.171875,
+  "rss_mib_final": 202.046875,
+  "minute_medians_mib": [
+    189.66,
+    202.05,
+    202.12,
+    202.12,
+    202.12,
+    202.12,
+    202.12
+  ],
+  "final_cpu_percent_one_core": "19.9",
+  "final_cpu_time": "1:26.13",
+  "scope": "probe includes encode/write/decode; native compiler overlapped this memory-only extension"
+}

@@ -1,0 +1,93 @@
+   Compiling screenpipe-sqlite-coordinator v0.4.53 (C:\src\screenpipe\crates\screenpipe-sqlite-coordinator)
+warning: function `admission_for_model` is never used
+  --> crates\screenpipe-core\src\workflows\pipeline.rs:47:4
+   |
+47 | fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
+   |    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-core` (lib) generated 1 warning
+   Compiling screenpipe-screen v0.4.53 (C:\src\screenpipe\crates\screenpipe-screen)
+   Compiling screenpipe-a11y v0.1.0 (C:\src\screenpipe\crates\screenpipe-a11y)
+   Compiling screenpipe-secrets v0.1.0 (C:\src\screenpipe\crates\screenpipe-secrets)
+warning: method `capture_window_tree_bounded_semantic` is never used
+    --> crates\screenpipe-a11y\src\platform\windows_uia.rs:1146:19
+     |
+ 577 | impl UiaContext {
+     | --------------- method in this implementation
+...
+1146 |     pub(crate) fn capture_window_tree_bounded_semantic(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-a11y` (lib) generated 1 warning
+   Compiling screenpipe-db v0.4.53 (C:\src\screenpipe\crates\screenpipe-db)
+   Compiling screenpipe-connect v0.4.53 (C:\src\screenpipe\crates\screenpipe-connect)
+    Finished `debug-dev` profile [unoptimized] target(s) in 1m 38s
+     Running unittests src\lib.rs (C:\spdev\debug-dev\deps\screenpipe_screen-52529d6a1951251f.exe)
+
+running 6 tests
+test screenshot_privacy::windows::tests::filtered_capture_keeps_full_monitor_dimensions ... ignored, requires a live unlocked Windows console
+test screenshot_privacy::windows::tests::alpha_zero_ignores_rgb_payload ... ok
+test screenshot_privacy::windows::tests::global_opacity_preserves_half_cyan_over_black ... ok
+test screenshot_privacy::windows::tests::premultiplied_alpha_is_not_multiplied_twice ... ok
+test screenshot_privacy::windows::tests::overlap_math_rejects_adjacent_windows ... ok
+test screenshot_privacy::windows::tests::global_opacity_scales_premultiplied_rgb_once ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 183 filtered out; finished in 0.00s
+
+     Running tests\apple_vision_test.rs (C:\spdev\debug-dev\deps\apple_vision_test-8b147bdb6f2d5d43.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\capture_error_test.rs (C:\spdev\debug-dev\deps\capture_error_test-d876d7e7dd562de6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests\capture_retry_test.rs (C:\spdev\debug-dev\deps\capture_retry_test-fbc4f8e0bfb2e58f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests\custom_ocr_test.rs (C:\spdev\debug-dev\deps\custom_ocr_test-2441bace67937bee.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\empty_window_name_test.rs (C:\spdev\debug-dev\deps\empty_window_name_test-a4bfa082486c798f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests\frame_window_mismatch_test.rs (C:\spdev\debug-dev\deps\frame_window_mismatch_test-12e0818144bc8f4a.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests\monitor_cache_test.rs (C:\spdev\debug-dev\deps\monitor_cache_test-dcbc9388636e5957.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests\url_timing_test.rs (C:\spdev\debug-dev\deps\url_timing_test-59bbbb20e77737cc.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests\windows_vision_test.rs (C:\spdev\debug-dev\deps\windows_vision_test-43ced4c67bdf01dd.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s

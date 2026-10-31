@@ -1,0 +1,6 @@
+{
+  "native_exit": 0,
+  "distinct_allowed_targets": 12,
+  "duration_target_seconds": 35,
+  "probe_sha256": "ef3817224accd991889ceb0b461daf832649b55554f0eba4f1acb0f38637b6f6"
+}

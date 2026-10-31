@@ -1,0 +1,9 @@
+{
+  "case": "title-transition",
+  "start_utc": "2026-10-31T02:19:53.3387442Z",
+  "end_utc": "2026-10-31T02:20:00.5948928Z",
+  "allowed_before_exit": 0,
+  "blocked_exit": 0,
+  "allowed_after_exit": 0,
+  "hwnd": 327698
+}

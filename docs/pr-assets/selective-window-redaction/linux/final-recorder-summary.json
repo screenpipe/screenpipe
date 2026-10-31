@@ -1,0 +1,84 @@
+[
+  {
+    "policy": "exclude",
+    "cpu_percent_one_core_median": 11.5,
+    "cpu_percent_one_core_max": 23.0,
+    "rss_mib_peak": 127.54296875,
+    "rss_mib_final": 103.96875,
+    "cases": [
+      {
+        "case": "five",
+        "observed_seconds_after_settle": 28.188565731048584,
+        "stored_screenshots": 26,
+        "observed_saved_fps": 0.9223598053221287
+      },
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.156859159469604,
+        "stored_screenshots": 20,
+        "observed_saved_fps": 0.8636749855526646
+      },
+      {
+        "case": "incognito_focus",
+        "observed_seconds_after_settle": 13.09318995475769,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      },
+      {
+        "case": "five",
+        "observed_seconds_after_settle": 13.095073223114014,
+        "stored_screenshots": 11,
+        "observed_saved_fps": 0.8400105759304946
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "include",
+    "cpu_percent_one_core_median": 10.6,
+    "cpu_percent_one_core_max": 23.0,
+    "rss_mib_peak": 110.75390625,
+    "rss_mib_final": 110.75390625,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.153395175933838,
+        "stored_screenshots": 23,
+        "observed_saved_fps": 0.9933748301375135
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "url-gate",
+    "cpu_percent_one_core_median": 7.7,
+    "cpu_percent_one_core_max": 23.0,
+    "rss_mib_peak": 125.85546875,
+    "rss_mib_final": 125.85546875,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.150302171707153,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "drm-gate",
+    "cpu_percent_one_core_median": 7.9,
+    "cpu_percent_one_core_max": 22.0,
+    "rss_mib_peak": 108.66015625,
+    "rss_mib_final": 102.64453125,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.150482654571533,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      }
+    ],
+    "acceptance_passed": true
+  }
+]

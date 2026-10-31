@@ -1,0 +1,12 @@
+{
+  "name": "noexcluded",
+  "mode": "exclude",
+  "layout": "normal",
+  "exit": 0,
+  "pids": [
+    10308,
+    2216,
+    8940,
+    11920
+  ]
+}

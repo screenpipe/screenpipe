@@ -1,0 +1,1380 @@
+{
+  "operation": "Review text only: UTF-8 BOM removal, LF line endings and trailing spaces/tabs removed. Binary images/videos unchanged. Original source evidence remains in the local native archives. Final blank lines normalized to one terminal newline.",
+  "files": [
+    {
+      "path": "windows/baseline-release-build-receipt.json",
+      "original_sha256": "7008e3c369e443b5a366847eb36485ed49b0d41c7600c014bd463d47e1bee799",
+      "review_sha256": "0dbc9ed44dc14a966eac6cc0a762d551570895e6fbee21571e190258d22b37d7"
+    },
+    {
+      "path": "windows/candidate-release-build-receipt.json",
+      "original_sha256": "9f68d4c2c885cf1eb42d360a6667b976477bc02509ccb379ffaac1b18327b088",
+      "review_sha256": "be1922c1f9274275f5d2070dd6661e98fbc3d1c79502590f218c1d4a592b7c6b"
+    },
+    {
+      "path": "windows/unit-tests-debug-dev-exit.txt",
+      "original_sha256": "54a15ee88f14afe3bd73ed012175401db47191dafc5ec35aa397e52f09b33e66",
+      "review_sha256": "699537936565bb42b96930d4e094a05018da7a9f0af11cc35a23805949a97af3"
+    },
+    {
+      "path": "windows/unit-tests-debug-dev.log",
+      "original_sha256": "e4eec0ccc6db7300be2290c53ea03a2fbabfbf7df50a75f70ad03806cdc97c03",
+      "review_sha256": "ddff5f2f18c385d9b69981e55dca91974c01ef98cb339e708f447c3783ca85db"
+    },
+    {
+      "path": "windows/source-hashes-prebuild.json",
+      "original_sha256": "bab88d68a66a5a636c16b8fd952be6bb4f74c76b7b82708762204aaa3aa8127b",
+      "review_sha256": "25462f5b037f82dc8549c796b6cd017e040c20fa949c90363195bebb7f3e92d3"
+    },
+    {
+      "path": "windows/guard-correctness/alpha-b-event.json",
+      "original_sha256": "9067ca924f627f48bb6a3cbcba78e9da2e235434fdb459235d7047dd33dbd5a5",
+      "review_sha256": "e383609a634ac5c3a3773a4e075e345959b155bbe8f2b25c2ea81cf4183cc694"
+    },
+    {
+      "path": "windows/guard-correctness/alpha-a.log",
+      "original_sha256": "97d97145532eaa57ee9aea31565dc6dfa49f214f7e2b779088d1fde78d4f83c6",
+      "review_sha256": "fd8ed7504ecdc9aa1d07b565b02ecbabce969724f942fdb7bf5a5b275f0007ab"
+    },
+    {
+      "path": "windows/guard-correctness/alpha-b.log",
+      "original_sha256": "d43915120614f14350efff1cf91c7ebcc249dd47413abd195bf5e811d8238cc2",
+      "review_sha256": "254cc8986c23ae2abb372be4d081748a338397d87f775d9ba459f60e25adcb37"
+    },
+    {
+      "path": "windows/guard-correctness/alpha-ab-assertions.json",
+      "original_sha256": "d856ed238225c1f31fa43564c2dac5877cc2610fa475712bbf1c9c6bac69534b",
+      "review_sha256": "18f62a0b25ba5b046599ab5e536c71e3bc7c3b5ad426d7ec614699f94dc29e8d"
+    },
+    {
+      "path": "windows/guard-correctness/alpha-a-event.json",
+      "original_sha256": "3b036899240fb9910a76f58f090e76a75fd63f634d906a55026cc91205302774",
+      "review_sha256": "994470600eb81d1e330a01f604dfba11ecc293597440e367b102be68300baadd"
+    },
+    {
+      "path": "windows/guard-correctness/frozen-source-hashes.json",
+      "original_sha256": "355730b701ce1dc89a902bc73def2f1123e5f2c5b0112d6e9ea410cad0c6113d",
+      "review_sha256": "f931384535040d2535b82ee9104582dc20e31694c064acf1f1e32d023921417d"
+    },
+    {
+      "path": "windows/guard-correctness/title-transition/allowed-before.log",
+      "original_sha256": "581638987ea4f43b008ab93f14519e433a34adf43207ee421e3c97cea392edf9",
+      "review_sha256": "547129fcb362b5f8dad6a599faa10a48a0680613ec2307aadf9e365001a20f4c"
+    },
+    {
+      "path": "windows/guard-correctness/title-transition/event.json",
+      "original_sha256": "7eed9e80c595b6fc682652da2ad73f93b8557687d362d4b2184a0481e272bf23",
+      "review_sha256": "ddec57a000a03ff7fad67b489091d11103b20406b0af8aaf2e45fd4a56103a28"
+    },
+    {
+      "path": "windows/guard-correctness/title-transition/blocked.log",
+      "original_sha256": "ab725d0e2fa6f1686eb9112a425f10859ad359ed28c7903b3e93fe9818e5087e",
+      "review_sha256": "a31fb34d012eadf2af0066b0587a630f0743e1bf5e568e1d8fbc3fe65d1e861d"
+    },
+    {
+      "path": "windows/guard-correctness/title-transition/allowed-after.log",
+      "original_sha256": "0f7b1550adb038a28b138c935d578b612a7d0764f13506a64dee20577578bb7d",
+      "review_sha256": "6b28236aec3c49734377e833847abe8a1ebcbdaa74e015cd3fee5be8e73e2438"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/b-filtered.log",
+      "original_sha256": "34b2059fa72b2277f54bf17768f9e3b4d15e7e3311a41c5a3025939d50db66b4",
+      "review_sha256": "c032a1102a8d2899a2caa76010711ac460d7e3292ee9430bdd274eff56055713"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/b-raw.log",
+      "original_sha256": "90b28f994cde6a81b6c58e231f1ce62914ed922d733f8591b29fb166ac1ac1a7",
+      "review_sha256": "8a0b6e321d5e14ef69c40cb147c47074801c149547b6e8eeb09d1e90e359231d"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/a-filtered.log",
+      "original_sha256": "a9fdac829dfb4ddd0d2242cd2829c89001f8f111b38e39d92b25b7dd1aa4db61",
+      "review_sha256": "8dbe740c3adb6f4515701001925e7ec1f0f0138bfeb8000dee698e0a8e2c5e1c"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/assertions.json",
+      "original_sha256": "755e7fd36234464941dcd68e40bb2c951e8fbdbe9be4c5e672cfa146ecaf1eb8",
+      "review_sha256": "b4fa336d065e02a2c782493f2c8cece0dbf686694d60fb2de3f9ce89ef306c92"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/a-raw.log",
+      "original_sha256": "822d42cd16a9c731b434fceb221f64bc035e01e8384306a299a541bbe2d4d60c",
+      "review_sha256": "d4b6441537e16cb88ba7bdaa7c2945873ffbfe509bf521b1139a73a0fd81b653"
+    },
+    {
+      "path": "windows/recorder-gates/negative-incognito-start-utc.txt",
+      "original_sha256": "01e457043d3b24c756f6c36d46d9701000072986306363d76cc5255491c73c50",
+      "review_sha256": "aa9c7d98b80e8cf569d452b0f71f5e813a7b33c3a8a43579fb7101409007f672"
+    },
+    {
+      "path": "windows/recorder-gates/negative-incognito-recorder.log",
+      "original_sha256": "cfd17aa113fc5f27f596c860b3c8b3a754058323bc8c78b30dbcc264f86e253c",
+      "review_sha256": "3822e2a23ee39df9758f43f57f33ac3c75981fa79a2d2e4ccef9a94eb2bc5f83"
+    },
+    {
+      "path": "windows/recorder-gates/negative-drm-start-utc.txt",
+      "original_sha256": "0d80b2f1f63210d9a5bd94b489469914bd3d1a451d327a0cbf2c42a467d25850",
+      "review_sha256": "7e5c6a73a065ecd8ff49fb28db46d1cf118366ced043d50447061d088f729027"
+    },
+    {
+      "path": "windows/recorder-gates/negative-url-recorder.log",
+      "original_sha256": "675866c2b6e3c055a53ceb1676faffa5770665daf6998ec13ca7f9bb9d8580db",
+      "review_sha256": "8fd019a411ddef554fa58f4e649b2927740820d4db594944bff24a6aa8ec9aa1"
+    },
+    {
+      "path": "windows/recorder-gates/jpeg-inventory.json",
+      "original_sha256": "cf39a6aae6799e25b61f3bc39dc06de0ac7ae7e6643b601cb67196d549705ab8",
+      "review_sha256": "4b009843385469bce66e420772f0196d95ff04a06e803db905cd21ff2234725c"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-scene.json",
+      "original_sha256": "eeb1db2506fea27b312ef8e31048a4ef478c22031b098088e412f50f8c2faa6e",
+      "review_sha256": "08a60a682d2ceea6263d55674322c7505d16ca306f0a783781c8a57780f57060"
+    },
+    {
+      "path": "windows/recorder-gates/index-rows-negative-url-data.json",
+      "original_sha256": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+      "review_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    {
+      "path": "windows/recorder-gates/index-rows-negative-incognito-data.json",
+      "original_sha256": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+      "review_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    {
+      "path": "windows/recorder-gates/negative-url-start-utc.txt",
+      "original_sha256": "6639b05262bb71c9da4c85b16408e4bc2f9eacd6bd2708264860aba1b3e01320",
+      "review_sha256": "2199efb1ea614f9d32ad2ccc98143d392cac53628cb0750e522551084477b0b7"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-acceptance.json",
+      "original_sha256": "3e23dc8b65e2d299849019f2901ce29c516d894583f29c697dc89ac25335419c",
+      "review_sha256": "3251c0e262427f4c9e5d937dc23ec04a56aecfb4676c0c4848c0418733ad7eb8"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-start-utc.txt",
+      "original_sha256": "1f22c3b4ae702ff02b507090104984cff17e4c85c9bb74bcd4734ea383af702f",
+      "review_sha256": "c6ea7727a9c5aa73b1a547d26781afb189130fcb7f711bfbee43ca5840af573c"
+    },
+    {
+      "path": "windows/recorder-gates/index-rows-negative-drm-data.json",
+      "original_sha256": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+      "review_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-valid-recorder.log",
+      "original_sha256": "9582bb93e31b15413d9f0e8e6ca084e960247e144bfcd85d32733917d3048ac7",
+      "review_sha256": "eccbb1cfaa5a922a1c565a20072aa03fadbfae0addcc087fd3eca724b071bea1"
+    },
+    {
+      "path": "windows/recorder-gates/negative-drm-recorder.log",
+      "original_sha256": "fb2e7a4a8ff56022510c68a11f80df394b19827d5934fa042257c3e88d8ea3cd",
+      "review_sha256": "62b671575fdcf78ac8d04d890c8baf2f1c74bbd63bee9eb7dc631b6ca049620c"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-valid-start-utc.txt",
+      "original_sha256": "3b36b27329dafcf3980c19e5c6f798a442974f95d2c1aab46cdc7ce894a91aa2",
+      "review_sha256": "0d25806f24e0a31e55e8625d995f74a59c6b489e9fd23f5e66fbf36dff5538a9"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-valid-resource-samples.json",
+      "original_sha256": "9df5a9c1369718c2435cf597c9afb9be36308f7e60213f262c1a95002b845524",
+      "review_sha256": "a95c7660ec1081cb1fac7ac207970ba84194150a4731d44791dfba54720e3158"
+    },
+    {
+      "path": "windows/recorder-gates/case-events.json",
+      "original_sha256": "be4ac8e7023a5fb67b796d2715e5777e3b5ad14e975db0b737c2b24c0c65d72c",
+      "review_sha256": "92c2442a38b3455225e079f76b5ccb800439620d0791daa3ffda32ca06f05345"
+    },
+    {
+      "path": "windows/recorder-gates/negative-incognito-scene.json",
+      "original_sha256": "3eafe16dbdc57b37bbb2deee3c5d1ebb35f0a1f8eed352028afac82da181efe4",
+      "review_sha256": "1eafe9c6e6a238976ba23cc19bf98804ccb09f9da92e4a2233b6d102ea303f6a"
+    },
+    {
+      "path": "windows/recorder-gates/index-rows-cadence-engine-data-valid.json",
+      "original_sha256": "87709136f5e8a04c9719111591140fed3a9c4e8ba5a48a9dc22b02d501ae9f30",
+      "review_sha256": "0c50b021dd6430d718a649e6a69a74a86fb82b979ebaacf358199f66d3ac74cb"
+    },
+    {
+      "path": "windows/recorder-gates/post-validation-hashes.json",
+      "original_sha256": "7e405c7d5c59c7ef0952200bc9b5d8b4cec7d066452976954769536756963aed",
+      "review_sha256": "c37da327269b679a94af9320ebc3535460117ba65ad4f5a1382e174ae5ce8348"
+    },
+    {
+      "path": "windows/recorder-gates/production-db-check.json",
+      "original_sha256": "eac92dc5632c4d89920e33f95292f2c28209ec9c04a3d8b9e7941c48b9f997a3",
+      "review_sha256": "ffdb41f86b4fa885d5e1759cbabe68f4a83098b1f515fa32260859526b06b77a"
+    },
+    {
+      "path": "windows/comparison-release/candidate-resources.json",
+      "original_sha256": "57d951f26325b650f5338ee4a1d4e97dc0ea94c41e92d9be8cd5c292934b1c45",
+      "review_sha256": "a1df4f239d9f79c3fd5a3683effaac0804c3cba4e578f7e55b2721ce5ad15ce3"
+    },
+    {
+      "path": "windows/comparison-release/controlled-scene.json",
+      "original_sha256": "b37c4e1c54226343380f8286dbd3847952dca9a5b0d54add7b2ef2049feab2a1",
+      "review_sha256": "bde6f622dc52b26c6bc0a52990ecfdf84d919b8c575a58cd5349598b81a80e07"
+    },
+    {
+      "path": "windows/comparison-release/candidate-event.json",
+      "original_sha256": "a65c15763d09c08aa0011096030d95e65a9689873e0e43ed5255faec974ec46e",
+      "review_sha256": "68a5172d04e3e1fb95a878d6c984338f7f7bc52ea78bf469ea55dc9873a7c6a5"
+    },
+    {
+      "path": "windows/comparison-release/candidate-warmup.log",
+      "original_sha256": "56669970ec35387760f59fb3b3b1cc489c846e5047032c934054ff7ad898f6da",
+      "review_sha256": "9b1f13e2efb283dce7384c20b83b7031a848f1eafa866e52cc67c434625c7470"
+    },
+    {
+      "path": "windows/comparison-release/baseline-warmup.log",
+      "original_sha256": "5d3abe1b74c94ae58a8221c7c722e02e9ea4693b9d2e384ff8b939d22c65969d",
+      "review_sha256": "f8da173e7193c1a8979bcf59d9ccf28a44b97e2dcdaca6955ce94a7c4f66bafb"
+    },
+    {
+      "path": "windows/comparison-release/comparison-summary.json",
+      "original_sha256": "6b4ba1f5743b019bb77361601eca0428016303ace8b041e294f8334dddaa6bf1",
+      "review_sha256": "3fe79e18dcd1cb28a19525118ae8fbc20131d353eb375b1913d0c89ef68a75b3"
+    },
+    {
+      "path": "windows/comparison-release/baseline-event.json",
+      "original_sha256": "c444145e36030ee04221454ef77ff5a8f0fad6b26b6ff419a8adec490c4ff9cc",
+      "review_sha256": "f4dc7ab855926a768fd0484c07a3173d44869609e63bfc252a78739fce691d20"
+    },
+    {
+      "path": "windows/comparison-release/baseline-resources.json",
+      "original_sha256": "d74645304481d9c2d0cae0fc2fbed08963273e1c9c92d13780a2beb068fd722b",
+      "review_sha256": "4b7a0d5d52f1c1d57bbe16ab975e8f8be690bdfab3835d4bd316e00c1e794c8d"
+    },
+    {
+      "path": "windows/recorder-release/final-db-rows.json",
+      "original_sha256": "e5be7c7ded1733e7f6de95cfb874e25ee2acdd5b027952d278256df40ee00dba",
+      "review_sha256": "d3ca420e04ab326153321a98c639c7522f1cc8a4d63405934b4a573a41d83bc6"
+    },
+    {
+      "path": "windows/recorder-release/final-engine-release-build-exit.txt",
+      "original_sha256": "54a15ee88f14afe3bd73ed012175401db47191dafc5ec35aa397e52f09b33e66",
+      "review_sha256": "699537936565bb42b96930d4e094a05018da7a9f0af11cc35a23805949a97af3"
+    },
+    {
+      "path": "windows/recorder-release/strictinclude-recorder-acceptance.json",
+      "original_sha256": "de08658b6f624c17c2460053c0ef9854abfb11610b1e699fb964a3d7663904f4",
+      "review_sha256": "cadb06d985b8ab4f191b84f712d96309390a2fa7d7a3551a09acdda0485413b8"
+    },
+    {
+      "path": "windows/recorder-release/native-commands-exits.json",
+      "original_sha256": "a05c7c2c5c6c9c501997910ea3c6b13a6562d011a051e7d681ddbec63cd4a79d",
+      "review_sha256": "91a41090c42a950966bba0869b9972dfe54c13d313a0ab1a64b5f54d3a79f735"
+    },
+    {
+      "path": "windows/recorder-release/final-engine-release-receipt.json",
+      "original_sha256": "57d00949dd81c99b48d8d29fa80260208e1264bd7c9d154ce2038f891cb90c01",
+      "review_sha256": "979a31b58f1c07224f3322dd6a6448741b2e413c0ab8192a3a807389a20c7749"
+    },
+    {
+      "path": "windows/recorder-release/saved-jpegs-manifest.json",
+      "original_sha256": "5eedf8f2fbb725897e0e7aa2341b514ffc81da9470b1afc646e7820e418ff019",
+      "review_sha256": "489068cd3177fdc4895559bfaad824770943b20a2d6dd705ace745218bd0cf97"
+    },
+    {
+      "path": "windows/recorder-release/final-recorder-acceptance.json",
+      "original_sha256": "7349fa340e51fc57dca6e253045e01e33098588d9531493a49743793f0ae85c7",
+      "review_sha256": "a0ef1cc1e8611cacbe3ef0b9baeab46b645ac365643ebec5ed0fa753fbdefacc"
+    },
+    {
+      "path": "windows/recorder-release/production-db-check-exit.txt",
+      "original_sha256": "54a15ee88f14afe3bd73ed012175401db47191dafc5ec35aa397e52f09b33e66",
+      "review_sha256": "699537936565bb42b96930d4e094a05018da7a9f0af11cc35a23805949a97af3"
+    },
+    {
+      "path": "windows/allowed-target-churn-release/targets.json",
+      "original_sha256": "cb944ce157b794fe110854e1b2bc1ec60c85a2507f020f1da67e9d0ef0d8904b",
+      "review_sha256": "61163177412d246519da1094338c4db348b70a683f4e6012351c46eb25749ac1"
+    },
+    {
+      "path": "windows/allowed-target-churn-release/event.json",
+      "original_sha256": "f832ed6cc3889a8bc1bffaec77526bd720850f5abf4452c6b33785c974708234",
+      "review_sha256": "bd4f4e694c3c3f43a965e4c4ef4099503fe856d4fcc067c98a4dd248ee1843e1"
+    },
+    {
+      "path": "windows/allowed-target-churn-release/resources.json",
+      "original_sha256": "ed5750ba161c3eb3b0d6ebbb3a4b5a1f45c17f8813c9dc407dd172acda029129",
+      "review_sha256": "c2e30dca2da5c5fd2270bd1d715c41edc7e5352b6d74f82954a452bb47bf8dac"
+    },
+    {
+      "path": "windows/allowed-target-churn-release/assertions.json",
+      "original_sha256": "8021a0705ca6dbff2c1cac4267fa7134f0f44cd4c120b725ea095b2faa92d4b4",
+      "review_sha256": "3a3673ffeaa33e28b27c27f72169b0cc425ce9f3f0d0b23988662514550828f5"
+    },
+    {
+      "path": "windows/shell-preview-release/raw-retry.log",
+      "original_sha256": "88ac1e480fe728a627824331fa6a980c932f44bf3e421853031c22c059417e9a",
+      "review_sha256": "eea608f52b2951e69d29adec85b3557d48993c24f27c6c53fe3233e8d3c15751"
+    },
+    {
+      "path": "windows/shell-preview-release/acceptance.json",
+      "original_sha256": "97d76c284494838abcc027dd7f94d76b41ac8aedd32d03668e43e1d06aa1b9cf",
+      "review_sha256": "b3414bc0acf5c70a932c3ad2f94cace6481d29b1113d52d56a51eb51432ab269"
+    },
+    {
+      "path": "windows/shell-preview-release/visible-preview-uia.json",
+      "original_sha256": "56139c29d8beed71f297a0a7a9ed2c738abe8f381c4c28e49b7b5bfc4e520325",
+      "review_sha256": "d22d543ba5fd1afcff1be4cbaaf19e21f842af4c985363449cab71b7a0e01e81"
+    },
+    {
+      "path": "windows/shell-preview-release/filtered.log",
+      "original_sha256": "89da85d91f13fe15351f2d11aa09ca1d4b80c5454678a09a62090429711454fe",
+      "review_sha256": "a897bf4968c992e2a68677c510f94a2934c8d47f576ab45a8e8c6dacfd94a17c"
+    },
+    {
+      "path": "windows/shell-preview-release/raw.log",
+      "original_sha256": "986d6b253307fde33fe8ce93d2ab6675f721ef8c998c1c4018c10f51ebe4a959",
+      "review_sha256": "de2fdb5359b75f889d345f76ad5723f73b23bd86532d5a8b60eb89612f02f15b"
+    },
+    {
+      "path": "windows/bounded-cases-release/fullyoccluded.log",
+      "original_sha256": "8dc1e1b9349ae5d3632e393bdd8ab737581da0e3a8fc536b980e1006a76b36c4",
+      "review_sha256": "af8a60d89e8f3ffbebe13702bfad90efd2a8ede4e391be9882dedb7b38b7196e"
+    },
+    {
+      "path": "windows/bounded-cases-release/blank-title.log",
+      "original_sha256": "774aa4c34db7eac51d1e934157d85f7b7fae0155060e4e1cbc4469a8aacdbd58",
+      "review_sha256": "0c7b4ddf38422e837574d6f266937ad2098e9db27a3682b8a2ce4a9da3c940c7"
+    },
+    {
+      "path": "windows/bounded-cases-release/nomatch-event.json",
+      "original_sha256": "4c6772de0433c916792368808a3279ed85fec43644508d83db4ca3ceeab40dad",
+      "review_sha256": "1d2b41a1292c121838ea3028509edcc100881ef66ed0df2ab975fa961ba6b494"
+    },
+    {
+      "path": "windows/bounded-cases-release/minimized.log",
+      "original_sha256": "2095fcc3842ceb1d5474cd4cde180dfd3e88e9d0a18a29f27f4543e2f1c3b7ad",
+      "review_sha256": "de12b2b0b20a42bc3d45f1bdc54a01e307c5aa7b8d86ec9c39f61da4a8c0422d"
+    },
+    {
+      "path": "windows/bounded-cases-release/minimized-event.json",
+      "original_sha256": "ee8326afb167207a4e7b5fcf643c707aa644b97fd5e7a5922d39f8803cd4dc92",
+      "review_sha256": "64cc6bbf0cf6336fcba4cb7d1b37ea18eccdcefe711c3771e99edbf521a98537"
+    },
+    {
+      "path": "windows/bounded-cases-release/strictinclude-event.json",
+      "original_sha256": "f4dde9a19220599434536b6468ef1bde557f1408b2e55c7bd5bffad116d85a55",
+      "review_sha256": "48640482faacf9d64a71a790e49132a1ef82c934e6c3fbb2ab4721d718c663e4"
+    },
+    {
+      "path": "windows/bounded-cases-release/normal-five-window.log",
+      "original_sha256": "3463cce5e6d0ca1b86c43a25a9a3c6195285c69f80b1ad95cb398724fab65a57",
+      "review_sha256": "09e5bdc07401411c71ee11fcf12749fe84bcdfa2cf43af04ff78a593bda204ec"
+    },
+    {
+      "path": "windows/bounded-cases-release/nomatch.log",
+      "original_sha256": "4e53943b498485b037191b24a7952c4e81f9172e57d9b72b4cb85ac03a13b350",
+      "review_sha256": "c7636162c509e18dbad84b80733a39ef24004f726614e504a2d0a59bd51c14ed"
+    },
+    {
+      "path": "windows/bounded-cases-release/fullyoccluded-event.json",
+      "original_sha256": "50953d30450e702f6fd386ab25dfae17465b8ed1a19ff56c43b0cee09ed9436b",
+      "review_sha256": "61428be96b36d10c9e9d2c72d6e38e54251a007cecbc78aafb8fade10718882f"
+    },
+    {
+      "path": "windows/bounded-cases-release/blank-title-event.json",
+      "original_sha256": "2f036da536f6c468d5785461632a95b4c7b422a9df22f5983e0df3eac2e679c9",
+      "review_sha256": "f2165e4bd7efaba997d2fc3e4dd55686f629f838cfe329edcaa72587a426d58b"
+    },
+    {
+      "path": "windows/bounded-cases-release/strictinclude.log",
+      "original_sha256": "8f3a232383b8553322d37ae8cb494f30e6d1d58e2e8f8fd78359ad40d38b6083",
+      "review_sha256": "bfa55618b9b54e195dd17e44ff88a4f4dc1f49dc705718fb2bda803a6d88e5a3"
+    },
+    {
+      "path": "windows/bounded-cases-release/noexcluded-event.json",
+      "original_sha256": "61ecbce363860c7b5d1313608527c77438df12059f4bc8ece820cc24cb89e54d",
+      "review_sha256": "7d61bdbef610c1577a116623c0a6578995abcef56d9b976214dd65138edb34d2"
+    },
+    {
+      "path": "windows/bounded-cases-release/normal-five-window-event.json",
+      "original_sha256": "67922f01fc10a7a569e8a25093cd99f4ca76ff6afca9f761ca4158f6dde378d0",
+      "review_sha256": "aec2a21a471695fab75b700d4908e37e08de077973a36172fbfb03920d8058bd"
+    },
+    {
+      "path": "windows/bounded-cases-release/noexcluded.log",
+      "original_sha256": "f983e213c4e1136d8f4286df10f5792e1d58ccfe2f7afe7c5b9d8c37aaf0d77b",
+      "review_sha256": "23e9567756512269356ee8ae993716cefca400ae5673052f91d77fbf558f1b52"
+    },
+    {
+      "path": "windows/bounded-cases-release/assertions.json",
+      "original_sha256": "8401bd6d56e5f40fa79fd7a8ba306a88dc2dde8d6c17ee769216515757d2714a",
+      "review_sha256": "cb4635f7e1cd975a5c5f66481dd2f8e5dce22b5f5898d455f0d8c01342a15fce"
+    },
+    {
+      "path": "source-manifest.json",
+      "original_sha256": "11bf3854c62b2d480d7c3e1ac422066adf2627cb3061fefdccdd04a7ba755f32",
+      "review_sha256": "a5c3bf11a9ecde7cd41828bd55b9eb3517c6e36a9d5dffe6ba4de323c1958c53"
+    },
+    {
+      "path": "visual-verification.json",
+      "original_sha256": "b91db7707bc9965b916ce08b2b0ca26a5270078f622b18f5201938ef2682412e",
+      "review_sha256": "3791b55ddbc9a8a2d2611304c639a8ae2da8c7cfdd495b8db6d51972bf68f634"
+    },
+    {
+      "path": "native-acceptance-summary.json",
+      "original_sha256": "c4dd3ddf5100dd2a152150158b75ae59a8acf49a28e6afe479a85f62da5870ae",
+      "review_sha256": "dbfbb76016f05c7fe418c08bdfd10e63938c922bd97763b8d806fc422748606a"
+    },
+    {
+      "path": "baseline-source-check.json",
+      "original_sha256": "07919d8b46e6c085d17f0f9ff824a1740495c5ce6946a7a5045ec1c0f9be20ed",
+      "review_sha256": "c5ac4fade68ef85d033963285642bdc0b13d43fbe4e963734a4093120401bbf7"
+    },
+    {
+      "path": "original-image-sources.json",
+      "original_sha256": "6c9b28f5a4c0e570ddbd5849132912c8b9d4abcefd79f088c663b21c4adff66e",
+      "review_sha256": "7c7f98358d4f56aa16c1a6f351a320fc87c8b94b07d7e8f8e920dd22b8a6c9e1"
+    },
+    {
+      "path": "macos/multi-pixel-assertions.json",
+      "original_sha256": "ebdcfbcbff707f96c011c527470e9783f9a780ddc45ec774b56459e82a49f977",
+      "review_sha256": "05b3ce05adcd2c94b5e78452c788ab29f2010fae13c7f2b164270ba40f061ef5"
+    },
+    {
+      "path": "macos/focus-video-manifest.json",
+      "original_sha256": "057740fb3c88acd2bba2623b32b3cc04eb70f2f868b479e9e8f8e18974d61412",
+      "review_sha256": "4d1352be47d8f6e9e06eb7fd54fa8842bcf97fbc77419a3d4338dab1db15f5d7"
+    },
+    {
+      "path": "macos/recorder-video-manifest.json",
+      "original_sha256": "140f5ff84ffafa344ed6ec3f8a6f170a39875b82b0355fb37d1b3835bf3f3a3e",
+      "review_sha256": "401323fabf8fd51ddd0a88dd75d4bf7d489ee087140f2c33f6bec4bb544eb290"
+    },
+    {
+      "path": "macos/video-manifest.json",
+      "original_sha256": "2faad06385a1245705935a18bd3e8812d2a312f4988f6f7f7007cb802762a8ec",
+      "review_sha256": "4daf3fbbce5a7f6858f581c34b812a62bcec1cafd11469c53838277c58fee77a"
+    },
+    {
+      "path": "macos/final-recorder-summary.json",
+      "original_sha256": "5ed81d837a786c348778d17c3bc80685150b72ecc11b784048358ed97baae57b",
+      "review_sha256": "69ba6a1de22728b96a7f0dbcf8327913330d6de5b3aa274c5e4f3bf4fecc214e"
+    },
+    {
+      "path": "macos/probe-final-smoke/acceptance.json",
+      "original_sha256": "dbc6200558edaaeffc1831929b416f7b1e106f0a50a979ccf4e1562034d7ee0b",
+      "review_sha256": "6e9a27ff266190e9290d9ede8d77fbce025be4a4472cfc6e3cdab67519c9d19f"
+    },
+    {
+      "path": "macos/recorder-multi-final/acceptance.json",
+      "original_sha256": "79fd06418b2920bfc08fe3c85eaa13e8a82ef459b3519655f3487d3b69807acc",
+      "review_sha256": "90063b905af926699eb5de80453938789a22475533b04f260d39bf366b68ba36"
+    },
+    {
+      "path": "macos/recorder-multi-final/monitor-counts.json",
+      "original_sha256": "41a5439076e67cc87933cb13f12fa0efc60c44c373fa5ec3dcd825b96a4a4a53",
+      "review_sha256": "ba5db3a6ffeb8a3a372e54cfddfa4f87e0830f92d56800cbc7445e19f35d5f4a"
+    },
+    {
+      "path": "macos/recorder-multi-final/pixel-checks.json",
+      "original_sha256": "78b65997dc54b8aba2129e314b7356b4dc9d71c9cfbeb81d093f48acce57ddde",
+      "review_sha256": "ee4ced2ebad2455268e28126d45c93288dc1ca61a662355edf008b26480ac7a7"
+    },
+    {
+      "path": "macos/recorder-multi-final/command.json",
+      "original_sha256": "e3ae4501ea3a9c31402a5169ebbf3fe600e5167630df7fec9e5ba18e7bfbc1c8",
+      "review_sha256": "abb4dc160b1d5f1e0dc332a43b2ad9c0eca77692f53e8ca26e7646f632a97ce7"
+    },
+    {
+      "path": "macos/recorder-multi-final/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/retina-v5-cap/retina-second_allowed-fixture.json",
+      "original_sha256": "7e38aa0c3936c041207ed04c36dd0935f4b8894d11490bc961ca55e9d8d7fab7",
+      "review_sha256": "77cec41631065b0eb22f825d501c8086d007d720e46d8d9a17388e169ab80427"
+    },
+    {
+      "path": "macos/retina-v5-cap/retina-secondary-fixture.json",
+      "original_sha256": "f92d19d201f7f42ec3de3335f0f6e06cfefb20626f55be239b7afd4f05572f7b",
+      "review_sha256": "e22635c2f3f90b228ca083775bab8bb7acb811cd53c2c58c1f6b231f55f5cd4c"
+    },
+    {
+      "path": "macos/retina-v5-cap/receipt.json",
+      "original_sha256": "b915bb5df022218f85b37fed5fb52fb3697c2ee5107a3518c1f534cd77b605c4",
+      "review_sha256": "1826d27b830a77aa67849372c4a9b03a7334fc01e2a8eddb3a38ef8d77cea829"
+    },
+    {
+      "path": "macos/cases/pixel-assertions.json",
+      "original_sha256": "eb40b089d2aa13bf25e3fed55dbd720a9c6b986bf46c97728f8704fb0f4511ca",
+      "review_sha256": "9d7a1e917cc10c63acd7967fd9add732384b222d1e4cd6c897ab6b026ca83a41"
+    },
+    {
+      "path": "macos/cases/receipt.json",
+      "original_sha256": "869bbfbc7cad9ed055f0bba2ad8224b7b40b3e46d56a229bfb55f3bed3c4f8ac",
+      "review_sha256": "86d071928f9ed4c0608021ead9377b4e03ce2d8f04030a34a1b7930be900e968"
+    },
+    {
+      "path": "macos/benchmark-long/summary.json",
+      "original_sha256": "772fce890b78ecca5dd439262389ca4fd8e253493dab451af3bbe42ec1711080",
+      "review_sha256": "6d2bf3059946665b866392fe1819c7638b3fef28010c03b13dbc2b797286d248"
+    },
+    {
+      "path": "macos/benchmark-long/resource-summary.json",
+      "original_sha256": "d4c4336eda25e7d55f3bfb97544a9610ff8ff94d1ad2722a6b9375d7528e2147",
+      "review_sha256": "9c703205de9c32196bfab2f9122d0e66ea711d5c174aac5ab37ed03b61590022"
+    },
+    {
+      "path": "macos/benchmark-long/exclude/resources.json",
+      "original_sha256": "9544ac2ae71e8675e15a4456ccb7e16593386ad2f3db2fb7e604b52e9bfb7361",
+      "review_sha256": "a7cd21d044abc2c3b7bcb59f61469f97ae08fb283c4d6a37ec2fa22e4e259da7"
+    },
+    {
+      "path": "macos/retina-v5-verified/retina-second_allowed-fixture.json",
+      "original_sha256": "6ebbf921d8b58097afe280c4d6a96fd95a3403f0d4a44fec2d9975bb65264677",
+      "review_sha256": "34600c3241b2693f42aca52d74d27e24dea0c9a8adecfc522301b0a8e0c2693d"
+    },
+    {
+      "path": "macos/retina-v5-verified/retina-secondary-fixture.json",
+      "original_sha256": "bf16a73cbe9831e06275f98d883f77d96211ca6dc4504b93cef21345306e1a6f",
+      "review_sha256": "65ed37e2fd6bd361e81acc9c658e7d084bf8dff8845ee6cf757d0880cfa3802a"
+    },
+    {
+      "path": "macos/retina-v5-verified/receipt.json",
+      "original_sha256": "18448b3b88e071de092772870edb09804ffdabaa48282db1db66160547b8f08d",
+      "review_sha256": "1a604d6b45cdfed42f3c07c9d2163e012d952965f7f5549b98f16819df454fba"
+    },
+    {
+      "path": "macos/recorder-v5/process-samples.json",
+      "original_sha256": "9d724a3c771cab9114287c814d7ec31abee144609dd77922aafdeedbb3d38f15",
+      "review_sha256": "3d9e6c6a9d1fc98bb08e9a47cab96ef2cf9eed1aeddc6d364ec79e6756d8c674"
+    },
+    {
+      "path": "macos/recorder-v5/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "macos/recorder-v5/health.json",
+      "original_sha256": "7c0ba70e4d887336b81c3a48a704e882fe5e461a421e3582da66563ebc7c2f08",
+      "review_sha256": "ed960d22ac44fb4e6b6b09f4ee226acade08abb0cd89446facc1c3c83debe442"
+    },
+    {
+      "path": "macos/recorder-v5/database-checks.json",
+      "original_sha256": "8f4cf9a5eaceabab70142ddc4cb370c883d413e8aede477857c95ef89812a7db",
+      "review_sha256": "23908b2dfdb62bf677bbf63b0824f2f62d06c92f833c1228dd44f456fb39763b"
+    },
+    {
+      "path": "macos/recorder-v5/pixel-checks.json",
+      "original_sha256": "54f26a00d0a7a90e00bad7f1f63f15f58033cc68a57d206a98e41e85a114784d",
+      "review_sha256": "2693a4cb3cbf24a33b8232514254be01083ab1a4b1ef75ff7b9d271c65241e1d"
+    },
+    {
+      "path": "macos/recorder-v5/command.json",
+      "original_sha256": "f008642cb7399b84f1d9ae585b608cc5c044999f5a42f70cbae54b4d0fc58323",
+      "review_sha256": "7a8193ee9d7f698f3780b37eacc6ee17ad6d415b169b4040c907b8c31afa0a06"
+    },
+    {
+      "path": "macos/recorder-v5/receipt.json",
+      "original_sha256": "6edf9a182143a147905d8752303771286cd2943b67cc1fa297cf5f4563d3d841",
+      "review_sha256": "9c55f78f7899ba47f86bc8b61f5e2b22dfcb0421157d76b4a0e66904393b9065"
+    },
+    {
+      "path": "macos/recorder-v5/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/benchmark-baseline-equal/summary.json",
+      "original_sha256": "ead675bc35f0c865d899ae48f7ec9bd8e6da5c30f09f47939d51e71d34170759",
+      "review_sha256": "a48ac5ac13541f16be19d9fa7492a0d6c50f1e1eaa51dc4d57bb383fcec61219"
+    },
+    {
+      "path": "macos/benchmark-baseline-equal/resource-summary.json",
+      "original_sha256": "66c7255b244720f17434d923b621b1f9ba217e566ec709ec3c038e505f18ac16",
+      "review_sha256": "548ed1f86fe6b677d540cdef88e6ff7c42268edb23c0868bbc0df8e69c5fc687"
+    },
+    {
+      "path": "macos/benchmark-baseline-equal/exclude/resources.json",
+      "original_sha256": "bd62a0016b55b39cefdd4f8adfc28bd1d0363ee85d952bf57cac740d7976c2ac",
+      "review_sha256": "a31d8f27c5d518b53426c0e8b413a61253953a4f8d08ea69720be3f234e7b517"
+    },
+    {
+      "path": "macos/benchmark-baseline-equal/none/resources.json",
+      "original_sha256": "7eb9b1e20615d1859d760fafdbf40b204c4a1eb58ceb8291a50e95cde40b23c4",
+      "review_sha256": "984c2047db4af97c45430c9f5cfacd248503507388d7cff5aa17b4cf0edf51b9"
+    },
+    {
+      "path": "macos/multi-v4-verified/right-secondary-fixture.json",
+      "original_sha256": "738b5ebf2b75941ab1e7e9175e4e5fc24aa0f91be5506d2577683325017361e9",
+      "review_sha256": "66f7e9cfcc482943f06f7878a62a1b3aa6ffdadaca5e707f9a033cea37292674"
+    },
+    {
+      "path": "macos/multi-v4-verified/right-spanning-fixture.json",
+      "original_sha256": "07b1cd98dacfc98bcac69849abc6096187d7172406b10e34a14e9c192078a22d",
+      "review_sha256": "902724629520d081576643e928f4672a94037f5f4984edfac3132f1df6cf10b5"
+    },
+    {
+      "path": "macos/multi-v4-verified/right-second_allowed-fixture.json",
+      "original_sha256": "884ff3fb261484fc1e8c9f9534444ebbc5adad539f4a9e14ff400809e8b8f54b",
+      "review_sha256": "b302dd7da9cf70b2d291303d21a2e83c9705ad9606d0a36f6b099909a7c1efd5"
+    },
+    {
+      "path": "macos/multi-v4-verified/right-five-fixture.json",
+      "original_sha256": "d52963291929013b697ac99eb92b3824e25a49bff5844d17ad442203b7da7fc0",
+      "review_sha256": "f6250e876640069b8ce639ac9931816c459811df473e3a262a6692073280f5fe"
+    },
+    {
+      "path": "macos/multi-v4-verified/retina-secondary-fixture.json",
+      "original_sha256": "ca94164c7ace7e52263e2be0d3add2a6bf7d97134d222801dca145aa891bc11d",
+      "review_sha256": "add3978ac93ca9affb3af04ba3cff55076b500bdbcde439aef45bbfb770ed748"
+    },
+    {
+      "path": "macos/multi-v4-verified/negative-secondary-fixture.json",
+      "original_sha256": "13fd92e5d16797b9d165ed55d80b02576f58fb0f558b91c644793e2b7472d636",
+      "review_sha256": "d3346ef5e4f18c9ceb7846d211a8b78e7728e33b6c21463e4073cc3f4062ace0"
+    },
+    {
+      "path": "macos/multi-v4-verified/receipt.json",
+      "original_sha256": "bf70379e8375c55217533cb4ac25b4f7ba666cfc8cb0275677175bf48f4e155b",
+      "review_sha256": "13c23f5eff2639903e052c8040914294e8cf8af23010d1de19ede8fffac70301"
+    },
+    {
+      "path": "macos/benchmark-final/summary.json",
+      "original_sha256": "e5660effda7277781f0dbeea620453df16c073c3288585bfc0980d2411320ae6",
+      "review_sha256": "a7f8ca996354c0b5f4c1fdef445c4614eeb76f9e675a7f609d27f650140e9b03"
+    },
+    {
+      "path": "macos/benchmark-final/exclude/resources.json",
+      "original_sha256": "02754e292aa083b3a42911bca427d3f9a2bcdcd2e8e3b8985e73a003b1ba0067",
+      "review_sha256": "31af34e08bf4c5645a6363e5c6061baddec926083ac8e6a213033e3413c509d8"
+    },
+    {
+      "path": "macos/benchmark-final/none/resources.json",
+      "original_sha256": "f38a73dffc919d6d34b9e1e431f5aa671dce95653e202ece65dd1c1b580c1ac6",
+      "review_sha256": "ac8e21f02fef0f3f4deb6e94ee1e69cb5758c7b707dd2e9937a1d3ed714152f9"
+    },
+    {
+      "path": "macos/race-v5/receipt.json",
+      "original_sha256": "c91c0356005151d432e80ddfee81779c5a86c6dbeaa4ea2f4c8727db0d7fcfd7",
+      "review_sha256": "622a067113c84849cdcd7e77b4c3d2528c5b8685754e21ac79173e4b6a03d552"
+    },
+    {
+      "path": "macos/final-native/alpha-checks.json",
+      "original_sha256": "d55c30d6c56604c129d9ab9cd32a96cbe63b8bd0dcb4841ba0bed158720d61a0",
+      "review_sha256": "cc171b115dbf240456f5ae3b28cb642996e82c84a1e50ed451daa8c89b452766"
+    },
+    {
+      "path": "macos/final-native/source-hashes.json",
+      "original_sha256": "63ac1b9b7e458f6f0aa6e0e6308aec0b155a41c088b3035e3cc2b794fadadedb",
+      "review_sha256": "016b3213ed9a59ec2f47bca5409535cc16845e941c6fda3b7364ff38404fce22"
+    },
+    {
+      "path": "macos/final-native/alpha-opacity-acceptance.json",
+      "original_sha256": "8676c906cde0f19dc021eb28cb4cf6641de76ae0ecd1dc044e2ed4344c03b08a",
+      "review_sha256": "719d94be92d9f45846addd8ab18d1b443220ee0956a10ec572916226b51f5e63"
+    },
+    {
+      "path": "macos/final-native/alpha-roi-values.json",
+      "original_sha256": "a574d848a25d4e37e2798e1009bb6416645a9f43752e6f1477b7c9bc6216fd4f",
+      "review_sha256": "0a794414c3c632cc2267d9d035354e29fad85749f2c9b0c40503eab97cfe20f8"
+    },
+    {
+      "path": "macos/final-native/exclude/process-samples.json",
+      "original_sha256": "b4645c473735d856ed1a33bf81fb8ea5d50bf067078d77814986bee5317f12e8",
+      "review_sha256": "901e9d87bf2305219c627972e10cdfdc305527938e264a536162de922781aea1"
+    },
+    {
+      "path": "macos/final-native/exclude/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "macos/final-native/exclude/video-receipt.json",
+      "original_sha256": "a49f827e0879a1b26b1a7c7ea290de57d94447b5242296a4293821006a1f2e06",
+      "review_sha256": "c74c57934b87515be289430f2adc3aa1d0b8a322da2a062bb5272d3c3395b3ad"
+    },
+    {
+      "path": "macos/final-native/exclude/acceptance.json",
+      "original_sha256": "885b87d40b65e417a704032ee80e04a157641cdd9f79e410104f74a1dc0c9583",
+      "review_sha256": "0c82b63d60bdf6021003e1a18fe8432b6c1516e622ae3de5e5a3acbd349efbee"
+    },
+    {
+      "path": "macos/final-native/exclude/database-checks.json",
+      "original_sha256": "edef3efecc4853509fee9c5fd380d7162ff220932f99b9a8bf502d92a7c9d2d9",
+      "review_sha256": "eeb5643b1d6f28c0c69f150c056077481954132f5143fcaa954f001db52dc640"
+    },
+    {
+      "path": "macos/final-native/exclude/pixel-checks.json",
+      "original_sha256": "65b3e67139936b5cb433bdb9ccdf7a95e643ec149e658328638a2a676847e40e",
+      "review_sha256": "23a5265ad32d121397abd11a16d1e24b7a3e2e6980f59514e3ae798e4ba72b55"
+    },
+    {
+      "path": "macos/final-native/exclude/command.json",
+      "original_sha256": "709a9efdba75ead6b33dc415f9c4ed012491c5479657d71ba3140b73347885ea",
+      "review_sha256": "d1bdbbd7b1e8f1e5aac6e044a998f40b257fdd8b2818ea41f990509bf4eef862"
+    },
+    {
+      "path": "macos/final-native/exclude/receipt.json",
+      "original_sha256": "4b31c625713d5487ee5b96c693afa7803d108f24bad487a4e766f31fba1fd5e1",
+      "review_sha256": "e05b9f02228d168016e415f7dc9c658cb20d3eb8a0b4c2038436e51204376e41"
+    },
+    {
+      "path": "macos/final-native/exclude/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/final-native/include/process-samples.json",
+      "original_sha256": "4769ba09e12a1a18c8d577097e8f2af5a52ef7912344d1d70df528db213d0ca4",
+      "review_sha256": "140bc16bce8437efe70621e32b09b08948d39c2d65228cd77db383457d3eee97"
+    },
+    {
+      "path": "macos/final-native/include/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "macos/final-native/include/acceptance.json",
+      "original_sha256": "6618403c2081ec4fbc5515069fca1ec19c432baf511184309c5a59cd8ee6b28d",
+      "review_sha256": "7973f1b472e834dd1767735200f68d3ef9bd9739e787cd6b69f78e349c751a47"
+    },
+    {
+      "path": "macos/final-native/include/database-checks.json",
+      "original_sha256": "7b57bbbbd6a2e51ba42e31e5ba5ec93d746b67d21f0fc3d847e242e9294b2780",
+      "review_sha256": "b25f2adcecbecf4f23728596d7df574035bb82cc8b6b27d2be94430ed95ade52"
+    },
+    {
+      "path": "macos/final-native/include/pixel-checks.json",
+      "original_sha256": "ab4d2f082c7ca1361f1f4a3b4f1093c639138f74c8ac30a9acb729ab557de48c",
+      "review_sha256": "24a675700227b9cac3d96f64af45ac69691092f203ec9d8071f32dd6b6e057b7"
+    },
+    {
+      "path": "macos/final-native/include/command.json",
+      "original_sha256": "3f71455a6e6fb2499ab556913e7ff480bedd5f325ebe436286342873333f19b4",
+      "review_sha256": "67e2fb5c9b1c2646b21714b5f351060487bfa5c7273b6527e46400f2971ed2f5"
+    },
+    {
+      "path": "macos/final-native/include/receipt.json",
+      "original_sha256": "563b882cd033125b3748a993feb4f74e14cfcea3e769f9681f719392a5c6958b",
+      "review_sha256": "5a1ab4071cfdff0bb5a01a8678bbee6f5d3138822e02788fb9ff186832364303"
+    },
+    {
+      "path": "macos/final-native/include/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/final-native/drm-gate/process-samples.json",
+      "original_sha256": "11dbe8741f4c1744246fbfc17e555da5febc2736f5f785a7e6be3329551965a8",
+      "review_sha256": "fc5dcd82c05657d6a9aa87085e933447e20f3a36a554fe5dbd5305b7a04a3bcf"
+    },
+    {
+      "path": "macos/final-native/drm-gate/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "macos/final-native/drm-gate/acceptance.json",
+      "original_sha256": "e7b1af2f25d92ca3a7ba96161e6628a5817bbe1be32a166163314203c008090d",
+      "review_sha256": "6dc6d6c7a906e46b55a7745b09b39b22afd170fd9172efece0865132bc1eef37"
+    },
+    {
+      "path": "macos/final-native/drm-gate/database-checks.json",
+      "original_sha256": "3192c4286a6e98c13ee0e1500a5f56a1c295434cbf144b25bc87026524b419b8",
+      "review_sha256": "77db54a2998ce840a5a15a3a3c24539fb361e352b3ee9e64ea65f6cee207d2a8"
+    },
+    {
+      "path": "macos/final-native/drm-gate/pixel-checks.json",
+      "original_sha256": "c4a1f10821683d527d1068b396a6c4e3a77423530ef5e8e93f743f03102c2f72",
+      "review_sha256": "9733094e44db4a64c85743515d343ffe7be00c48395dada2d18187eccdeff4df"
+    },
+    {
+      "path": "macos/final-native/drm-gate/command.json",
+      "original_sha256": "c26165eabb49b50851aa0c909cf229475f9148b742220542b6c85db17005f965",
+      "review_sha256": "80aa0989414dceaabf29c8a0c165b34e4912bba38d7a2ded451c5680529c8645"
+    },
+    {
+      "path": "macos/final-native/drm-gate/receipt.json",
+      "original_sha256": "1bc916a0ef5d459498431613408d630d40360c1c8c4ef5c3100da0204318b2f5",
+      "review_sha256": "b6bab2b2c7ebda27b8bc08805eb728c2d7d189044f9e835f6e6302d0cc8448c8"
+    },
+    {
+      "path": "macos/final-native/drm-gate/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/final-native/url-gate/process-samples.json",
+      "original_sha256": "7b9096e7416ef44e8c520e26462f2e6fdad0ac90d831c2f8377dd60c400f2054",
+      "review_sha256": "924e87a4b7dcfe82c5397be487815d322fd89076e3cd4255632b2d7a9814bad7"
+    },
+    {
+      "path": "macos/final-native/url-gate/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "macos/final-native/url-gate/acceptance.json",
+      "original_sha256": "e7b1af2f25d92ca3a7ba96161e6628a5817bbe1be32a166163314203c008090d",
+      "review_sha256": "6dc6d6c7a906e46b55a7745b09b39b22afd170fd9172efece0865132bc1eef37"
+    },
+    {
+      "path": "macos/final-native/url-gate/database-checks.json",
+      "original_sha256": "2d3685423d2bee59cd060457ab40f858307fefde98c1c5b8018318c9595d6cd7",
+      "review_sha256": "5b29d3b7c2479df4e1b4f39d6a7879c6ecbfa77510e874f058ccc801487cfb09"
+    },
+    {
+      "path": "macos/final-native/url-gate/pixel-checks.json",
+      "original_sha256": "50b5b7472f7d66ea0837a08b8f5a6fdddb0cdf7d62a9c3473843dc7b81b01fa2",
+      "review_sha256": "4e84de373bd367cc667f214216b3d4a64110e86c9409289a20b1a58d32de601a"
+    },
+    {
+      "path": "macos/final-native/url-gate/command.json",
+      "original_sha256": "824548b6399f5a4969e9f5b4914815806e8a81c2e8ce067951f184c6d8a551db",
+      "review_sha256": "9e8dc4059a30ca4c0d472f8a1a8f6a6b49e614d81fca9d6d35af8a04b9dc703f"
+    },
+    {
+      "path": "macos/final-native/url-gate/receipt.json",
+      "original_sha256": "731fa2fa3790954321d32d49d449a4ef08caf8c33ed8d25ca6e8203f9681dffa",
+      "review_sha256": "0ca53c88f0e7023a1afcd05cc589fc904dc141791bdab65c39de49563531711c"
+    },
+    {
+      "path": "macos/final-native/url-gate/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "macos/benchmark-clean/summary.json",
+      "original_sha256": "20c4317c24dd34a06a181540ed7062ec8bc7384b6ba79033d1ff6af32d26678e",
+      "review_sha256": "f4cb253bf970d97807121ef3765213279b049ea69272e5a68631907640f9bcea"
+    },
+    {
+      "path": "macos/benchmark-clean/candidate/resources.json",
+      "original_sha256": "21389112c35fdd751ea3ccdf2bcc1026b81378ba572ef3544da72a15721dabbd",
+      "review_sha256": "2bb8c6ba0a5c9fc15308933437064328f62d2b64103d1b65af3ac4402490c9d4"
+    },
+    {
+      "path": "macos/benchmark-clean/baseline/resources.json",
+      "original_sha256": "3e309a783f7630b1471d62849b1a463d3226323a202307756efa41f7f81040cd",
+      "review_sha256": "010bc3ac58b3906a19703527a833bd8153f40302b493a9722b3d083228920be1"
+    },
+    {
+      "path": "local-tests/final-event-capture-gates.log",
+      "original_sha256": "727f8df681a39dd84695a8cdf5f5e65ee2a7d9379731cbc2e32b22d98cd2def3",
+      "review_sha256": "4e2a66b4273c46972492ea2cf1e3f0c25fbcf42ceeeb4d9912f1c70a77f9de08"
+    },
+    {
+      "path": "local-tests/final-cli-tests.log",
+      "original_sha256": "96b4581e676ea6516326d156c1aced6966823acec87ffd140f2b5488a6ba0da5",
+      "review_sha256": "b2d5d6316866fdcfd31f878f1f13e38a5cd2d302c295f9c3fe32a24cad4db99e"
+    },
+    {
+      "path": "local-tests/final-screen-v5-tests.log",
+      "original_sha256": "e242cd5318a465a6304179a81476771860898b3fc627bce5f21ab5d124d501f1",
+      "review_sha256": "b2ef64c83e16cc7d3ee1d834a525345b0c940b75b6f21f1f4def1dd91fc68933"
+    },
+    {
+      "path": "local-tests/final-config-tests.log",
+      "original_sha256": "a271045d3f4e24c19fcc51831b1fcd01acaef75bccc88d4393a4b04a46ff5857",
+      "review_sha256": "5788433b784be70d9695e7749ef0700bb72847501fbee6321fb700cc64bfaa78"
+    },
+    {
+      "path": "linux/focus-video-manifest.json",
+      "original_sha256": "a35891e174e80c7c3a80bc642d0a5a03f2654874d8bd4014483a7d0848e5c562",
+      "review_sha256": "fa5496bd6fe8fbfc0d69fd1df38aec420abbc785ddeac376e537012b8ed4cec0"
+    },
+    {
+      "path": "linux/recorder-video-manifest.json",
+      "original_sha256": "b5b5a3dc2b0234e8bc8c797caae5364cb447742e75193921724cbfbf3c95518e",
+      "review_sha256": "f5d4c9d47896f54ba1939d2c5893087a640b1863cacf5f454e24f0c36ab00c20"
+    },
+    {
+      "path": "linux/video-manifest.json",
+      "original_sha256": "bb8c8f058d1146be05753dc29f7db2b6fd1c1807849a93f1c50debd76b695927",
+      "review_sha256": "d4864c23199b9ca1fcc7e499dae0fd125b4646b23e25253257ca0600a919ab84"
+    },
+    {
+      "path": "linux/race-cycles.json",
+      "original_sha256": "03dbf6cab70f213261752b13214b0ac75d3083eae6638528f76beceda9cc702c",
+      "review_sha256": "83e2fab9ef75745bda2dce2b887eedba91cfc2362d3fa2473b8ce2c8e0157501"
+    },
+    {
+      "path": "linux/final-recorder-summary.json",
+      "original_sha256": "abc6cf02601e37d6bd9fbfd84e41e554a26d6f6c3ff953a30f6c42f0956ebbff",
+      "review_sha256": "1b08591170b0b2a9e1c8d94c06bf6df77dcea70f2e294d75972c5a43f756802e"
+    },
+    {
+      "path": "linux/probe-final-smoke/acceptance.json",
+      "original_sha256": "6840758e312d6f62d6651dc4f21c1ddc99dddec9e6a5df5b13e6fb88f0e69c3a",
+      "review_sha256": "ae8699f755fec39cc8a8f1671c86a3b8833cab8d9be2a6870d99b54f2b981e44"
+    },
+    {
+      "path": "linux/recorder-multi-final/acceptance.json",
+      "original_sha256": "42b3561b146ee709fd09e6e1dafd3a58854ce24e0d3b462266e48ee80f62f60a",
+      "review_sha256": "0dc6bf51dfc39985d4b35acf9e7fd84b0741697ef12d33bfa59efddb48b7a1d4"
+    },
+    {
+      "path": "linux/recorder-multi-final/pixel-checks.json",
+      "original_sha256": "3631b39ab75afc35fefdb95175566816d7bb7a66ac8da03ae45eb328ae7a148c",
+      "review_sha256": "3bfc53308310272e6ab5719107505c1a4d28ccc2116e2335e3a0c5edb63bb4ab"
+    },
+    {
+      "path": "linux/recorder-multi-final/command.json",
+      "original_sha256": "a36fbcf2fca8f72dda1fa716aab2cb54b641c4d5bcd8b5677c3a34f6851033a8",
+      "review_sha256": "27cad8bc3a1cc04a912e8c6d64d6f907a6176e18191d499bd4d0efb71fbd8890"
+    },
+    {
+      "path": "linux/recorder-multi-final/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/multi/pixel-assertions.json",
+      "original_sha256": "c6d04c1741dfaba0dc02c89b147b066832ccdfd9c021dc47174e9fbab341187d",
+      "review_sha256": "fecbb36b84b8a72401283035c98267bc24f41a0a33745adcadc478334d773a13"
+    },
+    {
+      "path": "linux/multi/receipt.json",
+      "original_sha256": "1771cd2ab4a96f049e332b5d09282344b3a1ecbaff5edbb4ffd6b90d8ac9f34c",
+      "review_sha256": "ad45204e6b36cd9b49606df9d1a8bd7e9a4b42709fa6983b9595957c142bdd75"
+    },
+    {
+      "path": "linux/cases/pixel-assertions.json",
+      "original_sha256": "87871f98808453a2737dfd9c6c59817d590e381850247efa82092c051d464390",
+      "review_sha256": "f8cbb499427025e4c24b61663c301ddf4d82e98b8f258ea6d70bfdcf2610e34d"
+    },
+    {
+      "path": "linux/cases/receipt.json",
+      "original_sha256": "9233b281725916b86ecdccceecd8cc78f19b2140640cc376d1de5b725ba9ec60",
+      "review_sha256": "83283d54d3ed8de3988c2b71f8d71f269376f7c38b6fb0223434fcb1004c8096"
+    },
+    {
+      "path": "linux/benchmark-baseline-equal/summary.json",
+      "original_sha256": "674560bf036edc5ee74f53263092d5fe83baacfcba4fac9c5114e710b249d14c",
+      "review_sha256": "8110fff52ce818e4d845b462d322dc4bd203423ed48765e13c10795f9336ba13"
+    },
+    {
+      "path": "linux/benchmark-baseline-equal/exclude/resources.json",
+      "original_sha256": "34f88889ae76d43a3631568d12f851238ba0dd5d78d91d9ac08fd316b34c59cd",
+      "review_sha256": "5be2d60982b98a9964e866a4fe2dee49adf26fd88dd396c2245934e4daea3395"
+    },
+    {
+      "path": "linux/benchmark-baseline-equal/none/resources.json",
+      "original_sha256": "b56a9415edc57a4bb7eefffba73c8559540035c1595aa6efbd7c89bd213900fe",
+      "review_sha256": "d31e13dab33d6f2ab8bb66d5ee029c06c4641791aa0fa0b10940f68f30353c02"
+    },
+    {
+      "path": "linux/recorder-v3/process-samples.json",
+      "original_sha256": "0d4548b6bc9489c0e8dfd2ab9358ebd1f89f602617b3dda638fc03696fc498be",
+      "review_sha256": "3fcb2e4b7e4a27dd8a78bfad170d6bfc80bd5db633f64a0122e4bd2fe03ae897"
+    },
+    {
+      "path": "linux/recorder-v3/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/recorder-v3/health.json",
+      "original_sha256": "c818658540db1a6448a62bfe24e556fac717c9efd870d3f053284048e4f81f83",
+      "review_sha256": "a7d90b4ade9a38e77e6e79b75359041643627385af399642bbe13a46d494b936"
+    },
+    {
+      "path": "linux/recorder-v3/database-checks.json",
+      "original_sha256": "6cfd9e1ff6d38d74d4e34b774c08d3d048350b36cfc22c001c65e79c8324e96b",
+      "review_sha256": "14afd59e4990e303ac4edf8ff64d8f0986b0dafd4ce07e2858ea30a2255c0c37"
+    },
+    {
+      "path": "linux/recorder-v3/pixel-checks.json",
+      "original_sha256": "319079c99f7da5ac9f7938a83d498f3ef671070a2f34bbea056856c9e918f58b",
+      "review_sha256": "51502be7222f90cb0cdfce7f4e43b6ebef48f3809f1901845219b7ad432cdf3e"
+    },
+    {
+      "path": "linux/recorder-v3/command.json",
+      "original_sha256": "0cf3770c7d531dab9c65db24d551534621a892896bcaf1493f8964c64d2ae53c",
+      "review_sha256": "9bea16eb2ed0668958e4076f44c6cc697a83ededd525b28e2e88c5eb213a6c6e"
+    },
+    {
+      "path": "linux/recorder-v3/receipt.json",
+      "original_sha256": "5af8f387b95f80a8a5088f127de02a0a75ded1399620eb3ca1faeacf0b7f1847",
+      "review_sha256": "21eed6b14a2a66abf0931438c5605defd1cabea5b332ed316729539c5148e692"
+    },
+    {
+      "path": "linux/recorder-v3/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/benchmark-final/summary.json",
+      "original_sha256": "e35940bdc0659981935f50e0ddf5a601e18ff9f0fbcaefcc960d149fb4f631d5",
+      "review_sha256": "783b12ec9893fee5eb24724e3077e408254538a1083f9be8eb0e69edb75181eb"
+    },
+    {
+      "path": "linux/benchmark-final/exclude/resources.json",
+      "original_sha256": "4ee4530af27ecf3215c575003773cd0e2de53cbab3023618e472ed1a75d1c42e",
+      "review_sha256": "5b1a8c67a355c49ae4a70369b6b4df7fdaa07bb9f25473c8b4a3c51b0765e5ec"
+    },
+    {
+      "path": "linux/benchmark-final/none/resources.json",
+      "original_sha256": "caed6e42db1860ea4ddd7f8ffd69a51eb8302b5dae9a21f1ad88d3de19d9affd",
+      "review_sha256": "c1856a9e05f1bfbfb2b65bac0aa891adfd09f515c9a2c51c20f240ec625ade10"
+    },
+    {
+      "path": "linux/final-native/alpha-checks.json",
+      "original_sha256": "8645b5a980cd78dd37ef7c2b5d9997c9a816084df8c0ca25be6aa7bee7542385",
+      "review_sha256": "0cb3b6a7c3795ce422291d31b6213efbb2590d0f3d8f370c3c7cd631cf5678cf"
+    },
+    {
+      "path": "linux/final-native/source-hashes.json",
+      "original_sha256": "9a08224e7016800d75f4a237a6ff7ba669ac25bd1e833c1b68a667fafa1e507d",
+      "review_sha256": "f000ac533f0ab149a00b910e2351bcc997eaa740b1e0c4bb2aa8741706634ae5"
+    },
+    {
+      "path": "linux/final-native/alpha-opacity-acceptance.json",
+      "original_sha256": "8b007d5228e7e31fddde3447f91f46498120805ce543f3ba69da4ca8e8459d3f",
+      "review_sha256": "b4bd199ad0dd7656ef8d54652aa02ee18dc8eff93f8b54a5bdf60f173b32c030"
+    },
+    {
+      "path": "linux/final-native/alpha-roi-values.json",
+      "original_sha256": "d085d1a06001800b07b90335dca46aa7b77fbceeb1df96d2c3e85f384dea2052",
+      "review_sha256": "c6dc41f5c1f3b2f21e9abc375691eb9be6b71b15d6475a1dcd42545d9845e2ea"
+    },
+    {
+      "path": "linux/final-native/exclude/process-samples.json",
+      "original_sha256": "e7274eaf419128ec20f5bfba30622246f5e55f777f77eed114b076d24c76ce94",
+      "review_sha256": "1e9c4ebba88777a276746cf9cd33460d8c596cb25fe8ff3e228d9182e0f9283a"
+    },
+    {
+      "path": "linux/final-native/exclude/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/final-native/exclude/video-receipt.json",
+      "original_sha256": "dba7e30ae67af77652789c50dce892b659c9305de144a3aa99ff91e0320a3f06",
+      "review_sha256": "445837b1f1bf9d7ee164311e84ac04a277dd15fbdcb317d51bcc945788b2b56f"
+    },
+    {
+      "path": "linux/final-native/exclude/acceptance.json",
+      "original_sha256": "a6f959905ed0e9d5f5ac1e44a90e22451b84c25b1e6d39c8e8c43520e4dacf6c",
+      "review_sha256": "5b81747bc47d930762a2fdb3968b7542d7fc3c0ca92458c28a1bb6f145ff5ec5"
+    },
+    {
+      "path": "linux/final-native/exclude/database-checks.json",
+      "original_sha256": "ed80331ace0dc819f3246b030430700e4cf4421a5baf7d81e1f2a742d7f7a559",
+      "review_sha256": "e5d04e4c71174ce0e518cae0378ba59224a9866b3f18c9e304a897034053dd46"
+    },
+    {
+      "path": "linux/final-native/exclude/pixel-checks.json",
+      "original_sha256": "96387b55b338abd1cc480c488d2d18de9848b7cd44baf1d15a7b35809b229d60",
+      "review_sha256": "b6a90f23caf7b76b194b889dd5f5becba643f77e6d5c4e138259d7993173b5ee"
+    },
+    {
+      "path": "linux/final-native/exclude/command.json",
+      "original_sha256": "4f8716759969a3ce1fe336a0eb4a814e881ac2b1d287a79b08792e7764419dcc",
+      "review_sha256": "c276a792ff4722fbd37be58227516cd13fa8881e557c0f996c9a4709be7e557d"
+    },
+    {
+      "path": "linux/final-native/exclude/receipt.json",
+      "original_sha256": "85679b5f5a131ad2f4f288ebb2394d1ec529b2df5f364f074565af7fab59a306",
+      "review_sha256": "04d75bccafc84f50db69cc3c19d0ae74781b09a848c51bb02f6915e67895d9d3"
+    },
+    {
+      "path": "linux/final-native/exclude/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/final-native/include/process-samples.json",
+      "original_sha256": "e2a203ae844c1ce06f0efc9ac8d870fb3493533c3da2019009b87b0939a64b03",
+      "review_sha256": "ac3802cf84f1afc4a07781bbcbacef08d3fa178ed5f1c75c8b67b9a868158dc5"
+    },
+    {
+      "path": "linux/final-native/include/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/final-native/include/acceptance.json",
+      "original_sha256": "6c595a093bdda86505348a69deedc56d700de52ea21ef90becd6eddb1103d403",
+      "review_sha256": "2df8a17a4494378b5834f9cff5f17910bb5b971b70d22cbd67916a145b85d329"
+    },
+    {
+      "path": "linux/final-native/include/database-checks.json",
+      "original_sha256": "bda45fb0bb342a604e37edfd92d7ba1a32e7a25763e9521dea6e962d459b49d2",
+      "review_sha256": "42d2dbb79e3b71f1416b194856bf02e9efd5f3ace8bf1e938b1390e04c0c72c0"
+    },
+    {
+      "path": "linux/final-native/include/pixel-checks.json",
+      "original_sha256": "f7c1b8a5d5ae10b22e0247ff18ba352aed7316e305a130b1a1c5716abac36a51",
+      "review_sha256": "6c7c3b81b4d067bef237c2074d7abd4466c35ed14c10e6e76182e6ecd711abc5"
+    },
+    {
+      "path": "linux/final-native/include/command.json",
+      "original_sha256": "e6a979abf4b5a5650212c807885c5c8f2fcbd56bd996561c9c5f017ba30ea68f",
+      "review_sha256": "63638d769bee0c1d2bd2b9bed26a9fc59cc3e49eb4dbfa45769991611510bcf0"
+    },
+    {
+      "path": "linux/final-native/include/receipt.json",
+      "original_sha256": "88ea2b4ae5a53ea6644217c30cfb6e7e65fe870fc96d866d2903c6e161330b66",
+      "review_sha256": "c45a2ee7bc53e31e3d524600ebd97e6c93169aac884d53b42e5874b3e542c879"
+    },
+    {
+      "path": "linux/final-native/include/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/final-native/drm-gate/process-samples.json",
+      "original_sha256": "9be15af8b426b00d9f6fb2caa191a7d05e140cc2ce8e351e17a38ef44d97b00f",
+      "review_sha256": "7e6fb09e5f6e141f9004656b482e865439ecce7ce213807f07c3f1fc83c367d7"
+    },
+    {
+      "path": "linux/final-native/drm-gate/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/final-native/drm-gate/acceptance.json",
+      "original_sha256": "e7b1af2f25d92ca3a7ba96161e6628a5817bbe1be32a166163314203c008090d",
+      "review_sha256": "6dc6d6c7a906e46b55a7745b09b39b22afd170fd9172efece0865132bc1eef37"
+    },
+    {
+      "path": "linux/final-native/drm-gate/database-checks.json",
+      "original_sha256": "7e70ca594f5b0d45fc83e65b49eb3e3e56e757c3db70f5a9aee447c2b986fa70",
+      "review_sha256": "912663c9ff4c26a7ca23e9b7b978a3d282f53810d8ed278ab614c40db572ca21"
+    },
+    {
+      "path": "linux/final-native/drm-gate/pixel-checks.json",
+      "original_sha256": "a816afcb814c6ff71f42965ded710261663bcb83f5a81e4cb2b1e9b13de1789f",
+      "review_sha256": "2b69bdfa2020e54a0c86507f3df91f2f6d9ed1360f768050bdef6959919caf98"
+    },
+    {
+      "path": "linux/final-native/drm-gate/command.json",
+      "original_sha256": "33e279e3b7fbc0a286af494059e7d55a680a7b4aeaa1f96db9eb58c98be68ce1",
+      "review_sha256": "cd29a2da8a3fd39a2dafd850d8868edf09ff008fe19b78ae527fdec2a111ca1b"
+    },
+    {
+      "path": "linux/final-native/drm-gate/receipt.json",
+      "original_sha256": "1a167ed5d761cfa1342bb0c5761c1fbfe73e251eb651400cb375886ef1937888",
+      "review_sha256": "1c84fa5ad9cefd00ef5d900732fb03fa07f7a105543566b9d53cbcd9f107dc91"
+    },
+    {
+      "path": "linux/final-native/drm-gate/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/final-native/url-gate/process-samples.json",
+      "original_sha256": "d96c870a6dd91a7586aeda38956088f09d49c64bb1394925bb1ec79b75622ccc",
+      "review_sha256": "9a9dac646a6379be340e423194262acb4914163449f052f9aade14e3a43ee94a"
+    },
+    {
+      "path": "linux/final-native/url-gate/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/final-native/url-gate/acceptance.json",
+      "original_sha256": "e7b1af2f25d92ca3a7ba96161e6628a5817bbe1be32a166163314203c008090d",
+      "review_sha256": "6dc6d6c7a906e46b55a7745b09b39b22afd170fd9172efece0865132bc1eef37"
+    },
+    {
+      "path": "linux/final-native/url-gate/database-checks.json",
+      "original_sha256": "05b0e56eefd4e3cb9298f61767fbacc1afcd65e953539aeec56d8afc1f9cd31d",
+      "review_sha256": "5fcc0248b0583a4e3f79d7c35b1404eb16922c212ebb3c1fbdf103392335e264"
+    },
+    {
+      "path": "linux/final-native/url-gate/pixel-checks.json",
+      "original_sha256": "42909dcb597dffdb8218da7c9225e15fbbf361282755017518c32f13d1cb7793",
+      "review_sha256": "0384959660462b2929b60a6bf04b948100f8b9ee4907571b677a339316d12242"
+    },
+    {
+      "path": "linux/final-native/url-gate/command.json",
+      "original_sha256": "648381927c2f3df4b2d3fb7fb5df96489a1fb58242fafc821f298fc5c0d22f5b",
+      "review_sha256": "4d3189c49406ed6dca67a9dfc3017943fb2f7e50655c1fcfc6742884f5c353cc"
+    },
+    {
+      "path": "linux/final-native/url-gate/receipt.json",
+      "original_sha256": "bad15a098c0630746b1a4b4e2cc1c4da6022718a09355ad0ce7544a69c4d58ce",
+      "review_sha256": "00d12e76f51dc000ecf35dfa75f2113380515baa7c6d50f983111052d452f535"
+    },
+    {
+      "path": "linux/final-native/url-gate/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/recorder/process-samples.json",
+      "original_sha256": "7656fbac80e857121eecf10f1113a8af02a9574cdf35eb25bf71a01d67cc6334",
+      "review_sha256": "7858fe6e9e38819317cb3bcc1d411523e595659cce12827f46b33c754cb86bd1"
+    },
+    {
+      "path": "linux/recorder/exit.json",
+      "original_sha256": "bfdedf06596faa2042b0fedd9653ec1023d2e96ed56dc40b607985bc8438c1d5",
+      "review_sha256": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88"
+    },
+    {
+      "path": "linux/recorder/health.json",
+      "original_sha256": "adb3264f63a39dd0113333931ebcd40562bd24a0ff077f1611a14a67d64ece51",
+      "review_sha256": "20f2d5a9e43e1e2b3a6499636091dad9a93c57a9cc2abf1a3c54648042276940"
+    },
+    {
+      "path": "linux/recorder/database-checks.json",
+      "original_sha256": "e927af58daaf43baf8312e7f278b3be28ed44ac63229b604f2dfa6a0b2f67758",
+      "review_sha256": "1cceb3266339efa4dbadb2cd47ab8eb5f940edebadee71943883c46734f7a928"
+    },
+    {
+      "path": "linux/recorder/pixel-checks.json",
+      "original_sha256": "2573361c4cde19bc705bacad170cae9a9fb9e34771313c656170a365b30a7baf",
+      "review_sha256": "c0b92c0341a32003c2e855b809f4c2018b75824b59bf930a7e845094d9e07ec3"
+    },
+    {
+      "path": "linux/recorder/command.json",
+      "original_sha256": "c46e59da9a28cf128ddd73bbaa48af0b032475491b4046fb6f0ac13bc9da14b2",
+      "review_sha256": "40676deec341987bae7992f44a3600df8a82645f58ab833989bc86b221656897"
+    },
+    {
+      "path": "linux/recorder/receipt.json",
+      "original_sha256": "8f9073951d15888b9bd0871152a7e3089672a32885652fe97c92a938b27663e2",
+      "review_sha256": "b3b16d55c21453c9d479ec495277d68fddc93246b6ce57509fcb0325c78f1488"
+    },
+    {
+      "path": "linux/recorder/production-db-check.json",
+      "original_sha256": "cbf7d5bdaa935ea8317e011a950c330a9c7b8cde84911df400376137cb2a992d",
+      "review_sha256": "722f8e42fd038d2ad5d798394b695be25957dd642157bde7426b0fa6b7607d88"
+    },
+    {
+      "path": "linux/benchmark-clean/summary.json",
+      "original_sha256": "8c66f0b229c2330036e443332cd9c6cb7145488dd2965f4b0382f023aa4ba3b7",
+      "review_sha256": "26b90a7361861f287f2247545f4245ef6b54cccc06ed1926f0aacb278cc56947"
+    },
+    {
+      "path": "linux/benchmark-clean/candidate/resources.json",
+      "original_sha256": "ef77e28edc9c9b0148c2f197a5c69fe8dbc3711aa9207aadc520d599cdd536ac",
+      "review_sha256": "a5681831240370dd9fb5e204da83d65e9f756e38a43886fff636779104d78eda"
+    },
+    {
+      "path": "linux/benchmark-clean/baseline/resources.json",
+      "original_sha256": "22ae327139cddbd617f6f209206607bf0cbff42b70cc51e67bc072c8c7a729a1",
+      "review_sha256": "dabb7c1702f1c0570b8450a7a9a15ade5c73ec5bacfc8212b34cc6392f77be14"
+    },
+    {
+      "path": "windows/recorder-video-manifest.json",
+      "original_sha256": "754e103f4544d12f7b7a5bab7890bb685c0c3d51220aa3a47ebe57f045376f6b",
+      "review_sha256": "37c9d987c5ba4646c3e5bd893fb852ab0ed60179dbfb2b583a6361b8c7a668c3"
+    },
+    {
+      "path": "windows/transparency-video-manifest.json",
+      "original_sha256": "dcf08eb0863f5b199cc4c699f9261f5921dec8e36a72bdbd3db930369d7decd4",
+      "review_sha256": "86d603f90c63b69156eed5a5214baa9fb23a6a393500940f5039beb5a20019b8"
+    },
+    {
+      "path": "windows/recorder-visual-verification.json",
+      "original_sha256": "22a13ae61de7b8d611b802ef661a31b63888045f1d4d15ace0263fbe66249697",
+      "review_sha256": "3bf963db28a58804862c2ab6fbecbd96602a2a91e50b6bb70bf9490d38533c62"
+    },
+    {
+      "path": "windows/guard-correctness/build-profile.json",
+      "original_sha256": "e7b8abd2919d61f4fa41cb7188ba90d1323951927173dda44801271ec9abe87f",
+      "review_sha256": "9b72d3d06c67761b631c5a374512a23694e5fe59e97249d1cecb1005553214b4"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/b-raw.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/a-raw.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/a-filtered.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/alpha-ab-release-acceptance/b-filtered.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/recorder-gates/cadence-full-jpeg-audit.json",
+      "original_sha256": "df3106908083928cff2806e1d4f6e763edb3f8c405042a14b269f9f7629c2c02",
+      "review_sha256": "c91022c94629a7524b52630f58a421ef003965dd352c61fef99b0ad426bd2bdd"
+    },
+    {
+      "path": "windows/comparison-release/candidate-measured.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/comparison-release/candidate-warmup.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/comparison-release/baseline-warmup.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/comparison-release/baseline-measured.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/recorder-release/full-jpeg-audit.json",
+      "original_sha256": "3dae1a0b89290b957586a9bbbfeb00597bea1fc5b60652955a1c7de367735bc7",
+      "review_sha256": "fb96baa4dc98cd909cece5d0256240cf3f200d7cb5d617fe80518dbbb641d02d"
+    },
+    {
+      "path": "windows/allowed-target-churn-release/probe.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/shell-preview-release/filtered.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/shell-preview-release/raw.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/minimized.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/fullyoccluded.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/nomatch.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/noexcluded.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/strictinclude.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/blank-title.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "windows/bounded-cases-release/normal-five-window.err.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "review_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    }
+  ]
+}

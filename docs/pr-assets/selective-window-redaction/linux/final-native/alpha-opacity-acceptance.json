@@ -1,0 +1,40 @@
+[
+  {
+    "case": "transparent_front",
+    "crop": [
+      1050,
+      550,
+      1250,
+      650
+    ],
+    "expected_rgb": [
+      0,
+      140,
+      140
+    ],
+    "expected_global_opacity": 0.55,
+    "matching_pixels": 18682,
+    "total_pixels": 20000,
+    "fraction": 0.9341,
+    "passed": true
+  },
+  {
+    "case": "transparent_front_b",
+    "crop": [
+      1050,
+      550,
+      1250,
+      650
+    ],
+    "expected_rgb": [
+      0,
+      140,
+      140
+    ],
+    "expected_global_opacity": 0.55,
+    "matching_pixels": 18682,
+    "total_pixels": 20000,
+    "fraction": 0.9341,
+    "passed": true
+  }
+]

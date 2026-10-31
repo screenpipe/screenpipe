@@ -1,0 +1,675 @@
+[
+  {
+    "case": "five",
+    "start": 1793410641.4127414,
+    "end": 1793410669.6013072,
+    "snapshot_count": 26,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410655029_m60.jpg",
+      "data/data/data/2026-10-31/1793410663240_m60.jpg",
+      "data/data/data/2026-10-31/1793410653843_m60.jpg",
+      "data/data/data/2026-10-31/1793410646800_m60.jpg",
+      "data/data/data/2026-10-31/1793410644463_m60.jpg",
+      "data/data/data/2026-10-31/1793410665605_m60.jpg",
+      "data/data/data/2026-10-31/1793410664411_m60.jpg",
+      "data/data/data/2026-10-31/1793410667942_m60.jpg",
+      "data/data/data/2026-10-31/1793410651509_m60.jpg",
+      "data/data/data/2026-10-31/1793410660888_m60.jpg",
+      "data/data/data/2026-10-31/1793410641488_m60.jpg",
+      "data/data/data/2026-10-31/1793410662074_m60.jpg",
+      "data/data/data/2026-10-31/1793410666771_m60.jpg",
+      "data/data/data/2026-10-31/1793410645632_m60.jpg",
+      "data/data/data/2026-10-31/1793410658550_m60.jpg",
+      "data/data/data/2026-10-31/1793410650323_m60.jpg",
+      "data/data/data/2026-10-31/1793410669133_m60.jpg",
+      "data/data/data/2026-10-31/1793410659717_m60.jpg",
+      "data/data/data/2026-10-31/1793410642863_m60.jpg",
+      "data/data/data/2026-10-31/1793410657364_m60.jpg",
+      "data/data/data/2026-10-31/1793410649154_m60.jpg",
+      "data/data/data/2026-10-31/1793410652672_m60.jpg",
+      "data/data/data/2026-10-31/1793410656193_m60.jpg",
+      "data/data/data/2026-10-31/1793410647987_m60.jpg",
+      "data/data/data/2026-10-31/1793410641695_m60.jpg",
+      "data/data/data/2026-10-31/1793410644030_m60.jpg"
+    ],
+    "images": [
+      {
+        "file": "data/data/data/2026-10-31/1793410655029_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410663240_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410653843_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410646800_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410644463_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410665605_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410664411_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410667942_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410651509_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410660888_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410641488_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410662074_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410666771_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410645632_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410658550_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410650323_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410669133_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410659717_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410642863_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410657364_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410649154_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410652672_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410656193_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410647987_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410641695_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410644030_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      }
+    ],
+    "no_forbidden_pixels": true,
+    "useful": true
+  },
+  {
+    "case": "excluded_focus",
+    "start": 1793410672.7437356,
+    "end": 1793410695.9005947,
+    "snapshot_count": 20,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410682208_m60.jpg",
+      "data/data/data/2026-10-31/1793410677599_m60.jpg",
+      "data/data/data/2026-10-31/1793410687941_m60.jpg",
+      "data/data/data/2026-10-31/1793410679902_m60.jpg",
+      "data/data/data/2026-10-31/1793410678763_m60.jpg",
+      "data/data/data/2026-10-31/1793410674144_m60.jpg",
+      "data/data/data/2026-10-31/1793410681046_m60.jpg",
+      "data/data/data/2026-10-31/1793410672997_m60.jpg",
+      "data/data/data/2026-10-31/1793410685654_m60.jpg",
+      "data/data/data/2026-10-31/1793410694834_m60.jpg",
+      "data/data/data/2026-10-31/1793410690242_m60.jpg",
+      "data/data/data/2026-10-31/1793410693687_m60.jpg",
+      "data/data/data/2026-10-31/1793410675308_m60.jpg",
+      "data/data/data/2026-10-31/1793410691387_m60.jpg",
+      "data/data/data/2026-10-31/1793410676448_m60.jpg",
+      "data/data/data/2026-10-31/1793410683347_m60.jpg",
+      "data/data/data/2026-10-31/1793410684492_m60.jpg",
+      "data/data/data/2026-10-31/1793410686794_m60.jpg",
+      "data/data/data/2026-10-31/1793410692549_m60.jpg",
+      "data/data/data/2026-10-31/1793410689102_m60.jpg"
+    ],
+    "images": [
+      {
+        "file": "data/data/data/2026-10-31/1793410682208_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410677599_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410687941_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410679902_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410678763_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410674144_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410681046_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410672997_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410685654_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410694834_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410690242_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410693687_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410675308_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410691387_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410676448_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410683347_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410684492_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410686794_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410692549_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410689102_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      }
+    ],
+    "no_forbidden_pixels": true,
+    "useful": true
+  },
+  {
+    "case": "incognito_focus",
+    "start": 1793410699.0439296,
+    "end": 1793410712.1371195,
+    "snapshot_count": 0,
+    "snapshots": [],
+    "images": [],
+    "no_forbidden_pixels": true,
+    "useful": false
+  },
+  {
+    "case": "five",
+    "start": 1793410715.2823753,
+    "end": 1793410728.3774486,
+    "snapshot_count": 11,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410716266_m60.jpg",
+      "data/data/data/2026-10-31/1793410722134_m60.jpg",
+      "data/data/data/2026-10-31/1793410717435_m60.jpg",
+      "data/data/data/2026-10-31/1793410724472_m60.jpg",
+      "data/data/data/2026-10-31/1793410725658_m60.jpg",
+      "data/data/data/2026-10-31/1793410723302_m60.jpg",
+      "data/data/data/2026-10-31/1793410720948_m60.jpg",
+      "data/data/data/2026-10-31/1793410719785_m60.jpg",
+      "data/data/data/2026-10-31/1793410718621_m60.jpg",
+      "data/data/data/2026-10-31/1793410726827_m60.jpg",
+      "data/data/data/2026-10-31/1793410727995_m60.jpg"
+    ],
+    "images": [
+      {
+        "file": "data/data/data/2026-10-31/1793410716266_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410722134_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410717435_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410724472_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410725658_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410723302_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410720948_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410719785_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410718621_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410726827_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      },
+      {
+        "file": "data/data/data/2026-10-31/1793410727995_m60.jpg",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "forbidden_pixels": 0,
+        "cyan_pixels": 936290,
+        "yellow_pixels": 0
+      }
+    ],
+    "no_forbidden_pixels": true,
+    "useful": true
+  }
+]

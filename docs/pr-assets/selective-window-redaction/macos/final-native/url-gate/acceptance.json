@@ -1,0 +1,7 @@
+[
+  {
+    "case": "excluded_focus",
+    "check": "expected persistence",
+    "passed": true
+  }
+]

@@ -1,0 +1,84 @@
+[
+  {
+    "policy": "exclude",
+    "cpu_percent_one_core_median": 4.7,
+    "cpu_percent_one_core_max": 35.4,
+    "rss_mib_peak": 346.640625,
+    "rss_mib_final": 346.640625,
+    "cases": [
+      {
+        "case": "five",
+        "observed_seconds_after_settle": 28.48079013824463,
+        "stored_screenshots": 20,
+        "observed_saved_fps": 0.7022277086738391
+      },
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.459586143493652,
+        "stored_screenshots": 19,
+        "observed_saved_fps": 0.8099034605207438
+      },
+      {
+        "case": "incognito_focus",
+        "observed_seconds_after_settle": 13.261107921600342,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      },
+      {
+        "case": "five",
+        "observed_seconds_after_settle": 13.28713321685791,
+        "stored_screenshots": 11,
+        "observed_saved_fps": 0.8278685718333784
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "include",
+    "cpu_percent_one_core_median": 4.3,
+    "cpu_percent_one_core_max": 31.9,
+    "rss_mib_peak": 190.640625,
+    "rss_mib_final": 178.46875,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.432531118392944,
+        "stored_screenshots": 14,
+        "observed_saved_fps": 0.5974599982078314
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "url-gate",
+    "cpu_percent_one_core_median": 2.5,
+    "cpu_percent_one_core_max": 28.4,
+    "rss_mib_peak": 189.5625,
+    "rss_mib_final": 189.5625,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.443310976028442,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      }
+    ],
+    "acceptance_passed": true
+  },
+  {
+    "policy": "drm-gate",
+    "cpu_percent_one_core_median": 3.6,
+    "cpu_percent_one_core_max": 16.6,
+    "rss_mib_peak": 193.46875,
+    "rss_mib_final": 193.46875,
+    "cases": [
+      {
+        "case": "excluded_focus",
+        "observed_seconds_after_settle": 23.409164905548096,
+        "stored_screenshots": 0,
+        "observed_saved_fps": 0.0
+      }
+    ],
+    "acceptance_passed": true
+  }
+]

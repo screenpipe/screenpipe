@@ -1,0 +1,1 @@
+{"started_at": 1793410387.052907, "command": ["/opt/homebrew/bin/ffmpeg", "-loglevel", "warning", "-y", "-f", "avfoundation", "-framerate", "8", "-i", "0:none", "-t", "150", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p", "/Users/admin/redaction/evidence/final-native/exclude/native-session.mp4"]}

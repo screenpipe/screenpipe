@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "monitors": [
+    [
+      "monitor_78",
+      50
+    ],
+    [
+      "monitor_79",
+      50
+    ]
+  ],
+  "images": 101,
+  "marker_pixels": 0,
+  "all_images_useful": true,
+  "engine_source_sha256": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9"
+}

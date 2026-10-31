@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running unittests src/lib.rs (target/debug/deps/screenpipe_config-4e4b072a530bc266)
+
+running 26 tests
+test recording::tests::deserializes_from_empty_json ... ok
+test recording::tests::deserializes_legacy_extra_fields ... ok
+test recording::tests::explicit_aec_mode_wins_over_legacy_flags ... ok
+test recording::tests::explicit_screenpipe_aec_mode_enables_software_aec ... ok
+test recording::tests::missing_aec_mode_keeps_aec_off ... ok
+test recording::tests::deserializes_real_store_bin_shape ... ok
+test recording::tests::native_macos_aec_selection_preserves_native_echo_cancellation ... ok
+test recording::tests::audio_chunk_duration_accepts_i32 ... ok
+test recording::tests::helper_deepgram_key_sentinel_values ... ok
+test recording::tests::malformed_domain_rule_survives_as_fail_closed_sentinel ... ok
+test recording::tests::input_capture_defaults_follow_build_and_preserve_explicit_choices ... ok
+test recording::tests::malformed_monitor_id_shape_still_fails_deserialization ... ok
+test recording::tests::screenshot_capture_controls_timeline_cache ... ok
+test recording::tests::default_round_trips_through_json ... ok
+test recording::tests::meeting_piggyback_defaults_on ... ok
+test recording::tests::legacy_scalar_monitor_id_deserializes_as_single_selection ... ok
+test recording::tests::scrubbed_legacy_user_id_null_uses_empty_string_sentinel ... ok
+test recording::tests::pii_defaults_follow_build_and_preserve_explicit_choices ... ok
+test recording::tests::flatten_simulation ... ok
+test recording::tests::persisted_schedule_accepts_weekday_name_but_rejects_unknown_name ... ok
+test recording::tests::structured_domain_rules_deserialize_and_round_trip ... ok
+test recording::tests::vocab_entry_accepts_bare_string_and_struct_mixed ... ok
+test recording::tests::unknown_fields_ignored ... ok
+test recording::tests::semantic_context_mode_defaults_legacy_users_to_memory_and_round_trips ... ok
+test recording::recording_detail_tests::older_settings_default_to_auto_and_all_modes_round_trip ... ok
+test recording::tests::round_trips_through_toml ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.01s

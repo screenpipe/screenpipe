@@ -1,0 +1,50 @@
+[
+  {
+    "utc": "2026-10-31T03:20:54.7259318Z",
+    "pid": 6552,
+    "cpu_seconds": 1.828125,
+    "rss_bytes": 88121344,
+    "handles": 856,
+    "threads": 70
+  },
+  {
+    "utc": "2026-10-31T03:21:04.7471985Z",
+    "pid": 6552,
+    "cpu_seconds": 1.90625,
+    "rss_bytes": 84467712,
+    "handles": 858,
+    "threads": 70
+  },
+  {
+    "utc": "2026-10-31T03:21:14.7552303Z",
+    "pid": 6552,
+    "cpu_seconds": 1.984375,
+    "rss_bytes": 81121280,
+    "handles": 856,
+    "threads": 68
+  },
+  {
+    "utc": "2026-10-31T03:21:24.7679812Z",
+    "pid": 6552,
+    "cpu_seconds": 2.140625,
+    "rss_bytes": 77053952,
+    "handles": 858,
+    "threads": 68
+  },
+  {
+    "utc": "2026-10-31T03:21:34.7864937Z",
+    "pid": 6552,
+    "cpu_seconds": 2.1875,
+    "rss_bytes": 73383936,
+    "handles": 858,
+    "threads": 68
+  },
+  {
+    "utc": "2026-10-31T03:21:44.7911864Z",
+    "pid": 6552,
+    "cpu_seconds": 2.1875,
+    "rss_bytes": 70336512,
+    "handles": 852,
+    "threads": 65
+  }
+]

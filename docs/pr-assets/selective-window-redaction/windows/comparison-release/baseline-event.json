@@ -1,0 +1,7 @@
+{
+  "case": "baseline-release",
+  "exit": 0,
+  "start_note": "20 separate warmup frames completed before measurement",
+  "measured_frames": 120,
+  "probe_sha256": "da81306a9cd9d3955a56d41f83544ecec30f7eeaa2534a1e82b05bf68a90e64c"
+}

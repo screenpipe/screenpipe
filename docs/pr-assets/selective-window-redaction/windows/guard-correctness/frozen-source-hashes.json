@@ -1,0 +1,20 @@
+[
+  {
+    "path": "crates/screenpipe-screen/src/screenshot_privacy/windows.rs",
+    "sha256": "4625136f8e02aba9caa554ba15aedde762a8a7c66319b942e2516819ef7236fc",
+    "lf_normalized_sha256": "4625136f8e02aba9caa554ba15aedde762a8a7c66319b942e2516819ef7236fc",
+    "lf_matches": true
+  },
+  {
+    "path": "crates/screenpipe-screen/examples/windows_privacy_fixture.rs",
+    "sha256": "cb2e4d18383bbab3cd3101fda5512e17638453d14c4991cfe0b8dfc3444d2bca",
+    "lf_normalized_sha256": "cb2e4d18383bbab3cd3101fda5512e17638453d14c4991cfe0b8dfc3444d2bca",
+    "lf_matches": true
+  },
+  {
+    "path": "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs",
+    "sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+    "lf_normalized_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+    "lf_matches": true
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "method": "20-frame warmup in a separate process, followed by 120-frame measured process; no compiler active. Statistics use accepted frames only; median is arithmetic mean of middle pair; p95 nearest-rank ceil(0.95*n). Rejections retained separately. CPU/RSS/handles are process samples including startup.",
+  "baseline_commit": "3bb684b71567885bef406bfc3186f9da1c25a3af",
+  "baseline": {
+    "attempted": 120,
+    "accepted": 120,
+    "withheld": [],
+    "timing_ms": {
+      "capture_ms": {
+        "mean": 597.5220766666666,
+        "median": 594.8622499999999,
+        "p95": 664.3765000000001
+      },
+      "write_ms": {
+        "mean": 22.423870833333332,
+        "median": 22.0407,
+        "p95": 24.8826
+      },
+      "read_ms": {
+        "mean": 10.000695,
+        "median": 10.0333,
+        "p95": 10.5334
+      }
+    },
+    "cpu_seconds": 9.09375,
+    "rss_peak_bytes": 45891584,
+    "handles_peak": 984,
+    "handles_end": 975
+  },
+  "candidate": {
+    "attempted": 120,
+    "accepted": 119,
+    "withheld": [
+      {
+        "error": "window scene changed during privacy capture",
+        "index": 0,
+        "saved": false
+      }
+    ],
+    "timing_ms": {
+      "capture_ms": {
+        "mean": 468.0585537815126,
+        "median": 463.9583,
+        "p95": 526.8258999999999
+      },
+      "write_ms": {
+        "mean": 23.055431092436976,
+        "median": 22.7177,
+        "p95": 25.1845
+      },
+      "read_ms": {
+        "mean": 10.096376470588234,
+        "median": 10.077300000000001,
+        "p95": 11.386999999999999
+      }
+    },
+    "cpu_seconds": 10.234375,
+    "rss_peak_bytes": 44404736,
+    "handles_peak": 273,
+    "handles_end": 269
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "status": "coverage_unavailable",
+  "pass": false,
+  "reason": "Native visible taskbar button was present and hovered twice, but Windows 11 console did not materialize a preview window or thumbnail.",
+  "button": {
+    "name": "windows_privacy_fixture - 1 running window",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "pid": 6432,
+    "onscreen": true,
+    "bounds": [
+      680,
+      720,
+      44,
+      48
+    ]
+  },
+  "raw_positive_control_contains_excluded_window": true,
+  "raw_positive_control_contains_excluded_thumbnail": false,
+  "filtered_capture_exit": 0,
+  "note": "Known-class guard remains conservative; potentially black allowed previews are documented as a limitation."
+}

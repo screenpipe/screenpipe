@@ -1,0 +1,32 @@
+{
+  "probe_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+  "runtime_unchanged": true,
+  "build_exit": 0,
+  "binary_sha256": "aea87e1dcfbc927ffb4766a2935a623e8c06b63984df941201aabdc909755ac7",
+  "checks": [
+    {
+      "case": "exclude",
+      "exit": 0,
+      "passed": true,
+      "frames": 3
+    },
+    {
+      "case": "positive",
+      "exit": 0,
+      "passed": true,
+      "frames": 1
+    },
+    {
+      "case": "invalid",
+      "exit": 1,
+      "passed": true,
+      "frames": 0
+    },
+    {
+      "case": "unsupported-cap",
+      "exit": 1,
+      "passed": true,
+      "frames": 0
+    }
+  ]
+}

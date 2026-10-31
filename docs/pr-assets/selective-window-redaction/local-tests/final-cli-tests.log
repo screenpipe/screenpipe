@@ -1,0 +1,66 @@
+warning: function `admission_for_model` is never used
+  --> crates/screenpipe-core/src/workflows/pipeline.rs:47:4
+   |
+47 | fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
+   |    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-core` (lib) generated 1 warning
+   Compiling screenpipe-engine v0.4.53 (/Users/louis/Documents/Codex/2026-10-30/cna-x20/work/screenpipe/crates/screenpipe-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 59.95s
+     Running unittests src/lib.rs (target/debug/deps/screenpipe_engine-3cdb747ff9466091)
+
+running 50 tests
+test cli::tests::test_default_true_bools_accept_space_separated_value ... ok
+test cli::tests::test_default_true_bools_bare_flag_still_sets_true ... ok
+test cli::tests::test_default_true_bools_can_be_disabled_with_eq_false ... ok
+test cli::tests::test_cli_trigger_sources_survive_sensitive_storage_opt_out ... ok
+test cli::tests::test_default_true_bools_default_to_true_without_flag ... ok
+test cli::tests::test_audio_device_flag_enables_audio_over_persisted_disable ... ok
+test cli::tests::test_enhanced_incognito_detection_is_explicit ... ok
+test cli::tests::test_absent_app_context_arguments_preserve_persisted_settings ... ok
+test cli::tests::test_app_context_automation_overrides_persisted_disabled_mode ... ok
+test cli::tests::test_app_context_argument_takes_precedence_over_legacy_enable_flag ... ok
+test cli::tests::explicit_capture_max_width_overrides_saved_value ... ok
+test cli::tests::test_app_context_off_overrides_persisted_enabled_mode ... ok
+test cli::tests::test_eq_false_registers_as_cli_source_and_overrides_persisted_settings ... ok
+test cli::tests::test_enable_semantic_context_flag_flows_to_recording_settings ... ok
+test cli::tests::explicit_url_rule_flags_replace_persisted_policy ... ok
+test cli::tests::test_explicit_disable_audio_wins_over_audio_device ... ok
+test cli::tests::test_incognito_flags_default_to_basic_filtering ... ok
+test cli::tests::test_keep_computer_awake_default_false ... ok
+test cli::tests::test_fresh_cli_defaults_enable_memory_without_sensitive_input_storage ... ok
+test cli::tests::test_monitor_id_disables_use_all_monitors_default ... ok
+test cli::tests::test_keep_computer_awake_flag_flows_to_recording_settings ... ok
+test cli::tests::test_explicit_cli_overrides_preserve_app_settings_for_absent_defaults ... ok
+test cli::tests::test_explicit_disable_vision_wins_over_monitor_id ... ok
+test cli::tests::test_fresh_hardware_defaults_survive_absent_cli_flags ... ok
+test cli::tests::test_incognito_filter_can_be_disabled ... ok
+test cli::tests::test_monitor_id_flag_enables_vision_over_persisted_disable ... ok
+test cli::tests::recording_detail_cli_preserves_saved_mode_unless_explicitly_overridden ... ok
+test cli::tests::test_no_audio_flags_preserve_persisted_disable_audio ... ok
+test cli::tests::test_pause_on_drm_content_default_false ... ok
+test cli::tests::test_profile_command_parses_port_and_json ... ok
+test cli::tests::test_pause_on_drm_content_flag_sets_true ... ok
+test cli::tests::test_pause_on_drm_content_absent_flows_false ... ok
+test cli::tests::test_no_monitor_id_keeps_use_all_monitors_true ... ok
+test cli::tests::test_pause_on_drm_content_flows_to_recording_settings ... ok
+test cli::tests::test_profile_command_parses_with_defaults ... ok
+test cli::tests::test_no_vision_flags_preserve_persisted_disable_vision ... ok
+test cli::tests::test_record_arg_sources_only_mark_explicit_cli_args ... ok
+test cli::tests::test_setup_command_accepts_remote_api_url ... ok
+test cli::tests::test_setup_command_parses_with_default_api_url ... ok
+test cli::tests::test_survey_command_parses ... ok
+test cli::tests::test_schedule_rules_parse_and_auto_enable ... ok
+test cli::tests::test_schedule_disabled_by_default ... ok
+test cli::tests::test_explicit_capture_choices_win_after_fresh_hardware_defaults ... ok
+test cli::tests::url_rule_flags_reject_bare_labels ... ok
+test cli::tests::url_rule_flags_make_exact_and_subdomain_behavior_explicit ... ok
+test cli::tests::test_new_defaults_preserve_saved_choices ... ok
+test cli::tests::test_schedule_rule_rejects_bad_input ... ok
+test cli::tests::test_app_context_modes_flow_to_recording_settings ... ok
+test cli::tests::test_new_default_flags_accept_explicit_false_and_bare_true ... ok
+test cli::tests::test_semantic_context_environment_precedence ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 1733 filtered out; finished in 0.10s

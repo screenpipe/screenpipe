@@ -1,0 +1,36 @@
+{
+  "utc": "2026-10-31T03:19:43.5002274Z",
+  "display": {
+    "x": 0,
+    "y": 0,
+    "width": 1024,
+    "height": 768
+  },
+  "allowed": {
+    "pid": 12056,
+    "hwnd": "0x20196",
+    "title": "PrivacyAllowed",
+    "rect": [
+      0,
+      0,
+      1024,
+      768
+    ]
+  },
+  "blocked": {
+    "pid": 3864,
+    "hwnd": "0x201A2",
+    "title": "PrivacyBlocked",
+    "rect": [
+      250,
+      170,
+      770,
+      590
+    ]
+  },
+  "foreground": {
+    "hwnd": "0x201A2",
+    "title": "PrivacyBlocked",
+    "matches_blocked": true
+  }
+}

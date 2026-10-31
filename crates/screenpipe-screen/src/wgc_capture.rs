@@ -33,8 +33,9 @@
 
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, RgbaImage};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows::{
     core::{factory, IInspectable, Interface},
@@ -373,6 +374,68 @@ struct LatestFrame {
     demand: CopyDemand,
 }
 
+// CreateForWindow can retain an ALPC port after the returned item is released.
+// Cache only a bounded set of keyed native targets, never sessions or pixels.
+struct PrivacyWindowItem {
+    window_id: u32,
+    pid: u32,
+    item: GraphicsCaptureItem,
+    closed: Arc<AtomicBool>,
+    closed_token: EventRegistrationToken,
+}
+
+impl Drop for PrivacyWindowItem {
+    fn drop(&mut self) {
+        let _ = self.item.RemoveClosed(self.closed_token);
+    }
+}
+
+fn privacy_window_items() -> &'static Mutex<VecDeque<PrivacyWindowItem>> {
+    static ITEMS: OnceLock<Mutex<VecDeque<PrivacyWindowItem>>> = OnceLock::new();
+    ITEMS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn privacy_window_item(window_id: u32, pid: u32) -> Result<GraphicsCaptureItem> {
+    let mut items = privacy_window_items()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    items.retain(|entry| {
+        !entry.closed.load(Ordering::Acquire) && (entry.window_id != window_id || entry.pid == pid)
+    });
+    if let Some(index) = items
+        .iter()
+        .position(|entry| entry.window_id == window_id && entry.pid == pid)
+    {
+        let entry = items.remove(index).expect("located item");
+        let item = entry.item.clone();
+        items.push_back(entry);
+        return Ok(item);
+    }
+    let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+    let item: GraphicsCaptureItem =
+        unsafe { interop.CreateForWindow(HWND(window_id as usize as *mut std::ffi::c_void))? };
+    let closed = Arc::new(AtomicBool::new(false));
+    let flag = closed.clone();
+    let closed_token = item.Closed(
+        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
+            flag.store(true, Ordering::Release);
+            Ok(())
+        }),
+    )?;
+    const MAX_PRIVACY_ITEMS: usize = 8;
+    if items.len() == MAX_PRIVACY_ITEMS {
+        items.pop_front();
+    }
+    items.push_back(PrivacyWindowItem {
+        window_id,
+        pid,
+        item: item.clone(),
+        closed,
+        closed_token,
+    });
+    Ok(item)
+}
+
 /// Persistent WGC capture session that keeps a single GraphicsCaptureSession alive,
 /// eliminating the orange border flash caused by per-frame session create/destroy.
 pub struct PersistentCapture {
@@ -411,17 +474,18 @@ impl PersistentCapture {
         Self::from_item(item, false)
     }
 
-    /// Capture only this window's compositor surface, on every Windows architecture.
-    /// Native item dimensions avoid applying process DPI scaling to physical pixels.
-    pub(crate) fn new_window(window_id: u32) -> Result<Self> {
-        let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
-            .map_err(|e| anyhow!("failed to get GraphicsCaptureItem factory: {}", e))?;
-        let item: GraphicsCaptureItem = unsafe {
-            interop
-                .CreateForWindow(HWND(window_id as usize as *mut std::ffi::c_void))
-                .map_err(|e| anyhow!("CreateForWindow failed: {}", e))?
-        };
-        Self::from_item(item, true)
+    /// Capture only this window's compositor surface. Reuse only the keyed native
+    /// target; every call creates a new session and never retains pixels.
+    pub(crate) fn new_privacy_window(window_id: u32, pid: u32) -> Result<Self> {
+        let item = privacy_window_item(window_id, pid)?;
+        let result = Self::from_item(item, true);
+        if result.is_err() {
+            privacy_window_items()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .retain(|entry| entry.window_id != window_id || entry.pid != pid);
+        }
+        result
     }
 
     fn from_item(item: GraphicsCaptureItem, capture_initial_frame: bool) -> Result<Self> {

@@ -1,0 +1,42 @@
+[
+  {
+    "Id": 3140,
+    "ProcessName": "candidate-windows-privacy-fixture-release",
+    "MainWindowTitle": "PrivacyAllowed",
+    "MainWindowHandle": {
+      "value": 262720
+    }
+  },
+  {
+    "Id": 5940,
+    "ProcessName": "candidate-windows-privacy-fixture-release",
+    "MainWindowTitle": "PrivacyAllowed",
+    "MainWindowHandle": {
+      "value": 131824
+    }
+  },
+  {
+    "Id": 8084,
+    "ProcessName": "candidate-windows-privacy-fixture-release",
+    "MainWindowTitle": "PrivacyAllowed",
+    "MainWindowHandle": {
+      "value": 327892
+    }
+  },
+  {
+    "Id": 10424,
+    "ProcessName": "candidate-windows-privacy-fixture-release",
+    "MainWindowTitle": "PrivacyAllowed",
+    "MainWindowHandle": {
+      "value": 327714
+    }
+  },
+  {
+    "Id": 11340,
+    "ProcessName": "candidate-windows-privacy-fixture-release",
+    "MainWindowTitle": "PrivacyBlocked",
+    "MainWindowHandle": {
+      "value": 131862
+    }
+  }
+]

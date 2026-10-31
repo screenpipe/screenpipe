@@ -1,0 +1,13 @@
+{
+  "name": "fullyoccluded",
+  "mode": "exclude",
+  "layout": "fullyoccluded",
+  "exit": 0,
+  "pids": [
+    8412,
+    8588,
+    11908,
+    5184,
+    11008
+  ]
+}

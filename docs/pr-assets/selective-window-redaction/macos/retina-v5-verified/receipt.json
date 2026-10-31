@@ -1,0 +1,94 @@
+[
+  {
+    "layout": "retina",
+    "case": "secondary",
+    "monitor": {
+      "x": 0,
+      "mode_w": 1600,
+      "mode_h": 1000,
+      "id": 1,
+      "y": 0,
+      "h": 1000,
+      "pixels_w": 1600,
+      "mirror": 0,
+      "main": 1,
+      "pixels_h": 1000,
+      "w": 1600
+    },
+    "exit": 0,
+    "elapsed_ms": 1801,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 8,
+    "summary": true
+  },
+  {
+    "layout": "retina",
+    "case": "secondary",
+    "monitor": {
+      "x": 1600,
+      "mode_w": 1280,
+      "mode_h": 720,
+      "id": 7,
+      "y": 0,
+      "h": 720,
+      "pixels_w": 2560,
+      "mirror": 0,
+      "main": 0,
+      "pixels_h": 1440,
+      "w": 1280
+    },
+    "exit": 0,
+    "elapsed_ms": 2061,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 8,
+    "summary": true
+  },
+  {
+    "layout": "retina",
+    "case": "second_allowed",
+    "monitor": {
+      "x": 0,
+      "mode_w": 1600,
+      "mode_h": 1000,
+      "id": 1,
+      "y": 0,
+      "h": 1000,
+      "pixels_w": 1600,
+      "mirror": 0,
+      "main": 1,
+      "pixels_h": 1000,
+      "w": 1600
+    },
+    "exit": 0,
+    "elapsed_ms": 1783,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 8,
+    "summary": true
+  },
+  {
+    "layout": "retina",
+    "case": "second_allowed",
+    "monitor": {
+      "x": 1600,
+      "mode_w": 1280,
+      "mode_h": 720,
+      "id": 7,
+      "y": 0,
+      "h": 720,
+      "pixels_w": 2560,
+      "mirror": 0,
+      "main": 0,
+      "pixels_h": 1440,
+      "w": 1280
+    },
+    "exit": 0,
+    "elapsed_ms": 2186,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 8,
+    "summary": true
+  }
+]

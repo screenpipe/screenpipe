@@ -1,0 +1,210 @@
+{
+  "recorder_binary_sha256": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+  "rows": 19,
+  "matching_rows": 19,
+  "all_identity_text_absent": true,
+  "all_focused_false": true,
+  "all_jpegs_useful": true,
+  "all_private_roi_zero": true,
+  "idle_rows": 16,
+  "visual_change_rows": 1,
+  "gap_ms": {
+    "min": 581.6,
+    "mean": 1226.2,
+    "max": 1413.6
+  },
+  "production_db_check_exit": 0,
+  "python_sqlite_verifier": "unavailable: Microsoft Store aliases only; Bun read-only verifier used",
+  "rows_detail": [
+    {
+      "id": 1,
+      "basename": "1793416030132_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "manual"
+    },
+    {
+      "id": 2,
+      "basename": "1793416031224_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "app_switch"
+    },
+    {
+      "id": 3,
+      "basename": "1793416032526_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 4,
+      "basename": "1793416033108_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "visual_change"
+    },
+    {
+      "id": 5,
+      "basename": "1793416034351_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 6,
+      "basename": "1793416035619_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 7,
+      "basename": "1793416036903_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 8,
+      "basename": "1793416038156_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 9,
+      "basename": "1793416039473_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 10,
+      "basename": "1793416040724_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 11,
+      "basename": "1793416041943_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 12,
+      "basename": "1793416043240_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 13,
+      "basename": "1793416044480_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 14,
+      "basename": "1793416045875_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 15,
+      "basename": "1793416047142_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 16,
+      "basename": "1793416048413_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 17,
+      "basename": "1793416049653_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 18,
+      "basename": "1793416050889_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    },
+    {
+      "id": 19,
+      "basename": "1793416052203_m65537.jpg",
+      "snapshot_match": true,
+      "identity_and_text_absent": true,
+      "focused_false": true,
+      "useful_allowed_pixels": 132156,
+      "private_roi_pixels": 0,
+      "capture_trigger": "idle"
+    }
+  ]
+}

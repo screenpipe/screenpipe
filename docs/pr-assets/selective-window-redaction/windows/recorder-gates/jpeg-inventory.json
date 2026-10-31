@@ -1,0 +1,369 @@
+{
+  "created_utc": "2026-10-31T03:23:48.7474972Z",
+  "file_count": 40,
+  "uncompressed_bytes": 1796198,
+  "zip_bytes": 707042,
+  "zip_sha256": "222c8ae8f60b41596856214cf009d0a5d23763d603215d92faa89bcc5afa0e34",
+  "files": [
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416030132_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416030132_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416031224_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416031224_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416032526_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416032526_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416033108_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416033108_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416034351_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416034351_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416035619_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416035619_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416036903_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416036903_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416038156_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416038156_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416039473_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416039473_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416040724_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416040724_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416041943_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416041943_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416043240_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416043240_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416044480_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416044480_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416045875_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416045875_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416047142_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416047142_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416048413_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416048413_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416049653_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416049653_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416050889_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416050889_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-final-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\final-engine-data\\data\\data\\2026-10-31\\1793416052203_m65537.jpg",
+      "relative_safe_path": "prior-final-recorder/data/data/2026-10-31/1793416052203_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 58552,
+      "sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416188873_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416188873_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416189821_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416189821_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416190947_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416190947_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416191621_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416191621_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416192725_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416192725_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416193821_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416193821_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416194997_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416194997_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416196092_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416196092_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416197218_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416197218_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416198375_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416198375_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416199486_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416199486_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416200612_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416200612_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416201772_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416201772_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416202850_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416202850_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416203946_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416203946_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416205119_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416205119_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "prior-strictinclude-recorder",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\strictinclude-engine-data\\data\\data\\2026-10-31\\1793416206211_m65537.jpg",
+      "relative_safe_path": "prior-strictinclude-recorder/data/data/2026-10-31/1793416206211_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 30290,
+      "sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "policy_case": "supplemental-default-cadence",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data\\data\\2026-10-31\\1793416846527_m65537.jpg",
+      "relative_safe_path": "supplemental-default-cadence/data/data/2026-10-31/1793416846527_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 42195,
+      "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b"
+    },
+    {
+      "policy_case": "supplemental-default-cadence",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data\\data\\2026-10-31\\1793416847621_m65537.jpg",
+      "relative_safe_path": "supplemental-default-cadence/data/data/2026-10-31/1793416847621_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 42195,
+      "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b"
+    },
+    {
+      "policy_case": "supplemental-default-cadence",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data\\data\\2026-10-31\\1793416849227_m65537.jpg",
+      "relative_safe_path": "supplemental-default-cadence/data/data/2026-10-31/1793416849227_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 42195,
+      "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b"
+    },
+    {
+      "policy_case": "supplemental-default-cadence",
+      "original_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data\\data\\2026-10-31\\1793416879676_m65537.jpg",
+      "relative_safe_path": "supplemental-default-cadence/data/data/2026-10-31/1793416879676_m65537.jpg",
+      "width": 1024,
+      "height": 768,
+      "bytes": 42195,
+      "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b"
+    }
+  ]
+}

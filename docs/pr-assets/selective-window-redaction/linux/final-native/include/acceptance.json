@@ -1,0 +1,18 @@
+[
+  {
+    "case": "excluded_focus",
+    "check": "expected persistence",
+    "passed": true
+  },
+  {
+    "case": "excluded_focus",
+    "check": "allowed pixels retained; excluded absent",
+    "passed": true
+  },
+  {
+    "case": "excluded_focus",
+    "check": "no excluded metadata, text or reused elements",
+    "rows": 23,
+    "passed": true
+  }
+]

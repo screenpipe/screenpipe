@@ -1,0 +1,14 @@
+[
+  {
+    "os": "linux",
+    "original_commit": "3bb684b71567885bef406bfc3186f9da1c25a3af",
+    "verbatim_backend": true,
+    "sha256": "3e476b7776ba231384fcf8935e18af250299f8d0f86a15ab08d8d7c1c569c83c"
+  },
+  {
+    "os": "macos",
+    "original_commit": "3bb684b71567885bef406bfc3186f9da1c25a3af",
+    "verbatim_backend": true,
+    "sha256": "911d62ef29a9836c515022e221f73ad586039f88ed585eb8341d7655ce4c875a"
+  }
+]

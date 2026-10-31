@@ -1,0 +1,8 @@
+{
+  "validation": "native frozen-binary four-case checks complete; no source changes",
+  "wrapper_export": "failed after validation because current supplemental folder absent; worker wrote completed receipts into previous release supplemental folder",
+  "recovery": "read-only native export, downloaded and individually SHA verified",
+  "recovered_zip_sha256": "f900a2ac37b82149ce55a7c8ec4b161dced091b1de31069eea86b78e849bcf50",
+  "video_sha256": "6d7b388d12d54945e039743ee0397b0e8f1b651b6e7d062d7ef697d94f872915",
+  "video_started_utc": "2026-10-31T03:18:23.0448175Z"
+}

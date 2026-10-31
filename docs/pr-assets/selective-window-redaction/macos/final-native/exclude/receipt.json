@@ -1,0 +1,83 @@
+[
+  {
+    "case": "five",
+    "start": 1793410390.071095,
+    "end": 1793410418.5518851,
+    "snapshot_count": 20,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410389988_m1.jpg",
+      "data/data/data/2026-10-31/1793410413284_m1.jpg",
+      "data/data/data/2026-10-31/1793410401461_m1.jpg",
+      "data/data/data/2026-10-31/1793410397623_m1.jpg",
+      "data/data/data/2026-10-31/1793410400271_m1.jpg",
+      "data/data/data/2026-10-31/1793410407406_m1.jpg",
+      "data/data/data/2026-10-31/1793410409761_m1.jpg",
+      "data/data/data/2026-10-31/1793410412123_m1.jpg",
+      "data/data/data/2026-10-31/1793410415623_m1.jpg",
+      "data/data/data/2026-10-31/1793410408580_m1.jpg",
+      "data/data/data/2026-10-31/1793410410947_m1.jpg",
+      "data/data/data/2026-10-31/1793410394662_m1.jpg",
+      "data/data/data/2026-10-31/1793410405035_m1.jpg",
+      "data/data/data/2026-10-31/1793410406219_m1.jpg",
+      "data/data/data/2026-10-31/1793410399044_m1.jpg",
+      "data/data/data/2026-10-31/1793410403847_m1.jpg",
+      "data/data/data/2026-10-31/1793410417959_m1.jpg",
+      "data/data/data/2026-10-31/1793410416770_m1.jpg",
+      "data/data/data/2026-10-31/1793410414456_m1.jpg",
+      "data/data/data/2026-10-31/1793410402658_m1.jpg"
+    ]
+  },
+  {
+    "case": "excluded_focus",
+    "start": 1793410421.678401,
+    "end": 1793410445.1379871,
+    "snapshot_count": 19,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410443886_m1.jpg",
+      "data/data/data/2026-10-31/1793410430952_m1.jpg",
+      "data/data/data/2026-10-31/1793410442709_m1.jpg",
+      "data/data/data/2026-10-31/1793410422702_m1.jpg",
+      "data/data/data/2026-10-31/1793410429763_m1.jpg",
+      "data/data/data/2026-10-31/1793410440358_m1.jpg",
+      "data/data/data/2026-10-31/1793410436844_m1.jpg",
+      "data/data/data/2026-10-31/1793410423878_m1.jpg",
+      "data/data/data/2026-10-31/1793410434494_m1.jpg",
+      "data/data/data/2026-10-31/1793410426238_m1.jpg",
+      "data/data/data/2026-10-31/1793410425060_m1.jpg",
+      "data/data/data/2026-10-31/1793410432132_m1.jpg",
+      "data/data/data/2026-10-31/1793410439186_m1.jpg",
+      "data/data/data/2026-10-31/1793410428609_m1.jpg",
+      "data/data/data/2026-10-31/1793410427419_m1.jpg",
+      "data/data/data/2026-10-31/1793410435669_m1.jpg",
+      "data/data/data/2026-10-31/1793410441538_m1.jpg",
+      "data/data/data/2026-10-31/1793410433311_m1.jpg",
+      "data/data/data/2026-10-31/1793410438016_m1.jpg"
+    ]
+  },
+  {
+    "case": "incognito_focus",
+    "start": 1793410448.227533,
+    "end": 1793410461.488641,
+    "snapshot_count": 0,
+    "snapshots": []
+  },
+  {
+    "case": "five",
+    "start": 1793410464.563943,
+    "end": 1793410477.8510761,
+    "snapshot_count": 11,
+    "snapshots": [
+      "data/data/data/2026-10-31/1793410472098_m1.jpg",
+      "data/data/data/2026-10-31/1793410475632_m1.jpg",
+      "data/data/data/2026-10-31/1793410469703_m1.jpg",
+      "data/data/data/2026-10-31/1793410466161_m1.jpg",
+      "data/data/data/2026-10-31/1793410476785_m1.jpg",
+      "data/data/data/2026-10-31/1793410467342_m1.jpg",
+      "data/data/data/2026-10-31/1793410473282_m1.jpg",
+      "data/data/data/2026-10-31/1793410468515_m1.jpg",
+      "data/data/data/2026-10-31/1793410474465_m1.jpg",
+      "data/data/data/2026-10-31/1793410464972_m1.jpg",
+      "data/data/data/2026-10-31/1793410470903_m1.jpg"
+    ]
+  }
+]

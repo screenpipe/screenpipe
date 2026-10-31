@@ -1,0 +1,287 @@
+[
+  {
+    "case": "five-exclude",
+    "point": [
+      100,
+      100
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "point": [
+      700,
+      100
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "point": [
+      1300,
+      100
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "point": [
+      250,
+      600
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "point": [
+      1100,
+      600
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "excluded_front-exclude",
+    "point": [
+      1000,
+      600
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "excluded_behind-exclude",
+    "point": [
+      1000,
+      600
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "transparent_front-exclude",
+    "point": [
+      1000,
+      600
+    ],
+    "expected": [
+      0,
+      140,
+      140
+    ],
+    "actual": [
+      0,
+      140,
+      140
+    ],
+    "passed": true
+  },
+  {
+    "case": "small-exclude",
+    "point": [
+      80,
+      100
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "fully_occluded-exclude",
+    "point": [
+      1100,
+      600
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "case": "excluded_behind-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "blank_title-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "fully_occluded-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "all_excluded-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "excluded_front-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "five-none",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "offscreen-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "spanning-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "no_excluded-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "transparent_front-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "minimized-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "five-empty",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "small-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "five-include",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "no_excluded-nomatch",
+    "check": "full display dimensions",
+    "passed": true
+  },
+  {
+    "case": "five-exclude",
+    "check": "wallpaper preserved",
+    "passed": true
+  },
+  {
+    "case": "no_excluded-exclude",
+    "check": "wallpaper preserved",
+    "passed": true
+  },
+  {
+    "case": "minimized-exclude",
+    "check": "wallpaper preserved",
+    "passed": true
+  },
+  {
+    "case": "all_excluded-exclude",
+    "check": "wallpaper preserved",
+    "passed": true
+  },
+  {
+    "case": "empty include",
+    "check": "no unselected pixels",
+    "passed": true
+  }
+]

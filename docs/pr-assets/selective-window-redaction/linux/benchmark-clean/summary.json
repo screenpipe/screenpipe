@@ -1,0 +1,26 @@
+[
+  {
+    "variant": "baseline",
+    "exit": 0,
+    "saved": 140,
+    "rejected": 0,
+    "marker_pixels": 0,
+    "warmup": 20,
+    "measured_frames": 120,
+    "median_ms": 13.247523,
+    "p95_ms": 15.830165000000001,
+    "wall_s": 25.80412214700027
+  },
+  {
+    "variant": "candidate",
+    "exit": 0,
+    "saved": 140,
+    "rejected": 0,
+    "marker_pixels": 0,
+    "warmup": 20,
+    "measured_frames": 120,
+    "median_ms": 39.355625,
+    "p95_ms": 41.949856000000004,
+    "wall_s": 29.855262303999552
+  }
+]

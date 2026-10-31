@@ -1,0 +1,22 @@
+[
+  {
+    "mode": "exclude",
+    "exit": 0,
+    "saved": 1800,
+    "rejected": 0,
+    "warmup": 20,
+    "median_ms": 72.047292,
+    "p95_ms": 75.552833,
+    "wall_s": 365.28701675
+  },
+  {
+    "mode": "none",
+    "exit": 0,
+    "saved": 120,
+    "rejected": 0,
+    "warmup": 20,
+    "median_ms": 43.207625,
+    "p95_ms": 54.209875,
+    "wall_s": 23.26445504200001
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "video": "windows/videos/recorder-session-review.mp4",
+  "duration_seconds": 48,
+  "representative_frames_reviewed_seconds": [
+    4,
+    14,
+    22,
+    29,
+    36,
+    44
+  ],
+  "six_scene_captions_readable": true,
+  "full_desktop_and_stored_samples_visible": true,
+  "audio_mean_db": -16.9,
+  "audio_peak_db": -1.6,
+  "narration_generated_from_manifest": true
+}

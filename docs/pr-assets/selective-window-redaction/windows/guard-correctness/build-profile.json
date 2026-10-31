@@ -1,0 +1,7 @@
+{
+  "profile": "debug-dev",
+  "purpose": "guard correctness only; not production performance",
+  "status": "earlier native checkpoint; final release validation pending",
+  "runtime_source_sha256": "4625136f8e02aba9caa554ba15aedde762a8a7c66319b942e2516819ef7236fc",
+  "probe_source_sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958"
+}

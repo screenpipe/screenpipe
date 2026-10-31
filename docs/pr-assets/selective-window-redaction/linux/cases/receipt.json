@@ -1,0 +1,178 @@
+[
+  {
+    "session_time_s": 8.629995136288926e-07,
+    "case": "five",
+    "mode": "none",
+    "exit": 0,
+    "elapsed_ms": 1656,
+    "leaked": 12,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 2.809241863000352,
+    "case": "five",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1984,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 5.97126879499956,
+    "case": "five",
+    "mode": "include",
+    "exit": 0,
+    "elapsed_ms": 1681,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 8.832112459999735,
+    "case": "five",
+    "mode": "empty",
+    "exit": 0,
+    "elapsed_ms": 1521,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 11.541521868000018,
+    "case": "no_excluded",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1985,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 14.702397383000061,
+    "case": "no_excluded",
+    "mode": "nomatch",
+    "exit": 0,
+    "elapsed_ms": 1967,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 17.861959445999673,
+    "case": "minimized",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1979,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 21.02171629700024,
+    "case": "offscreen",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 2017,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 24.23431664799955,
+    "case": "excluded_front",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1935,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 27.343162426000163,
+    "case": "excluded_behind",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1952,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 30.454859897999995,
+    "case": "transparent_front",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1965,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 33.614647047999824,
+    "case": "small",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1788,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 36.573978985000394,
+    "case": "blank_title",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1958,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 39.6831540510002,
+    "case": "all_excluded",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 1813,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 42.69288111700007,
+    "case": "spanning",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 2004,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "session_time_s": 45.853173241999684,
+    "case": "fully_occluded",
+    "mode": "exclude",
+    "exit": 0,
+    "elapsed_ms": 2028,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  }
+]

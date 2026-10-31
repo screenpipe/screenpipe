@@ -1,0 +1,1 @@
+{"started_at": 1793410638.4116771, "command": ["/usr/bin/ffmpeg", "-loglevel", "warning", "-y", "-f", "x11grab", "-framerate", "8", "-video_size", "1920x1080", "-i", ":99", "-t", "150", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p", "/home/ubuntu/redaction/evidence/final-native/exclude/native-session.mp4"]}

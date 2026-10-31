@@ -1,0 +1,462 @@
+[
+  {
+    "suite": "multi-v4-verified",
+    "case": "five",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "five",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "point": [
+      400,
+      350
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "spanning",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "spanning",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "second_allowed",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "second_allowed",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "second_allowed",
+    "monitor": 3,
+    "point": [
+      400,
+      200
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "point": [
+      400,
+      350
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "multi-v4-verified",
+    "case": "secondary",
+    "monitor": 3,
+    "point": [
+      400,
+      350
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "secondary",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "secondary",
+    "monitor": 7,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      2560,
+      1440
+    ],
+    "expected": [
+      2560,
+      1440
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "secondary",
+    "monitor": 7,
+    "point": [
+      800,
+      700
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "second_allowed",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1600,
+      1000
+    ],
+    "expected": [
+      1600,
+      1000
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "second_allowed",
+    "monitor": 7,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      2560,
+      1440
+    ],
+    "expected": [
+      2560,
+      1440
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-verified",
+    "case": "second_allowed",
+    "monitor": 7,
+    "point": [
+      800,
+      400
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "secondary",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      800
+    ],
+    "expected": [
+      1280,
+      800
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "secondary",
+    "monitor": 9,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "secondary",
+    "monitor": 9,
+    "point": [
+      400,
+      350
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "expected": [
+      0,
+      0,
+      0
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "second_allowed",
+    "monitor": 1,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      800
+    ],
+    "expected": [
+      1280,
+      800
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "second_allowed",
+    "monitor": 9,
+    "check": "native pixels or explicit cap",
+    "actual": [
+      1280,
+      720
+    ],
+    "expected": [
+      1280,
+      720
+    ],
+    "pass": true
+  },
+  {
+    "suite": "retina-v5-cap",
+    "case": "second_allowed",
+    "monitor": 9,
+    "point": [
+      400,
+      200
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "expected": [
+      0,
+      255,
+      255
+    ],
+    "pass": true
+  }
+]

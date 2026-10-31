@@ -1,0 +1,26 @@
+warning: function `admission_for_model` is never used
+  --> crates/screenpipe-core/src/workflows/pipeline.rs:47:4
+   |
+47 | fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
+   |    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `screenpipe-core` (lib) generated 1 warning
+   Compiling screenpipe-screen v0.4.53 (/Users/louis/Documents/Codex/2026-10-30/cna-x20/work/screenpipe/crates/screenpipe-screen)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.95s
+     Running unittests src/lib.rs (target/debug/deps/screenpipe_screen-45aba509eef98ed1)
+
+running 10 tests
+test screenshot_privacy::scene::tests::restore_only_redacted_intersection_does_not_overpaint_other_windows ... ok
+test screenshot_privacy::scene::tests::excluded_middle_layer_keeps_allowed_foreground_and_hides_background ... ok
+test screenshot_privacy::scene::tests::negative_origin_and_spanning_window_clip_to_each_display ... ok
+test screenshot_privacy::scene::tests::excluded_shell_coverage_preserves_transparent_desktop_area ... ok
+test screenshot_privacy::scene::tests::transparent_foreground_reveals_black_redaction_not_hidden_background ... ok
+test screenshot_privacy::scene::tests::overlapping_exclusions_restore_transparency_once_per_pixel ... ok
+test screenshot_privacy::tests::exclusion_wins_when_an_app_is_included ... ok
+test screenshot_privacy::tests::include_scopes_pixels_to_the_matching_window ... ok
+test screenshot_privacy::tests::incognito_is_not_reintroduced_by_including_the_browser ... ok
+test screenshot_privacy::tests::unrelated_url_only_policy_does_not_enable_window_capture ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 209 filtered out; finished in 0.00s

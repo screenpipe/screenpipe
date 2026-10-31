@@ -1,0 +1,13 @@
+{
+  "name": "normal-five-window",
+  "mode": "exclude",
+  "layout": "normal",
+  "exit": 0,
+  "pids": [
+    1644,
+    6072,
+    9916,
+    2064,
+    10584
+  ]
+}

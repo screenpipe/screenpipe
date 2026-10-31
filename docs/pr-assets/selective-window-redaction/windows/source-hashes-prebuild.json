@@ -1,0 +1,22 @@
+[
+  {
+    "path": "crates/screenpipe-screen/src/screenshot_privacy/windows.rs",
+    "sha256": "39e046222ddf19e354619d42adfcaae2cb7149f0b413edbc5745ceee80bd5b6d",
+    "bytes": 19383
+  },
+  {
+    "path": "crates/screenpipe-screen/src/wgc_capture.rs",
+    "sha256": "aae27ee016b32fe65f306e5b14391aa47f32c9b25f4ae694a08f38a4dd3e69ab",
+    "bytes": 45656
+  },
+  {
+    "path": "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs",
+    "sha256": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958",
+    "bytes": 5552
+  },
+  {
+    "path": "crates/screenpipe-screen/examples/windows_privacy_fixture.rs",
+    "sha256": "cb2e4d18383bbab3cd3101fda5512e17638453d14c4991cfe0b8dfc3444d2bca",
+    "bytes": 8098
+  }
+]

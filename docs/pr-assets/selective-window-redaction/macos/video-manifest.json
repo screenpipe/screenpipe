@@ -1,0 +1,8 @@
+{
+  "source": "outputs/redaction-validation/macos/cases-v5/native-session.mp4",
+  "output": "outputs/redaction-validation/macos/videos/native-session-review.mp4",
+  "duration": 65.75,
+  "edits": "Full native session retained on left. Representative frame-0 from each native capture scene shown on right at scene boundaries. Narrated introduction and concise policy/case captions added.",
+  "narration": "This is the native Mac O S virtual machine session. The desktop is on the left. A saved screenshot from each test is on the right. Cyan windows are allowed. Magenta marks excluded content. Watch the saved image preserve the other windows and desktop while masking excluded areas. The labels identify each policy and edge case.",
+  "synthetic_fixture": true
+}

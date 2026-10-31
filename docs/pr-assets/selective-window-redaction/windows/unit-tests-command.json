@@ -1,0 +1,10 @@
+{
+  "command": "cargo test -p screenpipe-screen --profile debug-dev screenshot_privacy::windows::tests -- --nocapture",
+  "cargo_target_dir": "C:\\spdev",
+  "native_exit": 0,
+  "passed": 5,
+  "failed": 0,
+  "ignored": 1,
+  "source_receipt": "source-hashes-prebuild.json",
+  "scope": "native Windows unit correctness only; performance uses separate --release artifacts"
+}

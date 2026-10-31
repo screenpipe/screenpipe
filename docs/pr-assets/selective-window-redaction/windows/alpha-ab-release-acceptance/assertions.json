@@ -1,0 +1,35 @@
+{
+  "roi": [
+    360,
+    310,
+    700,
+    610
+  ],
+  "roi_pixels": 102000,
+  "raw_overlap_changes": true,
+  "filtered_overlap_invariant": true,
+  "a_filtered_cyan_pixels": 102000,
+  "b_filtered_cyan_pixels": 102000,
+  "samples": {
+    "a-raw": [
+      127,
+      128,
+      255
+    ],
+    "a-filtered": [
+      0,
+      128,
+      128
+    ],
+    "b-raw": [
+      127,
+      128,
+      128
+    ],
+    "b-filtered": [
+      0,
+      128,
+      128
+    ]
+  }
+}

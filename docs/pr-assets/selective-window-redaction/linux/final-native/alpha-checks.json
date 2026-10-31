@@ -1,0 +1,26 @@
+[
+  {
+    "mode": "none",
+    "crop": [
+      1050,
+      550,
+      1250,
+      650
+    ],
+    "mean_channel_difference": 57.48586666666667,
+    "maximum_channel_difference": 115,
+    "passed": true
+  },
+  {
+    "mode": "exclude",
+    "crop": [
+      1050,
+      550,
+      1250,
+      650
+    ],
+    "mean_channel_difference": 0.0,
+    "maximum_channel_difference": 0,
+    "passed": true
+  }
+]

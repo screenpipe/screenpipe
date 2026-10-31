@@ -1,0 +1,7 @@
+{
+  "case": "candidate-release",
+  "exit": 0,
+  "start_note": "20 separate warmup frames completed before measurement",
+  "measured_frames": 120,
+  "probe_sha256": "ef3817224accd991889ceb0b461daf832649b55554f0eba4f1acb0f38637b6f6"
+}

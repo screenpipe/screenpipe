@@ -1,0 +1,9 @@
+{
+  "source": "outputs/redaction-validation/macos/final-native/exclude/native-session.mp4",
+  "source_offset_seconds": 37.6254940032959,
+  "duration_seconds": 15,
+  "saved_image": "outputs/redaction-validation/macos/final-native/exclude/excluded_focus-saved.jpg",
+  "output": "outputs/redaction-validation/macos/videos/excluded-focus-review.mp4",
+  "narration": "The excluded window now has focus. The recorder still saves the rest of the desktop, with only that window blacked out. Its name and text are absent from the saved record.",
+  "edits": "Native focused-exclusion segment on left, actual stored JPEG on right; explanatory narration and captions."
+}

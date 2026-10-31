@@ -1,0 +1,43 @@
+{
+  "sample_scope": "Same live release probe process; engine release compiler active, so timings are contention-affected. Startup sample differs from first active sample. Recovery continues static captures, not process exit.",
+  "first_sample": {
+    "phase": "before",
+    "utc": "2026-10-31T02:45:44.1945210Z",
+    "probe_cpu": 0.0,
+    "probe_rss": 2387968,
+    "probe_handles": 52
+  },
+  "first_active": {
+    "phase": "during",
+    "ordinal": 0,
+    "utc": "2026-10-31T02:45:45.7915384Z",
+    "probe_cpu": 0.125,
+    "probe_rss": 40755200,
+    "probe_handles": 273
+  },
+  "recovery_first": {
+    "phase": "recovery",
+    "utc": "2026-10-31T02:46:08.5592961Z",
+    "probe_cpu": 2.15625,
+    "probe_rss": 32862208,
+    "probe_handles": 283
+  },
+  "recovery_last": {
+    "phase": "recovery",
+    "utc": "2026-10-31T02:46:48.0918087Z",
+    "probe_cpu": 5.90625,
+    "probe_rss": 33439744,
+    "probe_handles": 285
+  },
+  "recovery_sample_interval_seconds": 39.532512,
+  "whole_probe_elapsed_ms": 63660,
+  "handles_change_first_active_to_last": 12,
+  "rss_change_first_active_to_last_bytes": -7315456,
+  "whole_run_peak_handles": 296,
+  "whole_run_peak_rss_bytes": 41291776,
+  "rejection_reasons": {
+    "window scene changed during privacy capture": 5,
+    "CreateFreeThreaded failed: The parameter is incorrect. (0x80070057)": 4
+  },
+  "closed_and_eviction_event_counts": "not instrumented; target count exceeds cache capacity but direct callback count is not observable"
+}

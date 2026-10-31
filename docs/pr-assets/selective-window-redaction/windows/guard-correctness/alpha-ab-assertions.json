@@ -1,0 +1,36 @@
+{
+  "a_sha256": "659ca3eef8d334eb475b9ab4df4273ad9aaa947b29efa709182a538fd944634e",
+  "b_sha256": "659ca3eef8d334eb475b9ab4df4273ad9aaa947b29efa709182a538fd944634e",
+  "overlap_roi": [
+    360,
+    310,
+    700,
+    610
+  ],
+  "roi_identical": true,
+  "samples": {
+    "400,300": [
+      0,
+      128,
+      128
+    ],
+    "400,500": [
+      0,
+      128,
+      128
+    ],
+    "550,300": [
+      0,
+      128,
+      128
+    ],
+    "400,400": [
+      0,
+      128,
+      128
+    ]
+  },
+  "roi_expected_contribution_pixels": 102000,
+  "roi_pixels": 102000,
+  "foreground_survives": true
+}

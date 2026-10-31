@@ -1,0 +1,45 @@
+{
+  "method": "Every pixel of every actual stored JPEG reopened with Pillow and scanned by NumPy. Magenta excluded marker: R>200,G<60,B>200; allowed cyan: R<30,G>220,B>220. Useful content threshold>1000; exact native dimensions1024x768. This marker audit is separate from numeric alpha A/B and indexed-metadata checks.",
+  "cases": [
+    {
+      "source_directory": "work/windows-redaction/gates-final/recovered/all-recorder-jpegs/supplemental-default-cadence",
+      "images": 4,
+      "passed": true,
+      "frames": [
+        {
+          "file": "data/data/2026-10-31/1793416846527_m65537.jpg",
+          "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b",
+          "width": 1024,
+          "height": 768,
+          "excluded_marker_pixels": 0,
+          "allowed_pixels": 525848
+        },
+        {
+          "file": "data/data/2026-10-31/1793416847621_m65537.jpg",
+          "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b",
+          "width": 1024,
+          "height": 768,
+          "excluded_marker_pixels": 0,
+          "allowed_pixels": 525848
+        },
+        {
+          "file": "data/data/2026-10-31/1793416849227_m65537.jpg",
+          "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b",
+          "width": 1024,
+          "height": 768,
+          "excluded_marker_pixels": 0,
+          "allowed_pixels": 525848
+        },
+        {
+          "file": "data/data/2026-10-31/1793416879676_m65537.jpg",
+          "sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b",
+          "width": 1024,
+          "height": 768,
+          "excluded_marker_pixels": 0,
+          "allowed_pixels": 525848
+        }
+      ]
+    }
+  ],
+  "passed": true
+}

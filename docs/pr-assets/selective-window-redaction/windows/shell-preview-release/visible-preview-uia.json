@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Microsoft 365 Copilot pinned",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 416.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "File Explorer pinned",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 460.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "Microsoft Edge pinned",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 504.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "Microsoft Store pinned",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 548.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "Outlook pinned",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 592.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "Terminal - 1 running window",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 636.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  },
+  {
+    "name": "windows_privacy_fixture - 1 running window",
+    "class": "Taskbar.TaskListButtonAutomationPeer",
+    "process_id": 6432,
+    "onscreen": true,
+    "left": 680.0,
+    "top": 720.0,
+    "width": 44.0,
+    "height": 48.0
+  }
+]

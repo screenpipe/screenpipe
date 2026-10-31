@@ -1,0 +1,82 @@
+[
+  {
+    "case": "five",
+    "monitor": 78,
+    "exit": 0,
+    "elapsed_ms": 2162,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "five",
+    "monitor": 79,
+    "exit": 0,
+    "elapsed_ms": 1907,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "secondary",
+    "monitor": 78,
+    "exit": 0,
+    "elapsed_ms": 2104,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "secondary",
+    "monitor": 79,
+    "exit": 0,
+    "elapsed_ms": 1933,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 78,
+    "exit": 0,
+    "elapsed_ms": 2103,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 79,
+    "exit": 0,
+    "elapsed_ms": 1955,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "second_allowed",
+    "monitor": 78,
+    "exit": 0,
+    "elapsed_ms": 2057,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  },
+  {
+    "case": "second_allowed",
+    "monitor": 79,
+    "exit": 0,
+    "elapsed_ms": 1969,
+    "leaked": 0,
+    "rejected": 0,
+    "saved": 12,
+    "summary": true
+  }
+]

@@ -1,0 +1,132 @@
+detected hardware tier: High
+2026-10-30T20:22:19.348347Z  INFO screenpipe_engine::process_priority: process priority set to BelowNormal — engine yields CPU to foreground apps (opt out with SCREENPIPE_KEEP_NORMAL_PRIORITY=1)
+checking permissions...
+  screen recording: ok
+  accessibility: ok
+2026-10-30T20:22:21.243476Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="elements"
+2026-10-30T20:22:21.705753Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="audio_transcriptions"
+2026-10-30T20:22:21.821486Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="ui_events"
+2026-10-30T20:22:21.943636Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="semantic_items"
+2026-10-30T20:22:22.045119Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="pipe_executions"
+2026-10-30T20:22:22.120284Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="meeting_transcript_segments"
+2026-10-30T20:22:22.183047Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="outputs"
+2026-10-30T20:22:22.524469Z  INFO screenpipe_engine::sleep_monitor: Starting Windows suspend/resume + screen-lock monitor
+2026-10-30T20:22:22.524833Z  INFO screenpipe_engine::permission_monitor: permission monitor started screen=true mic=true accessibility=true keychain=true
+2026-10-30T20:22:22.524920Z  INFO screenpipe: meeting detector disabled because audio capture is disabled
+2026-10-30T20:22:22.524941Z  INFO screenpipe_engine::sleep_monitor: Windows suspend/resume notifications registered
+2026-10-30T20:22:22.532193Z  INFO screenpipe_engine::power::manager: power manager started (poll interval: 10s)
+2026-10-30T20:22:22.532220Z  INFO screenpipe_engine::snapshot_compaction: snapshot compaction worker started (min_age=600s, poll=300s)
+2026-10-30T20:22:22.532297Z  INFO screenpipe_engine::power::manager: initial power profile: Performance (on_ac=true, battery=None, os_low_power=false, thermal=Nominal, reason=ac_power)
+2026-10-30T20:22:22.532434Z  INFO screenpipe_engine::semantic_worker: semantic projection worker enabled
+2026-10-30T20:22:22.532573Z  INFO screenpipe: API server listening on 127.0.0.1:3030 (localhost only)
+2026-10-30T20:22:22.532611Z  INFO screenpipe: API auth enabled — run `screenpipe auth token` to view your key
+
+2026-10-30T20:22:22.532650Z  INFO screenpipe_engine::vision_manager::manager: Starting VisionManager
+  tip: get the desktop app for chat, timeline, and search UI
+       → https://screenpi.pe/onboarding
+
+2026-10-30T20:22:22.533128Z  INFO screenpipe_engine::vision_manager::manager: Starting vision recording for monitor 65537 (1024x768)
+2026-10-30T20:22:22.533204Z  INFO screenpipe_engine::vision_manager::manager: Starting event-driven capture for monitor 65537 (device: monitor_65537)
+2026-10-30T20:22:22.533292Z  INFO screenpipe_engine::vision_manager::manager: VisionManager started with 1/1 monitor(s)
+2026-10-30T20:22:22.533325Z  INFO screenpipe_engine::hd_recorder: hd recorder: high-fps capture not supported on this platform (monitor 65537)
+2026-10-30T20:22:22.533345Z  INFO screenpipe_engine::vision_manager::monitor_watcher: Starting monitor watcher (polling every 5 seconds)
+2026-10-30T20:22:22.533449Z  INFO screenpipe_engine::event_driven_capture: event-driven capture started for monitor 65537 (device: monitor_65537)
+2026-10-30T20:22:22.533639Z  INFO screenpipe_engine::event_driven_capture: idle capture phase for monitor 65537: next idle in 1000ms across 1 monitor(s)
+2026-10-30T20:22:22.547217Z  INFO screenpipe_engine::vision_manager::monitor_watcher: display layout snapshot persisted reason="startup"
+2026-10-30T20:22:22.659606Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-discover
+2026-10-30T20:22:22.660635Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-deepen
+2026-10-30T20:22:22.662075Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-review
+2026-10-30T20:22:22.663245Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-maintain
+2026-10-30T20:22:22.664651Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-activity
+2026-10-30T20:22:22.665830Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-patterns
+2026-10-30T20:22:22.667332Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-procedures
+2026-10-30T20:22:22.668477Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-timing
+2026-10-30T20:22:22.669959Z  INFO screenpipe_core::pipes: installed built-in pipe: workflow-discovery
+2026-10-30T20:22:22.671081Z  INFO screenpipe_core::pipes: installed built-in pipe: skill-learning
+2026-10-30T20:22:22.672756Z  INFO screenpipe_core::pipes: installed built-in pipe: automate-my-work
+2026-10-30T20:22:22.673866Z  INFO screenpipe_core::pipes: installed built-in pipe: missed-todos
+2026-10-30T20:22:22.675271Z  INFO screenpipe_core::pipes: installed built-in pipe: day-recap
+2026-10-30T20:22:22.676461Z  INFO screenpipe_core::pipes: installed built-in pipe: standup-update
+2026-10-30T20:22:22.678388Z  INFO screenpipe_core::pipes: installed built-in pipe: ai-habits
+2026-10-30T20:22:22.679539Z  INFO screenpipe_core::pipes: installed built-in pipe: time-breakdown
+2026-10-30T20:22:22.681077Z  INFO screenpipe_core::pipes: installed built-in pipe: video-export
+2026-10-30T20:22:22.682172Z  INFO screenpipe_core::pipes: installed built-in pipe: meeting-summary
+2026-10-30T20:22:22.683786Z  INFO screenpipe_core::pipes: installed built-in pipe: speaker-reconciliation
+2026-10-30T20:22:22.684970Z  INFO screenpipe_core::pipes: installed built-in pipe: commitments
+2026-10-30T20:22:22.686491Z  INFO screenpipe_core::pipes: installed built-in pipe: accounting-follow-through
+2026-10-30T20:22:22.696784Z  INFO screenpipe_core::pipes: loaded 21 pipes from "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\negative-drm-data\\pipes"
+
+
+
+                                            _
+   __________________  ___  ____     ____  (_____  ___
+  / ___/ ___/ ___/ _ \/ _ \/ __ \   / __ \/ / __ \/ _ \
+ (__  / /__/ /  /  __/  __/ / / /  / /_/ / / /_/ /  __/
+/____/\___/_/   \___/\___/_/ /_/  / .___/_/ .___/\___/
+                                 /_/     /_/
+
+
+
+power AI by everything you've seen, said or heard
+open source | runs locally | developer friendly
+
+
+2026-10-30T20:22:22.700597Z  INFO screenpipe_core::pipes: pipe scheduler started (generation 2)
+┌────────────────────────┬────────────────────────────────────┐
+│ setting                │ value                              │
+├────────────────────────┼────────────────────────────────────┤
+│ audio chunk duration   │ 30 seconds                         │
+│ port                   │ 3030                               │
+│ audio disabled         │ true                               │
+│ vision disabled        │ false                              │
+│ pause on DRM content   │ true                               │
+│ audio engine           │ "Parakeet"                         │
+│ vad engine             │ Silero                             │
+│ data directory         │ C:\screenpipe-worker\results\redactrelease-20261031\supplemental\negative-drm-data │
+│ debug mode             │ false                              │
+│ telemetry              │ false                              │
+│ use pii removal        │ true                               │
+│ use all monitors       │ true                               │
+│ ignored windows        │ ["::PrivacyBlocked"]               │
+│ included windows       │ []                                 │
+│ cloud sync             │ disabled                           │
+│ auto-destruct pid      │ 0                                  │
+│ deepgram key           │ not set                            │
+│ api auth               │ enabled                            │
+│ encrypt secrets        │ disabled                           │
+│ retention days         │ forever                            │
+│ retention mode         │ n/a                                │
+├────────────────────────┼────────────────────────────────────┤
+│ languages              │                                    │
+2026-10-30T20:22:22.700740Z  WARN screenpipe: pi agent install failed: bun not found — install from https://bun.sh
+│                        │ all languages                      │
+2026-10-30T20:22:22.700808Z  INFO screenpipe_core::pipes: connection-trigger watcher started (generation 2)
+├────────────────────────┼────────────────────────────────────┤
+│ monitors               │                                    │
+│                        │ id: 65537                          │
+├────────────────────────┼────────────────────────────────────┤
+│ audio devices          │                                    │
+│                        │ disabled                           │
+└────────────────────────┴────────────────────────────────────┘
+you are using local processing. all your data stays on your computer.
+
+telemetry is disabled. no data will be sent to external services.
+
+check latest changes here: https://github.com/screenpipe/screenpipe/releases
+2026-10-30T20:22:22.700903Z  INFO screenpipe: starting UI event capture
+2026-10-30T20:22:22.701022Z  INFO screenpipe_engine::ui_recorder: Starting UI event capture
+2026-10-30T20:22:22.702282Z  INFO screenpipe: meeting watcher skipped because audio capture is disabled
+2026-10-30T20:22:22.702287Z  INFO screenpipe_engine::ui_recorder: UI recording session started: 9a0f60f9-17eb-4d65-a05b-ee08906687c5
+2026-10-30T20:22:22.702390Z  INFO screenpipe_engine::calendar_speaker_id: speaker identification: started (user_name=<not set>)
+2026-10-30T20:22:22.755053Z  INFO screenpipe_engine::hot_frame_cache: hot_frame_cache: warming from DB (2026-10-30 03:22:22.755036300 UTC to 2026-10-31 03:22:22.755036300 UTC)
+2026-10-30T20:22:22.758461Z  INFO screenpipe_engine::hot_frame_cache: hot_frame_cache: warmed with 0 frame entries and 0 deduped audio entries, coverage from None
+2026-10-30T20:22:22.793310Z  INFO screenpipe: Server listening on 127.0.0.1:3030
+2026-10-30T20:22:22.793473Z  INFO screenpipe: local retention disabled (--retention-days 0)
+2026-10-30T20:22:22.793748Z  INFO screenpipe: text-PII worker skipped at startup — async_pii_redaction=false. OPF model (~2.8 GB) will NOT be downloaded or loaded. Toggle via Settings → Privacy → AI PII removal.
+2026-10-30T20:22:22.793795Z  INFO screenpipe: image-PII worker skipped at startup — async_image_pii_redaction=false. rfdetr_v9 model (~108 MB) will NOT be downloaded or loaded. Toggle via Settings → Privacy → AI PII removal.
+2026-10-30T20:22:22.793820Z  INFO screenpipe_engine::server: Server listening on 127.0.0.1:3030
+2026-10-30T20:22:27.478397Z  INFO screenpipe_db::storage::bulk::lifecycle: sealing bulk payload batch table="ui_events" rows=1
+2026-10-30T20:22:44.689932Z  INFO screenpipe: stop requested, initiating shutdown
+2026-10-30T20:22:44.690079Z  INFO screenpipe_engine::snapshot_compaction: snapshot compaction worker shutting down
+2026-10-30T20:22:44.690110Z  INFO screenpipe: received shutdown signal for VisionManager
+2026-10-30T20:22:44.690161Z  INFO screenpipe_engine::vision_manager::manager: Shutting down VisionManager

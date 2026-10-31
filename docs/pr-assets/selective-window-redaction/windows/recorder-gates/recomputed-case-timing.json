@@ -1,0 +1,41 @@
+{
+  "basis": "ISO start timestamp and final recorder log LastWriteTimeUtc, recomputed without truncating start fractional seconds; raw native elapsed field retained separately",
+  "cases": [
+    {
+      "case": "default-visual-probe-quiet-static-cadence",
+      "utc_start": "2026-10-31T03:20:42.261217+00:00",
+      "utc_stop": "2026-10-31T03:21:45.898133+00:00",
+      "elapsed_seconds": 63.636916,
+      "reported_elapsed_seconds": 63.898,
+      "video_start_offset_seconds": 139.2164,
+      "video_stop_offset_seconds": 202.853316
+    },
+    {
+      "case": "negative-url",
+      "utc_start": "2026-10-31T03:21:50.359452+00:00",
+      "utc_stop": "2026-10-31T03:22:16.641917+00:00",
+      "elapsed_seconds": 26.282465,
+      "reported_elapsed_seconds": 26.642,
+      "video_start_offset_seconds": 207.314635,
+      "video_stop_offset_seconds": 233.5971
+    },
+    {
+      "case": "negative-drm",
+      "utc_start": "2026-10-31T03:22:19.000873+00:00",
+      "utc_stop": "2026-10-31T03:22:44.684736+00:00",
+      "elapsed_seconds": 25.683863,
+      "reported_elapsed_seconds": 25.685,
+      "video_start_offset_seconds": 235.956056,
+      "video_stop_offset_seconds": 261.639919
+    },
+    {
+      "case": "negative-incognito",
+      "utc_start": "2026-10-31T03:22:53.823032+00:00",
+      "utc_stop": "2026-10-31T03:23:18.930930+00:00",
+      "elapsed_seconds": 25.107898,
+      "reported_elapsed_seconds": 25.931,
+      "video_start_offset_seconds": 270.778215,
+      "video_stop_offset_seconds": 295.886113
+    }
+  ]
+}

@@ -1,0 +1,124 @@
+[
+  {
+    "case": "five",
+    "monitor": 78,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "five",
+    "monitor": 79,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "secondary",
+    "monitor": 78,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "secondary",
+    "monitor": 79,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 78,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 79,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "second_allowed",
+    "monitor": 78,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "second_allowed",
+    "monitor": 79,
+    "check": "full monitor dimensions",
+    "passed": true
+  },
+  {
+    "case": "five",
+    "monitor": 78,
+    "point": [
+      1100,
+      600
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "secondary",
+    "monitor": 79,
+    "point": [
+      500,
+      300
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 78,
+    "point": [
+      1800,
+      300
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "spanning",
+    "monitor": 79,
+    "point": [
+      100,
+      300
+    ],
+    "actual": [
+      0,
+      0,
+      0
+    ],
+    "passed": true
+  },
+  {
+    "case": "second_allowed",
+    "monitor": 79,
+    "point": [
+      500,
+      300
+    ],
+    "actual": [
+      0,
+      255,
+      255
+    ],
+    "passed": true
+  },
+  {
+    "check": "untouched first-monitor allowed window survives right-monitor exclusion",
+    "passed": true
+  }
+]

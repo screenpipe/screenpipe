@@ -1,0 +1,13 @@
+{
+  "name": "strictinclude",
+  "mode": "include",
+  "layout": "normal",
+  "exit": 0,
+  "pids": [
+    1948,
+    8672,
+    3292,
+    2184,
+    7732
+  ]
+}

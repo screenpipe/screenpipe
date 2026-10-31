@@ -1,0 +1,8 @@
+{
+  "case": "alpha-b",
+  "start_utc": "2026-10-31T02:19:25.6487652Z",
+  "end_utc": "2026-10-31T02:19:32.0652028Z",
+  "exit": 0,
+  "background_pid": 13200,
+  "foreground_pid": 4256
+}

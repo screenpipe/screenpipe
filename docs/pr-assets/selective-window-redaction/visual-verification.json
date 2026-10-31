@@ -1,0 +1,45 @@
+{
+  "verified_media": [
+    {
+      "os": "linux",
+      "video": "linux/videos/recorder-session-review.mp4",
+      "sample_time_seconds": 65,
+      "observed": "Incognito focused on native desktop; no screenshot stored panel and matching phase caption",
+      "audio_mean_db": -21.7,
+      "audio_peak_db": -2.1
+    },
+    {
+      "os": "macos",
+      "video": "macos/videos/recorder-session-review.mp4",
+      "sample_time_seconds": 65,
+      "observed": "Incognito focused on native desktop; no screenshot stored panel and matching phase caption",
+      "audio_mean_db": -21.7,
+      "audio_peak_db": -2.3
+    }
+  ],
+  "verification": "Rendered video frame inspected; ffmpeg volumedetect confirms audible narration. Main matrix and focused-exclusion excerpt verified separately.",
+  "windows_transparency": {
+    "checked_seconds": [
+      2,
+      9
+    ],
+    "caption_readable": true,
+    "full_desktop_and_actual_stored_sample": true,
+    "both_backgrounds_visibly_distinct": true,
+    "native_profile": "debug-dev correctness only",
+    "mean_audio_db": -16.6,
+    "max_audio_db": -2.1,
+    "duration_seconds": 12.5,
+    "narration_seconds": 10.94
+  },
+  "windows_release_comparison": {
+    "baseline": "work/windows-redaction/curated-release/comparison-release/baseline-saved.jpg",
+    "candidate": "work/windows-redaction/curated-release/comparison-release/candidate-saved.jpg",
+    "inspected": true,
+    "dimensions": [
+      1024,
+      768
+    ],
+    "finding": "Original filtered image reveals allowed underlying windows where excluded window stood. Candidate blackens the actual excluded rectangle and preserves visible portions of all four allowed windows. Fixture mostly covers wallpaper/taskbar; separate alpha proof shows background preservation."
+  }
+}

@@ -1,0 +1,1427 @@
+[
+  {
+    "database": "data/storage/a85fe37d-45a8-4e00-b5f3-3ff2cb9fd2a0/index.sqlite",
+    "integrity": {
+      "unsupported_external_sqlite_function": "unknown function: vec_length()"
+    },
+    "columns": [
+      "id",
+      "video_chunk_id",
+      "offset_index",
+      "timestamp",
+      "name",
+      "app_name",
+      "window_name",
+      "focused",
+      "browser_url",
+      "device_name",
+      "sync_id",
+      "machine_id",
+      "synced_at",
+      "snapshot_path",
+      "accessibility_text",
+      "accessibility_tree_json",
+      "content_hash",
+      "simhash",
+      "capture_trigger",
+      "text_source",
+      "cloud_blob_id",
+      "full_text",
+      "elements_ref_frame_id",
+      "accessibility_redacted_at",
+      "image_redacted_at",
+      "document_path",
+      "full_text_redacted_at",
+      "text_json",
+      "accessibility_tree_redacted_at",
+      "window_name_redacted_at",
+      "browser_url_redacted_at",
+      "text_json_redacted_at",
+      "semantic_run_id",
+      "payload_full_text_length",
+      "payload_accessibility_length",
+      "payload_full_text_present",
+      "payload_accessibility_present",
+      "payload_detail_present"
+    ],
+    "frames": [
+      {
+        "id": 1,
+        "timestamp": "2026-10-31T00:42:45.695149826+00:00",
+        "app_name": "Unknown",
+        "window_name": "PrivacyAllowed 0",
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407365695_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 2,
+        "timestamp": "2026-10-31T00:42:45.884538979+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407365884_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 3,
+        "timestamp": "2026-10-31T00:42:47.015736531+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407367015_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 4,
+        "timestamp": "2026-10-31T00:42:48.147374399+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 5,
+        "timestamp": "2026-10-31T00:42:48.459689144+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407368459_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 6,
+        "timestamp": "2026-10-31T00:42:49.592523914+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 7,
+        "timestamp": "2026-10-31T00:42:50.641391683+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 8,
+        "timestamp": "2026-10-31T00:42:51.691589852+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407371691_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 9,
+        "timestamp": "2026-10-31T00:42:52.839593240+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407372839_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 10,
+        "timestamp": "2026-10-31T00:42:53.967450089+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407373967_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 11,
+        "timestamp": "2026-10-31T00:42:55.100449044+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407375100_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 12,
+        "timestamp": "2026-10-31T00:42:56.255545251+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 13,
+        "timestamp": "2026-10-31T00:42:57.304604838+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 14,
+        "timestamp": "2026-10-31T00:42:58.351088581+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 15,
+        "timestamp": "2026-10-31T00:42:59.416737003+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 16,
+        "timestamp": "2026-10-31T00:43:00.466971066+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 17,
+        "timestamp": "2026-10-31T00:43:01.514684405+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 18,
+        "timestamp": "2026-10-31T00:43:02.583003155+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407382583_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 19,
+        "timestamp": "2026-10-31T00:43:03.717983482+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 20,
+        "timestamp": "2026-10-31T00:43:04.769156487+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": null
+      },
+      {
+        "id": 21,
+        "timestamp": "2026-10-31T00:43:05.832258545+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407385832_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 22,
+        "timestamp": "2026-10-31T00:43:06.966643473+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407386966_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 23,
+        "timestamp": "2026-10-31T00:43:08.098138975+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407388098_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 24,
+        "timestamp": "2026-10-31T00:43:09.242378741+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407389242_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 25,
+        "timestamp": "2026-10-31T00:43:10.376204193+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407390376_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 26,
+        "timestamp": "2026-10-31T00:43:11.507094345+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407391507_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 27,
+        "timestamp": "2026-10-31T00:43:12.653089322+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407392653_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 28,
+        "timestamp": "2026-10-31T00:43:13.784730831+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407393784_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 29,
+        "timestamp": "2026-10-31T00:43:14.897641422+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407394897_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 30,
+        "timestamp": "2026-10-31T00:43:15.273270965+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407395273_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 31,
+        "timestamp": "2026-10-31T00:43:16.386011356+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407396386_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 32,
+        "timestamp": "2026-10-31T00:43:17.500044925+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407397500_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 33,
+        "timestamp": "2026-10-31T00:43:18.630663373+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407398630_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 34,
+        "timestamp": "2026-10-31T00:43:19.745803477+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407399745_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 35,
+        "timestamp": "2026-10-31T00:43:20.863044149+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407400863_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 36,
+        "timestamp": "2026-10-31T00:43:21.992909617+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407401992_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 37,
+        "timestamp": "2026-10-31T00:43:23.108070529+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407403108_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 38,
+        "timestamp": "2026-10-31T00:43:24.223739788+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407404223_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 39,
+        "timestamp": "2026-10-31T00:43:25.353383773+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407405353_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 40,
+        "timestamp": "2026-10-31T00:43:26.469070815+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407406469_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 41,
+        "timestamp": "2026-10-31T00:43:27.583339350+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407407583_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 42,
+        "timestamp": "2026-10-31T00:43:28.713433409+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407408713_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 43,
+        "timestamp": "2026-10-31T00:43:29.828827027+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407409828_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 44,
+        "timestamp": "2026-10-31T00:43:30.943298734+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407410943_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 45,
+        "timestamp": "2026-10-31T00:43:32.076836500+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407412076_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 46,
+        "timestamp": "2026-10-31T00:43:33.188284719+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407413188_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 47,
+        "timestamp": "2026-10-31T00:43:34.323654171+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407414323_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 48,
+        "timestamp": "2026-10-31T00:43:34.716929580+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407414716_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 49,
+        "timestamp": "2026-10-31T00:43:35.847573058+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407415847_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 50,
+        "timestamp": "2026-10-31T00:43:36.976601155+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407416976_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 51,
+        "timestamp": "2026-10-31T00:43:38.122845551+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407418122_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 52,
+        "timestamp": "2026-10-31T00:43:39.254718908+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407419254_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 53,
+        "timestamp": "2026-10-31T00:43:40.386655078+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407420386_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 54,
+        "timestamp": "2026-10-31T00:43:41.534107636+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407421534_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 55,
+        "timestamp": "2026-10-31T00:43:42.663119381+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407422663_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 56,
+        "timestamp": "2026-10-31T00:43:43.793272534+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407423793_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 57,
+        "timestamp": "2026-10-31T00:43:44.939955451+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407424939_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 58,
+        "timestamp": "2026-10-31T00:43:46.070342450+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407426070_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 59,
+        "timestamp": "2026-10-31T00:43:47.206960028+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407427206_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 60,
+        "timestamp": "2026-10-31T00:43:48.354621094+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407428354_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 61,
+        "timestamp": "2026-10-31T00:43:49.485979022+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407429485_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 62,
+        "timestamp": "2026-10-31T00:43:50.616983584+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407430616_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 63,
+        "timestamp": "2026-10-31T00:43:51.762690461+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407431762_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 64,
+        "timestamp": "2026-10-31T00:43:52.893152781+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407432893_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 65,
+        "timestamp": "2026-10-31T00:43:54.025045611+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407434025_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 66,
+        "timestamp": "2026-10-31T00:43:55.179455901+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407435179_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 67,
+        "timestamp": "2026-10-31T00:43:56.308742984+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407436308_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 68,
+        "timestamp": "2026-10-31T00:43:57.440237209+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407437440_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 69,
+        "timestamp": "2026-10-31T00:43:58.587124696+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407438587_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 70,
+        "timestamp": "2026-10-31T00:43:59.720125341+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407439720_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 71,
+        "timestamp": "2026-10-31T00:44:00.854244028+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407440854_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 72,
+        "timestamp": "2026-10-31T00:44:02.000050193+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407442000_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 73,
+        "timestamp": "2026-10-31T00:44:03.132196587+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407443132_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 74,
+        "timestamp": "2026-10-31T00:44:04.265176604+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407444265_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 75,
+        "timestamp": "2026-10-31T00:44:05.412543616+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407445412_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 76,
+        "timestamp": "2026-10-31T00:44:06.542960413+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407446542_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 77,
+        "timestamp": "2026-10-31T00:44:07.674744352+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407447674_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 78,
+        "timestamp": "2026-10-31T00:44:08.822800993+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407448822_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 79,
+        "timestamp": "2026-10-31T00:44:09.954868006+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407449954_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 80,
+        "timestamp": "2026-10-31T00:44:11.086639728+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407451086_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 81,
+        "timestamp": "2026-10-31T00:44:12.233603300+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407452233_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 82,
+        "timestamp": "2026-10-31T00:44:13.364541823+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407453364_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 83,
+        "timestamp": "2026-10-31T00:44:14.498294072+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407454498_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 84,
+        "timestamp": "2026-10-31T00:44:14.892447971+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407454892_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 85,
+        "timestamp": "2026-10-31T00:44:16.023846029+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407456023_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 86,
+        "timestamp": "2026-10-31T00:44:17.152704493+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407457152_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 87,
+        "timestamp": "2026-10-31T00:44:18.298990906+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407458298_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 88,
+        "timestamp": "2026-10-31T00:44:19.431116408+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407459431_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 89,
+        "timestamp": "2026-10-31T00:44:20.562284737+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407460562_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 90,
+        "timestamp": "2026-10-31T00:44:21.707074729+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407461707_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 91,
+        "timestamp": "2026-10-31T00:44:22.839720159+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407462839_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 92,
+        "timestamp": "2026-10-31T00:44:23.970481199+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407463970_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 93,
+        "timestamp": "2026-10-31T00:44:25.116331775+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407465116_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 94,
+        "timestamp": "2026-10-31T00:44:26.248944608+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407466248_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 95,
+        "timestamp": "2026-10-31T00:44:27.383205035+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407467383_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 96,
+        "timestamp": "2026-10-31T00:44:28.530511404+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407468530_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 97,
+        "timestamp": "2026-10-31T00:44:29.661309458+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407469661_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 98,
+        "timestamp": "2026-10-31T00:44:30.809411192+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407470809_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 99,
+        "timestamp": "2026-10-31T00:44:31.995518350+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407471995_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 100,
+        "timestamp": "2026-10-31T00:44:33.136740190+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407473136_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 101,
+        "timestamp": "2026-10-31T00:44:34.268715269+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407474268_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 102,
+        "timestamp": "2026-10-31T00:44:34.679920330+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407474679_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 103,
+        "timestamp": "2026-10-31T00:44:35.824058791+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407475824_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 104,
+        "timestamp": "2026-10-31T00:44:36.970516569+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407476970_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 105,
+        "timestamp": "2026-10-31T00:44:38.150508623+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407478150_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 106,
+        "timestamp": "2026-10-31T00:44:39.295842414+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407479295_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 107,
+        "timestamp": "2026-10-31T00:44:40.444916184+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407480444_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 108,
+        "timestamp": "2026-10-31T00:44:41.617073036+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407481617_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 109,
+        "timestamp": "2026-10-31T00:44:42.765547414+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407482765_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 110,
+        "timestamp": "2026-10-31T00:44:43.911496545+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407483911_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 111,
+        "timestamp": "2026-10-31T00:44:45.075572551+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407485075_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 112,
+        "timestamp": "2026-10-31T00:44:46.225039123+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407486225_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 113,
+        "timestamp": "2026-10-31T00:44:47.367984736+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407487367_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 114,
+        "timestamp": "2026-10-31T00:44:48.518494313+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407488518_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 115,
+        "timestamp": "2026-10-31T00:44:49.647749589+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407489647_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 116,
+        "timestamp": "2026-10-31T00:44:50.780267424+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407490780_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 117,
+        "timestamp": "2026-10-31T00:44:51.944425539+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407491944_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 118,
+        "timestamp": "2026-10-31T00:44:53.079678263+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407493079_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 119,
+        "timestamp": "2026-10-31T00:44:54.210565033+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407494210_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 120,
+        "timestamp": "2026-10-31T00:44:55.358170723+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407495358_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 121,
+        "timestamp": "2026-10-31T00:44:56.488237039+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407496488_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 122,
+        "timestamp": "2026-10-31T00:44:57.618573904+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407497618_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 123,
+        "timestamp": "2026-10-31T00:44:58.766216199+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407498766_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 124,
+        "timestamp": "2026-10-31T00:44:59.894062709+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407499894_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 125,
+        "timestamp": "2026-10-31T00:45:01.025188359+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407501025_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 126,
+        "timestamp": "2026-10-31T00:45:02.170794132+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407502170_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 127,
+        "timestamp": "2026-10-31T00:45:03.305977959+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407503305_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 128,
+        "timestamp": "2026-10-31T00:45:04.437499213+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407504437_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 129,
+        "timestamp": "2026-10-31T00:45:05.586644005+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407505586_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 130,
+        "timestamp": "2026-10-31T00:45:06.721035848+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407506721_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 131,
+        "timestamp": "2026-10-31T00:45:07.856708673+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407507856_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 132,
+        "timestamp": "2026-10-31T00:45:09.010908670+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407509010_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 133,
+        "timestamp": "2026-10-31T00:45:10.140202363+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407510140_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 134,
+        "timestamp": "2026-10-31T00:45:11.272266995+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407511272_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 135,
+        "timestamp": "2026-10-31T00:45:12.419901136+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407512419_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 136,
+        "timestamp": "2026-10-31T00:45:13.554954287+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407513554_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 137,
+        "timestamp": "2026-10-31T00:45:14.687185287+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407514687_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 138,
+        "timestamp": "2026-10-31T00:45:15.834853760+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407515834_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 139,
+        "timestamp": "2026-10-31T00:45:16.969439203+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407516969_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 140,
+        "timestamp": "2026-10-31T00:45:18.104746991+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407518104_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 141,
+        "timestamp": "2026-10-31T00:45:19.252943405+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407519252_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 142,
+        "timestamp": "2026-10-31T00:45:20.387924701+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407520387_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 143,
+        "timestamp": "2026-10-31T00:45:21.517281761+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407521517_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 144,
+        "timestamp": "2026-10-31T00:45:22.667271659+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407522667_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 145,
+        "timestamp": "2026-10-31T00:45:23.801020956+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407523801_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 146,
+        "timestamp": "2026-10-31T00:45:24.934929934+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407524934_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 147,
+        "timestamp": "2026-10-31T00:45:26.088862819+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407526088_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 148,
+        "timestamp": "2026-10-31T00:45:27.218806701+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407527218_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 149,
+        "timestamp": "2026-10-31T00:45:28.352391246+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407528352_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 150,
+        "timestamp": "2026-10-31T00:45:29.504094615+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407529504_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 151,
+        "timestamp": "2026-10-31T00:45:30.635041120+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407530635_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 152,
+        "timestamp": "2026-10-31T00:45:31.766796310+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407531766_m60.jpg",
+        "text_source": null
+      },
+      {
+        "id": 153,
+        "timestamp": "2026-10-31T00:45:32.914081842+00:00",
+        "app_name": null,
+        "window_name": null,
+        "browser_url": null,
+        "snapshot_path": "/home/ubuntu/redaction/evidence/recorder/data/data/data/2026-10-31/1793407532914_m60.jpg",
+        "text_source": null
+      }
+    ]
+  }
+]

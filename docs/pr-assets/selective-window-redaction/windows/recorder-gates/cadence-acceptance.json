@@ -1,0 +1,195 @@
+{
+  "case": "default-visual-probe-quiet-static-cadence",
+  "pass": true,
+  "visual_probes": "active/default; --visual-check-interval-ms omitted",
+  "idle_cadence": "default; --idle-capture-interval-ms omitted; log reports 30000ms",
+  "command": "final-screenpipe-release.exe record --ignored-windows '::PrivacyBlocked' --disable-audio --disable-telemetry --disable-meeting-detector",
+  "utc_start": "2026-10-30T20:20:42.261217-07:00",
+  "utc_stop": "2026-10-30T20:21:45.8981338-07:00",
+  "elapsed_seconds": 63.898,
+  "startup_to_first_frame_seconds": 4.266,
+  "frame_window_seconds": 33.149,
+  "canonical_rows": 4,
+  "trigger_counts": {
+    "idle": 1,
+    "app_switch": 1,
+    "visual_change": 1,
+    "manual": 1
+  },
+  "repeated_false_visual_change_loop": false,
+  "rows": [
+    {
+      "id": 1,
+      "timestamp": "2026-10-31T03:20:46.527474800+00:00",
+      "app_name": null,
+      "window_name": null,
+      "focused": 0,
+      "browser_url": null,
+      "snapshot_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data/data\\2026-10-31\\1793416846527_m65537.jpg",
+      "accessibility_text": null,
+      "accessibility_tree_json": null,
+      "full_text": null,
+      "elements_ref_frame_id": null,
+      "document_path": null,
+      "text_json": null,
+      "capture_trigger": "manual"
+    },
+    {
+      "id": 2,
+      "timestamp": "2026-10-31T03:20:47.621149900+00:00",
+      "app_name": null,
+      "window_name": null,
+      "focused": 0,
+      "browser_url": null,
+      "snapshot_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data/data\\2026-10-31\\1793416847621_m65537.jpg",
+      "accessibility_text": null,
+      "accessibility_tree_json": null,
+      "full_text": null,
+      "elements_ref_frame_id": null,
+      "document_path": null,
+      "text_json": null,
+      "capture_trigger": "app_switch"
+    },
+    {
+      "id": 3,
+      "timestamp": "2026-10-31T03:20:49.227103600+00:00",
+      "app_name": null,
+      "window_name": null,
+      "focused": 0,
+      "browser_url": null,
+      "snapshot_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data/data\\2026-10-31\\1793416849227_m65537.jpg",
+      "accessibility_text": null,
+      "accessibility_tree_json": null,
+      "full_text": null,
+      "elements_ref_frame_id": null,
+      "document_path": null,
+      "text_json": null,
+      "capture_trigger": "visual_change"
+    },
+    {
+      "id": 4,
+      "timestamp": "2026-10-31T03:21:19.676696500+00:00",
+      "app_name": null,
+      "window_name": null,
+      "focused": 0,
+      "browser_url": null,
+      "snapshot_path": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\cadence-engine-data-valid\\data/data\\2026-10-31\\1793416879676_m65537.jpg",
+      "accessibility_text": null,
+      "accessibility_tree_json": null,
+      "full_text": null,
+      "elements_ref_frame_id": null,
+      "document_path": null,
+      "text_json": null,
+      "capture_trigger": "idle"
+    }
+  ],
+  "all_identity_text_reference_absent": true,
+  "all_focused_false": true,
+  "resource_samples": [
+    {
+      "utc": "2026-10-31T03:20:54.7259318Z",
+      "pid": 6552,
+      "cpu_seconds": 1.828125,
+      "rss_bytes": 88121344,
+      "handles": 856,
+      "threads": 70
+    },
+    {
+      "utc": "2026-10-31T03:21:04.7471985Z",
+      "pid": 6552,
+      "cpu_seconds": 1.90625,
+      "rss_bytes": 84467712,
+      "handles": 858,
+      "threads": 70
+    },
+    {
+      "utc": "2026-10-31T03:21:14.7552303Z",
+      "pid": 6552,
+      "cpu_seconds": 1.984375,
+      "rss_bytes": 81121280,
+      "handles": 856,
+      "threads": 68
+    },
+    {
+      "utc": "2026-10-31T03:21:24.7679812Z",
+      "pid": 6552,
+      "cpu_seconds": 2.140625,
+      "rss_bytes": 77053952,
+      "handles": 858,
+      "threads": 68
+    },
+    {
+      "utc": "2026-10-31T03:21:34.7864937Z",
+      "pid": 6552,
+      "cpu_seconds": 2.1875,
+      "rss_bytes": 73383936,
+      "handles": 858,
+      "threads": 68
+    },
+    {
+      "utc": "2026-10-31T03:21:44.7911864Z",
+      "pid": 6552,
+      "cpu_seconds": 2.1875,
+      "rss_bytes": 70336512,
+      "handles": 852,
+      "threads": 65
+    }
+  ],
+  "resource_summary": {
+    "cpu_seconds_first": 1.828125,
+    "cpu_seconds_last": 2.1875,
+    "rss_bytes_min": 70336512.0,
+    "rss_bytes_max": 88121344.0,
+    "handles_min": 852.0,
+    "handles_max": 858.0
+  },
+  "pty_ctrl_c_exit": 1,
+  "stop_log": "stop requested, initiating shutdown",
+  "production_db_check_exit": 0,
+  "scene": {
+    "utc": "2026-10-31T03:19:43.5002274Z",
+    "display": {
+      "x": 0,
+      "y": 0,
+      "width": 1024,
+      "height": 768
+    },
+    "allowed": {
+      "pid": 12056,
+      "hwnd": "0x20196",
+      "title": "PrivacyAllowed",
+      "rect": [
+        0,
+        0,
+        1024,
+        768
+      ]
+    },
+    "blocked": {
+      "pid": 3864,
+      "hwnd": "0x201A2",
+      "title": "PrivacyBlocked",
+      "rect": [
+        250,
+        170,
+        770,
+        590
+      ]
+    },
+    "foreground": {
+      "hwnd": "0x201A2",
+      "title": "PrivacyBlocked",
+      "matches_blocked": true
+    }
+  },
+  "hashes": {
+    "binary": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+    "fixture_binary": "d7c139a907273624d8ec5c66755890818acc1452c58ed6d4057bff82eb9d1137",
+    "windows": "39e046222ddf19e354619d42adfcaae2cb7149f0b413edbc5745ceee80bd5b6d",
+    "wgc": "aae27ee016b32fe65f306e5b14391aa47f32c9b25f4ae694a08f38a4dd3e69ab",
+    "engine": "307749f49ed27be32a39fca91569ccee3d2a22b16a50b9b76943c5b33487acf9",
+    "probe": "07e04cbbecb0aca12aa6e8f89942304e64c695dca48b9606deb076138469d958"
+  },
+  "limitation": "An earlier 44-second cadence attempt was stopped prematurely by the validator and is preserved separately; this acceptance uses the fresh valid 63-second run only.",
+  "stop_timestamp_basis": "recorder log file LastWriteTimeUtc; engine log timestamp is local wall time mislabeled Z"
+}

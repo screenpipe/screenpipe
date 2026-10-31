@@ -1,0 +1,14 @@
+{
+  "name": "minimized",
+  "mode": "exclude",
+  "exit": 0,
+  "showwindow_minimize_return": true,
+  "blocked_hwnd": 1245976,
+  "pids": [
+    11308,
+    12196,
+    6920,
+    9352,
+    6784
+  ]
+}

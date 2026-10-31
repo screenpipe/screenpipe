@@ -1,0 +1,898 @@
+{
+  "outputs/redaction-validation/linux/cases-v4/excluded_behind-exclude/desktop.png": {
+    "sha256": "9d4985683013655501a7cda4ab3a75258bbfb5fdcce892200369a28df078cfdf",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/blank_title-exclude/desktop.png": {
+    "sha256": "a69d2e42f7048bde2ce169643f140f7b8063dddb02451c922f5eb51c0f7a8281",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/fully_occluded-exclude/desktop.png": {
+    "sha256": "07c72c56007f906c47481ebf60d243c3c6cb39966a681db6b77e5d7d9c50d7ba",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/all_excluded-exclude/desktop.png": {
+    "sha256": "0039a6860e79ab67ce7b4fb736df2b65ee9f4de2032c614d91b16ca5bdf2e00e",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/excluded_front-exclude/desktop.png": {
+    "sha256": "5db6a419e792b6ccba564625758f18d2b28a147f2e97ddf3acb2ff42561e3a47",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-none/desktop.png": {
+    "sha256": "f075d2a7aa75d894c72439a44f20ddcb2754658c050a92594c24567cc79f1371",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/offscreen-exclude/desktop.png": {
+    "sha256": "1e1407b12886b6502d360d56f0eca5c75e293d0d949ae20afa06f52feaac9750",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/spanning-exclude/desktop.png": {
+    "sha256": "8e1d38bdfbaf97d46180c1ea02282a336759b9f7692d8607320a23aec786f921",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/no_excluded-exclude/desktop.png": {
+    "sha256": "d27f377c3b12c3a6075e0e33f611c458643ae8de15a9f69710b9aab89cbb19c5",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/transparent_front-exclude/desktop.png": {
+    "sha256": "2efec0665b29167dde8325547e60cdc3a5601d34bf4350c142dbb150dc544833",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/minimized-exclude/desktop.png": {
+    "sha256": "d27f377c3b12c3a6075e0e33f611c458643ae8de15a9f69710b9aab89cbb19c5",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-empty/desktop.png": {
+    "sha256": "f075d2a7aa75d894c72439a44f20ddcb2754658c050a92594c24567cc79f1371",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/small-exclude/desktop.png": {
+    "sha256": "538e4800c16a56be9acdef2f6ed4ba6392282990f49dace6b62f24a2da728287",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-exclude/desktop.png": {
+    "sha256": "f075d2a7aa75d894c72439a44f20ddcb2754658c050a92594c24567cc79f1371",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-include/desktop.png": {
+    "sha256": "f075d2a7aa75d894c72439a44f20ddcb2754658c050a92594c24567cc79f1371",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/no_excluded-nomatch/desktop.png": {
+    "sha256": "d27f377c3b12c3a6075e0e33f611c458643ae8de15a9f69710b9aab89cbb19c5",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/excluded_behind-exclude/capture/frame-0.png": {
+    "sha256": "0c7e7308697a5e8372f9fd292e6beec5cab79537483060347c43460f36349eb8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/blank_title-exclude/capture/frame-0.png": {
+    "sha256": "fa50f594e4a3f554616d18d27100dc6d1825febe57dd06de7113cdbb045eda7f",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/fully_occluded-exclude/capture/frame-0.png": {
+    "sha256": "48f117ef347416d6214eb3aa454678d29664db51e443848e1631c908011d9776",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/all_excluded-exclude/capture/frame-0.png": {
+    "sha256": "fae61b06321b8f306ad620363a6dbf9543d3c519f6867489aabaf3fdad87be56",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/excluded_front-exclude/capture/frame-0.png": {
+    "sha256": "4ca870cd0b60e840abc7e8521939c42afbbac745be8869067af027684c37010e",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-none/capture/frame-0.png": {
+    "sha256": "5e20299db2666cb9eed77caea6f3d3c98b495da7d8f671f0f2effad8aa1372b0",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/offscreen-exclude/capture/frame-0.png": {
+    "sha256": "4bb05eff64ec3df144cbb0c5d3961aab60afe030874e8d7cfebe64a0fe6f529e",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/spanning-exclude/capture/frame-0.png": {
+    "sha256": "5d1501c0b5cc78522e662a946f287a8ab5cbd705fd09983bb665c14f87ef04a6",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/no_excluded-exclude/capture/frame-0.png": {
+    "sha256": "1b81016c747e438412c82fb4e767c09d78d3f7844075e86fed3570c423820be8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/transparent_front-exclude/capture/frame-0.png": {
+    "sha256": "164458d458f3d9e1dd00aabd524eec539946ece637d699d5687685ea26e52c13",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/minimized-exclude/capture/frame-0.png": {
+    "sha256": "1b81016c747e438412c82fb4e767c09d78d3f7844075e86fed3570c423820be8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-empty/capture/frame-0.png": {
+    "sha256": "564fe64317b8abae9bc593ee47aca81a6790fc8fea2e1fbfdb34e093f6a10add",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/small-exclude/capture/frame-0.png": {
+    "sha256": "2afa23f84f8022f9c2f7e782cd26f60131d1961e40a2b6d1b43a65bedc0b6624",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-exclude/capture/frame-0.png": {
+    "sha256": "edc40003880526737192a1752e8b6986aac58fba77873a0c09f6db289d6832c8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/five-include/capture/frame-0.png": {
+    "sha256": "91a50eb1b1c273f5ca09a38aed4ae0a946921f1775676132356dff68d0ef7cde",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/cases-v4/no_excluded-nomatch/capture/frame-0.png": {
+    "sha256": "1b81016c747e438412c82fb4e767c09d78d3f7844075e86fed3570c423820be8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/spanning-79/capture/frame-0.png": {
+    "sha256": "365be47b624c15cfb976ae22ab16bd012d67effefdf28064ed3e8ff0cb78a42b",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/spanning-78/capture/frame-0.png": {
+    "sha256": "45ce8bde60bb9d3f3afc1d91a49a2427cd7800ee0334fe775095a5858be67f20",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/second_allowed-78/capture/frame-0.png": {
+    "sha256": "46b4397e932366e83c04b3f49e63d8604b190b9dc80e5532c2cc7b85b29fe7b0",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/second_allowed-79/capture/frame-0.png": {
+    "sha256": "909462f58787dd4475ab2035b2780af682dd42da56e821b1402e04f897c92d98",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/secondary-78/capture/frame-0.png": {
+    "sha256": "8e6b1f10e89669c81dadaa2f106d06e8709d4867b1b84613d9f96c6e88f19966",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/five-78/capture/frame-0.png": {
+    "sha256": "6e74d6d33455d7648d2a051c444ce8490fc6dfdeffd81c8db2b01f70495e6ed4",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/secondary-79/capture/frame-0.png": {
+    "sha256": "704c1f21ba36b7f1031550332df31ad5eaf96717324ffbe7f30bd5e1fa21f270",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/multi/five-79/capture/frame-0.png": {
+    "sha256": "dddcc54d771d1072494e6bf9717cb19b58eae023ff47563ab0541f4f267b22db",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/benchmark-baseline-equal/exclude/capture/frame-0.png": {
+    "sha256": "5082f59557c94c98aad4b3dba120ce612ed32706fff04c5c2f5e0abc6be9400d",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/benchmark-baseline-equal/none/capture/frame-0.png": {
+    "sha256": "5e20299db2666cb9eed77caea6f3d3c98b495da7d8f671f0f2effad8aa1372b0",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/benchmark-clean/candidate/capture/frame-0.png": {
+    "sha256": "edc40003880526737192a1752e8b6986aac58fba77873a0c09f6db289d6832c8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/benchmark-clean/baseline/capture/frame-0.png": {
+    "sha256": "5082f59557c94c98aad4b3dba120ce612ed32706fff04c5c2f5e0abc6be9400d",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/probe-final-smoke/positive/frame-0.png": {
+    "sha256": "5e20299db2666cb9eed77caea6f3d3c98b495da7d8f671f0f2effad8aa1372b0",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/probe-final-smoke/exclude/frame-0.png": {
+    "sha256": "edc40003880526737192a1752e8b6986aac58fba77873a0c09f6db289d6832c8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/exclude/excluded_focus-desktop.png": {
+    "sha256": "21dd4f63f7dd4b6bc7fe42c09ce1afac6f639004472fac6e0005d921a359414c",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/exclude/incognito_focus-desktop.png": {
+    "sha256": "1aebf91c9b343128d5361573da45c63f555ab9e6b65911cc0a34378de65e13e8",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/exclude/five-desktop.png": {
+    "sha256": "f075d2a7aa75d894c72439a44f20ddcb2754658c050a92594c24567cc79f1371",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/include/excluded_focus-desktop.png": {
+    "sha256": "21dd4f63f7dd4b6bc7fe42c09ce1afac6f639004472fac6e0005d921a359414c",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/drm-gate/excluded_focus-desktop.png": {
+    "sha256": "21dd4f63f7dd4b6bc7fe42c09ce1afac6f639004472fac6e0005d921a359414c",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/url-gate/excluded_focus-desktop.png": {
+    "sha256": "21dd4f63f7dd4b6bc7fe42c09ce1afac6f639004472fac6e0005d921a359414c",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/alpha/exclude/transparent_front_b/capture/frame-0.png": {
+    "sha256": "164458d458f3d9e1dd00aabd524eec539946ece637d699d5687685ea26e52c13",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/alpha/exclude/transparent_front/capture/frame-0.png": {
+    "sha256": "164458d458f3d9e1dd00aabd524eec539946ece637d699d5687685ea26e52c13",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/alpha/none/transparent_front_b/capture/frame-0.png": {
+    "sha256": "5b8af289ceeffecabacad5cdd3bdd3f1ad6e48134f8d05c276a26d075290a7be",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/linux/final-native/alpha/none/transparent_front/capture/frame-0.png": {
+    "sha256": "f7a9fb59672dff6e55f284af2ee22573c444832e52e709cf44dc332a5a039cab",
+    "dimensions": [
+      1920,
+      1080
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/excluded_behind-exclude/desktop.png": {
+    "sha256": "c91891111e9f0afb3b723309aa46f6d6eaafc1ae9e5888597908d0be6254a9c3",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/blank_title-exclude/desktop.png": {
+    "sha256": "afff52ac14171e8dc6730f846779b8d13bd108cfc1bac1803d3ce43513194220",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/fully_occluded-exclude/desktop.png": {
+    "sha256": "d99c4f8655be7626600d69802a87f955665581934d5da0c6d1b7eae8abe9c68e",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/all_excluded-exclude/desktop.png": {
+    "sha256": "410dd7677a9e274a9afab4c72969bc84a25edff6204409695e8d928694222b37",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/excluded_front-exclude/desktop.png": {
+    "sha256": "df4880dc3ee4283713f789178eb801fcc238830d12be1758f273e4c37e59fcd7",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-none/desktop.png": {
+    "sha256": "0f464d59f4e072518a9b62aa51aa23e3f36ec69f2165faecdcf4416c6f60408b",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/offscreen-exclude/desktop.png": {
+    "sha256": "290616b5dbc59bc2b98b5e6262797346010e454c3bf7544ac2c45658f9213f48",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/spanning-exclude/desktop.png": {
+    "sha256": "a043b771002ea7b852f7ae324876ac5e374cca1255bfb6147a4142e16d402c60",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/no_excluded-exclude/desktop.png": {
+    "sha256": "ecff5ff91cda7a0065310075b1ea8a5051a3fb00663044cf4a0e2e217d06cdda",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/transparent_front-exclude/desktop.png": {
+    "sha256": "6fb4ac8c433480a353dd47d27b79f9767727748abbb6574267077f29cd38b3fb",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/minimized-exclude/desktop.png": {
+    "sha256": "b637e4c1981507e85e6308ddc0a8699d4cb82d842a650b09e792ec660642d371",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-empty/desktop.png": {
+    "sha256": "05c02588b23100f26cc3064e124624493d1948bcf6984c39e1e69ab584864007",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/small-exclude/desktop.png": {
+    "sha256": "7ca5f8ba16aa91c47f66c51a119d7a30d7aa784da09e6f23c47f98d6ccc78be5",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-exclude/desktop.png": {
+    "sha256": "233d6dc4b99ddfb795aae12369091c2077e19cf32ba16527a5109a9b51f37152",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-include/desktop.png": {
+    "sha256": "410c39d4bf4893d84c23b30e764c2d6139b6d5edc98f083009b3d6002d2a9238",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/no_excluded-nomatch/desktop.png": {
+    "sha256": "f673218997595ac56700f32cacd8e8a1e4665520a35c95b09eb0cff07101c8b4",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/excluded_behind-exclude/capture/frame-0.png": {
+    "sha256": "2edc8449d9f23dc77602f37b89189caddc613a380fd3fb342cff23ba207bf18f",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/blank_title-exclude/capture/frame-0.png": {
+    "sha256": "69a4f5afed0e8fcb87ac0800876d1a04f66e9eda240734b8158c631e2ae00c8f",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/fully_occluded-exclude/capture/frame-0.png": {
+    "sha256": "ce5af9a44c31d51a5bece7e19bd9a9c0b11a6eb5b365ab89b2f44d5ce18b2fdd",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/all_excluded-exclude/capture/frame-0.png": {
+    "sha256": "7c43d3957f1214204422933839f0a64039e4999570d27e76acb87548417ebb20",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/excluded_front-exclude/capture/frame-0.png": {
+    "sha256": "d7b40c2604b2d627492ea5269a865dc5627215dfef4db4a16d1dad863a8d5e0c",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-none/capture/frame-0.png": {
+    "sha256": "fc696a131f882dc18394d1462aeccee745c30b1b4c8ea94af523cd6f0755d1d8",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/offscreen-exclude/capture/frame-0.png": {
+    "sha256": "e0eba15f9d1d931b16579b4b02d4e2e2d7424f99c4c554ce158331be3f61f19c",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/spanning-exclude/capture/frame-0.png": {
+    "sha256": "e8d36f39c98c300d2c5258b1866aad7c4a60ded5f0291a3346d913d24c41234b",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/no_excluded-exclude/capture/frame-0.png": {
+    "sha256": "e6d4d4ad5fc31c0221ea86ebf3758ed607175ca87ce6635cac1b434137695969",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/transparent_front-exclude/capture/frame-0.png": {
+    "sha256": "f517e60dec23a65462bde51c7d89afac40f136ce4d9967648b808486007eb7a1",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/minimized-exclude/capture/frame-0.png": {
+    "sha256": "44f4ecd2e92ed2e82be1db5092421a1d2fdaa8ff9fe065e8f8323ca58bc90791",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-empty/capture/frame-0.png": {
+    "sha256": "43d506e2b6b15697de6d56d7d108f5b55b86303ca9e02de359240171ddbc0cc3",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/small-exclude/capture/frame-0.png": {
+    "sha256": "94727ef8c98c84622932a4a49e7d5a9228762f65958089e0ebb3af503a1c494f",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-exclude/capture/frame-0.png": {
+    "sha256": "991d05522b2ef0949559e9b0520cd22c3ef33b8cfbc717b1b19fc9d3cbea671f",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/five-include/capture/frame-0.png": {
+    "sha256": "243b910aed19c9556d7dff6a99d337d10207f263472216f849e8cf956aac3656",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/cases-v5/no_excluded-nomatch/capture/frame-0.png": {
+    "sha256": "2cc9cca61899686d7b4b5ec2bbb9687f63daa8c62ffc1347cece26f32ab2e1aa",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/probe-final-smoke/positive/frame-0.png": {
+    "sha256": "4995fc5153cf0c0666b465893bcaa0a2e0f87aa18b8cda1188c0282b6716334c",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/probe-final-smoke/exclude/frame-0.png": {
+    "sha256": "7d78f5dd52eb0ebfbe361104974f83d1b2f8bf00fa1515dc39d1205a11701fb7",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-secondary-1/capture/frame-0.png": {
+    "sha256": "1017f2a6ebe6260b49e15807f762b3279ffebcc8167f699b8f5a8eb8a2888bbd",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-second_allowed-1/capture/frame-0.png": {
+    "sha256": "94c49e0558053a3c8a3372688084563bd7e75681a0ba60b25ed3c85b09fc6f62",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/retina-secondary-1/capture/frame-0.png": {
+    "sha256": "5f580b40c7fe9acfc74230596352c56c32f55d97304a219d3ebcdeab5b4e809c",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-five-3/capture/frame-0.png": {
+    "sha256": "f93689ecdb4c30647f891344262ec061154eed156cc2fda9bbb23532f6e63372",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-spanning-3/capture/frame-0.png": {
+    "sha256": "dd23150619b9d7ada23a54321e4b05c9469e29cbde65a5ebb198ddbcdf89423e",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/negative-secondary-1/capture/frame-0.png": {
+    "sha256": "74d87e79aaac9b073e3f9e0e6bae3115368d34e309a2c1a27f1084709f682d2b",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-second_allowed-3/capture/frame-0.png": {
+    "sha256": "6ece7cbb15b028734fd22c41636a24104bb4c8dbb8779bcedd996d6011c73fac",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-secondary-3/capture/frame-0.png": {
+    "sha256": "f85f393a372098f0f4527e56f0a3dc567d44895d8a59fef1321492eb6df9da2c",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-spanning-1/capture/frame-0.png": {
+    "sha256": "000b7f1e4dedae3ef10e74d017c21f8a052ba6ce2b74355ba6caf2bba4cf0dea",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/right-five-1/capture/frame-0.png": {
+    "sha256": "c5dd91edac5c7579370e9b02cea5626ce1a3d8fcc7b677aaba9919c90ff21ffc",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/retina-secondary-3/capture/frame-0.png": {
+    "sha256": "2ea1bb74e12e1c27da6ea2c55486eaf65ca54d3cbd4a2b4849030f048a3eda7b",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/multi-v4-verified/negative-secondary-3/capture/frame-0.png": {
+    "sha256": "a3a334e26da5299bf2e2f880f7191fb99b3f2b601f87afd4eeb3609a3b0e55ed",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-verified/retina-secondary-1/capture/frame-0.png": {
+    "sha256": "e79ff1dd5b7e6c0887ba1ab605cfad1b606081a4e9206d77722754110e220615",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-verified/retina-secondary-7/capture/frame-0.png": {
+    "sha256": "3c2e2e1ac588359400fef5016f209ee1f7fe3dbcdfa9a0c3ec079637fbf6e453",
+    "dimensions": [
+      2560,
+      1440
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-verified/retina-second_allowed-7/capture/frame-0.png": {
+    "sha256": "6e20da03d9ddd659ac813545e53c142f8a482476fc898c848f7daf58a1c61bf8",
+    "dimensions": [
+      2560,
+      1440
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-verified/retina-second_allowed-1/capture/frame-0.png": {
+    "sha256": "3a4203477caa77039aa09f723c8bdfeff3cb7ca449cbaf4df932f07f90973c02",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-cap/retina-secondary-1/capture/frame-0.png": {
+    "sha256": "38a17e96249c70fe1419cef85311ddbbd7362003a853bfa6e1f313bcb31d3808",
+    "dimensions": [
+      1280,
+      800
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-cap/retina-secondary-9/capture/frame-0.png": {
+    "sha256": "a9d0fad90f0baf5c22435e4db546d6b9c8c4591085dac6f3ae06b80bea85d41e",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-cap/retina-second_allowed-9/capture/frame-0.png": {
+    "sha256": "5bbe0b3c019547f88ac8ca0ec88b1270f1eb940e9ba53c66d914f35b478fc9ec",
+    "dimensions": [
+      1280,
+      720
+    ]
+  },
+  "outputs/redaction-validation/macos/retina-v5-cap/retina-second_allowed-1/capture/frame-0.png": {
+    "sha256": "8af2c7dae7d32d7a0e5c88779fd384cd6a768b5f136e4b222e31b8f50b23958f",
+    "dimensions": [
+      1280,
+      800
+    ]
+  },
+  "outputs/redaction-validation/macos/mission-control/desktop.png": {
+    "sha256": "7346118afdd6328e47b1c6bd547eb3bd8710e72d51b63d399ef266d60af9b341",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/mission-control/capture.png": {
+    "sha256": "6ba88d4c526fd328a02e735207f38aa8c7fdfb710ff314ae06a976cd80fe4693",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/benchmark-baseline-equal/exclude/capture/frame-0.png": {
+    "sha256": "0b76de9e9556bc4be2491ed439ff5d18262d93395e137c675c725f35dd4cc579",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/benchmark-baseline-equal/none/capture/frame-0.png": {
+    "sha256": "3493fc315c7e5f2267cef6095b1b304b05cc5122c80be36cf64ed1cf7af92343",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/benchmark-clean/candidate/capture/frame-0.png": {
+    "sha256": "071cf6e5b9860249bbce0b532735686493e52f312bb79df53f197913dc0bf813",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/benchmark-clean/baseline/capture/frame-0.png": {
+    "sha256": "3d0a47f38a2098079cf84167dbd76ce1535b919e34f0faf546c74cb5d85b2f39",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/benchmark-long/exclude/capture/frame-0.png": {
+    "sha256": "3e7bbffe7015e4cad11652bf8b5627e3750d714668cea4b409e7849af3236e6f",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/exclude/excluded_focus-desktop.png": {
+    "sha256": "a20582e85135a7d3b09232c3f565061ed947628365250fe59cf73ba04945caf3",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/exclude/incognito_focus-desktop.png": {
+    "sha256": "50c1e9071a87427542c3b5855f47851b44cb54375a1d51e66fbc45d95b9de89b",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/exclude/five-desktop.png": {
+    "sha256": "fb4f89ba200cd23ca8d313e833974a74924e3cc49704a0e639263b70b81dbe25",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/include/excluded_focus-desktop.png": {
+    "sha256": "6b1d9b463756b0fdff4c19b69a5373a81dd7c1f2a4b8139872020ed617ee0648",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/drm-gate/excluded_focus-desktop.png": {
+    "sha256": "dfe3996e9fcadf5666b18d51d95dbbb36e3db4f1aa94885cd85b87f2b48d69ec",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/url-gate/excluded_focus-desktop.png": {
+    "sha256": "a128a7359a207d20c5384f21f6bda4a246757848d7472499cf2cdbed3db09c52",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/alpha/exclude/transparent_front_b/capture/frame-0.png": {
+    "sha256": "4556a3fa1de97964fd3dded87cdd06d7af62e818ca4f2b0efc4ac6a6470c1891",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/alpha/exclude/transparent_front/capture/frame-0.png": {
+    "sha256": "0841ff86518999f72e9aa58ba4b03387863592c07111bf156b1bd38084f743b7",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/alpha/none/transparent_front_b/capture/frame-0.png": {
+    "sha256": "f9d8f42873645f5d4cbdd62ea0cdaa125da5aa693db8452430cf71490b27b800",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/final-native/alpha/none/transparent_front/capture/frame-0.png": {
+    "sha256": "3e839cdf5f92d93abe31ed5eb61a1ce07d919c8f4d603b9cc3406a49c6782d4a",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  },
+  "outputs/redaction-validation/macos/race-v5/recovery/frame-0.png": {
+    "sha256": "47c175d69bcd16ad46ba2742541e550e2327508d650a554d6bf05362ef71a31e",
+    "dimensions": [
+      1600,
+      1000
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+$ bun run e2e:coverage:check && bun run coverage:core:check && bun ../../docs/coverage/scripts/generate-unified-coverage-report.ts --check
+$ bun e2e/scripts/generate-coverage-report.ts --check
+Coverage report is up to date: e2e/COVERAGE.md
+$ bun ../../docs/coverage/scripts/generate-core-engine-coverage-report.ts --check
+Core coverage report is up to date: ../../docs/coverage/CORE.md
+Unified coverage report is up to date: ../../docs/COVERAGE.md

@@ -11,6 +11,9 @@ use crate::monitor::SafeMonitor;
 use image::DynamicImage;
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+mod scene;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

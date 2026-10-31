@@ -1,0 +1,49 @@
+[
+  {
+    "database": "data/storage/32cabbbd-21d2-4f5c-95af-1883799fe207/index.sqlite",
+    "integrity": {
+      "unsupported_external_sqlite_function": "unknown function: vec_length()"
+    },
+    "columns": [
+      "id",
+      "video_chunk_id",
+      "offset_index",
+      "timestamp",
+      "name",
+      "app_name",
+      "window_name",
+      "focused",
+      "browser_url",
+      "device_name",
+      "sync_id",
+      "machine_id",
+      "synced_at",
+      "snapshot_path",
+      "accessibility_text",
+      "accessibility_tree_json",
+      "content_hash",
+      "simhash",
+      "capture_trigger",
+      "text_source",
+      "cloud_blob_id",
+      "full_text",
+      "elements_ref_frame_id",
+      "accessibility_redacted_at",
+      "image_redacted_at",
+      "document_path",
+      "full_text_redacted_at",
+      "text_json",
+      "accessibility_tree_redacted_at",
+      "window_name_redacted_at",
+      "browser_url_redacted_at",
+      "text_json_redacted_at",
+      "semantic_run_id",
+      "payload_full_text_length",
+      "payload_accessibility_length",
+      "payload_full_text_present",
+      "payload_accessibility_present",
+      "payload_detail_present"
+    ],
+    "frames": []
+  }
+]

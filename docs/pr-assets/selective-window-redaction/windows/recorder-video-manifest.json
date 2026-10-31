@@ -1,0 +1,63 @@
+{
+  "source": "work/windows-redaction/release-final/console-raw.mp4",
+  "source_sha256": "1a634adc51baf81931989a56351c34577abef63a405f81f253702b3239b833d2",
+  "source_durations_seconds": {
+    "work/windows-redaction/release-final/console-raw.mp4": 2462.6,
+    "work/windows-redaction/gates-final/acceptance.mp4": 381.33
+  },
+  "source_sha256_by_path": {
+    "work/windows-redaction/release-final/console-raw.mp4": "1a634adc51baf81931989a56351c34577abef63a405f81f253702b3239b833d2",
+    "work/windows-redaction/gates-final/acceptance.mp4": "6d7b388d12d54945e039743ee0397b0e8f1b651b6e7d062d7ef697d94f872915"
+  },
+  "output": "outputs/redaction-validation/windows/videos/recorder-session-review.mp4",
+  "output_sha256": "8cf39a11bcea5bebac5c1df4fcf152ac98ba546013c6d1a8095974b4aeccb7b0",
+  "duration_seconds": 48,
+  "profile": "release",
+  "segments": [
+    {
+      "source_offset_seconds": 2217.425,
+      "duration_seconds": 10,
+      "screenshot": "outputs/redaction-validation/windows/final-native/excluded-focus-saved.jpg",
+      "caption": "Excluded focus | Safe desktop retained; focused metadata empty",
+      "sample_sha256": "ac04f2a344add03dac6168fa5b0fceef9dcd9b18f7ad1c9bd459553b19bab122"
+    },
+    {
+      "source_offset_seconds": 2374.425,
+      "duration_seconds": 8,
+      "screenshot": "outputs/redaction-validation/windows/final-native/strictinclude-saved.jpg",
+      "caption": "Strict include | Only explicitly allowed window content retained",
+      "sample_sha256": "06890af8e9353d605a09ea25c69bd1ed7e76dd5a9323dc940644f7daf4979905"
+    },
+    {
+      "source": "work/windows-redaction/gates-final/acceptance.mp4",
+      "source_offset_seconds": 155,
+      "duration_seconds": 8,
+      "screenshot": "outputs/redaction-validation/windows/final-native/cadence-saved.jpg",
+      "caption": "Default cadence | Four indexed frames in 63.64 seconds; no repeated trigger loop",
+      "sample_sha256": "072573f1f2947bef4034d1ae2435e6d783aefa1ab55f69a279051dbf2929d71b"
+    },
+    {
+      "source": "work/windows-redaction/gates-final/acceptance.mp4",
+      "source_offset_seconds": 214,
+      "duration_seconds": 7,
+      "caption": "URL policy enabled | Excluded-focus fallback withheld; zero images or rows",
+      "sample_sha256": null
+    },
+    {
+      "source": "work/windows-redaction/gates-final/acceptance.mp4",
+      "source_offset_seconds": 243,
+      "duration_seconds": 7,
+      "caption": "DRM policy enabled | Excluded-focus fallback withheld; zero images or rows",
+      "sample_sha256": null
+    },
+    {
+      "source": "work/windows-redaction/gates-final/acceptance.mp4",
+      "source_offset_seconds": 279,
+      "duration_seconds": 8,
+      "caption": "Incognito fixture | Capture withheld; zero images or indexed rows",
+      "sample_sha256": null
+    }
+  ],
+  "narration": "These are recordings of the final Windows release build. With an excluded window focused, the stored screenshot keeps allowed desktop content while the focused identity and text fields stay empty. Strict include rules retain only allowed content. The default cadence run produced four indexed frames over sixty four seconds, without a repeated visual change loop. The remaining scenes test conservative policy gates. With URL or DRM policy enabled, the excluded focus fallback stores no screenshot or row. The incognito fixture also stores nothing. These are synthetic policy tests, not a test of protected video playback.",
+  "edits": "Excerpts from native console recording at normal playback speed; actual stored JPEG samples alongside, explicit empty panel for a verified no-snapshot case. Setup/build time omitted. Narration and concise captions added."
+}

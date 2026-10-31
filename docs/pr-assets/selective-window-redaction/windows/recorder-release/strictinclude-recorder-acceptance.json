@@ -1,0 +1,178 @@
+{
+  "binary_sha256": "7c99b93fe9d312c3d7eb99eeb332de41cf34701d6b6be71029b3e424e0434cd0",
+  "saved_jpegs": 17,
+  "all_allowed_preserved": true,
+  "all_private_sample_zero": true,
+  "frames": [
+    {
+      "basename": "1793416188873_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416189821_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416190947_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416191621_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416192725_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416193821_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416194997_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416196092_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416197218_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416198375_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416199486_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416200612_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416201772_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416202850_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416203946_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416205119_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    },
+    {
+      "basename": "1793416206211_m65537.jpg",
+      "allowed_sample": [
+        0,
+        255,
+        255
+      ],
+      "allowed_preserved": true,
+      "private_sampled_pixels": 0
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "case": "cadence-engine-data-valid",
+    "command": "SCREENPIPE_DATA_DIR=<case> final-screenpipe-release.exe db check",
+    "native_exit": 0,
+    "log": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\production-db-check-cadence-engine-data-valid.log"
+  },
+  {
+    "case": "negative-url-data",
+    "command": "SCREENPIPE_DATA_DIR=<case> final-screenpipe-release.exe db check",
+    "native_exit": 0,
+    "log": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\production-db-check-negative-url-data.log"
+  },
+  {
+    "case": "negative-drm-data",
+    "command": "SCREENPIPE_DATA_DIR=<case> final-screenpipe-release.exe db check",
+    "native_exit": 0,
+    "log": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\production-db-check-negative-drm-data.log"
+  },
+  {
+    "case": "negative-incognito-data",
+    "command": "SCREENPIPE_DATA_DIR=<case> final-screenpipe-release.exe db check",
+    "native_exit": 0,
+    "log": "C:\\screenpipe-worker\\results\\redactrelease-20261031\\supplemental\\production-db-check-negative-incognito-data.log"
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command '$supp='\"'C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental';\"'$fixture='\"'C:\\\\spdev\\\\release\\\\examples\\\\windows_privacy_fixture.exe';\"'$a=Start-Process $fixture -ArgumentList @('\"'allowed','0','0') -PassThru;\"'$b=Start-Process $fixture -ArgumentList @('\"'blocked','252','174') -PassThru;Start-Sleep -Seconds 1;\"'$a.Id,$b.Id|Set-Content \"$supp'\"\\\\final-recorder-fixture-pids.txt\\\" -Encoding ascii;C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental\\\\final-screenpipe-release.exe record --data-dir C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental\\\\final-engine-data --disable-audio --ignored-windows ::PrivacyBlocked --idle-capture-interval-ms 1000 --visual-check-interval-ms 0 --disable-telemetry --disable-meeting-detector\"",
+    "native_exit": 1
+  },
+  {
+    "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command '$supp='\"'C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental';\"'$fixture='\"'C:\\\\spdev\\\\release\\\\examples\\\\windows_privacy_fixture.exe';\"'$a=Start-Process $fixture -ArgumentList @('\"'allowed','0','0') -PassThru;\"'$b=Start-Process $fixture -ArgumentList @('\"'blocked','252','174') -PassThru;Start-Sleep -Seconds 1;\"'$a.Id,$b.Id|Set-Content \"$supp'\"\\\\strictinclude-recorder-fixture-pids.txt\\\" -Encoding ascii;C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental\\\\final-screenpipe-release.exe record --data-dir C:\\\\screenpipe-worker\\\\results\\\\redactrelease-20261031\\\\supplemental\\\\strictinclude-engine-data --disable-audio --ignored-windows ::PrivacyBlocked --included-windows ::PrivacyAllowed --idle-capture-interval-ms 1000 --visual-check-interval-ms 0 --disable-telemetry --disable-meeting-detector --port 3031\"",
+    "native_exit": 1
+  }
+]

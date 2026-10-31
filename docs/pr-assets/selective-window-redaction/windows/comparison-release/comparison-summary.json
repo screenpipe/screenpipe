@@ -1,0 +1,127 @@
+{
+  "scene": {
+    "display": "1024x768",
+    "windows": [
+      {
+        "kind": "allowed",
+        "x": 0,
+        "y": 0
+      },
+      {
+        "kind": "allowed",
+        "x": 504,
+        "y": 0
+      },
+      {
+        "kind": "allowed",
+        "x": 0,
+        "y": 348
+      },
+      {
+        "kind": "allowed",
+        "x": 504,
+        "y": 348
+      },
+      {
+        "kind": "blocked",
+        "x": 252,
+        "y": 174
+      }
+    ],
+    "warmup_frames_each": 20,
+    "measured_frames_each": 120
+  },
+  "baseline": {
+    "frames": 120,
+    "saved": 120,
+    "rejected": 0,
+    "leaked": 0,
+    "dimensions": [
+      "1024x768"
+    ],
+    "capture_ms": {
+      "mean": 597.522,
+      "median": 594.834,
+      "p95": 664.377,
+      "min": 528.185,
+      "max": 679.274
+    },
+    "write_ms": {
+      "mean": 22.424,
+      "median": 22.041,
+      "p95": 24.883,
+      "min": 21.338,
+      "max": 31.163
+    },
+    "read_ms": {
+      "mean": 10.001,
+      "median": 10.033,
+      "p95": 10.533,
+      "min": 9.043,
+      "max": 13.023
+    },
+    "cpu_seconds_delta": 9.094,
+    "rss_bytes": {
+      "mean": 38523992.159,
+      "median": 38608896.0,
+      "p95": 41832448.0,
+      "min": 2383872.0,
+      "max": 45891584.0
+    },
+    "handles": {
+      "mean": 621.199,
+      "median": 624.0,
+      "p95": 949.0,
+      "min": 52.0,
+      "max": 984.0
+    }
+  },
+  "candidate": {
+    "frames": 120,
+    "saved": 119,
+    "rejected": 1,
+    "leaked": 0,
+    "dimensions": [
+      "1024x768",
+      "x"
+    ],
+    "capture_ms": {
+      "mean": 468.059,
+      "median": 463.958,
+      "p95": 520.798,
+      "min": 373.15,
+      "max": 536.012
+    },
+    "write_ms": {
+      "mean": 23.055,
+      "median": 22.718,
+      "p95": 25.05,
+      "min": 21.898,
+      "max": 30.07
+    },
+    "read_ms": {
+      "mean": 10.096,
+      "median": 10.077,
+      "p95": 11.327,
+      "min": 7.973,
+      "max": 12.868
+    },
+    "cpu_seconds_delta": 10.234,
+    "rss_bytes": {
+      "mean": 37952091.353,
+      "median": 37920768.0,
+      "p95": 41078784.0,
+      "min": 2379776.0,
+      "max": 44404736.0
+    },
+    "handles": {
+      "mean": 268.83,
+      "median": 271.0,
+      "p95": 273.0,
+      "min": 48.0,
+      "max": 273.0
+    }
+  },
+  "capture_mean_overhead_pct": -21.67,
+  "cpu_overhead_pct": 12.54
+}

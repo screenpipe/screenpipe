@@ -1,0 +1,1013 @@
+[
+  {
+    "database": "data/storage/1ce41b3f-ddd9-491b-a7b4-8774685b7a48/index.sqlite",
+    "integrity": {
+      "unsupported_external_sqlite_function": "unknown function: vec_length()"
+    },
+    "columns": [
+      "id",
+      "video_chunk_id",
+      "offset_index",
+      "timestamp",
+      "name",
+      "app_name",
+      "window_name",
+      "focused",
+      "browser_url",
+      "device_name",
+      "sync_id",
+      "machine_id",
+      "synced_at",
+      "snapshot_path",
+      "accessibility_text",
+      "accessibility_tree_json",
+      "content_hash",
+      "simhash",
+      "capture_trigger",
+      "text_source",
+      "cloud_blob_id",
+      "full_text",
+      "elements_ref_frame_id",
+      "accessibility_redacted_at",
+      "image_redacted_at",
+      "document_path",
+      "full_text_redacted_at",
+      "text_json",
+      "accessibility_tree_redacted_at",
+      "window_name_redacted_at",
+      "browser_url_redacted_at",
+      "text_json_redacted_at",
+      "semantic_run_id",
+      "payload_full_text_length",
+      "payload_accessibility_length",
+      "payload_full_text_present",
+      "payload_accessibility_present",
+      "payload_detail_present"
+    ],
+    "frames": [
+      {
+        "id": 1,
+        "timestamp": "2026-10-31T01:02:27.128941+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408547128_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 2,
+        "timestamp": "2026-10-31T01:02:36.653909+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408556653_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 3,
+        "timestamp": "2026-10-31T01:02:42.641476+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408562641_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 4,
+        "timestamp": "2026-10-31T01:02:45.376219+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408565376_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 5,
+        "timestamp": "2026-10-31T01:02:48.040235+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408568040_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 6,
+        "timestamp": "2026-10-31T01:02:51.563355+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408571563_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 7,
+        "timestamp": "2026-10-31T01:02:54.075274+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408574075_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 8,
+        "timestamp": "2026-10-31T01:02:55.321757+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408575321_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 9,
+        "timestamp": "2026-10-31T01:02:56.522306+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408576522_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 10,
+        "timestamp": "2026-10-31T01:02:57.712627+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408577712_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 11,
+        "timestamp": "2026-10-31T01:02:58.892956+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408578892_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 12,
+        "timestamp": "2026-10-31T01:03:00.090162+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408580090_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 13,
+        "timestamp": "2026-10-31T01:03:01.278408+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408581278_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 14,
+        "timestamp": "2026-10-31T01:03:02.478626+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408582478_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 15,
+        "timestamp": "2026-10-31T01:03:03.678365+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408583678_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 16,
+        "timestamp": "2026-10-31T01:03:04.875924+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408584875_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 17,
+        "timestamp": "2026-10-31T01:03:06.064619+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408586064_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 18,
+        "timestamp": "2026-10-31T01:03:07.262360+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408587262_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 19,
+        "timestamp": "2026-10-31T01:03:08.463242+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408588463_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 20,
+        "timestamp": "2026-10-31T01:03:09.637344+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408589637_m1.jpg",
+        "text_source": "accessibility"
+      },
+      {
+        "id": 21,
+        "timestamp": "2026-10-31T01:03:10.846159+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408590846_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 22,
+        "timestamp": "2026-10-31T01:03:12.795762+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408592795_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 23,
+        "timestamp": "2026-10-31T01:03:13.997410+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408593997_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 24,
+        "timestamp": "2026-10-31T01:03:15.206165+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408595206_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 25,
+        "timestamp": "2026-10-31T01:03:16.416+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408596416_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 26,
+        "timestamp": "2026-10-31T01:03:17.620320+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408597620_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 27,
+        "timestamp": "2026-10-31T01:03:18.813029+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408598813_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 28,
+        "timestamp": "2026-10-31T01:03:20.000682+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408600000_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 29,
+        "timestamp": "2026-10-31T01:03:21.207658+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408601207_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 30,
+        "timestamp": "2026-10-31T01:03:22.407247+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408602407_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 31,
+        "timestamp": "2026-10-31T01:03:23.603610+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408603603_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 32,
+        "timestamp": "2026-10-31T01:03:24.810860+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408604810_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 33,
+        "timestamp": "2026-10-31T01:03:26.025177+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408606025_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 34,
+        "timestamp": "2026-10-31T01:03:27.233033+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408607233_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 35,
+        "timestamp": "2026-10-31T01:03:28.432335+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408608432_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 36,
+        "timestamp": "2026-10-31T01:03:29.628063+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408609628_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 37,
+        "timestamp": "2026-10-31T01:03:30.835310+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408610835_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 38,
+        "timestamp": "2026-10-31T01:03:33.274763+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408613274_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 39,
+        "timestamp": "2026-10-31T01:03:34.796599+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408614796_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 40,
+        "timestamp": "2026-10-31T01:03:35.995815+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408615995_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 41,
+        "timestamp": "2026-10-31T01:03:37.172569+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408617172_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 42,
+        "timestamp": "2026-10-31T01:03:38.373754+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408618373_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 43,
+        "timestamp": "2026-10-31T01:03:39.549654+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408619549_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 44,
+        "timestamp": "2026-10-31T01:03:40.753694+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408620753_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 45,
+        "timestamp": "2026-10-31T01:03:41.947428+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408621947_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 46,
+        "timestamp": "2026-10-31T01:03:43.120958+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408623120_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 47,
+        "timestamp": "2026-10-31T01:03:44.325155+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408624325_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 48,
+        "timestamp": "2026-10-31T01:03:45.512396+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408625512_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 49,
+        "timestamp": "2026-10-31T01:03:46.721192+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408626721_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 50,
+        "timestamp": "2026-10-31T01:03:47.927303+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408627927_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 51,
+        "timestamp": "2026-10-31T01:03:49.129899+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408629129_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 52,
+        "timestamp": "2026-10-31T01:03:50.314284+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": null,
+        "text_source": "accessibility"
+      },
+      {
+        "id": 53,
+        "timestamp": "2026-10-31T01:03:51.452687+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408631452_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 54,
+        "timestamp": "2026-10-31T01:03:52.754682+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408632754_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 55,
+        "timestamp": "2026-10-31T01:03:54.309845+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408634309_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 56,
+        "timestamp": "2026-10-31T01:03:55.461191+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408635461_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 57,
+        "timestamp": "2026-10-31T01:03:56.624857+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408636624_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 58,
+        "timestamp": "2026-10-31T01:03:57.764446+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408637764_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 59,
+        "timestamp": "2026-10-31T01:03:58.918569+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408638918_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 60,
+        "timestamp": "2026-10-31T01:04:00.091016+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408640091_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 61,
+        "timestamp": "2026-10-31T01:04:01.261264+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408641261_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 62,
+        "timestamp": "2026-10-31T01:04:02.421366+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408642421_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 63,
+        "timestamp": "2026-10-31T01:04:03.603783+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408643603_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 64,
+        "timestamp": "2026-10-31T01:04:04.762768+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408644762_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 65,
+        "timestamp": "2026-10-31T01:04:05.925213+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408645925_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 66,
+        "timestamp": "2026-10-31T01:04:07.097407+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408647097_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 67,
+        "timestamp": "2026-10-31T01:04:08.260628+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408648260_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 68,
+        "timestamp": "2026-10-31T01:04:09.414212+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408649414_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 69,
+        "timestamp": "2026-10-31T01:04:10.584264+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408650584_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 70,
+        "timestamp": "2026-10-31T01:04:11.732680+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408651732_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 71,
+        "timestamp": "2026-10-31T01:04:12.905637+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408652905_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 72,
+        "timestamp": "2026-10-31T01:04:14.195568+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408654195_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 73,
+        "timestamp": "2026-10-31T01:04:15.376563+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408655376_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 74,
+        "timestamp": "2026-10-31T01:04:16.586945+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408656586_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 75,
+        "timestamp": "2026-10-31T01:04:17.754752+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408657754_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 76,
+        "timestamp": "2026-10-31T01:04:18.940476+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408658940_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 77,
+        "timestamp": "2026-10-31T01:04:20.116217+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408660116_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 78,
+        "timestamp": "2026-10-31T01:04:21.294116+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408661294_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 79,
+        "timestamp": "2026-10-31T01:04:22.473294+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408662473_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 80,
+        "timestamp": "2026-10-31T01:04:23.662909+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408663662_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 81,
+        "timestamp": "2026-10-31T01:04:24.857324+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408664857_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 82,
+        "timestamp": "2026-10-31T01:04:26.061113+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408666061_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 83,
+        "timestamp": "2026-10-31T01:04:27.228533+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408667228_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 84,
+        "timestamp": "2026-10-31T01:04:28.402760+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408668402_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 85,
+        "timestamp": "2026-10-31T01:04:29.580175+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408669580_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 86,
+        "timestamp": "2026-10-31T01:04:30.763059+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408670763_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 87,
+        "timestamp": "2026-10-31T01:04:31.961578+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408671961_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 88,
+        "timestamp": "2026-10-31T01:04:33.147974+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408673147_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 89,
+        "timestamp": "2026-10-31T01:04:34.305344+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408674305_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 90,
+        "timestamp": "2026-10-31T01:04:35.490114+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408675490_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 91,
+        "timestamp": "2026-10-31T01:04:36.656254+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408676656_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 92,
+        "timestamp": "2026-10-31T01:04:37.835830+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408677835_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 93,
+        "timestamp": "2026-10-31T01:04:39.011261+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408679011_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 94,
+        "timestamp": "2026-10-31T01:04:40.198274+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408680198_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 95,
+        "timestamp": "2026-10-31T01:04:41.379415+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408681379_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 96,
+        "timestamp": "2026-10-31T01:04:42.546493+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408682546_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 97,
+        "timestamp": "2026-10-31T01:04:43.737979+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408683737_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 98,
+        "timestamp": "2026-10-31T01:04:44.919085+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408684919_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 99,
+        "timestamp": "2026-10-31T01:04:46.107765+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408686107_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 100,
+        "timestamp": "2026-10-31T01:04:47.287863+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408687287_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 101,
+        "timestamp": "2026-10-31T01:04:48.464036+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408688464_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 102,
+        "timestamp": "2026-10-31T01:04:49.658381+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408689658_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 103,
+        "timestamp": "2026-10-31T01:04:50.841367+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408690841_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 104,
+        "timestamp": "2026-10-31T01:04:51.999655+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408691999_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 105,
+        "timestamp": "2026-10-31T01:04:53.176967+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408693176_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 106,
+        "timestamp": "2026-10-31T01:04:54.364550+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408694364_m1.jpg",
+        "text_source": "hybrid"
+      },
+      {
+        "id": 107,
+        "timestamp": "2026-10-31T01:04:55.550045+00:00",
+        "app_name": "PrivacyFixture",
+        "window_name": "PrivacyAllowed Browser",
+        "browser_url": null,
+        "snapshot_path": "/Users/admin/redaction/evidence/recorder-v5/data/data/data/2026-10-31/1793408695550_m1.jpg",
+        "text_source": "hybrid"
+      }
+    ]
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "rss_mib_min": 123.21875,
+  "rss_mib_max": 160.53125,
+  "rss_mib_final": 155.796875,
+  "minute_medians_mib": [
+    138.84,
+    149.78,
+    160.52,
+    160.52,
+    160.52,
+    155.8
+  ],
+  "final_cpu_percent_one_core": "13.2",
+  "final_cpu_time": "1:02.18",
+  "scope": "same probe driver and original3bb backend; uncapped native dimensions; release compiler overlapped the run"
+}
