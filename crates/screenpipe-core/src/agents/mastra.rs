@@ -105,6 +105,10 @@ impl MastraExecutor {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .env("MASTRA_TELEMETRY_DISABLED", "1")
+            .env(
+                "SCREENPIPE_MASTRA_LEGACY_AGENT_DIR",
+                super::pi::pi_config_dir()?,
+            )
             .env("SCREENPIPE_PIPE_PERMISSIONS", permissions_json)
             .env("SCREENPIPE_MASTRA_PERMISSIONS_FILE", permissions_path)
             .env("SCREENPIPE_LOCAL_API_KEY", token)

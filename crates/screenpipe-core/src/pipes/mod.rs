@@ -2909,6 +2909,21 @@ pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 600;
 /// rolling-minute rate-limit window. No-op when nothing is waiting.
 const SCHEDULED_RUN_SPACING_SECS: u64 = 5;
 
+fn pipe_executor_config(
+    agent: &str,
+    config: Option<serde_json::Value>,
+    subagent: bool,
+) -> Option<serde_json::Value> {
+    if agent != "mastra" {
+        return config;
+    }
+    let mut value = config.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("subagent".to_string(), serde_json::Value::Bool(subagent));
+    }
+    Some(value)
+}
+
 /// The Mastra runtime loads the same policy/tool definitions through its native
 /// tool adapter. These assets do not install or start a Pi runtime.
 fn install_mastra_assets(pipe_dir: &Path) -> Result<()> {
@@ -3172,6 +3187,19 @@ pub struct PipeManager {
 }
 
 impl PipeManager {
+    /// Installed executors, used by Cloud Runner reconciliation before changing
+    /// future dispatch. An unknown engine must not be treated as Mastra-ready.
+    pub fn available_executors(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .executors
+            .iter()
+            .filter(|(_, executor)| executor.is_available())
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     pub fn new(
         pipes_dir: PathBuf,
         executors: HashMap<String, Arc<dyn AgentExecutor>>,
@@ -4558,6 +4586,8 @@ impl PipeManager {
                         .await;
                 }
             }
+            let run_executor_config =
+                pipe_executor_config(&run_agent, run_executor_config, config.subagent);
             let run_result = if let Some(error) = permissions_error {
                 drop(line_tx);
                 Ok(Err(error))
@@ -5256,6 +5286,8 @@ impl PipeManager {
                         .await;
                 }
             }
+            let run_executor_config =
+                pipe_executor_config(&run_agent, run_executor_config, config.subagent);
             let run_result = if let Some(error) = permissions_error {
                 drop(line_tx);
                 Ok(Err(error))
@@ -7102,6 +7134,8 @@ impl PipeManager {
                     let token_registry_ref = token_registry.clone();
                     let mcp_session_access_ref = mcp_session_access.clone();
                     let effort = config.effort;
+                    let executor_config =
+                        pipe_executor_config(&run_agent, executor_config, config.subagent);
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let event_sem = event_semaphore.clone();
