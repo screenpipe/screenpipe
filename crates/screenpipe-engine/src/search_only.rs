@@ -26,7 +26,12 @@ fn history_request(method: &Method, path: &str) -> bool {
         // raw_sql already enforces read-only SQL and the history access policy.
         return matches!(
             path,
-            "/raw_sql" | "/chats/search" | "/tags/vision/batch" | "/export" | "/vault/lock" | "/vault/unlock"
+            "/raw_sql"
+                | "/chats/search"
+                | "/tags/vision/batch"
+                | "/export"
+                | "/vault/lock"
+                | "/vault/unlock"
         );
     }
     if method != Method::GET && method != Method::HEAD {
