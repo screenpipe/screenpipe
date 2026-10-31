@@ -5535,6 +5535,26 @@ mod tests {
     // ---- Existing tests ----
 
     #[test]
+    fn legacy_scalar_audio_device_store_deserializes() {
+        // SCREENPIPE-APP-V2: older stores saved audioDevices as a plain string.
+        let mut raw = json!(SettingsStore::default());
+        raw["audioDevices"] = json!("Microphone (AT2020USB+) (input)");
+        let sanitized = SettingsStore::sanitize_legacy_fields(raw);
+
+        let settings: SettingsStore = serde_json::from_value(sanitized).unwrap();
+
+        assert_eq!(
+            settings.recording.audio_devices,
+            vec!["Microphone (AT2020USB+) (input)".to_string()]
+        );
+        // Re-serializing persists the repaired array shape.
+        assert_eq!(
+            json!(settings)["audioDevices"],
+            json!(["Microphone (AT2020USB+) (input)"])
+        );
+    }
+
+    #[test]
     fn test_sanitize_legacy_fields_does_not_panic() {
         let corrupted = json!({
             "aiPresets": ["corrupted_string_not_an_object"]
