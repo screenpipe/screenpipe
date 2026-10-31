@@ -1,3 +1,6 @@
+<!-- doc-covers: apps/screenpipe-app-tauri/lib/workflows/usage.ts, packages/workflows-ui/src/use-workflow-usage.ts -->
+<!-- doc-verified: 2fcbdb6e3 -->
+
 # Local Workflows usage events
 
 The desktop host supplies explicit events to the shared Workflows UI. The
