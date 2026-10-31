@@ -741,6 +741,8 @@ pub struct HealthCheckResponse {
     /// platform support changes the mode used by the recorder.
     pub audio_capture_mode: String,
     pub audio_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_error: Option<serde_json::Value>,
     pub message: String,
     pub verbose_instructions: Option<String>,
     pub device_status_details: Option<String>,
@@ -1070,6 +1072,7 @@ fn degraded_response() -> HealthCheckResponse {
         loop_stage_age_secs: None,
         audio_capture_mode: "unknown".to_string(),
         audio_status: "unknown".to_string(),
+        recording_error: None,
         message: "health check timed out before producing a snapshot".to_string(),
         verbose_instructions: None,
         device_status_details: None,
@@ -1176,6 +1179,33 @@ fn should_query_audio_transcription_backlog(
     configured_engine: Option<AudioTranscriptionEngine>,
 ) -> bool {
     !audio_disabled && !matches!(configured_engine, Some(AudioTranscriptionEngine::Disabled))
+}
+
+/// Export the same local diagnostic cause and event time without credentials
+/// or storage URLs. This performs no remote redaction or content reads.
+async fn recording_error_report(
+    mut error: screenpipe_core::health_diagnostics::RecordingError,
+) -> Option<serde_json::Value> {
+    use screenpipe_redact::Redactor;
+    static REDACTOR: std::sync::LazyLock<screenpipe_redact::Pipeline> =
+        std::sync::LazyLock::new(screenpipe_redact::Pipeline::regex_only);
+    static URLS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#"https?://[^\s<>"']+"#).unwrap());
+    match REDACTOR
+        .redact_batch(std::slice::from_ref(&error.message))
+        .await
+    {
+        Ok(output) => output.first().and_then(|output| {
+            error.message = URLS
+                .replace_all(&output.redacted, "[storage URL]")
+                .into_owned();
+            serde_json::to_value(error).ok()
+        }),
+        Err(cause) => {
+            tracing::error!("recording health error redaction failed: {}", cause);
+            None
+        }
+    }
 }
 
 async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
@@ -1935,6 +1965,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let wqh = state.db.write_queue_health();
 
     let diagnostics = screenpipe_core::health_diagnostics::snapshot(state.audio_disabled);
+    let recording_error = match screenpipe_core::health_diagnostics::last_recording_error() {
+        Some(error) => recording_error_report(error).await,
+        None => None,
+    };
     let mut response = HealthCheckResponse {
         dependencies: diagnostics.dependencies,
         runtime: diagnostics.runtime,
@@ -1962,6 +1996,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             .and_then(|ts| (ts > 0).then(|| now_ts.saturating_sub(ts))),
         audio_capture_mode: audio_capture_mode.to_string(),
         audio_status,
+        recording_error,
         message,
         verbose_instructions,
         device_status_details,
@@ -1970,7 +2005,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         pipeline,
         accessibility: {
             let snap = tree_walker_snapshot();
-            if snap.walks_total > 0 {
+            if snap.observed_at.is_some() || snap.walks_total > 0 {
                 Some(snap)
             } else {
                 None
@@ -2816,6 +2851,26 @@ mod tests {
         assert!(recovered.unhealthy_reasons.is_empty());
     }
 
+    #[tokio::test]
+    async fn recording_error_export_preserves_origin_after_redaction() {
+        let error = screenpipe_core::health_diagnostics::RecordingError {
+            source: "audio".into(),
+            message: "CoreAudio OSStatus 561145187 password=private-secret https://private.test?signature=hidden".into(),
+            occurred_at: "2026-10-29T12:00:00Z".into(),
+        };
+        let exported = recording_error_report(error).await.unwrap();
+        assert_eq!(exported["source"], "audio");
+        assert_eq!(exported["occurred_at"], "2026-10-29T12:00:00Z");
+        let message = exported["message"].as_str().unwrap();
+        assert!(
+            message.contains("CoreAudio OSStatus 561145187"),
+            "{message}"
+        );
+        assert!(!message.contains("private-secret"));
+        assert!(!message.contains("private.test"));
+        assert!(!message.contains("hidden"));
+    }
+
     fn dummy_response(status: &str) -> HealthCheckResponse {
         HealthCheckResponse {
             status: status.to_string(),
@@ -2832,6 +2887,7 @@ mod tests {
             loop_stage_age_secs: None,
             audio_capture_mode: "always".to_string(),
             audio_status: "ok".to_string(),
+            recording_error: None,
             message: "test".to_string(),
             verbose_instructions: None,
             device_status_details: None,

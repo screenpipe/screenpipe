@@ -1269,6 +1269,7 @@ pub(crate) async fn event_driven_capture_loop(
                 }
             }
             Ok(Err(e)) => {
+                screenpipe_core::health_diagnostics::record_recording_error("screen", &e);
                 warn!("startup capture failed for monitor {}: {}", monitor_id, e);
             }
             Err(_timeout) => {
@@ -2299,6 +2300,7 @@ pub(crate) async fn event_driven_capture_loop(
                         }
                     }
                     Ok(Err(e)) => {
+                        screenpipe_core::health_diagnostics::record_recording_error("screen", &e);
                         consecutive_capture_errors += 1;
 
                         // Mark captured on failure to reset idle timer — without
@@ -3504,6 +3506,14 @@ async fn do_capture(
         {
             TreeWalkerWorkerOutcome::Completed(result) => Some(result),
             TreeWalkerWorkerOutcome::TimedOut { restarted } => {
+                screenpipe_core::health_diagnostics::observe_ax("error");
+                screenpipe_core::health_diagnostics::record_recording_error(
+                    "ax",
+                    format!(
+                        "AX worker timed out after {}ms; restarted={restarted}",
+                        worker_timeout.as_millis()
+                    ),
+                );
                 if let Some(app) = trigger_app.as_deref() {
                     walk_budget.record_worker_timeout(app);
                 }
@@ -3513,6 +3523,11 @@ async fn do_capture(
                 None
             }
             TreeWalkerWorkerOutcome::Saturated => {
+                screenpipe_core::health_diagnostics::observe_ax("error");
+                screenpipe_core::health_diagnostics::record_recording_error(
+                    "ax",
+                    "AX worker pool saturated; walk was not started",
+                );
                 if let Some(app) = trigger_app.as_deref() {
                     walk_budget.record_worker_timeout(app);
                 }
