@@ -8,13 +8,13 @@
     "source": "github",
     "subfolder": "packages/screenpipe-mcp"
   },
-  "version": "0.20.3",
+  "version": "0.20.4",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "screenpipe-mcp",
-      "version": "0.20.3",
+      "version": "0.20.4",
       "transport": {
         "type": "stdio"
       }
