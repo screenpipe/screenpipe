@@ -200,7 +200,7 @@ const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
 /// cleanup deterministic even after the original bun/pi parent exits: MCP
 /// servers and helper grandchildren remain in the job and are killed on drop.
 #[cfg(windows)]
-struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
+pub(super) struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 // SAFETY: Windows kernel handles may be closed from any thread. This guard has
@@ -209,7 +209,7 @@ unsafe impl Send for KillOnDropJob {}
 
 #[cfg(windows)]
 impl KillOnDropJob {
-    fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
+    pub(super) fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
         use std::mem::{size_of, zeroed};
         use std::ptr;
         use windows_sys::Win32::Foundation::CloseHandle;

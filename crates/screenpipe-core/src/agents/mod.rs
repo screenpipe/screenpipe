@@ -17,6 +17,7 @@ pub mod chat_destination;
 pub mod cli_runtime;
 pub mod cloud;
 mod cloud_context;
+pub mod mastra;
 pub mod pi;
 pub mod pi_compaction;
 pub mod worktree;

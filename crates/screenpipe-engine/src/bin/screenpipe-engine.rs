@@ -1636,6 +1636,11 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             config.api_auth_key.clone(),
         )),
     );
+    if let Some(executor) =
+        screenpipe_core::agents::mastra::MastraExecutor::from_env(user_token.clone())?
+    {
+        agent_executors.insert("mastra".to_string(), std::sync::Arc::new(executor));
+    }
     let cloud_agent_executor = std::sync::Arc::new(
         screenpipe_core::agents::cloud::CloudAgentExecutor::new(
             config.port,
