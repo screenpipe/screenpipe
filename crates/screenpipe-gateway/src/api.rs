@@ -243,6 +243,11 @@ struct TimeWindow {
 /// gateway in another timezone and neither said so (SCR-288 divergence 7). UTC
 /// is the only reading both can reproduce.
 fn normalize_timestamp(value: &str) -> Option<String> {
+    // The grammar is pure ASCII; refusing anything else up front also keeps
+    // the byte-offset slicing below on char boundaries.
+    if !value.is_ascii() {
+        return None;
+    }
     let b = value.as_bytes();
     if b.len() < 10 {
         return None;
@@ -2092,6 +2097,40 @@ mod tests {
                 parse_timestamp(bad, "since").is_err(),
                 "{bad:?} must be refused, not silently defaulted"
             );
+        }
+    }
+
+    /// The offset split slices `rest` 6 bytes from its end; a multi-byte
+    /// char there must be a 400, not a handler panic.
+    #[test]
+    fn non_ascii_timestamp_is_refused_not_panicked() {
+        for bad in [
+            // These two put the split point inside a multi-byte char and
+            // panicked without the guard.
+            "2026-07-22Tééé1",
+            "2026-07-22T日00:00",
+            // These split on a boundary; they must still be refused.
+            "2026-07-22T09:30:1é",
+            "2026-07-22T日本語",
+        ] {
+            assert_eq!(normalize_timestamp(bad), None, "{bad:?}");
+            assert!(parse_timestamp(bad, "since").is_err(), "{bad:?}");
+        }
+    }
+
+    /// Same case at the route: the handler answers the typed 400 instead of
+    /// panicking the request task.
+    #[tokio::test]
+    async fn a_non_ascii_since_is_a_typed_400_at_the_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let router = seeded_router(&dir).await;
+        for uri in [
+            "/api/enterprise/v1/search?since=2026-07-22T%C3%A9%C3%A9%C3%A91",
+            "/api/enterprise/v1/records?until=2026-07-22T%E6%97%A500:00",
+        ] {
+            let (status, body) = get_json(&router, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri} -> {body}");
+            assert_eq!(body["code"], "invalid_time_window", "{uri} -> {body}");
         }
     }
 
