@@ -1416,7 +1416,8 @@ const observeCall = createCallObserver({
   send: (payload, signal) => callAPI("/internal/telemetry/mcp-call", { method: "POST", body: JSON.stringify(payload), signal }),
 });
 server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(request.params.name, async () => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: suppliedArgs } = request.params;
+  const args = suppliedArgs ?? (name === CHAT_SEARCH_TOOL.name ? {} : undefined);
 
   if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
 

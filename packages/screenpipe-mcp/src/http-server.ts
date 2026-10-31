@@ -324,7 +324,8 @@ function createMcpServer(screenpipePort: number): Server {
     },
   });
   s.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(request.params.name, async () => {
-    const { name, arguments: args } = request.params;
+    const { name, arguments: suppliedArgs } = request.params;
+    const args = suppliedArgs ?? (name === CHAT_SEARCH_TOOL.name ? {} : undefined);
     if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
     if (!args) throw Object.assign(new Error("Missing arguments"), { status: 400 });
     if (name === CHAT_SEARCH_TOOL.name) return searchChats(args, fetchAPI);

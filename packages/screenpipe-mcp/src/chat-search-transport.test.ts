@@ -44,6 +44,10 @@ it.each(["stdio", "http"])("discovers and calls read-only chat search through %s
     const search = requests.find(req => req.url === "/chats/search")!;
     expect(search.auth).toBe("Bearer fixture-key");
     expect(JSON.parse(search.body)).toEqual({ query: "decision", sources: ["claude"], limit: 3 });
+    const recent = await client.callTool({ name: "search-chats" });
+    expect(recent.isError).not.toBe(true);
+    const latest = requests.filter(req => req.url === "/chats/search").at(-1)!;
+    expect(JSON.parse(latest.body)).toEqual({ query: "", sources: [], limit: 10 });
     status = 404;
     // Both transport error envelopes must signal failure, never an empty history.
     try {
