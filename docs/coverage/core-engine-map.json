@@ -308,6 +308,7 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/activity_ledger.rs",
+        "src/agent_chats.rs",
         "src/agent_profile.rs",
         "src/agent_skills.rs",
         "src/auth_key.rs",

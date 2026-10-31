@@ -27,7 +27,7 @@ pub(crate) async fn release_middleware(
     // Meeting/audio streams are exempt; /ws/events filters other content.
     // These endpoints expose raw containers, files, or unverified
     // derivatives. They cannot borrow a frame-text receipt as authorization.
-    if matches!(path, "/raw_sql" | "/export")
+    if matches!(path, "/raw_sql" | "/export" | "/chats/search")
         || path.starts_with("/frames/preview-media/")
         || path.starts_with("/artifacts")
         || path == "/data/backup"
