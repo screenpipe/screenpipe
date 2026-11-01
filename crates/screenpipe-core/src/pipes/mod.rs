@@ -3034,11 +3034,19 @@ async fn setup_agent_permissions(
     if read_only {
         restrict_api_permissions_to_read_only(&mut perms);
     }
+    // Pi installs its filesystem guard only when configured restrictions are
+    // active. Preserve that resolved policy; prompts/presets cannot supply it.
+    let filesystem_policy = if perms.has_any_restrictions() {
+        "pipe"
+    } else {
+        "unrestricted"
+    };
     perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
     use rand::Rng;
     let token = format!("sp_pipe_{:016x}", rand::rng().random::<u64>());
     perms.pipe_token = Some(token.clone());
     let mut value = serde_json::to_value(&perms)?;
+    value["filesystem_policy"] = serde_json::json!(filesystem_policy);
     value["api_base"] = serde_json::json!(format!("http://127.0.0.1:{api_port}"));
     let json = serde_json::to_string(&value)?;
     registry.register_token(token.clone(), perms).await;
@@ -9702,6 +9710,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mastra_filesystem_policy_matches_pi_extension_admission() {
+        for (preset, expected) in [
+            ("none", "unrestricted"),
+            ("reader", "pipe"),
+            ("admin", "pipe"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut config, _) = parse_frontmatter(&pipe_source(false, "prompt")).unwrap();
+            config.name = "fixture".into();
+            config.agent = "mastra".into();
+            config.permissions = PipePermissionsConfig::Preset(preset.into());
+            PiExecutor::ensure_permissions_extension(dir.path(), &config).unwrap();
+            let pi_guard = dir
+                .path()
+                .join(".pi/extensions/screenpipe-permissions.ts")
+                .is_file();
+            let registry: Arc<dyn permissions::PipeTokenRegistry> =
+                Arc::new(MastraTestRegistry::default());
+            setup_agent_permissions("mastra", dir.path(), &config, Some(&registry), false, 3131)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(dir.path().join(".screenpipe-permissions.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(json["filesystem_policy"], expected);
+            assert_eq!(json["filesystem_policy"] == "pipe", pi_guard);
+            assert_eq!(json["pipe_dir"], dir.path().to_string_lossy().as_ref());
+            assert!(json["pipe_token"].as_str().unwrap().starts_with("sp_pipe_"));
+        }
+    }
+
+    #[tokio::test]
     async fn mastra_permissions_preserve_scope_and_unwind_failed_publication() {
         let dir = tempfile::tempdir().unwrap();
         let (mut config, _) = parse_frontmatter(&pipe_source(false, "prompt")).unwrap();
@@ -9721,6 +9762,7 @@ mod tests {
         .unwrap();
         assert_eq!(json["pipe_token"], token);
         assert_eq!(json["privacy_filter"], true);
+        assert_eq!(json["filesystem_policy"], "pipe");
         assert_eq!(json["api_base"], "http://127.0.0.1:3131");
         assert_eq!(registry.0.lock().unwrap()[&token].deny_rules.len(), 4);
         assert!(dir
