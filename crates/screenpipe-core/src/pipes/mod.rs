@@ -2909,6 +2909,154 @@ pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 600;
 /// rolling-minute rate-limit window. No-op when nothing is waiting.
 const SCHEDULED_RUN_SPACING_SECS: u64 = 5;
 
+/// One accepted Mastra invocation, shared by every provider fallback attempt.
+/// Source deliveries also retain this identity across scheduler restarts.
+#[derive(Clone)]
+struct MastraExecutionContext {
+    id: String,
+    input: serde_json::Value,
+}
+
+impl MastraExecutionContext {
+    fn for_run(
+        agent: &str,
+        source_delivery: Option<&serde_json::Value>,
+        prompt: &str,
+        system_prompt: &str,
+    ) -> Option<Self> {
+        if agent != "mastra" {
+            return None;
+        }
+        let delivery_id = source_delivery
+            .and_then(|data| data.get("delivery_id"))
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty());
+        Some(Self {
+            id: delivery_id
+                .map(|id| format!("delivery:{id}"))
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            input: if delivery_id.is_some() {
+                // The watcher snapshot is stable; rendered prompts contain a new
+                // lookback/time and the bus envelope a new timestamp on retry.
+                source_delivery
+                    .and_then(|data| data.get("context"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::json!({"prompt": prompt, "systemPrompt": system_prompt})
+            },
+        })
+    }
+}
+
+fn pipe_executor_config(
+    agent: &str,
+    config: Option<serde_json::Value>,
+    subagent: bool,
+    execution_context: Option<&MastraExecutionContext>,
+) -> Option<serde_json::Value> {
+    if agent != "mastra" {
+        return config;
+    }
+    let context = execution_context.expect("Mastra invocation identity must be initialized");
+    let mut value = config.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("subagent".to_string(), serde_json::Value::Bool(subagent));
+        // Presets cannot replace the scheduler-owned identity or accepted input.
+        object.insert(
+            "_screenpipeExecutionInput".to_string(),
+            context.input.clone(),
+        );
+        object.insert(
+            "_screenpipeExecutionId".to_string(),
+            serde_json::Value::String(context.id.clone()),
+        );
+    }
+    Some(value)
+}
+
+/// The Mastra runtime loads the same policy/tool definitions through its native
+/// tool adapter. These assets do not install or start a Pi runtime.
+fn install_mastra_assets(pipe_dir: &Path) -> Result<()> {
+    atomic_write(
+        &pipe_dir.join(".screenpipe-mastra-permissions.ts"),
+        include_str!("../../assets/extensions/screenpipe-permissions.ts"),
+    )?;
+    let extensions = pipe_dir.join(".screenpipe-mastra/extensions");
+    std::fs::create_dir_all(&extensions)?;
+    for (name, source) in [
+        (
+            "register-artifact.ts",
+            include_str!("../../assets/extensions/register-artifact.ts"),
+        ),
+        (
+            "workflow-workspace.ts",
+            include_str!("../../assets/extensions/workflow-workspace.ts"),
+        ),
+        (
+            "structured-output.ts",
+            include_str!("../../assets/extensions/structured-output.ts"),
+        ),
+        (
+            "mcp-bridge.ts",
+            include_str!("../../assets/extensions/mcp-bridge.ts"),
+        ),
+        (
+            "web-search.ts",
+            include_str!("../../assets/extensions/web-search.ts"),
+        ),
+    ] {
+        atomic_write(&extensions.join(name), source)?;
+    }
+    Ok(())
+}
+
+/// Mastra requires an active recorder registry and an atomically published
+/// permission file. Setup errors enter the normal failed-run cleanup path.
+async fn setup_agent_permissions(
+    agent: &str,
+    pipe_dir: &Path,
+    config: &PipeConfig,
+    token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
+    read_only: bool,
+    api_port: u16,
+) -> Result<Option<String>> {
+    if agent != "mastra" {
+        return Ok(
+            setup_pipe_permissions(pipe_dir, config, token_registry, read_only, api_port).await,
+        );
+    }
+    let registry = token_registry.ok_or_else(|| {
+        anyhow!("Mastra requires the running engine's scoped recorder token registry")
+    })?;
+    install_mastra_assets(pipe_dir)?;
+    let mut perms = permissions::PipePermissions::from_config(config);
+    if read_only {
+        restrict_api_permissions_to_read_only(&mut perms);
+    }
+    // Pi installs its filesystem guard only when configured restrictions are
+    // active. Preserve that resolved policy; prompts/presets cannot supply it.
+    let filesystem_policy = if perms.has_any_restrictions() {
+        "pipe"
+    } else {
+        "unrestricted"
+    };
+    perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
+    use rand::Rng;
+    let token = format!("sp_pipe_{:016x}", rand::rng().random::<u64>());
+    perms.pipe_token = Some(token.clone());
+    let mut value = serde_json::to_value(&perms)?;
+    value["filesystem_policy"] = serde_json::json!(filesystem_policy);
+    value["api_base"] = serde_json::json!(format!("http://127.0.0.1:{api_port}"));
+    let json = serde_json::to_string(&value)?;
+    registry.register_token(token.clone(), perms).await;
+    if let Err(error) = atomic_write(&pipe_dir.join(".screenpipe-permissions.json"), &json) {
+        registry.remove_token(&token).await;
+        return Err(error.context("could not publish Mastra scoped permissions"));
+    }
+    Ok(Some(token))
+}
+
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
 /// Returns the generated token (if any) so the caller can clean it up later.
@@ -3098,6 +3246,19 @@ pub struct PipeManager {
 }
 
 impl PipeManager {
+    /// Installed executors, used by Cloud Runner reconciliation before changing
+    /// future dispatch. An unknown engine must not be treated as Mastra-ready.
+    pub fn available_executors(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .executors
+            .iter()
+            .filter(|(_, executor)| executor.is_available())
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     pub fn new(
         pipes_dir: PathBuf,
         executors: HashMap<String, Arc<dyn AgentExecutor>>,
@@ -3577,8 +3738,10 @@ impl PipeManager {
                         last_run: last_log.map(|l| l.finished_at),
                         last_success: last_log.map(|l| l.success),
                         is_running: running.contains_key(name),
-                        has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name))
-                            .is_some(),
+                        has_saved_context: has_saved_agent_context(
+                            &self.pipes_dir.join(name),
+                            &config.agent,
+                        ),
                         is_bundled_builtin,
                         prompt_body: body.clone(),
                         raw_content: raw.clone(),
@@ -3766,7 +3929,10 @@ impl PipeManager {
                     last_run: last_log.map(|l| l.finished_at),
                     last_success: last_log.map(|l| l.success),
                     is_running: running.contains_key(name),
-                    has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name)).is_some(),
+                    has_saved_context: has_saved_agent_context(
+                        &self.pipes_dir.join(name),
+                        &config.agent,
+                    ),
                     is_bundled_builtin,
                     prompt_body: body.clone(),
                     raw_content: raw.clone(),
@@ -4376,6 +4542,7 @@ impl PipeManager {
 
         // Pre-configure pi
         let mut pipe_token: Option<String> = None;
+        let mut permissions_error = None;
         if run_agent == "pi" {
             let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
@@ -4390,15 +4557,20 @@ impl PipeManager {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
         }
-        if matches!(run_agent.as_str(), "pi" | "acp") {
-            pipe_token = setup_pipe_permissions(
+        if matches!(run_agent.as_str(), "pi" | "acp" | "mastra") {
+            match setup_agent_permissions(
+                &run_agent,
                 &pipe_dir,
                 &config,
                 self.token_registry.as_ref(),
                 trigger == "event" && event_runs_are_read_only(&config),
                 self.api_port,
             )
-            .await;
+            .await
+            {
+                Ok(token) => pipe_token = token,
+                Err(error) => permissions_error = Some(error),
+            }
         }
         let token_registry_ref = self.token_registry.clone();
 
@@ -4473,30 +4645,50 @@ impl PipeManager {
                         .await;
                 }
             }
-            let run_result = tokio::time::timeout(
-                timeout_duration,
-                executor.run_streaming(
-                    &prompt,
-                    &run_model,
-                    &pipe_dir,
-                    run_provider.as_deref(),
-                    run_provider_url.as_deref(),
-                    run_api_key.as_deref(),
-                    Some(shared_pid.clone()),
-                    line_tx,
-                    history_enabled,
-                    Some(config.effort.as_str()),
-                    Some(&pipe_system_prompt),
-                    mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: must match the frontend's pipeSessionId()
-                    // format (`pipe:<name>:<execId>`) so the owned-browser
-                    // sidebar shows navigations when the user is watching this
-                    // pipe.
-                    Some(session_owner.as_str()),
-                    run_executor_config.as_ref(),
-                ),
-            )
-            .await;
+            let execution_context = MastraExecutionContext::for_run(
+                &run_agent,
+                event_context
+                    .as_ref()
+                    .filter(|event| event.name == "connection_trigger")
+                    .map(|event| &event.data),
+                &prompt,
+                &pipe_system_prompt,
+            );
+            let run_executor_config = pipe_executor_config(
+                &run_agent,
+                run_executor_config,
+                config.subagent,
+                execution_context.as_ref(),
+            );
+            let run_result = if let Some(error) = permissions_error {
+                drop(line_tx);
+                Ok(Err(error))
+            } else {
+                tokio::time::timeout(
+                    timeout_duration,
+                    executor.run_streaming(
+                        &prompt,
+                        &run_model,
+                        &pipe_dir,
+                        run_provider.as_deref(),
+                        run_provider_url.as_deref(),
+                        run_api_key.as_deref(),
+                        Some(shared_pid.clone()),
+                        line_tx,
+                        history_enabled,
+                        Some(config.effort.as_str()),
+                        Some(&pipe_system_prompt),
+                        mcp_allowlist_arg(&mcp_server_allowlist),
+                        // Owner tag: must match the frontend's pipeSessionId()
+                        // format (`pipe:<name>:<execId>`) so the owned-browser
+                        // sidebar shows navigations when the user is watching this
+                        // pipe.
+                        Some(session_owner.as_str()),
+                        run_executor_config.as_ref(),
+                    ),
+                )
+                .await
+            };
             if run_result.is_ok() {
                 run_handle.mark_finished();
             }
@@ -4533,8 +4725,10 @@ impl PipeManager {
                         classified.status,
                         &filtered_stdout,
                     );
-                    let session_path =
-                        find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
+                    let session_path = (run_agent != "mastra")
+                        .then(|| find_latest_pi_session(&pipe_dir))
+                        .flatten()
+                        .map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
@@ -4675,7 +4869,7 @@ impl PipeManager {
             );
 
             // Auto-clear Pi session on context overflow so the next run starts fresh
-            if cb_error_type.as_deref() == Some("context_overflow") {
+            if run_agent != "mastra" && cb_error_type.as_deref() == Some("context_overflow") {
                 let pipe_dir = pipes_dir_for_log.join(&pipe_name);
                 if let Err(e) = delete_pi_sessions(&pipe_dir) {
                     warn!(
@@ -4723,7 +4917,7 @@ impl PipeManager {
     /// Run a pipe once with an explicit trigger type.
     async fn run_pipe_with_trigger(&self, name: &str, trigger: &str) -> Result<PipeRunLog> {
         let outcome = self
-            .run_pipe_with_trigger_inner(name, trigger, 0, None, None)
+            .run_pipe_with_trigger_inner(name, trigger, 0, None, None, None)
             .await?;
         // The inner runner retries presets and is also called by the scheduler.
         // Emit only the final outcome here, never intermediate attempts.
@@ -4743,6 +4937,7 @@ impl PipeManager {
         retry_depth: usize,
         run_context: Option<&'a str>,
         event_context: Option<&'a EventTrigger>,
+        retry_context: Option<&'a MastraExecutionContext>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PipeRunOutcome>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -5078,6 +5273,7 @@ impl PipeManager {
             // Pre-configure pi with the pipe's provider so models.json has the
             // right entry before the agent subprocess starts.
             let mut pipe_token: Option<String> = None;
+            let mut permissions_error = None;
             if run_agent == "pi" {
                 if let Err(e) = PiExecutor::ensure_pi_config(
                     None,
@@ -5091,15 +5287,20 @@ impl PipeManager {
                     warn!("failed to pre-configure pi provider: {}", e);
                 }
             }
-            if matches!(run_agent.as_str(), "pi" | "acp") {
-                pipe_token = setup_pipe_permissions(
+            if matches!(run_agent.as_str(), "pi" | "acp" | "mastra") {
+                match setup_agent_permissions(
+                    &run_agent,
                     &self.pipes_dir.join(name),
                     &config,
                     self.token_registry.as_ref(),
                     trigger == "event" && event_runs_are_read_only(&config),
                     self.api_port,
                 )
-                .await;
+                .await
+                {
+                    Ok(token) => pipe_token = token,
+                    Err(error) => permissions_error = Some(error),
+                }
             }
 
             // Run with timeout + streaming
@@ -5158,30 +5359,52 @@ impl PipeManager {
                         .await;
                 }
             }
-            let run_result = tokio::time::timeout(
-                timeout_duration,
-                executor.run_streaming(
+            let execution_context = retry_context.cloned().or_else(|| {
+                MastraExecutionContext::for_run(
+                    &run_agent,
+                    event_context
+                        .as_ref()
+                        .filter(|event| event.name == "connection_trigger")
+                        .map(|event| &event.data),
                     &prompt,
-                    &run_model,
-                    &pipe_dir,
-                    run_provider.as_deref(),
-                    run_provider_url.as_deref(),
-                    run_api_key.as_deref(),
-                    Some(shared_pid.clone()),
-                    line_tx,
-                    history_enabled,
-                    Some(config.effort.as_str()),
-                    Some(&pipe_system_prompt),
-                    mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: must match the frontend's pipeSessionId()
-                    // format (`pipe:<name>:<execId>`) so the owned-browser
-                    // sidebar shows navigations when the user is watching this
-                    // pipe.
-                    Some(session_owner.as_str()),
-                    run_executor_config.as_ref(),
-                ),
-            )
-            .await;
+                    &pipe_system_prompt,
+                )
+            });
+            let run_executor_config = pipe_executor_config(
+                &run_agent,
+                run_executor_config,
+                config.subagent,
+                execution_context.as_ref(),
+            );
+            let run_result = if let Some(error) = permissions_error {
+                drop(line_tx);
+                Ok(Err(error))
+            } else {
+                tokio::time::timeout(
+                    timeout_duration,
+                    executor.run_streaming(
+                        &prompt,
+                        &run_model,
+                        &pipe_dir,
+                        run_provider.as_deref(),
+                        run_provider_url.as_deref(),
+                        run_api_key.as_deref(),
+                        Some(shared_pid.clone()),
+                        line_tx,
+                        history_enabled,
+                        Some(config.effort.as_str()),
+                        Some(&pipe_system_prompt),
+                        mcp_allowlist_arg(&mcp_server_allowlist),
+                        // Owner tag: must match the frontend's pipeSessionId()
+                        // format (`pipe:<name>:<execId>`) so the owned-browser
+                        // sidebar shows navigations when the user is watching this
+                        // pipe.
+                        Some(session_owner.as_str()),
+                        run_executor_config.as_ref(),
+                    ),
+                )
+                .await
+            };
             if run_result.is_ok() {
                 run_handle.mark_finished();
             }
@@ -5215,8 +5438,10 @@ impl PipeManager {
                         &filtered_stdout,
                     );
                     log_read_tool_failures(name, exec_id, classified.status, &filtered_stdout);
-                    let session_path =
-                        find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
+                    let session_path = (run_agent != "mastra")
+                        .then(|| find_latest_pi_session(&pipe_dir))
+                        .flatten()
+                        .map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
                             .finish_execution(
@@ -5405,6 +5630,7 @@ impl PipeManager {
                                 next_idx,
                                 run_context,
                                 event_context,
+                                execution_context.as_ref(),
                             )
                             .await;
                     }
@@ -6065,6 +6291,11 @@ impl PipeManager {
         }
         delete_pi_sessions(&pipe_dir)?;
         let _ = std::fs::remove_file(pipe_dir.join(".screenpipe-acp-sessions.json"));
+        match std::fs::remove_file(pipe_dir.join(crate::agents::mastra::SESSION_MANIFEST)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         info!("cleared history for pipe '{}'", name);
         Ok(())
     }
@@ -6908,6 +7139,7 @@ impl PipeManager {
 
                     // Pre-configure pi with the pipe's provider
                     let mut pipe_token: Option<String> = None;
+                    let mut permissions_error = None;
                     if run_agent == "pi" {
                         let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
@@ -6922,15 +7154,20 @@ impl PipeManager {
                             warn!("scheduler: failed to pre-configure pi provider: {}", e);
                         }
                     }
-                    if matches!(run_agent.as_str(), "pi" | "acp") {
-                        pipe_token = setup_pipe_permissions(
+                    if matches!(run_agent.as_str(), "pi" | "acp" | "mastra") {
+                        match setup_agent_permissions(
+                            &run_agent,
                             &pipes_dir.join(name),
                             config,
                             token_registry.as_ref(),
                             triggered_by_event && event_runs_are_read_only(config),
                             api_port,
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(token) => pipe_token = token,
+                            Err(error) => permissions_error = Some(error),
+                        }
                     }
 
                     // Check if history/session continuation is enabled
@@ -6986,6 +7223,21 @@ impl PipeManager {
                     let token_registry_ref = token_registry.clone();
                     let mcp_session_access_ref = mcp_session_access.clone();
                     let effort = config.effort;
+                    let execution_context = MastraExecutionContext::for_run(
+                        &run_agent,
+                        event_triggered
+                            .get(name)
+                            .filter(|event| event.name == "connection_trigger")
+                            .map(|event| &event.data),
+                        &prompt,
+                        &pipe_system_prompt,
+                    );
+                    let executor_config = pipe_executor_config(
+                        &run_agent,
+                        executor_config,
+                        config.subagent,
+                        execution_context.as_ref(),
+                    );
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let event_sem = event_semaphore.clone();
@@ -7238,28 +7490,33 @@ impl PipeManager {
                                     .await;
                             }
                         }
-                        let run_result = tokio::time::timeout(
-                            timeout_duration,
-                            executor.run_streaming(
-                                &prompt,
-                                &model,
-                                &pipe_dir,
-                                provider.as_deref(),
-                                provider_url.as_deref(),
-                                api_key.as_deref(),
-                                Some(shared_pid.clone()),
-                                line_tx,
-                                history_enabled,
-                                Some(effort.as_str()),
-                                Some(&pipe_system_prompt),
-                                mcp_allowlist_arg(&mcp_server_allowlist),
-                                // Owner tag — must match pipeSessionId() on the
-                                // frontend. See run_pipe_with_trigger.
-                                Some(session_owner.as_str()),
-                                executor_config.as_ref(),
-                            ),
-                        )
-                        .await;
+                        let run_result = if let Some(error) = permissions_error {
+                            drop(line_tx);
+                            Ok(Err(error))
+                        } else {
+                            tokio::time::timeout(
+                                timeout_duration,
+                                executor.run_streaming(
+                                    &prompt,
+                                    &model,
+                                    &pipe_dir,
+                                    provider.as_deref(),
+                                    provider_url.as_deref(),
+                                    api_key.as_deref(),
+                                    Some(shared_pid.clone()),
+                                    line_tx,
+                                    history_enabled,
+                                    Some(effort.as_str()),
+                                    Some(&pipe_system_prompt),
+                                    mcp_allowlist_arg(&mcp_server_allowlist),
+                                    // Owner tag — must match pipeSessionId() on the
+                                    // frontend. See run_pipe_with_trigger.
+                                    Some(session_owner.as_str()),
+                                    executor_config.as_ref(),
+                                ),
+                            )
+                            .await
+                        };
                         if run_result.is_ok() {
                             run_handle.mark_finished();
                         }
@@ -7300,7 +7557,9 @@ impl PipeManager {
                                     classified.status,
                                     &filtered_stdout,
                                 );
-                                let session_path = find_latest_pi_session(&pipe_dir)
+                                let session_path = (run_agent != "mastra")
+                                    .then(|| find_latest_pi_session(&pipe_dir))
+                                    .flatten()
                                     .map(|p| p.to_string_lossy().to_string());
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
@@ -7483,6 +7742,7 @@ impl PipeManager {
                                         next_idx,
                                         run_scoped_context.as_deref(),
                                         fallback_event_context.as_ref(),
+                                        execution_context.as_ref(),
                                     )
                                     .await
                                 {
@@ -7515,7 +7775,9 @@ impl PipeManager {
                         }
 
                         // Auto-clear Pi session on context overflow so the next run starts fresh
-                        if cb_error_type.as_deref() == Some("context_overflow") {
+                        if run_agent != "mastra"
+                            && cb_error_type.as_deref() == Some("context_overflow")
+                        {
                             let pipe_dir = pipes_dir_for_log.join(&pipe_name);
                             if let Err(e) = delete_pi_sessions(&pipe_dir) {
                                 warn!("failed to clear Pi session after context overflow for '{}': {}", pipe_name, e);
@@ -9297,6 +9559,16 @@ fn encode_pi_session_dir_from_base(working_dir: &Path, agent_dir: &Path) -> Path
     sessions_base.join(encoded)
 }
 
+fn has_saved_agent_context(pipe_dir: &Path, agent: &str) -> bool {
+    if agent == "mastra" {
+        pipe_dir
+            .join(crate::agents::mastra::SESSION_MANIFEST)
+            .is_file()
+    } else {
+        find_latest_pi_session(pipe_dir).is_some()
+    }
+}
+
 /// Find the most recently modified Pi session file for a pipe's working directory.
 pub fn find_latest_pi_session(pipe_dir: &Path) -> Option<PathBuf> {
     encode_pi_session_dirs(pipe_dir)?
@@ -9361,6 +9633,173 @@ mod tests {
     use futures::{FutureExt, StreamExt};
     use std::path::Path;
     use std::sync::atomic::Ordering;
+
+    #[derive(Default)]
+    struct MastraTestRegistry(std::sync::Mutex<HashMap<String, permissions::PipePermissions>>);
+
+    #[async_trait::async_trait]
+    impl permissions::PipeTokenRegistry for MastraTestRegistry {
+        async fn register_token(&self, token: String, perms: permissions::PipePermissions) {
+            self.0.lock().unwrap().insert(token, perms);
+        }
+        async fn remove_token(&self, token: &str) {
+            self.0.lock().unwrap().remove(token);
+        }
+    }
+
+    #[test]
+    fn mastra_delivery_identity_overrides_presets_and_survives_fallback_attempts() {
+        let preset = serde_json::json!({"_screenpipeExecutionId": "forged", "_screenpipeExecutionInput": {"forged": true}, "custom": true});
+        let delivery = serde_json::json!({"delivery_id": "source-one", "timestamp": "first attempt", "context": {"items": ["accepted source"]}});
+        let retry_delivery = serde_json::json!({"delivery_id": "source-one", "timestamp": "later attempt", "context": {"items": ["accepted source"]}});
+        let first_context = MastraExecutionContext::for_run(
+            "mastra",
+            Some(&delivery),
+            "first prompt",
+            "first system",
+        );
+        let retry_context = MastraExecutionContext::for_run(
+            "mastra",
+            Some(&retry_delivery),
+            "changed prompt",
+            "changed system",
+        );
+        let first =
+            pipe_executor_config("mastra", Some(preset.clone()), true, first_context.as_ref())
+                .unwrap();
+        let retry = pipe_executor_config("mastra", None, false, retry_context.as_ref()).unwrap();
+        assert_eq!(first["_screenpipeExecutionId"], "delivery:source-one");
+        assert_eq!(
+            first["_screenpipeExecutionId"],
+            retry["_screenpipeExecutionId"]
+        );
+        assert_eq!(first["custom"], true);
+        assert_eq!(first["_screenpipeExecutionInput"], delivery["context"]);
+        assert_eq!(
+            first["_screenpipeExecutionInput"],
+            retry["_screenpipeExecutionInput"]
+        );
+        let timer_context = MastraExecutionContext::for_run("mastra", None, "prompt", "system");
+        let next_timer_context =
+            MastraExecutionContext::for_run("mastra", None, "prompt", "system");
+        let timer = pipe_executor_config(
+            "mastra",
+            Some(preset.clone()),
+            false,
+            timer_context.as_ref(),
+        )
+        .unwrap();
+        let next_timer =
+            pipe_executor_config("mastra", None, false, next_timer_context.as_ref()).unwrap();
+        assert_ne!(
+            timer["_screenpipeExecutionId"],
+            next_timer["_screenpipeExecutionId"]
+        );
+        assert_ne!(timer["_screenpipeExecutionId"], "forged");
+        assert_eq!(
+            timer["_screenpipeExecutionInput"],
+            serde_json::json!({"prompt": "prompt", "systemPrompt": "system"})
+        );
+        assert!(
+            MastraExecutionContext::for_run("pi", Some(&delivery), "prompt", "system").is_none()
+        );
+        assert_eq!(
+            pipe_executor_config("pi", Some(preset.clone()), false, None),
+            Some(preset)
+        );
+    }
+
+    #[tokio::test]
+    async fn mastra_filesystem_policy_matches_pi_extension_admission() {
+        for (preset, expected) in [
+            ("none", "unrestricted"),
+            ("reader", "pipe"),
+            ("admin", "pipe"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut config, _) = parse_frontmatter(&pipe_source(false, "prompt")).unwrap();
+            config.name = "fixture".into();
+            config.agent = "mastra".into();
+            config.permissions = PipePermissionsConfig::Preset(preset.into());
+            PiExecutor::ensure_permissions_extension(dir.path(), &config).unwrap();
+            let pi_guard = dir
+                .path()
+                .join(".pi/extensions/screenpipe-permissions.ts")
+                .is_file();
+            let registry: Arc<dyn permissions::PipeTokenRegistry> =
+                Arc::new(MastraTestRegistry::default());
+            setup_agent_permissions("mastra", dir.path(), &config, Some(&registry), false, 3131)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(dir.path().join(".screenpipe-permissions.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(json["filesystem_policy"], expected);
+            assert_eq!(json["filesystem_policy"] == "pipe", pi_guard);
+            assert_eq!(json["pipe_dir"], dir.path().to_string_lossy().as_ref());
+            assert!(json["pipe_token"].as_str().unwrap().starts_with("sp_pipe_"));
+        }
+    }
+
+    #[tokio::test]
+    async fn mastra_permissions_preserve_scope_and_unwind_failed_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, _) = parse_frontmatter(&pipe_source(false, "prompt")).unwrap();
+        config.name = "fixture".into();
+        config.agent = "mastra".into();
+        config.privacy_filter = true;
+        let registry = Arc::new(MastraTestRegistry::default());
+        let shared: Arc<dyn permissions::PipeTokenRegistry> = registry.clone();
+        let token =
+            setup_agent_permissions("mastra", dir.path(), &config, Some(&shared), true, 3131)
+                .await
+                .unwrap()
+                .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join(".screenpipe-permissions.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["pipe_token"], token);
+        assert_eq!(json["privacy_filter"], true);
+        assert_eq!(json["filesystem_policy"], "pipe");
+        assert_eq!(json["api_base"], "http://127.0.0.1:3131");
+        assert_eq!(registry.0.lock().unwrap()[&token].deny_rules.len(), 4);
+        assert!(dir
+            .path()
+            .join(".screenpipe-mastra-permissions.ts")
+            .is_file());
+        assert!(!dir.path().join(".pi").exists());
+        std::fs::remove_file(dir.path().join(".screenpipe-permissions.json")).unwrap();
+        std::fs::create_dir(dir.path().join(".screenpipe-permissions.json")).unwrap();
+        let error =
+            setup_agent_permissions("mastra", dir.path(), &config, Some(&shared), false, 3131)
+                .await
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("publish Mastra scoped permissions"));
+        assert_eq!(
+            registry.0.lock().unwrap().len(),
+            1,
+            "failed setup must revoke only its new token"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_mastra_history_preserves_recovery_journals() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("fixture");
+        std::fs::create_dir_all(pipe.join(".screenpipe-mastra-sessions/session")).unwrap();
+        let journal = pipe.join(".screenpipe-mastra-sessions/session/events.jsonl");
+        std::fs::write(&journal, "durable journal").unwrap();
+        std::fs::write(pipe.join(crate::agents::mastra::SESSION_MANIFEST), "{}").unwrap();
+        assert!(has_saved_agent_context(&pipe, "mastra"));
+        let manager = PipeManager::new(dir.path().to_path_buf(), HashMap::new(), None, 3030);
+        manager.clear_pipe_history("fixture").await.unwrap();
+        assert!(!has_saved_agent_context(&pipe, "mastra"));
+        assert_eq!(std::fs::read_to_string(journal).unwrap(), "durable journal");
+    }
 
     #[test]
     fn file_read_failure_diagnostics_exclude_private_tool_content() {
@@ -9499,6 +9938,197 @@ mod tests {
         fn name(&self) -> &str {
             "sequenced-test"
         }
+    }
+
+    #[derive(Clone)]
+    struct MastraFallbackAttempt {
+        model: String,
+        prompt: String,
+        system_prompt: String,
+        config: serde_json::Value,
+    }
+
+    #[derive(Default)]
+    struct MastraFallbackExecutor(std::sync::Mutex<Vec<MastraFallbackAttempt>>);
+
+    #[async_trait::async_trait]
+    impl AgentExecutor for MastraFallbackExecutor {
+        async fn run(
+            &self,
+            _prompt: &str,
+            _model: &str,
+            _working_dir: &Path,
+            _provider: Option<&str>,
+            _provider_url: Option<&str>,
+            _provider_api_key: Option<&str>,
+            _shared_pid: Option<SharedPid>,
+            _continue_session: bool,
+        ) -> Result<AgentOutput> {
+            Err(anyhow!(
+                "fixture requires the real streaming invocation path"
+            ))
+        }
+
+        async fn run_streaming(
+            &self,
+            prompt: &str,
+            model: &str,
+            _working_dir: &Path,
+            _provider: Option<&str>,
+            _provider_url: Option<&str>,
+            _provider_api_key: Option<&str>,
+            _shared_pid: Option<SharedPid>,
+            _line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+            _continue_session: bool,
+            _thinking_level: Option<&str>,
+            system_prompt: Option<&str>,
+            _mcp_server_allowlist: Option<&[String]>,
+            _session_owner: Option<&str>,
+            config: Option<&serde_json::Value>,
+        ) -> Result<AgentOutput> {
+            self.0.lock().unwrap().push(MastraFallbackAttempt {
+                model: model.into(),
+                prompt: prompt.into(),
+                system_prompt: system_prompt.unwrap().into(),
+                config: config.unwrap().clone(),
+            });
+            let success = model == "final";
+            Ok(AgentOutput {
+                stdout: if success {
+                    "completed".into()
+                } else {
+                    String::new()
+                },
+                stderr: if success {
+                    String::new()
+                } else {
+                    "provider fixture failure".into()
+                },
+                success,
+                pid: None,
+            })
+        }
+
+        fn kill(&self, _handle: &ExecutionHandle) -> Result<()> {
+            Ok(())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn ensure_installed(&self) -> Result<()> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "mastra-fallback-test"
+        }
+    }
+
+    async fn check_mastra_fallback_identity(scheduled: bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let name = if scheduled {
+            "mastra-scheduled-retry"
+        } else {
+            "mastra-manual-retry"
+        };
+        let pipe_dir = pipes_dir.join(name);
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        let presets: Vec<_> = ["primary", "secondary", "final"]
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "provider": "openai", "model": id, "apiKey": "test-only",
+                    "prompt": format!("Instructions for {id}"),
+                })
+            })
+            .collect();
+        std::fs::write(
+            temp.path().join("store.bin"),
+            serde_json::to_vec(&serde_json::json!({
+                "settings": {"aiPresets": presets}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let schedule = if scheduled { "every 1m" } else { "manual" };
+        std::fs::write(pipe_dir.join("pipe.md"), format!(
+            "---\nschedule: {schedule}\nenabled: true\nagent: mastra\nhistory: false\npreset:\n  - primary\n  - secondary\n  - final\n---\nSave the requested work.\n"
+        )).unwrap();
+        let executor = Arc::new(MastraFallbackExecutor::default());
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mastra".into(), executor.clone());
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        let registry = Arc::new(MastraTestRegistry::default());
+        manager.set_token_registry(registry.clone());
+        manager.load_pipes().await.unwrap();
+        let mut completed = screenpipe_events::subscribe_to_event::<serde_json::Value>(&format!(
+            "pipe_completed:{name}"
+        ));
+        for _ in 0..2 {
+            if scheduled {
+                // Restarting the scheduler without a DB makes a new timer run due.
+                // Both runs still execute the actual scheduler-to-fallback path.
+                manager.start_scheduler().await.unwrap();
+                let event =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), completed.next()).await;
+                // Stop even if the event times out or reports a failed run.
+                manager.stop_scheduler().await;
+                assert_eq!(event.unwrap().unwrap().data["success"], true);
+            } else {
+                assert!(
+                    manager
+                        .run_pipe_with_trigger(name, "manual")
+                        .await
+                        .unwrap()
+                        .success
+                );
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !registry.0.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scoped tokens must be cleaned up");
+        let attempts = executor.0.lock().unwrap();
+        assert_eq!(attempts.len(), 6);
+        for run in attempts.chunks_exact(3) {
+            assert_eq!(
+                run.iter()
+                    .map(|attempt| attempt.model.as_str())
+                    .collect::<Vec<_>>(),
+                ["primary", "secondary", "final"]
+            );
+            let accepted =
+                serde_json::json!({"prompt": run[0].prompt, "systemPrompt": run[0].system_prompt});
+            for attempt in run {
+                assert_eq!(
+                    attempt.config["_screenpipeExecutionId"],
+                    run[0].config["_screenpipeExecutionId"]
+                );
+                assert_eq!(attempt.config["_screenpipeExecutionInput"], accepted);
+            }
+            assert_ne!(
+                run[0].system_prompt, run[1].system_prompt,
+                "fixture must change the rendered preset prompt"
+            );
+        }
+        assert_ne!(
+            attempts[0].config["_screenpipeExecutionId"],
+            attempts[3].config["_screenpipeExecutionId"],
+            "a new invocation must not reuse a completed execution"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_mastra_fallback_preserves_identity_and_accepted_input() {
+        check_mastra_fallback_identity(false).await;
+    }
+
+    #[tokio::test]
+    async fn scheduled_mastra_fallback_preserves_identity_and_accepted_input() {
+        check_mastra_fallback_identity(true).await;
     }
 
     struct SourceContextExecutor {

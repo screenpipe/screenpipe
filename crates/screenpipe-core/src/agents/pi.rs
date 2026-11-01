@@ -200,7 +200,7 @@ const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
 /// cleanup deterministic even after the original bun/pi parent exits: MCP
 /// servers and helper grandchildren remain in the job and are killed on drop.
 #[cfg(windows)]
-struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
+pub(super) struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 // SAFETY: Windows kernel handles may be closed from any thread. This guard has
@@ -209,7 +209,7 @@ unsafe impl Send for KillOnDropJob {}
 
 #[cfg(windows)]
 impl KillOnDropJob {
-    fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
+    pub(super) fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
         use std::mem::{size_of, zeroed};
         use std::ptr;
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -2700,6 +2700,14 @@ impl AgentExecutor for PiExecutor {
 /// Escape hatch: `SCREENPIPE_PI_AGENT_DIR` overrides the location; setting it
 /// to `~/.pi/agent` restores the old shared-config behavior.
 pub fn pi_config_dir() -> Result<PathBuf> {
+    let dir = pi_config_path()?;
+    seed_pi_config_from_global(&dir);
+    ensure_pi_settings_defaults(&dir)?;
+    Ok(dir)
+}
+
+/// Resolve legacy state without installing or changing the Pi runtime.
+pub(super) fn pi_config_path() -> Result<PathBuf> {
     let dir = match std::env::var("SCREENPIPE_PI_AGENT_DIR") {
         Ok(v) if !v.trim().is_empty() => {
             let v = v.trim();
@@ -2717,8 +2725,6 @@ pub fn pi_config_dir() -> Result<PathBuf> {
         }
         _ => crate::paths::default_screenpipe_data_dir().join("pi-config"),
     };
-    seed_pi_config_from_global(&dir);
-    ensure_pi_settings_defaults(&dir)?;
     Ok(dir)
 }
 
