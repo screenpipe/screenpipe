@@ -322,6 +322,7 @@ pub(crate) struct CaptureParams<'a> {
     pub ignored_patterns: Vec<WindowPattern>,
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
+    pub focused_window_screenshots: bool,
     pub languages: &'a [screenpipe_core::Language],
     /// Opt-in background semantic parser. None preserves historical capture.
     pub semantic_tx: Option<&'a SemanticProjectionSender>,
@@ -579,6 +580,7 @@ pub struct EventDrivenCaptureConfig {
     /// When true, visual checks, full screenshot capture, JPEG writes, and OCR
     /// fallback are skipped.
     pub disable_screenshots: bool,
+    pub focused_window_screenshots: bool,
     /// User-pinned guaranteed-capture floor (ms). When `Some`, this is an
     /// explicit "always capture at least every N ms" choice and it must
     /// survive PowerProfile transitions — a battery-saver switch (whose
@@ -600,6 +602,7 @@ impl Default for EventDrivenCaptureConfig {
             visual_check_interval_ms: 3_000, // check every 3 seconds
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
             disable_screenshots: false,
+            focused_window_screenshots: false,
             idle_capture_interval_override_ms: None, // follow PowerProfile unless pinned
         }
     }
@@ -1044,6 +1047,7 @@ pub(crate) async fn event_driven_capture_loop(
     );
 
     let screenshots_disabled_by_config = config.disable_screenshots;
+    let focused_window_screenshots = config.focused_window_screenshots;
     let mut screenshot_disabled = screenshots_disabled_by_config;
     // Publish the effective state so /health can name an intentional pixel
     // pause instead of blaming Screen Recording permission for it (#5808).
@@ -1180,6 +1184,7 @@ pub(crate) async fn event_driven_capture_loop(
         ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
         pause_on_drm_content,
+        focused_window_screenshots,
         languages: &languages,
         semantic_tx: semantic_tx.as_ref(),
     };
@@ -2507,6 +2512,23 @@ fn mask_image_to_focused_window(
     Some(image::DynamicImage::ImageRgba8(masked))
 }
 
+/// Reuse monitor coordinates for both pixels and accessibility/OCR overlays.
+/// An unavailable focused window must never silently widen a scoped image.
+fn apply_screenshot_scope(
+    image: image::DynamicImage,
+    bounds: Option<screenpipe_capture::paired_capture::FocusedWindowBounds>,
+    focused_only: bool,
+    screenshots_disabled: bool,
+) -> (image::DynamicImage, bool) {
+    if !focused_only || screenshots_disabled {
+        return (image, false);
+    }
+    match bounds.and_then(|bounds| mask_image_to_focused_window(&image, bounds)) {
+        Some(masked) => (masked, false),
+        None => (image::DynamicImage::new_rgba8(1, 1), true),
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn get_focused_pid_fresh() -> Option<i32> {
     screenpipe_a11y::platform::macos::get_focused_pid_fresh()
@@ -3162,6 +3184,16 @@ async fn do_capture(
     monitor_hosts_focus: bool,
     #[allow(unused_variables)] last_screenshot_focus_pid: &mut Option<i32>,
 ) -> Result<CaptureOutput> {
+    // Only the monitor hosting focus can provide an image in this mode.
+    // Avoid taking and then discarding screenshots of the other monitors.
+    if params.focused_window_screenshots && !monitor_hosts_focus {
+        return Ok(CaptureOutput {
+            result: None,
+            image: image::DynamicImage::new_rgba8(1, 1),
+            elements_deduped: false,
+            corrupt: None,
+        });
+    }
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
     #[cfg(target_os = "windows")]
@@ -3331,7 +3363,10 @@ async fn do_capture(
     } else {
         RedactedFocusDecision::Continue
     };
-    if focus_decision == RedactedFocusDecision::Withhold {
+    if focus_decision == RedactedFocusDecision::Withhold
+        || (params.focused_window_screenshots
+            && focus_decision == RedactedFocusDecision::PixelsOnly)
+    {
         return Ok(CaptureOutput {
             result: None,
             image,
@@ -3888,6 +3923,14 @@ async fn do_capture(
                     .is_some_and(|app| app.eq_ignore_ascii_case(&snap.app_name))
             })
             .and_then(|snap| snap.window_bounds)
+            .filter(|b| {
+                b.x.is_finite()
+                    && b.y.is_finite()
+                    && b.width.is_finite()
+                    && b.height.is_finite()
+                    && b.width > 0.0
+                    && b.height > 0.0
+            })
             .map(
                 |b| screenpipe_capture::paired_capture::FocusedWindowBounds {
                     x: (b.x * frame_w as f64).round() as i32,
@@ -3898,27 +3941,17 @@ async fn do_capture(
             )
     };
 
-    // With a URL allowlist, an allowed native app must not expose a blocked
-    // browser elsewhere on the monitor. Black out pixels outside the
-    // positively identified focused window for both native apps and browsers.
+    // A URL allowlist and the opt-in focused-window mode both restrict pixels
+    // to a positively identified focused window. Preserve monitor dimensions
+    // so accessibility bounds, OCR boxes, and replay retain their coordinates.
     // If the platform cannot provide trustworthy bounds, keep the allowed snapshot but
     // suppress pixels and OCR for this frame rather than widening capture.
-    let mut allowlist_pixels_unverified = false;
-    let image = if params.window_filters.has_url_allowlist()
-        && !screenshot_disabled
-        && !skip_pixels_for_unknown_exclusions
-    {
-        match focused_window_bounds.and_then(|bounds| mask_image_to_focused_window(&image, bounds))
-        {
-            Some(masked) => masked,
-            None => {
-                allowlist_pixels_unverified = true;
-                image::DynamicImage::new_rgba8(1, 1)
-            }
-        }
-    } else {
-        image
-    };
+    let (image, scoped_pixels_unverified) = apply_screenshot_scope(
+        image,
+        focused_window_bounds,
+        params.focused_window_screenshots || params.window_filters.has_url_allowlist(),
+        screenshot_disabled || skip_pixels_for_unknown_exclusions,
+    );
 
     let elements_ref_frame_id = matching_elements_reference(
         trigger,
@@ -3951,7 +3984,7 @@ async fn do_capture(
         // only, no snapshot written for the 1x1 placeholder.
         screenshot_disabled: screenshot_disabled
             || skip_pixels_for_unknown_exclusions
-            || allowlist_pixels_unverified,
+            || scoped_pixels_unverified,
         in_meeting,
         monitor_hosts_focus,
         ax_screenshot_coherent,
@@ -4411,6 +4444,52 @@ mod tests {
         assert!(!permits_redacted_desktop_without_focus(
             &filters, &config, true, false
         ));
+    }
+
+    #[test]
+    fn focused_window_screenshots_preserve_coordinates_and_hide_desktop() {
+        use image::GenericImageView;
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            3,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+        let bounds = screenpipe_capture::paired_capture::FocusedWindowBounds {
+            x: -1,
+            y: 1,
+            width: 3,
+            height: 5,
+        };
+        let (desktop, suppressed) = apply_screenshot_scope(source.clone(), None, false, false);
+        assert!(!suppressed);
+        assert_eq!(desktop.as_bytes(), source.as_bytes());
+        let (focused, suppressed) =
+            apply_screenshot_scope(source.clone(), Some(bounds), true, false);
+        assert!(!suppressed);
+        assert_eq!(focused.dimensions(), source.dimensions());
+        for y in 0..3 {
+            for x in 0..4 {
+                let expected = if x < 2 && y >= 1 {
+                    [10, 20, 30, 255]
+                } else {
+                    [0, 0, 0, 255]
+                };
+                assert_eq!(focused.get_pixel(x, y).0, expected);
+            }
+        }
+        // Missing focus/bounds (including another monitor) cannot save a desktop image.
+        assert!(apply_screenshot_scope(source.clone(), None, true, false).1);
+        let invalid = screenpipe_capture::paired_capture::FocusedWindowBounds {
+            x: 9,
+            y: 9,
+            width: 1,
+            height: 1,
+        };
+        assert!(apply_screenshot_scope(source.clone(), Some(invalid), true, false).1);
+        // Image capture being off must not turn it back on or do masking work.
+        let (disabled, suppressed) = apply_screenshot_scope(source.clone(), None, true, true);
+        assert!(!suppressed);
+        assert_eq!(disabled.as_bytes(), source.as_bytes());
     }
 
     #[test]
