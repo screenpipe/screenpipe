@@ -208,6 +208,15 @@ pub fn capture_event_nonblocking(event: &'static str, properties: Value) {
     });
 }
 
+/// Routine diagnostics stay nonblocking; graceful shutdown awaits a bounded send.
+pub(crate) async fn capture_diagnostic(event: &'static str, properties: Value, final_report: bool) {
+    if final_report {
+        crate::telemetry_reporting::finish_report(capture_event(event, properties)).await;
+    } else {
+        capture_event_nonblocking(event, properties);
+    }
+}
+
 /// Parse macOS version string (e.g., "14.5" or "10.15.7") into major version number
 #[cfg(target_os = "macos")]
 fn parse_macos_major_version(version_str: &str) -> Option<u32> {

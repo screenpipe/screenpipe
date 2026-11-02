@@ -13,7 +13,9 @@ use screenpipe_audio::audio_manager::AudioManager;
 use screenpipe_core::sync::SyncServiceHandle;
 use tracing::{debug, error, info};
 
-use crate::telemetry_reporting::HealthReportSchedule;
+use crate::telemetry_reporting::{
+    DiagnosticShutdown, HealthReportSchedule, CLI_DIAGNOSTIC_REPORT_INTERVAL,
+};
 
 use crate::{
     analytics,
@@ -255,6 +257,8 @@ pub struct AppState {
 }
 
 pub struct SCServer {
+    pub diagnostic_shutdown: Arc<DiagnosticShutdown>,
+    pub diagnostic_report_interval: Duration,
     /// Exact catalog directory supplied by the desktop owner; never inferred from another app.
     pub workflow_catalog_dir: Option<PathBuf>,
     db: Arc<DatabaseManager>,
@@ -390,6 +394,8 @@ impl SCServer {
     ) -> Self {
         let audio_metrics = audio_manager.metrics.clone();
         SCServer {
+            diagnostic_shutdown: Arc::default(),
+            diagnostic_report_interval: CLI_DIAGNOSTIC_REPORT_INTERVAL,
             workflow_catalog_dir: None,
             db,
             history_access: HistoryAccessPolicy::unrestricted(),
@@ -654,32 +660,40 @@ impl SCServer {
                 }
             });
 
-            // Check pipeline failures every minute; report healthy summaries every 15 minutes.
+            // Check failures every minute; use the owner-selected healthy cadence.
             let metrics_for_posthog = self.vision_metrics.clone();
-            telemetry_tasks.spawn(async move {
+            let shutdown = self.diagnostic_shutdown.clone();
+            let report_interval = self.diagnostic_report_interval;
+            telemetry_tasks.spawn(self.diagnostic_shutdown.track(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
                 let started = std::time::Instant::now();
-                let mut reports = HealthReportSchedule::new();
+                let mut reports = HealthReportSchedule::new(report_interval);
                 loop {
-                    interval.tick().await;
+                    let stopping = tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => true,
+                        _ = interval.tick() => false,
+                    };
                     let snap = metrics_for_posthog.snapshot();
                     // Only report if the pipeline has captured any frames
                     if snap.frames_captured > 0
-                        && reports.should_report(
-                            started.elapsed(),
-                            [snap.frames_dropped, snap.pipeline_stall_count],
-                        )
+                        && (stopping
+                            || reports.should_report(
+                                started.elapsed(),
+                                [snap.frames_dropped, snap.pipeline_stall_count],
+                            ))
                     {
                         // Recording-coverage reliability metric: what % of the
                         // user's working time had healthy capture. Sampled
                         // independently (5s sampler); snapshotted here so the
                         // fleet sees coverage alongside raw pipeline counters.
                         let cov = crate::recording_coverage::coverage_snapshot();
-                        analytics::capture_event_nonblocking(
+                        analytics::capture_diagnostic(
                             "vision_pipeline_health",
                             json!({
                                 "uptime_secs": snap.uptime_secs,
-                                "telemetry_report_interval_secs": crate::telemetry_reporting::DIAGNOSTIC_REPORT_INTERVAL.as_secs(),
+                                "telemetry_report_interval_secs": report_interval.as_secs(),
+                                "shutdown_report": stopping,
                                 "frames_captured": snap.frames_captured,
                                 "frames_skipped": snap.frames_skipped,
                                 "ocr_completed": snap.ocr_completed,
@@ -711,20 +725,30 @@ impl SCServer {
                                 "recording_active_paused_secs": cov.active_paused_secs,
                                 "recording_idle_secs": cov.idle_secs,
                             }),
-                        );
+                            stopping,
+                        )
+                        .await;
+                    }
+                    if stopping {
+                        break;
                     }
                 }
-            });
+            }));
 
             // Keep minute-level failure/device checks without sending healthy polls.
             let audio_metrics_for_posthog = self.audio_metrics.clone();
             let audio_manager_for_posthog = self.audio_manager.clone();
-            telemetry_tasks.spawn(async move {
+            let shutdown = self.diagnostic_shutdown.clone();
+            telemetry_tasks.spawn(self.diagnostic_shutdown.track(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
                 let started = std::time::Instant::now();
-                let mut reports = HealthReportSchedule::new();
+                let mut reports = HealthReportSchedule::new(report_interval);
                 loop {
-                    interval.tick().await;
+                    let stopping = tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => true,
+                        _ = interval.tick() => false,
+                    };
                     let snap = audio_metrics_for_posthog.snapshot();
                     // Only report if the pipeline has processed any chunks
                     if snap.chunks_sent > 0 || snap.vad_rejected > 0 {
@@ -742,16 +766,17 @@ impl SCServer {
                             snap.process_errors,
                             snap.transcription_errors,
                         ];
-                        if !reports
-                            .should_report(started.elapsed(), (failure_counts, devices.clone()))
+                        if !stopping
+                            && !reports.should_report(started.elapsed(), (failure_counts, devices.clone()))
                         {
                             continue;
                         }
-                        analytics::capture_event_nonblocking(
+                        analytics::capture_diagnostic(
                             "audio_pipeline_health",
                             json!({
                                 "uptime_secs": snap.uptime_secs,
-                                "telemetry_report_interval_secs": crate::telemetry_reporting::DIAGNOSTIC_REPORT_INTERVAL.as_secs(),
+                                "telemetry_report_interval_secs": report_interval.as_secs(),
+                                "shutdown_report": stopping,
                                 "chunks_sent": snap.chunks_sent,
                                 "chunks_received": snap.chunks_received,
                                 "chunks_channel_full": snap.chunks_channel_full,
@@ -778,10 +803,15 @@ impl SCServer {
                                 "audio_devices": devices,
                                 "audio_device_count": device_count,
                             }),
-                        );
+                            stopping,
+                        )
+                        .await;
+                    }
+                    if stopping {
+                        break;
                     }
                 }
-            });
+            }));
 
             // Permanent subscriber that forwards allowlisted piggyback telemetry
             // (meeting summaries + mic capture health) from the in-process events

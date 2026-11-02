@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 
 use crate::resource_summary::ResourceReportWindow;
 use crate::telemetry_context::TelemetryContext;
+use crate::telemetry_reporting::{finish_report, DiagnosticShutdown};
 
 const RESOURCE_PROCESS_GROUPS: [(&str, &str); 5] = [
     ("screenpipe_app", "app"),
@@ -152,6 +153,7 @@ fn analyze_memory_trend(samples: &[(f64, f64)]) -> Option<LeakStats> {
 /// governance live in `screenpipe-resource`; this type owns only reporting,
 /// leak policy, and engine telemetry integrations.
 pub struct ResourceTelemetryReporter {
+    diagnostic_shutdown: Arc<DiagnosticShutdown>,
     start_time: Instant,
     resource_log_file: Option<String>, // analyse output here: https://colab.research.google.com/drive/1zELlGdzGdjChWKikSqZTHekm5XRxY-1r?usp=sharing
     posthog_client: Option<Client>,
@@ -449,6 +451,7 @@ impl ResourceTelemetryReporter {
         );
 
         Arc::new(Self {
+            diagnostic_shutdown: Arc::default(),
             start_time: Instant::now(),
             resource_log_file,
             posthog_client,
@@ -783,6 +786,10 @@ impl ResourceTelemetryReporter {
         }
     }
 
+    pub fn shutdown_handle(&self) -> Arc<DiagnosticShutdown> {
+        self.diagnostic_shutdown.clone()
+    }
+
     pub fn start_monitoring(
         self: &Arc<Self>,
         interval: Duration,
@@ -796,11 +803,26 @@ impl ResourceTelemetryReporter {
         let mut last_posthog_update: Option<Instant> = None;
         let mut window = ResourceReportWindow::default();
 
-        tokio::spawn(async move {
+        let shutdown = self.diagnostic_shutdown.clone();
+        tokio::spawn(self.diagnostic_shutdown.track(async move {
             let mut sampler = ResourceSampler::new();
 
             loop {
                 tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {
+                        // Refresh once more so sessions shorter than the local
+                        // sampling interval and the last partial window survive.
+                        sampler.refresh();
+                        let snapshot = sampler.snapshot();
+                        window.observe(
+                            f64::from(snapshot.total_cpu_percent),
+                            snapshot.total_memory_gb,
+                            snapshot.phys_footprint_gb,
+                        );
+                        finish_report(monitor.log_status(&snapshot, &window)).await;
+                        break;
+                    }
                     _ = tokio::time::sleep(interval) => {
                         sampler.refresh();
 
@@ -848,7 +870,7 @@ impl ResourceTelemetryReporter {
                     }
                 }
             }
-        });
+        }));
     }
 
     async fn log_status_local(&self, snapshot: &ResourceSnapshot) {
@@ -864,15 +886,13 @@ impl ResourceTelemetryReporter {
     }
 
     pub async fn shutdown(&self) {
+        self.diagnostic_shutdown.flush().await;
         if let Some(ref file) = self.resource_log_file {
             if let Ok(mut f) = OpenOptions::new().write(true).open(file) {
                 let _ = f.flush();
             }
         }
 
-        if self.posthog_client.is_some() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     }
 }
 

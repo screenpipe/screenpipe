@@ -651,7 +651,7 @@ impl ServerCore {
         let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
         resource_reporter.start_monitoring(
             Duration::from_secs(30),
-            Some(screenpipe_engine::telemetry_reporting::DIAGNOSTIC_REPORT_INTERVAL),
+            Some(screenpipe_engine::telemetry_reporting::DESKTOP_DIAGNOSTIC_REPORT_INTERVAL),
         );
         start_sleep_monitor();
 
@@ -666,6 +666,10 @@ impl ServerCore {
             config.use_pii_removal,
             config.video_quality.clone(),
         );
+        let diagnostic_shutdown = resource_reporter.shutdown_handle();
+        server.diagnostic_shutdown = diagnostic_shutdown.clone();
+        server.diagnostic_report_interval =
+            screenpipe_engine::telemetry_reporting::DESKTOP_DIAGNOSTIC_REPORT_INTERVAL;
         server.workflow_catalog_dir = workflow_catalog_dir;
         server.vision_metrics = vision_metrics.clone();
         server.audio_metrics = audio_manager.metrics.clone();
@@ -1141,6 +1145,7 @@ impl ServerCore {
                     // Err means the sender dropped, which only happens when
                     // the whole ServerCore is gone — treat as shutdown.
                     let _ = shutdown_rx.wait_for(|stop| *stop).await;
+                    diagnostic_shutdown.flush().await;
                 },
             ))
             .catch_unwind()
