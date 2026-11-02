@@ -16,7 +16,7 @@ retry, account-boundary, and retirement protocol.
 signed/notarized app -> unsigned DMG template -> Worker personalizes app xattr and DMG checksums
   -> Finder copies app -> existing native proof -> claim -> authenticated bind
 
-signed screenpipe-<UUID>.exe -> NSIS validates filename -> installed token
+signed screenpipe-<UUID>.exe -> browser HostUrl ADS (filename fallback) -> installed token
   -> Windows credential-store proof -> claim -> authenticated bind
 
 signed screenpipe-<UUID>.AppImage -> APPIMAGE filename -> credential-store proof
@@ -82,6 +82,14 @@ Windows host and checks Authenticode, version metadata, and architecture evidenc
 in the versioned release filename. The NSIS bootstrap PE machine is not treated
 as payload architecture. Filename personalization preserves the signed bytes.
 Use `--platform windows` for x86_64 and `--platform windows-arm` for ARM64.
+For the browser-origin route, the HTTPS URL and `Content-Disposition` filename
+must both end in the same `screenpipe-<canonical lowercase UUID v4>.exe` bound
+by the download ticket. The installer reads only its own `Zone.Identifier`
+stream with Win32 APIs and accepts one `[ZoneTransfer]` `HostUrl` whose HTTPS
+URL path ends in that exact filename. A valid origin candidate wins over the
+legacy current filename. Missing, malformed, duplicated, oversized, query-like,
+or non-HTTPS metadata falls back to the current filename. `ZoneId` is not
+authorization, and the installed app never searches download directories.
 
 For Linux xattr downloads, use the same versioned AppImage with `--linux-xattr`:
 
@@ -121,8 +129,10 @@ proof, consent, account and retirement rules are unchanged.
 The script never uploads artifacts or changes publication pointers. Production
 activation and versioned-artifact publication have not been performed. Human
 publication remains required. An ordinary, unpersonalized download installs and
-runs normally without optional attribution. Renaming a personalized Windows or
-raw Linux download before its first install/launch can lose attribution.
+runs normally without optional attribution. A same-volume rename preserves
+Windows attribution when the browser attached a valid origin stream; filesystems
+or transfer tools that strip the stream fall back to the renamed filename. Renaming
+a personalized raw Linux download before its first launch can lose attribution.
 
 The signature-exempt xattr and ZIP extraction behavior are documented by
 [Apple Developer Technical Support](https://developer.apple.com/forums/thread/796303).

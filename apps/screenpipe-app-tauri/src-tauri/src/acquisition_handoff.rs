@@ -164,6 +164,7 @@ fn carrier() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn carrier_from(directory: &std::path::Path) -> Option<String> {
+    report_windows_installer_diagnostic(directory);
     // The installer writes this once. Keep the read bounded so an untrusted or
     // corrupt install directory cannot turn startup into an unbounded read.
     let path = directory.join("acquisition-grant");
@@ -175,6 +176,30 @@ fn carrier_from(directory: &std::path::Path) -> Option<String> {
     if bytes.len() != 36 { return None; }
     let grant = String::from_utf8(bytes).ok()?;
     uuid4(&grant).then_some(grant)
+}
+
+#[cfg(target_os = "windows")]
+fn report_windows_installer_diagnostic(directory: &std::path::Path) {
+    const DIAGNOSTIC: &str = "invalid-origin-metadata";
+    let path = directory.join("acquisition-grant-diagnostic");
+    let valid = std::fs::metadata(&path)
+        .is_ok_and(|metadata| metadata.len() == DIAGNOSTIC.len() as u64)
+        && std::fs::File::open(&path).is_ok_and(|file| {
+            use std::io::Read;
+            let mut bytes = Vec::with_capacity(DIAGNOSTIC.len() + 1);
+            file.take((DIAGNOSTIC.len() + 1) as u64)
+                .read_to_end(&mut bytes)
+                .is_ok()
+                && bytes == DIAGNOSTIC.as_bytes()
+        });
+    if valid {
+        tracing::warn!(
+            "Windows acquisition origin metadata invalid; installer tried filename attribution"
+        );
+    }
+    // This file contains only a fixed outcome and is single-use. Unknown data
+    // is discarded silently so it can never become a support-log injection.
+    let _ = std::fs::remove_file(path);
 }
 
 #[cfg(target_os = "linux")]
@@ -503,6 +528,46 @@ mod tests {
         }
         std::fs::write(&path, format!("{grant}\n")).unwrap();
         assert!(carrier_from(dir.path()).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_ads_failure_survives_support_rotation_without_private_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-02.log");
+        let grant = "12345678-1234-4234-8234-123456789012";
+        std::fs::write(dir.path().join("acquisition-grant"), format!("{grant}\n")).unwrap();
+        std::fs::write(
+            dir.path().join("acquisition-grant-diagnostic"),
+            "invalid-origin-metadata",
+        )
+        .unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(carrier_from(dir.path()).is_none());
+        });
+        assert!(!dir.path().join("acquisition-grant-diagnostic").exists());
+        std::fs::rename(
+            &current,
+            dir.path().join("screenpipe-app.2026-11-02.1.log"),
+        )
+        .unwrap();
+        std::fs::write(&current, b"after rotation\n").unwrap();
+        let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[dir.path().to_path_buf()],
+            dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        assert!(report.contains(
+            "Windows acquisition origin metadata invalid; installer tried filename attribution"
+        ));
+        for private in [grant, "https://downloads.test/private", "user_private", "acquisition-grant"] {
+            assert!(!report.contains(private), "support report leaked {private}: {report}");
+        }
     }
 
     #[tokio::test]

@@ -193,9 +193,15 @@ class CarrierTest(unittest.TestCase):
             first = '12345678-1234-4234-8234-123456789012'
             second = 'abcdefab-cdef-4abc-9def-abcdefabcdef'
 
-            def install(filename, directory):
+            def install(filename, directory, zone_identifier=None):
                 installer = root / filename
                 shutil.copyfile(root / 'fixture.exe', installer)
+                if zone_identifier is not None:
+                    Path(str(installer) + ':Zone.Identifier').write_text(
+                        zone_identifier, encoding='ascii', newline='')
+                    with Path(str(installer) + ':Zone.Identifier').open(
+                            encoding='ascii', newline='') as stream:
+                        self.assertEqual(stream.read(), zone_identifier)
                 subprocess.run([str(installer), '/S', f'/D={directory}'], check=True)
                 self.assertEqual((directory / 'installed').read_text(), 'ok')
 
@@ -204,6 +210,50 @@ class CarrierTest(unittest.TestCase):
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
             install(f'screenpipe-{second}.exe', valid_dir)
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
+
+            ads = ('[ZoneTransfer]\r\nZoneId=3\r\n'
+                   f'HostUrl=https://downloads.test/download/ticket/screenpipe-{second}.exe\r\n')
+            ads_dir = root / 'ads-renamed'
+            install('renamed.exe', ads_dir, ads)
+            self.assertTrue((ads_dir / 'acquisition-grant').is_file(),
+                            [(p.name, p.read_text(errors='replace')) for p in ads_dir.iterdir()])
+            self.assertEqual((ads_dir / 'acquisition-grant').read_text(), second)
+            # A valid browser origin is preferred over a conflicting legacy
+            # filename, while a previous install remains first-grant wins.
+            conflict_dir = root / 'ads-conflict'
+            install(f'screenpipe-{first}.exe', conflict_dir, ads)
+            self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
+            install('renamed-again.exe', conflict_dir,
+                    ads.replace(second, '11111111-1111-4111-8111-111111111111'))
+            self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
+
+            fallback_cases = [
+                '[ZoneTransfer]\r\nZoneId=3\r\n',
+                '[ZoneTransfer]\r\nHostUrl=http://downloads.test/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/?next=/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                + ('x' * 1100) + f'/screenpipe-{second}.exe\r\n',
+                '[Other]\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-12345678-1234-4234-C234-123456789012.exe\r\n',
+            ]
+            for index, malformed_ads in enumerate(fallback_cases):
+                directory = root / f'ads-fallback-{index}'
+                install(f'screenpipe-{first}.exe', directory, malformed_ads)
+                self.assertEqual((directory / 'acquisition-grant').read_text(), first)
+                diagnostic = directory / 'acquisition-grant-diagnostic'
+                if index in {1, 2, 3, 4, 6}:
+                    self.assertEqual(diagnostic.read_text(), 'invalid-origin-metadata')
+                    self.assertNotIn(first, diagnostic.read_text())
+                    self.assertNotIn(second, diagnostic.read_text())
+                else:
+                    self.assertFalse(diagnostic.exists())
             for index, name in enumerate([
                 f'screenpipe-{carrier.PLACEHOLDER}.exe',
                 'screenpipe-12345678-1234-4234-7234-123456789012.exe',

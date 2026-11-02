@@ -9,82 +9,223 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 
-; Save a filename-carried acquisition grant once. This is deliberately a pure
-; NSIS parser: attribution is optional and never launches a shell or blocks an
-; install. Expected filename: screenpipe-<lowercase canonical UUID v4>.exe.
-!macro _SP_SaveAcquisitionGrant
-  Push $0
-  Push $1
-  Push $2
-  Push $3
-  ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
-    StrLen $0 $EXEFILE
-    ${If} $0 == 51
-      StrCpy $1 $EXEFILE 11 0
-      StrCpy $2 $EXEFILE 4 47
-      ${If} $1 == "screenpipe-"
-      ${AndIf} $2 == ".exe"
-        StrCpy $1 $EXEFILE 36 11
-        ${If} $1 != "00000000-0000-4000-8000-000000000000"
-          StrCpy $2 $1 1 14
-          ${If} $2 == "4"
-            StrCpy $2 $1 1 19
-            ${If} $2 == "8"
-            ${OrIf} $2 == "9"
-            ${OrIf} $2 == "a"
-            ${OrIf} $2 == "b"
-              StrCpy $0 0
-              StrCpy $3 1
-              ${Do}
-                StrCpy $2 $1 1 $0
-                ${If} $0 == 8
-                ${OrIf} $0 == 13
-                ${OrIf} $0 == 18
-                ${OrIf} $0 == 23
-                  ${If} $2 != "-"
-                    StrCpy $3 0
-                    ${ExitDo}
-                  ${EndIf}
-                ${Else}
-                  ${If} $2 != "0"
-                  ${AndIf} $2 != "1"
-                  ${AndIf} $2 != "2"
-                  ${AndIf} $2 != "3"
-                  ${AndIf} $2 != "4"
-                  ${AndIf} $2 != "5"
-                  ${AndIf} $2 != "6"
-                  ${AndIf} $2 != "7"
-                  ${AndIf} $2 != "8"
-                  ${AndIf} $2 != "9"
-                  ${AndIf} $2 != "a"
-                  ${AndIf} $2 != "b"
-                  ${AndIf} $2 != "c"
-                  ${AndIf} $2 != "d"
-                  ${AndIf} $2 != "e"
-                  ${AndIf} $2 != "f"
-                    StrCpy $3 0
-                    ${ExitDo}
-                  ${EndIf}
-                ${EndIf}
-                IntOp $0 $0 + 1
-                ${If} $0 >= 36
+; Validate the one acquisition filename shape shared by the browser origin
+; metadata and the legacy installer filename. Input and output may be the same
+; register. Invalid input produces an empty output.
+!macro _SP_ValidateAcquisitionFilename Input Output ScratchA ScratchB ScratchC
+  StrCpy ${Output} ""
+  StrLen ${ScratchA} ${Input}
+  ${If} ${ScratchA} == 51
+    StrCpy ${ScratchA} ${Input} 11 0
+    StrCpy ${ScratchB} ${Input} 4 47
+    ${If} ${ScratchA} == "screenpipe-"
+    ${AndIf} ${ScratchB} == ".exe"
+      StrCpy ${ScratchA} ${Input} 36 11
+      ${If} ${ScratchA} != "00000000-0000-4000-8000-000000000000"
+        StrCpy ${ScratchB} ${ScratchA} 1 14
+        ${If} ${ScratchB} == "4"
+          StrCpy ${ScratchB} ${ScratchA} 1 19
+          ${If} ${ScratchB} == "8"
+          ${OrIf} ${ScratchB} == "9"
+          ${OrIf} ${ScratchB} == "a"
+          ${OrIf} ${ScratchB} == "b"
+            StrCpy ${ScratchB} 0
+            StrCpy ${ScratchC} 1
+            ${Do}
+              StrCpy ${Output} ${ScratchA} 1 ${ScratchB}
+              ${If} ${ScratchB} == 8
+              ${OrIf} ${ScratchB} == 13
+              ${OrIf} ${ScratchB} == 18
+              ${OrIf} ${ScratchB} == 23
+                ${If} ${Output} != "-"
+                  StrCpy ${ScratchC} 0
                   ${ExitDo}
                 ${EndIf}
-              ${Loop}
-              ${If} $3 == 1
-                ClearErrors
-                FileOpen $0 "$INSTDIR\acquisition-grant" w
-                ${IfNot} ${Errors}
-                  FileWrite $0 $1
-                  FileClose $0
+              ${Else}
+                ${If} ${Output} != "0"
+                ${AndIf} ${Output} != "1"
+                ${AndIf} ${Output} != "2"
+                ${AndIf} ${Output} != "3"
+                ${AndIf} ${Output} != "4"
+                ${AndIf} ${Output} != "5"
+                ${AndIf} ${Output} != "6"
+                ${AndIf} ${Output} != "7"
+                ${AndIf} ${Output} != "8"
+                ${AndIf} ${Output} != "9"
+                ${AndIf} ${Output} != "a"
+                ${AndIf} ${Output} != "b"
+                ${AndIf} ${Output} != "c"
+                ${AndIf} ${Output} != "d"
+                ${AndIf} ${Output} != "e"
+                ${AndIf} ${Output} != "f"
+                  StrCpy ${ScratchC} 0
+                  ${ExitDo}
                 ${EndIf}
               ${EndIf}
+              IntOp ${ScratchB} ${ScratchB} + 1
+              ${If} ${ScratchB} >= 36
+                ${ExitDo}
+              ${EndIf}
+            ${Loop}
+            ${If} ${ScratchC} == 1
+              StrCpy ${Output} ${ScratchA}
+            ${Else}
+              StrCpy ${Output} ""
             ${EndIf}
           ${EndIf}
         ${EndIf}
       ${EndIf}
     ${EndIf}
   ${EndIf}
+!macroend
+
+; Save a browser-origin or filename-carried acquisition grant once. This is a
+; pure NSIS parser: attribution is optional and never launches a shell or
+; blocks an install. A valid HTTPS HostUrl ending in the personalized download
+; filename wins; malformed/missing metadata falls back to $EXEFILE.
+!macro _SP_SaveAcquisitionGrant
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  Push $R0
+  ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
+    !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
+
+    ; Parse the stream ourselves so duplicate HostUrl keys and lines wider than
+    ; NSIS's fixed string buffer are rejected, never silently truncated.
+    StrCpy $7 0 ; inside [ZoneTransfer]
+    StrCpy $8 0 ; HostUrl count/error sentinel
+    StrCpy $9 "" ; valid ADS grant
+    ClearErrors
+    ; NSIS validates ordinary FileOpen paths and rejects the second colon in an
+    ; ADS name. Open only this stream on the running installer with CreateFileW;
+    ; FileRead/FileClose use the same native HANDLE representation.
+    System::Call 'kernel32::CreateFileW(w "$EXEPATH:Zone.Identifier", i 0x80000000, i 7, p 0, i 3, i 0x80, p 0)p.r5'
+    ${If} $5 != -1
+    ${AndIf} $5 != ""
+      ${Do}
+        ClearErrors
+        FileRead $5 $6
+        ${If} ${Errors}
+          ${ExitDo}
+        ${EndIf}
+        StrLen $0 $6
+        ${If} $0 > 0
+          IntOp $1 $0 - 1
+          StrCpy $2 $6 1 $1
+          ${If} $2 != "$\n"
+            ; A second successful read means this logical line exceeded the
+            ; fixed buffer. Reject all ADS metadata rather than using a suffix.
+            ClearErrors
+            FileRead $5 $R0
+            ${IfNot} ${Errors}
+              StrCpy $8 2
+              ${ExitDo}
+            ${EndIf}
+          ${Else}
+            StrCpy $6 $6 $1
+            StrLen $0 $6
+            ${If} $0 > 0
+              IntOp $1 $0 - 1
+              StrCpy $2 $6 1 $1
+              ${If} $2 == "$\r"
+                StrCpy $6 $6 $1
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        StrCpy $0 $6 1 0
+        ${If} $0 == "["
+          ${If} $6 == "[ZoneTransfer]"
+            StrCpy $7 1
+          ${Else}
+            StrCpy $7 0
+          ${EndIf}
+        ${ElseIf} $7 == 1
+          StrCpy $0 $6 8 0
+          ${If} $0 == "HostUrl="
+            IntOp $8 $8 + 1
+            ${If} $8 > 1
+              ${ExitDo}
+            ${EndIf}
+            StrCpy $0 $6 "" 8
+            StrCpy $1 $0 8 0
+            StrLen $2 $0
+            ${If} $1 == "https://"
+            ${AndIf} $2 >= 61
+              StrCpy $1 $0 1 8
+              ${If} $1 != "/"
+                ; Query/fragment text and backslashes are not URL paths. Scan
+                ; the received value without allocating or invoking a parser.
+                StrCpy $3 8
+                ${Do}
+                  StrCpy $R0 $0 1 $3
+                  ${If} $R0 == "?"
+                  ${OrIf} $R0 == "#"
+                  ${OrIf} $R0 == "\"
+                    StrCpy $3 -1
+                    ${ExitDo}
+                  ${EndIf}
+                  IntOp $3 $3 + 1
+                  ${If} $3 >= $2
+                    ${ExitDo}
+                  ${EndIf}
+                ${Loop}
+                ${If} $3 >= 0
+                  StrCpy $1 $0 52 -52
+                  StrCpy $2 $1 1 0
+                  ${If} $2 == "/"
+                    StrCpy $1 $1 "" 1
+                    !insertmacro _SP_ValidateAcquisitionFilename "$1" $9 $0 $2 $3
+                  ${EndIf}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${Loop}
+      FileClose $5
+    ${EndIf}
+    StrCpy $7 0 ; accepted ADS outcome
+    ${If} $8 == 1
+    ${AndIf} $9 != ""
+      StrCpy $4 $9
+      StrCpy $7 1
+    ${EndIf}
+    ${If} $8 != 0
+    ${AndIf} $7 == 0
+      ; Persist only a fixed, privacy-safe outcome for normal support logs.
+      ; Never copy the URL, grant, account, or local installer path.
+      ClearErrors
+      FileOpen $0 "$INSTDIR\acquisition-grant-diagnostic" w
+      ${IfNot} ${Errors}
+        FileWrite $0 "invalid-origin-metadata"
+        FileClose $0
+      ${EndIf}
+    ${EndIf}
+    ${If} $4 != ""
+      ClearErrors
+      FileOpen $0 "$INSTDIR\acquisition-grant" w
+      ${IfNot} ${Errors}
+        FileWrite $0 $4
+        FileClose $0
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $R0
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
   Pop $3
   Pop $2
   Pop $1
