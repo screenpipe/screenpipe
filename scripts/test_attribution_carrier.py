@@ -4,12 +4,14 @@
 import importlib.util
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest import mock
 
@@ -19,6 +21,68 @@ spec.loader.exec_module(carrier)
 
 
 class CarrierTest(unittest.TestCase):
+    def test_linux_xattr_tar_preserves_appimage_and_exact_patch_location(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / 'screenpipe_1.2.3_amd64.AppImage'
+            content = bytearray(2049)
+            content[:6] = b'\x7fELF\x02\x01'
+            content[8:11] = b'AI\x02'
+            content[18] = 62
+            # The same bytes in the executable must never be personalized.
+            content[100:136] = carrier.PLACEHOLDER.encode()
+            artifact.write_bytes(content)
+            prepared, manifest = carrier.package_linux_xattr(artifact, root / 'out', 'linux', '1.2.3')
+            data = json.loads(manifest.read_text())
+            self.assertEqual(data['schema'], 3)
+            self.assertEqual(data['carrier'], 'linux-xattr')
+            self.assertEqual(data['size'], prepared.stat().st_size)
+            self.assertEqual(data['sha256'], hashlib.sha256(prepared.read_bytes()).hexdigest())
+            self.assertEqual(data['appimage'], dict(name='screenpipe.AppImage', size=len(content),
+                                                   sha256=hashlib.sha256(content).hexdigest()))
+            grant = '12345678-1234-4234-8234-123456789012'
+            patched = bytearray(prepared.read_bytes())
+            offset = data['grant_offset']
+            self.assertEqual(patched[offset:offset+36], carrier.PLACEHOLDER.encode())
+            patched[offset:offset+36] = grant.encode()
+            personalized = root / 'personalized.tar'
+            personalized.write_bytes(patched)
+            with tarfile.open(personalized) as archive:
+                members = archive.getmembers()
+                self.assertEqual(len(members), 1)
+                member = members[0]
+                self.assertTrue(member.isfile())
+                self.assertEqual(member.mode, 0o755)
+                self.assertEqual(member.offset_data, 1536)
+                self.assertEqual(member.pax_headers, {'SCHILY.xattr.' + carrier.LINUX_XATTR: grant})
+                self.assertEqual(archive.extractfile(member).read(), content)
+            self.assertEqual(artifact.read_bytes(), content)
+            with self.assertRaisesRegex(ValueError, 'overwrite'):
+                carrier.package_linux_xattr(artifact, root / 'out', 'linux', '1.2.3')
+            with self.assertRaisesRegex(ValueError, 'version'):
+                carrier.package_linux_xattr(artifact, root / 'wrong-version', 'linux', '1.2.4')
+            with self.assertRaisesRegex(ValueError, 'platform linux'):
+                carrier.package_linux_xattr(artifact, root / 'wrong-platform', 'windows', '1.2.3')
+            if sys.platform == 'linux':
+                restored = root / 'restored'
+                restored.mkdir()
+                subprocess.run(['tar', '--xattrs', '-xf', str(personalized), '-C', str(restored)], check=True)
+                executable = restored / member.name
+                self.assertEqual(executable.read_bytes(), content)
+                self.assertEqual(executable.stat().st_mode & 0o777, 0o755)
+                renamed = restored / 'renamed.AppImage'
+                executable.rename(renamed)
+                self.assertEqual(os.getxattr(renamed, carrier.LINUX_XATTR), grant.encode())
+                # Verify persistence from a fresh process, without in-memory state.
+                received = subprocess.check_output([
+                    sys.executable, '-c', 'import os,sys;sys.stdout.buffer.write(os.getxattr(sys.argv[1],sys.argv[2]))',
+                    str(renamed), carrier.LINUX_XATTR])
+                self.assertEqual(received, grant.encode())
+                ordinary = root / 'without-xattrs'
+                ordinary.mkdir()
+                subprocess.run(['tar', '--no-xattrs', '-xf', str(personalized), '-C', str(ordinary)], check=True)
+                self.assertNotIn(carrier.LINUX_XATTR, os.listxattr(ordinary / member.name))
+
     @unittest.skipUnless(sys.platform == "darwin", "requires macOS signing tools")
     def test_signed_archive_metadata_and_overwrite_boundaries(self):
         with tempfile.TemporaryDirectory(prefix='screenpipe-carrier-test-') as tmp:

@@ -2,7 +2,8 @@
 // https://screenpipe.com
 
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchEnterprise, reportEnterprise } from "./enterprise-release.cjs";
@@ -15,6 +16,36 @@ const installAction = "install-windows-frontend-dependencies";
 const sha = "01afe5afda5fa75f3e4d733ef9a934b975347f48";
 const context = { repo: { owner: "screenpipe", repo: "screenpipe" }, runId: 123, ref: "refs/heads/main" };
 const platformJobs = ["resolve-release", "localization", "release-enterprise-windows", "release-enterprise-linux", "release-enterprise-macos"];
+
+test("Linux carrier preparation preserves recovery of older app revisions", () => {
+  const step = app.jobs["publish-tauri"].steps.find((step: any) => step.name === "Prepare Linux xattr download carrier");
+  const script = step.run.replaceAll("${{ matrix.target }}", "x86_64-unknown-linux-gnu");
+  for (const revision of ["missing", "legacy", "current"]) {
+    const fixture = mkdtempSync(join(tmpdir(), "screenpipe-linux-release-"));
+    try {
+      const bundle = join(fixture, "apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle");
+      mkdirSync(join(bundle, "appimage"), { recursive: true });
+      mkdirSync(join(fixture, "scripts"));
+      writeFileSync(join(fixture, "apps/screenpipe-app-tauri/src-tauri/Cargo.toml"),
+        '# screenpipe — AI that knows everything you\'ve seen, said, or heard\n# https://screenpipe.com\nversion = "1.2.3"\n');
+      const image = Buffer.alloc(1024);
+      image.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+      image.set([0x41, 0x49, 2], 8);
+      image[18] = 62;
+      writeFileSync(join(bundle, "appimage/screenpipe_1.2.3_amd64.AppImage"), image);
+      if (revision !== "missing") {
+        writeFileSync(join(fixture, "scripts/package-attribution-carrier.py"), revision === "current"
+          ? readFileSync(join(root, "scripts/package-attribution-carrier.py"))
+          : '# screenpipe — AI that knows everything you\'ve seen, said, or heard\n# https://screenpipe.com\nraise RuntimeError("legacy packager must not be called")\n');
+      }
+      const result = Bun.spawnSync(["bash", "-c", script], { cwd: fixture, stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      expect(existsSync(join(bundle, "attribution/screenpipe-attribution.tar"))).toBe(revision === "current");
+      expect(existsSync(join(bundle, "attribution/screenpipe-attribution-linux.json"))).toBe(revision === "current");
+      expect(readFileSync(join(bundle, "appimage/screenpipe_1.2.3_amd64.AppImage"))).toEqual(image);
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  }
+});
 
 function api(dispatchFails = false) {
   const calls: { method: string; args: any }[] = [];

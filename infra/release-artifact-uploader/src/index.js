@@ -60,8 +60,11 @@ export function artifactKey(scope, version, target, filename) {
 		throw new Error("invalid version");
 	}
 	if (!TARGETS.has(target)) throw new Error("unsupported target");
-	const carrierManifest = scope === "consumer" && target.endsWith("-apple-darwin") &&
-		filename === "screenpipe-attribution.json";
+	const carrierArtifact = scope === "consumer" && (
+		(target.endsWith("-apple-darwin") && filename === "screenpipe-attribution.json") ||
+		(target === "x86_64-unknown-linux-gnu" &&
+			["screenpipe-attribution.tar", "screenpipe-attribution-linux.json"].includes(filename))
+	);
 	if (
 		!filename ||
 		filename.length > 255 ||
@@ -70,7 +73,7 @@ export function artifactKey(scope, version, target, filename) {
 		filename.includes("/") ||
 		filename.includes("\\") ||
 		filename.includes("\0") ||
-		(!carrierManifest && !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix)))
+		(!carrierArtifact && !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix)))
 	) {
 		throw new Error("invalid artifact filename");
 	}

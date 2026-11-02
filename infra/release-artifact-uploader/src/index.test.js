@@ -6,6 +6,20 @@ import { describe, expect, test } from "bun:test";
 import { artifactKey, handleRequest } from "./index.js";
 
 describe("release artifact capability boundary", () => {
+	test("admits only the exact consumer Linux xattr artifacts", () => {
+		for (const filename of ["screenpipe-attribution.tar", "screenpipe-attribution-linux.json"]) {
+			expect(artifactKey("consumer", "2.7.130", "x86_64-unknown-linux-gnu", filename))
+				.toBe(`releases/2.7.130/x86_64-unknown-linux-gnu/${filename}`);
+			for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]) {
+				expect(() => artifactKey("consumer", "2.7.130", target, filename)).toThrow();
+			}
+			expect(() => artifactKey("enterprise", "2.7.130", "x86_64-unknown-linux-gnu", filename)).toThrow();
+		}
+		for (const filename of ["another.tar", "latest.json", "beta/latest.json", "published.json", "other-manifest.json"]) {
+			expect(() => artifactKey("consumer", "2.7.130", "x86_64-unknown-linux-gnu", filename)).toThrow();
+		}
+	});
+
 	test("admits only the consumer Mac carrier manifest alongside ordinary artifacts", () => {
 		for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin"]) {
 			expect(artifactKey("consumer", "2.7.130", target, "screenpipe-attribution.json"))
