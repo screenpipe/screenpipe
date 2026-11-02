@@ -1122,6 +1122,12 @@ impl SCServer {
                 get(crate::routes::privacy_release::ready_page),
             )
             .merge(server.into_router())
+            // Read-only reuse of local chat discovery; inherits API auth and
+            // vault/pipe permissions. No cross-chat dispatch is exposed.
+            .route(
+                "/chats/search",
+                axum::routing::post(crate::agent_chats::search_handler),
+            )
             // Agent self-improvement lives behind one validated local API so
             // native Pi and ACP share profile safety, prompt rendering, skill
             // provenance, optimistic concurrency, and bundled protection.
@@ -1967,8 +1973,9 @@ mod tests {
     }
 
     #[test]
-    fn frame_routes_are_not_api_auth_exempt() {
+    fn chat_and_frame_routes_are_not_api_auth_exempt() {
         for path in [
+            "/chats/search",
             "/frames/123",
             "/frames/123/thumbnail",
             "/frames/123/text",
