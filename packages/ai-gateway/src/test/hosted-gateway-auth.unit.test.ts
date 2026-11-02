@@ -105,6 +105,46 @@ describe('hosted Gateway binding authentication', () => {
     expect(calls).toBe(1);
   });
 
+  it('delivers native streaming content and completion through the binding', async () => {
+    let calls = 0;
+    const env = fixture(async (request) => {
+      calls++;
+      expect(request.query.stream).toBe(true);
+      return new Response('data: ' + JSON.stringify({ id: 'synthetic', object: 'chat.completion.chunk', model: 'gpt-6-luna',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }] }) + '\n\ndata: ' +
+        JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 8, completion_tokens: 2 } }) +
+        '\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    const connection = await resolveHostedChatConnection(env, 'openai', context, 'gpt-6-luna');
+    const stream = await createProvider('gpt-6-luna', env, connection).createStreamingCompletion({ ...prompt, model: 'gpt-6-luna', stream: true });
+    const result = await new Response(stream).text();
+    expect(result).toContain('OK');
+    expect(result).toContain('[DONE]');
+    expect(calls).toBe(1);
+  });
+
+  it.each([false, true])('keeps Vertex provider credentials and %s streaming protocol on the same Gateway', async stream => {
+    const calls: any[] = [];
+    const env = { ...fixture(async (request, options) => {
+      calls.push({ request, options });
+      const result = { candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 2 } };
+      return stream ? new Response('data: ' + JSON.stringify(result) + '\n\n', { headers: { 'Content-Type': 'text/event-stream' } }) : Response.json(result);
+    }), VERTEX_AUTH_MODE: 'wif', WIF_SIGNING_KEY: 'synthetic', WIF_PROJECT_ID: 'synthetic-project' } as Env;
+    const connection = await resolveHostedChatConnection(env, 'google-vertex-ai', context, 'gemini-4-argon');
+    const provider = createProvider('gemini-4-argon', env, connection) as any;
+    provider.vertexProvider.getAccessToken = async () => 'synthetic-vertex-token';
+    const body = { ...prompt, model: 'gemini-4-argon', stream };
+    const result = stream ? await new Response(await provider.createStreamingCompletion(body)).text() : await (await provider.createCompletion(body)).text();
+    expect(result).toContain('OK');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].request).toMatchObject({ provider: 'google-vertex-ai', headers: { authorization: 'Bearer synthetic-vertex-token' } });
+    expect(calls[0].request.endpoint).toBe('v1/projects/synthetic-project/locations/global/publishers/google/models/gemini-4-argon:' +
+      (stream ? 'streamGenerateContent?alt=sse' : 'generateContent'));
+    expect(calls[0].options.extraHeaders['cf-aig-custom-cost']).toBe(connection.defaultHeaders['cf-aig-custom-cost']);
+    expect(JSON.stringify(calls)).not.toContain(staleToken);
+  });
+
   it('retains explicit local HTTP transport and refuses unrelated URLs', async () => {
     const env = fixture(async () => { throw new Error('Unexpected binding dispatch'); });
     expect(cloudflareGatewayBindingFetch({ ...env, CLOUDFLARE_AI_GATEWAY_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/account/fixture' },
