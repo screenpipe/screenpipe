@@ -288,7 +288,7 @@
           ; Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm,
           ; signatureValue }. Only the direct TBSCertificate child can own [3].
           StrCpy $0 $3
-          !insertmacro _SP_ReadDer $R7 $0 $4 $1 $3 $4 $5
+          !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
           ${If} $5 == 0
           ${OrIf} $1 != 48
             StrCpy $R0 "embedded-der"

@@ -31,6 +31,14 @@ WINDOWS_DUMMY_CERT = base64.b64decode(
 )
 
 
+def _sha256_path(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _der_length(length):
     if length < 128:
         return bytes([length])
@@ -395,8 +403,17 @@ def package_windows_release_carriers(artifact, output, platform, release):
             print('legacy schema 1 filename carrier omitted: source exceeds Website signed 32-bit streaming limit',
                   file=sys.stderr)
         prepared = tuple(staging.iterdir())
-        for item in prepared:
-            os.replace(item, output / item.name)
+        published = []
+        try:
+            for item in prepared:
+                destination = output / item.name
+                os.link(item, destination)
+                published.append(destination)
+                item.unlink()
+        except Exception:
+            for destination in published:
+                destination.unlink(missing_ok=True)
+            raise
     return tuple(output / item.name for item in prepared)
 
 
@@ -409,16 +426,14 @@ def package_windows_certificate(artifact, output, platform, release):
     output.mkdir(parents=True, exist_ok=True)
     target = output / 'screenpipe-attribution-windows.exe'
     manifest = output / 'screenpipe-attribution-windows.json'
-    # A killed prior preparation can leave the completed executable before its
-    # manifest commit. That state is incomplete and safe to retry.
-    if target.exists() and not manifest.exists():
-        target.unlink()
     if target.exists() or manifest.exists():
-        raise ValueError('refusing to overwrite prepared artifacts')
+        if manifest.exists():
+            raise ValueError('refusing to overwrite prepared artifacts')
     before = artifact.stat()
     digest = hashlib.sha256()
     temporary = None
     manifest_name = None
+    target_created = False
     try:
         with artifact.open('rb') as source:
             cert_offset, size_offset, certificate, relative_grant = _prepare_windows_certificate(source, before.st_size)
@@ -448,8 +463,20 @@ def package_windows_certificate(artifact, output, platform, release):
         after = artifact.stat()
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError('installer changed during streaming copy')
-        os.replace(temporary, target)
-        temporary = None
+        try:
+            os.link(temporary, target)
+            target_created = True
+            temporary.unlink()
+            temporary = None
+        except FileExistsError:
+            # A killed preparation may have published the complete executable
+            # immediately before committing its manifest. Resume only when the
+            # bytes prove that this is precisely our deterministic output.
+            if (target.stat().st_size != temporary.stat().st_size or
+                    _sha256_path(target) != digest.hexdigest()):
+                raise ValueError('refusing to overwrite prepared artifacts')
+            temporary.unlink()
+            temporary = None
     except Exception:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -473,11 +500,14 @@ def package_windows_certificate(artifact, output, platform, release):
             destination.write('\n')
             destination.flush()
             os.fsync(destination.fileno())
-        os.replace(manifest_name, manifest)
+        os.link(manifest_name, manifest)
+        Path(manifest_name).unlink()
+        manifest_name = None
     except Exception:
         if manifest_name is not None:
             Path(manifest_name).unlink(missing_ok=True)
-        target.unlink(missing_ok=True)
+        if target_created:
+            target.unlink(missing_ok=True)
         raise
     return target, manifest
 

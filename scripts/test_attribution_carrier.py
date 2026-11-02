@@ -272,14 +272,15 @@ class CarrierTest(unittest.TestCase):
                     marker=carrier.WINDOWS_MARKER.decode(), table_at_end=True))
                 self.assertEqual(data['sha256'], hashlib.sha256(expected_bytes).hexdigest())
 
-    def test_windows_certificate_patch_crosses_copy_boundary_and_recovers_orphan(self):
+    def test_windows_certificate_patch_crosses_copy_boundary_and_recovers_owned_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact = root / 'screenpipe_1.2.3_x64-setup.exe'
             artifact.write_bytes(b'MZ' + bytes(1024 * 1024 + 126))
             output = root / 'out'
             output.mkdir()
-            (output / 'screenpipe-attribution-windows.exe').write_bytes(b'interrupted')
+            target = output / 'screenpipe-attribution-windows.exe'
+            target.write_bytes(b'unrelated-builder-output')
             certificate = carrier.WINDOWS_MARKER + carrier.PLACEHOLDER.encode()
             size_offset = 1024 * 1024 - 2
             cert_offset = 1024 * 1024 + 64
@@ -287,11 +288,24 @@ class CarrierTest(unittest.TestCase):
             with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
                  mock.patch.object(carrier, '_prepare_windows_certificate',
                                    return_value=(cert_offset, size_offset, certificate, 33)):
+                with self.assertRaisesRegex(ValueError, 'refusing to overwrite'):
+                    carrier.package_windows_certificate(artifact, output, 'windows', '1.2.3')
+                self.assertEqual(target.read_bytes(), b'unrelated-builder-output')
+                target.unlink()
                 prepared, manifest = carrier.package_windows_certificate(
                     artifact, output, 'windows', '1.2.3')
             data = prepared.read_bytes()
             self.assertEqual(struct.unpack_from('<I', data, size_offset)[0], len(certificate))
             self.assertEqual(data[cert_offset:cert_offset + len(certificate)], certificate)
+            self.assertTrue(manifest.is_file())
+            expected = prepared.read_bytes()
+            manifest.unlink()
+            with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                 mock.patch.object(carrier, '_prepare_windows_certificate',
+                                   return_value=(cert_offset, size_offset, certificate, 33)):
+                prepared, manifest = carrier.package_windows_certificate(
+                    artifact, output, 'windows', '1.2.3')
+            self.assertEqual(prepared.read_bytes(), expected)
             self.assertTrue(manifest.is_file())
 
     @unittest.skipUnless(sys.platform == 'win32', 'requires Windows NSIS')
