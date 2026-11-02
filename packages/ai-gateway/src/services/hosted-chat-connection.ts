@@ -4,7 +4,7 @@
 
 import type { Env, RequestBody } from '../types';
 import { GEMINI_ARGON_MODEL } from '../providers/gemini-argon';
-import { getHostedChatGatewayConnection, type CloudflareGatewayProvider, type HostedChatGatewayContext } from './cloudflare-ai-gateway';
+import { cloudflareGatewayBindingFetch, getHostedChatGatewayConnection, type CloudflareGatewayProvider, type HostedChatGatewayContext } from './cloudflare-ai-gateway';
 import { getBaseGatewayTokenRates } from './cost-tracker';
 import { originalGatewayReason } from './experiential-routing-policy';
 import { experientialDispatchTags } from './experiential-metadata';
@@ -67,7 +67,7 @@ async function verifyNoTrainingPolicy(apiKey: string, signal: AbortSignal): Prom
   }
 }
 
-function experientialPrivateFetch(baseURL: string, apiKey: string): typeof fetch {
+function experientialPrivateFetch(baseURL: string, apiKey: string, gatewayFetch?: typeof fetch): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     if (!request.url.startsWith(baseURL.replace(/\/$/, '') + '/') || request.method !== 'POST') {
@@ -83,7 +83,7 @@ function experientialPrivateFetch(baseURL: string, apiKey: string): typeof fetch
     headers.delete('content-length');
     // Cloudflare enforces the request's spend rules on the inference path.
     // Reporting APIs and the retired premium ledger cannot veto chat.
-    const response = await fetch(new Request(request, { headers, body: JSON.stringify(body), redirect: 'manual' }));
+    const response = await (gatewayFetch ?? fetch)(new Request(request, { headers, body: JSON.stringify(body), redirect: 'manual' }));
     if (!response.ok) {
       const failure = await response.clone().json().catch(() => null) as any;
       const code = failure?.error?.code ?? failure?.code;
@@ -122,8 +122,7 @@ export async function resolveHostedChatConnection(
   if (hybrid && nativeProvider && !retainedReason) {
     const apiKey = env.EXPERIENTIAL_API_KEY?.trim();
     const slug = env.CLOUDFLARE_EXPERIENTIAL_PROVIDER?.trim();
-    if (!apiKey || !/^xpl_[0-9a-f]{40}$/.test(apiKey) || !slug || !/^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
-        !env.CLOUDFLARE_AI_GATEWAY_TOKEN?.trim()) {
+    if (!apiKey || !/^xpl_[0-9a-f]{40}$/.test(apiKey) || !slug || !/^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       throw Object.assign(new Error('Experiential hybrid gateway credentials or custom provider are not configured'), { status: 503, transient: false });
     }
     const connection = await getHostedChatGatewayConnection(env, provider, context);
@@ -138,7 +137,11 @@ export async function resolveHostedChatConnection(
     };
     delete defaultHeaders['cf-aig-byok-alias'];
     const baseURL = url.toString().replace(/\/$/, '');
-    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL, apiKey),
+    const gatewayFetch = cloudflareGatewayBindingFetch(env, slug, baseURL, provider === 'anthropic' ? '' : 'v1/');
+    if (!gatewayFetch && !env.CLOUDFLARE_AI_GATEWAY_TOKEN?.trim()) {
+      throw Object.assign(new Error('Experiential hybrid gateway authentication is not configured'), { status: 503, transient: false });
+    }
+    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL, apiKey, gatewayFetch),
       openAICompatible: true,
       model: EXPERIENTIAL_MODEL_ALIASES[model] ?? model,
       explicitPromptCaching: false,
@@ -148,30 +151,10 @@ export async function resolveHostedChatConnection(
   if (hybrid || env.HOSTED_CHAT_GATEWAY === 'cloudflare' || forceOriginalReason || env.EXPERIENTIAL_CANARY_MODE !== 'internal' || context.plan !== 'internal' ||
       (provider !== 'openai' && provider !== 'anthropic' && !(provider === 'google-vertex-ai' && model === GEMINI_ARGON_MODEL))) {
     const connection = await getHostedChatGatewayConnection(env, provider, context);
-    // getUrl() returns an address, not authentication. Dedicated canaries do
-    // not copy production gateway tokens. Use the existing authenticated
-    // gateway binding for their rollback while preserving native SDK payloads.
-    // Customer traffic and token-configured production connections are unchanged.
-    const binding = context.plan === 'internal' && env.EXPERIENTIAL_API_KEY &&
-      !env.CLOUDFLARE_AI_GATEWAY_BASE_URL?.trim() && !env.CLOUDFLARE_AI_GATEWAY_TOKEN?.trim() &&
-      (provider === 'openai' || provider === 'anthropic')
-      ? env.AI.gateway(String(env.CLOUDFLARE_AI_GATEWAY_ID)) : undefined;
-    const bindingFetch = binding && typeof binding.run === 'function'
-      ? (async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = String(input);
-          const prefix = connection.baseURL.replace(/\/$/, '') + '/';
-          if (!url.startsWith(prefix) || init?.method?.toUpperCase() !== 'POST' || typeof init.body !== 'string') {
-            throw new Error('Unexpected canary rollback SDK request');
-          }
-          const endpoint = url.slice(prefix.length);
-          if (!['chat/completions','responses','v1/messages'].includes(endpoint)) {
-            throw new Error('Unexpected canary rollback protocol');
-          }
-          const headers = Object.fromEntries([...new Headers(init.headers)].filter(([name]) => !name.startsWith('cf-aig-')));
-          return binding.run({ provider, endpoint, headers, query: JSON.parse(init.body) }, {
-            extraHeaders: Object.fromEntries(Object.entries(connection.defaultHeaders).filter(([name, value]) => name.startsWith('cf-aig-') && value !== null)),
-          });
-        }) as typeof fetch : undefined;
+    // getUrl() supplies an address only. Authenticate native SDK requests with
+    // the binding for customers too, even if a stored token has expired.
+    const bindingFetch = provider === 'openai' || provider === 'anthropic' || provider === 'google-vertex-ai'
+      ? cloudflareGatewayBindingFetch(env, provider, connection.baseURL) : undefined;
     return { ...connection, ...(bindingFetch ? { fetch: bindingFetch } : {}), gateway: 'cloudflare' as const, model,
       allowanceGateway: 'cloudflare' as const,
       gatewayReason: retainedReason ?? (hybrid ? 'retained_provider' : 'original_gateway'),

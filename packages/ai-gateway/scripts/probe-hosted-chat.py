@@ -4,6 +4,7 @@
 """Exercise real chat with synthetic content and inherited bindings, without changing production traffic."""
 import json
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -77,5 +78,10 @@ with tempfile.TemporaryFile(mode="w+") as logs:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
         print("remote_dev_stopped", process.poll() is not None, flush=True)
+        logs.seek(0)
+        for line in logs.read().splitlines():
+            if re.search(r"error|warn|failed|not found|permission", line, re.I):
+                safe = re.sub(r"https?://\S+|[A-Za-z0-9_=-]{24,}", "[redacted]", line.replace(token, "[redacted]"))
+                print("remote_dev_diagnostic", safe, flush=True)
     if failed:
         raise SystemExit(1)

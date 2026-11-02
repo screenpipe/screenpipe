@@ -156,14 +156,20 @@ describe('real hosted chat connection selector', () => {
     expect(calls[0].options.extraHeaders['cf-aig-metadata']).toBe(JSON.stringify(context));
     expect(calls[0].options.extraHeaders['cf-aig-max-attempts']).toBe('1');
   });
-  it.each(['internal','business'] as const)('preserves token-configured %s rollback transport', async plan => {
+  it.each(['internal','business'] as const)('authenticates %s rollback with the binding when a stored token is stale', async plan => {
+    const calls: any[] = [];
     const tokenEnv = { ...env, EXPERIENTIAL_CANARY_MODE:'off', CLOUDFLARE_AI_GATEWAY_BASE_URL:undefined,
       CLOUDFLARE_AI_GATEWAY_TOKEN:'synthetic-existing-gateway-token',
       AI:{gateway:()=>({getUrl:async()=> 'https://gateway.ai.cloudflare.com/v1/account/fixture/openai',
-        run:async()=>{ throw new Error('Configured native transport must remain unchanged'); }})}} as unknown as Env;
+        run:async(request: any, options: any)=>{ calls.push({request,options}); return Response.json({choices:[{message:{role:'assistant',content:'OK'},finish_reason:'stop'}],usage:{prompt_tokens:8,completion_tokens:2}}); }})}} as unknown as Env;
     const c=await resolveHostedChatConnection(tokenEnv,'openai',{...context,plan},'gpt-5.4-mini');
-    expect(c.gateway).toBe('cloudflare'); expect(c.fetch).toBeUndefined();
-    expect(c.defaultHeaders['cf-aig-authorization']).toBe('Bearer synthetic-existing-gateway-token');
+    expect(c.gateway).toBe('cloudflare'); expect(typeof c.fetch).toBe('function');
+    const response=await createProvider('gpt-5.4-mini',tokenEnv,c).createCompletion({model:'gpt-5.4-mini',messages:[{role:'user',content:'Synthetic.'}]});
+    expect((await response.json() as any).choices[0].message.content).toBe('OK');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.extraHeaders).not.toHaveProperty('cf-aig-authorization');
+    expect(calls[0].options.extraHeaders['cf-aig-metadata']).toBe(JSON.stringify({...context,plan}));
+    expect(JSON.stringify(calls)).not.toContain('synthetic-existing-gateway-token');
   });
   it('maps the documented GPT-5.6 alias to Sol only for Experiential', async () => {
     const c=await resolveHostedChatConnection(env,'openai',context,'gpt-5.6'); expect(c.model).toBe('gpt-5.6-sol');
