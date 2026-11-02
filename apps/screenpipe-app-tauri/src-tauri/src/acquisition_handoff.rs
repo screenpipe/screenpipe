@@ -813,6 +813,8 @@ struct.pack_into('<I',prefix,size_offset,len(table)); output.write_bytes(prefix+
             let status = std::process::Command::new(&output)
                 .args(["/S", &format!("/D={}", destination.display())]).status().unwrap();
             assert!(status.success());
+            assert_eq!(std::fs::read_to_string(destination.join("caller-state")).unwrap(),
+                "c0|c1|c2|c3|c4|c5|c6|c7|c8|c9|r0|r1|r2|r3|r4|r5|r6|r7|1");
             println!("producer {length}: {}", std::fs::read_to_string(
                 destination.join("acquisition-grant-diagnostic")
             ).unwrap_or_else(|_| "accepted".into()));

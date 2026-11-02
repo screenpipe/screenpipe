@@ -150,7 +150,32 @@ Section
   FileOpen `$0 "`$INSTDIR\installed" w
   FileWrite `$0 "ok"
   FileClose `$0
+  StrCpy `$0 "c0"
+  StrCpy `$1 "c1"
+  StrCpy `$2 "c2"
+  StrCpy `$3 "c3"
+  StrCpy `$4 "c4"
+  StrCpy `$5 "c5"
+  StrCpy `$6 "c6"
+  StrCpy `$7 "c7"
+  StrCpy `$8 "c8"
+  StrCpy `$9 "c9"
+  StrCpy `$R0 "r0"
+  StrCpy `$R1 "r1"
+  StrCpy `$R2 "r2"
+  StrCpy `$R3 "r3"
+  StrCpy `$R4 "r4"
+  StrCpy `$R5 "r5"
+  StrCpy `$R6 "r6"
+  StrCpy `$R7 "r7"
+  SetErrors
   !insertmacro _SP_SaveAcquisitionGrant
+  StrCpy `$R8 "0"
+  IfErrors 0 +2
+  StrCpy `$R8 "1"
+  FileOpen `$R9 "`$INSTDIR\caller-state" w
+  FileWrite `$R9 "`$0|`$1|`$2|`$3|`$4|`$5|`$6|`$7|`$8|`$9|`$R0|`$R1|`$R2|`$R3|`$R4|`$R5|`$R6|`$R7|`$R8"
+  FileClose `$R9
 SectionEnd
 "@ | Set-Content -LiteralPath $fixture -Encoding utf8
   & $makensis '/V2' $fixture | Out-Null
@@ -310,6 +335,10 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   }
   $received = [IO.File]::ReadAllText($grantPath)
   if ($received -ne $grant) { throw 'installed grant did not match the Edge HostUrl suffix' }
+  $expectedCallerState = 'c0|c1|c2|c3|c4|c5|c6|c7|c8|c9|r0|r1|r2|r3|r4|r5|r6|r7|1'
+  if ([IO.File]::ReadAllText((Join-Path $install 'caller-state')) -ne $expectedCallerState) {
+    throw 'signed certificate path changed caller registers, stack, or initial error flag'
+  }
 
   Start-Process -FilePath $edge -ArgumentList @("--user-data-dir=$profile", $secondUrl) | Out-Null
   [void](Wait-AutomationElement ([Windows.Automation.ControlType]::ListItem) "$secondFilename isn't commonly downloaded*" 60)
@@ -334,6 +363,9 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   if ($secondInstaller.ExitCode -ne 0) { throw "second fixture installer exited $($secondInstaller.ExitCode)" }
   if ([IO.File]::ReadAllText((Join-Path $install 'acquisition-grant')) -ne $grant) {
     throw 'a later valid browser grant replaced the installed first grant'
+  }
+  if ([IO.File]::ReadAllText((Join-Path $install 'caller-state')) -ne $expectedCallerState) {
+    throw 'existing-grant path changed caller registers, stack, or initial error flag'
   }
   $readback = (& pwsh.exe -NoProfile -Command "[IO.File]::ReadAllText('$($install.Replace("'", "''"))\acquisition-grant')")
   if ($LASTEXITCODE -ne 0 -or $readback -ne $grant) { throw 'fresh-process grant readback failed' }

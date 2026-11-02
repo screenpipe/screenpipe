@@ -76,7 +76,7 @@ test("Windows carrier orchestration recovers old sources and surfaces Python fai
       const installer = Buffer.from("ordinary signed installer fixture");
       writeFileSync(join(bundle, "nsis/screenpipe_1.2.3_x64-setup.exe"), installer);
       if (revision !== "missing") writeFileSync(join(fixture, "scripts/package-attribution-carrier.py"), revision === "legacy"
-        ? '# screenpipe — AI that knows everything you\'ve seen, said, or heard\n# https://screenpipe.com\nraise RuntimeError("old packager must not run")\n'
+        ? '# screenpipe — AI that knows everything you\'ve seen, said, or heard\n# https://screenpipe.com\n# legacy option: --windows-certificate\nraise RuntimeError("old packager must not run")\n'
         : '# screenpipe — AI that knows everything you\'ve seen, said, or heard\n# https://screenpipe.com\n# --windows-release-carriers\nraise SystemExit(23)\n');
       const result = Bun.spawnSync(["pwsh", "-NoProfile", "-Command", script], { cwd: fixture, stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode === 0).toBe(revision !== "failing");

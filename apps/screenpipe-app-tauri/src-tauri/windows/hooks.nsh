@@ -46,7 +46,8 @@
   IntOp ${ScratchB} ${ParentEnd} - ${Value}
   IntCmp ${ScratchB} ${ScratchA} 0 ${_SP_DER_INVALID} 0
   IntOp ${ScratchB} ${Base} + ${Value}
-  System::Call '*${ScratchB}(&i1.${ScratchC})'
+  System::Call '*${ScratchB}(&i1.r6)'
+  StrCpy ${ScratchC} $6
   ${If} ${ScratchC} == 0
     Goto ${_SP_DER_INVALID}
   ${EndIf}
@@ -193,6 +194,10 @@
   Push $R4
   Push $R5
   Push $R6
+  Push $R7
+  StrCpy $R7 0
+  IfErrors 0 +2
+    StrCpy $R7 1
   Push $R7
   ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
     !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
@@ -605,12 +610,12 @@
         ${EndIf}
       ${EndIf}
     ${EndIf}
-    ${EndIf}
     Pop $6
     Pop $5
     ${If} $5 != ""
       StrCpy $R0 $5
       StrCpy $R1 $6
+    ${EndIf}
     ${EndIf}
     StrCpy $7 0 ; accepted ADS outcome
     ${If} $8 == 1
@@ -627,14 +632,21 @@
       StrCpy $R5 "filename"
     ${EndIf}
     ${If} $4 != ""
+      StrCpy $R6 "failed"
       ClearErrors
       FileOpen $0 "$INSTDIR\acquisition-grant" w
       ${IfNot} ${Errors}
+        StrCpy $1 0
         FileWrite $0 $4
+        ${IfNot} ${Errors}
+          StrCpy $1 1
+        ${EndIf}
+        ClearErrors
         FileClose $0
-        StrCpy $R6 "saved"
-      ${Else}
-        StrCpy $R6 "failed"
+        ${IfNot} ${Errors}
+        ${AndIf} $1 == 1
+          StrCpy $R6 "saved"
+        ${EndIf}
       ${EndIf}
     ${EndIf}
     ${If} $R0 != ""
@@ -660,6 +672,12 @@
         FileClose $0
       ${EndIf}
     ${EndIf}
+  ${EndIf}
+  Pop $R7
+  ${If} $R7 == 1
+    SetErrors
+  ${Else}
+    ClearErrors
   ${EndIf}
   Pop $R7
   Pop $R6

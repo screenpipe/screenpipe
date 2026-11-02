@@ -321,11 +321,23 @@ class CarrierTest(unittest.TestCase):
                 '; https://screenpipe.com\n'
                 'Unicode true\nSilentInstall silent\nRequestExecutionLevel user\n'
                 f'!include "{hooks}"\n'
-                'Name "Screenpipe attribution fixture"\nOutFile "fixture.exe"\nInstallDir "$TEMP\\screenpipe-attribution-fixture"\n'
+                'Name "Screenpipe attribution fixture"\n!ifndef OUTFILE\n!define OUTFILE "fixture.exe"\n!endif\n'
+                'OutFile "${OUTFILE}"\nInstallDir "$TEMP\\screenpipe-attribution-fixture"\n'
                 'Section\nCreateDirectory "$INSTDIR"\nFileOpen $0 "$INSTDIR\\installed" w\nFileWrite $0 "ok"\nFileClose $0\n'
-                '!insertmacro _SP_SaveAcquisitionGrant\nSectionEnd\n',
+                'StrCpy $0 "c0"\nStrCpy $1 "c1"\nStrCpy $2 "c2"\nStrCpy $3 "c3"\nStrCpy $4 "c4"\n'
+                'StrCpy $5 "c5"\nStrCpy $6 "c6"\nStrCpy $7 "c7"\nStrCpy $8 "c8"\nStrCpy $9 "c9"\n'
+                'StrCpy $R0 "r0"\nStrCpy $R1 "r1"\nStrCpy $R2 "r2"\nStrCpy $R3 "r3"\n'
+                'StrCpy $R4 "r4"\nStrCpy $R5 "r5"\nStrCpy $R6 "r6"\nStrCpy $R7 "r7"\n'
+                '!ifdef INITIAL_ERROR\nSetErrors\n!else\nClearErrors\n!endif\n'
+                '!insertmacro _SP_SaveAcquisitionGrant\n'
+                'StrCpy $R8 "0"\nIfErrors 0 +2\nStrCpy $R8 "1"\n'
+                'FileOpen $R9 "$INSTDIR\\caller-state" w\n'
+                'FileWrite $R9 "$0|$1|$2|$3|$4|$5|$6|$7|$8|$9|$R0|$R1|$R2|$R3|$R4|$R5|$R6|$R7|$R8"\n'
+                'FileClose $R9\nSectionEnd\n',
                 encoding='utf-8')
             subprocess.run([makensis, '/V2', str(fixture)], cwd=root, check=True)
+            subprocess.run([makensis, '/V2', '/DOUTFILE=fixture-error.exe',
+                            '/DINITIAL_ERROR=1', str(fixture)], cwd=root, check=True)
 
             # Exercise the real PowerShell adapter, including a path whose
             # spaces and metacharacters must remain data, never command text.
@@ -336,9 +348,13 @@ class CarrierTest(unittest.TestCase):
             first = '12345678-1234-4234-8234-123456789012'
             second = 'abcdefab-cdef-4abc-9def-abcdefabcdef'
 
-            def install(filename, directory, zone_identifier=None):
+            expected_canaries = ('c0|c1|c2|c3|c4|c5|c6|c7|c8|c9|'
+                                 'r0|r1|r2|r3|r4|r5|r6|r7')
+
+            def install(filename, directory, zone_identifier=None,
+                        source='fixture.exe', initial_error='0'):
                 installer = root / filename
-                shutil.copyfile(root / 'fixture.exe', installer)
+                shutil.copyfile(root / source, installer)
                 if zone_identifier is not None:
                     Path(str(installer) + ':Zone.Identifier').write_text(
                         zone_identifier, encoding='ascii', newline='')
@@ -347,6 +363,8 @@ class CarrierTest(unittest.TestCase):
                         self.assertEqual(stream.read(), zone_identifier)
                 subprocess.run([str(installer), '/S', f'/D={directory}'], check=True)
                 self.assertEqual((directory / 'installed').read_text(), 'ok')
+                self.assertEqual((directory / 'caller-state').read_text(),
+                                 f'{expected_canaries}|{initial_error}')
 
             valid_dir = root / 'valid'
             install(f'screenpipe-{first}.exe', valid_dir)
@@ -372,6 +390,24 @@ class CarrierTest(unittest.TestCase):
             install('renamed-again.exe', conflict_dir,
                     ads.replace(second, '11111111-1111-4111-8111-111111111111'))
             self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
+
+            # Both incoming error states survive the absent, invalid, fallback,
+            # and existing-grant branches while ordinary installation continues.
+            for label, filename, zone, existing in [
+                    ('absent', 'renamed.exe', None, False),
+                    ('invalid', 'screenpipe-NOT-A-GRANT.exe',
+                     '[ZoneTransfer]\r\nHostUrl=http://invalid.test/x\r\n', False),
+                    ('fallback', f'screenpipe-{first}.exe', None, False),
+                    ('existing', f'screenpipe-{second}.exe', None, True)]:
+                for initial_error in ('0', '1'):
+                    directory = root / f'canary-{label}-{initial_error}'
+                    if existing:
+                        directory.mkdir()
+                        (directory / 'acquisition-grant').write_text(first)
+                    install(filename, directory, zone, 'fixture-error.exe'
+                            if initial_error == '1' else 'fixture.exe', initial_error)
+                    if existing:
+                        self.assertEqual((directory / 'acquisition-grant').read_text(), first)
 
             host_prefix = 'HostUrl=https://downloads.test/download/'
             host_suffix = f'/screenpipe-{second}.exe'
