@@ -24,7 +24,16 @@ print("accounting_schema", status, json.dumps(result.get("result", [])))
 status, settings = get(base + "/workers/scripts/ai-proxy/settings", token)
 print("accounting_binding", status, json.dumps([{k:b.get(k) for k in ("name","type","id")} for b in settings.get("result",{}).get("bindings",[]) if b.get("name") in ("DB","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID")]))
 now = int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
-status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":1793389980000,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"regex","type":"string","value":"Hosted context pricing|screenpipe.ai-gateway-route|Cloudflare hosted AI allowance reached"}],"filterCombination":"and"},"limit":2000})
+status, deployments = get(base + "/workers/scripts/ai-proxy/deployments", token)
+current = deployments.get("result", {}).get("deployments", [])
+if status != 200 or not current:
+    raise RuntimeError("Current production deployment could not be read")
+# Compare versions only during the actual rollout. A fixed historical incident
+# window can fill the event sample with old failures and hide the canary.
+started = current[0]["created_on"]
+since = int(datetime.datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()*1000)
+print("production_observation_window", json.dumps({"from": since, "to": now, "deployment_started": started}), flush=True)
+status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":since,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"regex","type":"string","value":"Hosted context pricing|screenpipe.ai-gateway-route|Cloudflare hosted AI allowance reached"}],"filterCombination":"and"},"limit":2000})
 print("accounting_telemetry_status", status, flush=True)
 print("accounting_telemetry_shape", list(telemetry.get("result",{})), flush=True)
 summaries={}
@@ -34,9 +43,9 @@ for event in telemetry.get("result",{}).get("events",{}).get("events",[]):
     message=source.get("message","")
     if message.startswith("screenpipe.ai-gateway-route "):
         route=json.loads(message.split(" ",1)[1])
-        key=(version,route.get("status_code"),route.get("served_model"))
-        summary=summaries.setdefault(key,{"version":version,"status":key[1],"model":key[2],"count":0,"latest":0})
-        summary['count']+=1
+        key=(version,route.get("status_code"),route.get("served_model"),route.get("gateway_mode"))
+        summary=summaries.setdefault(key,{"version":version,"status":key[1],"model":key[2],"gateway":key[3],"sample_count":0,"latest":0})
+        summary['sample_count']+=1
         summary['latest']=max(summary['latest'],event.get('timestamp',0))
     elif 'allowance reached' in message:
         print('cloudflare_allowance_event',json.dumps({"timestamp":event.get("timestamp"),"version":version,"model":source.get('model'),"lane":source.get('lane'),"limitScope":source.get('limitScope')}),flush=True)
