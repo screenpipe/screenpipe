@@ -107,8 +107,9 @@ $downloaded = Join-Path $download $filename
 $secondDownloaded = Join-Path $download $secondFilename
 $existingPartials = @(Get-ChildItem -LiteralPath $download -Filter 'Unconfirmed *.crdownload' `
   -ErrorAction SilentlyContinue | ForEach-Object FullName)
-$renamed = Join-Path $root 'renamed-installer.exe'
-$secondRenamed = Join-Path $root 'renamed-installer-second.exe'
+$renamed = Join-Path $root $filename
+$secondRoot = Join-Path $root 'second-rename'
+$secondRenamed = Join-Path $secondRoot $secondFilename
 $port = Get-Random -Minimum 41000 -Maximum 49000
 $fixtureHost = 'screenpipe-download.127.0.0.1.nip.io'
 $ticket = 'eyJhbGciOiJFUzI1NiIsImtpZCI6ImZpeHR1cmUifQ.eyJwdXJwb3NlIjoiZG93bmxvYWQifQ.fixture-signature'
@@ -124,7 +125,7 @@ $recorder = $null
 $urlAcl = "https://$fixtureHost`:$port/"
 
 try {
-  New-Item -ItemType Directory -Path $root,$profile,$install -Force | Out-Null
+  New-Item -ItemType Directory -Path $root,$profile,$install,$secondRoot -Force | Out-Null
   if ($EvidenceDirectory) { New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null }
   Remove-Item -LiteralPath $downloaded,$secondDownloaded -Force -ErrorAction SilentlyContinue
 
@@ -265,9 +266,10 @@ SectionEnd
   }
   $installer = Start-Process -FilePath $renamed -ArgumentList @('/S', "/D=$install") -Wait -PassThru
   if ($installer.ExitCode -ne 0) { throw "fixture installer exited $($installer.ExitCode)" }
+  $zonePresentAfterExecution = Test-Path -LiteralPath "$renamed`:Zone.Identifier"
   $grantPath = Join-Path $install 'acquisition-grant'
   if (-not (Test-Path -LiteralPath $grantPath)) {
-    throw 'normal Windows shell execution consumed Zone.Identifier before the NSIS hook; acquisition grant absent'
+    throw 'normal Windows execution consumed Zone.Identifier and canonical filename fallback did not preserve attribution'
   }
   $received = [IO.File]::ReadAllText($grantPath)
   if ($received -ne $grant) { throw 'installed grant did not match the Edge HostUrl suffix' }
@@ -317,6 +319,8 @@ SectionEnd
     zone_id = $zoneId
     host_url_preserved = $true
     same_volume_rename_preserved_stream = $true
+    zone_identifier_present_after_normal_execution = $zonePresentAfterExecution
+    canonical_filename_fallback_after_execution = (-not $zonePresentAfterExecution)
     authenticode_before = [string]$signatureBefore.Status
     authenticode_after_rename = [string]$signatureAfter.Status
     installed_grant_matches_url_suffix = $true
