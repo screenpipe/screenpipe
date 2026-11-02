@@ -165,6 +165,33 @@ class CarrierTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'version metadata'):
                         carrier.package_filename(artifact, root / f'version-{platform}', platform, '1.2.3')
 
+    def test_windows_certificate_manifest_contract_for_both_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            placeholder_bytes = b'prefix' + carrier.PLACEHOLDER.encode() + b'suffix'
+            for platform, arch in [('windows', 'x64'), ('windows-arm', 'arm64')]:
+                artifact = root / f'screenpipe_1.2.3_{arch}-setup.exe'
+                artifact.write_bytes(b'MZ' + bytes(128))
+                output = root / f'certificate-{platform}'
+                metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
+                with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                     mock.patch.object(carrier, '_prepare_windows_certificate',
+                                       return_value=(placeholder_bytes, 6)):
+                    prepared, manifest = carrier.package_windows_certificate(
+                        artifact, output, platform, '1.2.3')
+                data = json.loads(manifest.read_text())
+                self.assertEqual(prepared.name, 'screenpipe-attribution-windows.exe')
+                self.assertEqual(manifest.name, 'screenpipe-attribution-windows.json')
+                self.assertEqual(data['schema'], 4)
+                self.assertEqual(data['carrier'], 'windows-certificate')
+                self.assertEqual(data['platform'], platform)
+                self.assertEqual(data['patch'], dict(
+                    offset=6, length=36, placeholder=carrier.PLACEHOLDER))
+                self.assertEqual(data['certificate'], dict(
+                    oid=carrier.WINDOWS_OID, critical=False,
+                    marker=carrier.WINDOWS_MARKER.decode(), table_at_end=True))
+                self.assertEqual(data['sha256'], hashlib.sha256(placeholder_bytes).hexdigest())
+
     @unittest.skipUnless(sys.platform == 'win32', 'requires Windows NSIS')
     def test_actual_nsis_filename_grant_fixture(self):
         makensis = shutil.which('makensis') or shutil.which('makensis.exe')

@@ -16,7 +16,8 @@ retry, account-boundary, and retirement protocol.
 signed/notarized app -> unsigned DMG template -> Worker personalizes app xattr and DMG checksums
   -> Finder copies app -> existing native proof -> claim -> authenticated bind
 
-signed screenpipe-<UUID>.exe -> browser HostUrl ADS (filename fallback) -> installed token
+signed EXE -> untrusted certificate extension -> Worker patches fixed UUID bytes
+  -> ordinary browser EXE download -> renamed installer -> installed token
   -> Windows credential-store proof -> claim -> authenticated bind
 
 signed screenpipe-<UUID>.AppImage -> APPIMAGE filename -> credential-store proof
@@ -82,17 +83,21 @@ Windows host and checks Authenticode, version metadata, and architecture evidenc
 in the versioned release filename. The NSIS bootstrap PE machine is not treated
 as payload architecture. Filename personalization preserves the signed bytes.
 Use `--platform windows` for x86_64 and `--platform windows-arm` for ARM64.
-For the browser-origin route, the HTTPS URL and `Content-Disposition` filename
-must both end in the same `screenpipe-<canonical lowercase UUID v4>.exe` bound
-by the download ticket. The installer reads only its own `Zone.Identifier`
-stream with Win32 APIs and accepts one `[ZoneTransfer]` `HostUrl` whose HTTPS
-URL path ends in that exact filename. A valid origin candidate wins over the
-legacy current filename. The parser consumes the stream incrementally at the
-NSIS 1023-character read boundary: unrelated long fields are discarded through
-their newline, while a `HostUrl` longer than that boundary is rejected only
-after all of its chunks are consumed and measured. Missing, malformed,
-duplicated, oversized, query-like, or non-HTTPS origin metadata falls back to
-the current filename. A closed, privacy-safe diagnostic records the fixed cause,
+The release job additionally prepares `screenpipe-attribution-windows.exe` and
+schema-4 `screenpipe-attribution-windows.json` with `--windows-certificate`.
+The EXE contains a fixed placeholder in a noncritical extension of an extra
+untrusted certificate under UUID-derived OID
+`2.25.190389607246623950780965390285594181377`. The original signed image digest,
+signer, code and NSIS payload remain unchanged; whole-file SHA-256 changes when
+the website patches only the manifest's 36-byte range. The installer validates
+that embedded UUID first, so ordinary browser download, rename, SmartScreen
+handoff and normal installation require no additional user step.
+
+Legacy browser `HostUrl` and canonical filename carriers remain fallbacks for
+already prepared releases. Windows may consume `Zone.Identifier` before NSIS
+starts, so origin metadata is not considered durable. The incremental parser
+still rejects malformed, duplicated, oversized, query-like, or non-HTTPS origin
+metadata. A closed, privacy-safe diagnostic records the fixed cause,
 measured boundary or Windows I/O error when applicable, and the actual fallback
 and persistence outcome; the app validates that protocol before logging it and
 never logs the URL, grant, installer path, or marker text. `ZoneId` is not

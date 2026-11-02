@@ -85,10 +85,8 @@
   !undef _SP_UUID_LOOP
 !macroend
 
-; Save a browser-origin or filename-carried acquisition grant once. This is a
-; pure NSIS parser: attribution is optional and never launches a shell or
-; blocks an install. A valid HTTPS HostUrl ending in the personalized download
-; filename wins; malformed/missing metadata falls back to $EXEFILE.
+; Save an embedded-certificate, browser-origin, or filename-carried grant once.
+; Attribution is optional and never launches a shell or blocks installation.
 !macro _SP_SaveAcquisitionGrant
   Push $0
   Push $1
@@ -120,6 +118,98 @@
     StrCpy $7 0 ; inside [ZoneTransfer]
     StrCpy $8 0 ; HostUrl count
     StrCpy $9 "" ; valid ADS grant
+    ; The primary Windows carrier is a noncritical extension on an untrusted
+    ; extra PKCS#7 certificate. Read only the PE certificate table, require the
+    ; application-qualified marker to be unique, and validate its exact 36-byte
+    ; canonical UUID. This does not treat the carrier as signer-authenticated.
+    ClearErrors
+    FileOpen $5 "$EXEPATH" r
+    ${IfNot} ${Errors}
+      FileSeek $5 60 SET
+      FileReadByte $5 $0
+      FileReadByte $5 $1
+      FileReadByte $5 $2
+      FileReadByte $5 $3
+      IntOp $1 $1 * 256
+      IntOp $2 $2 * 65536
+      IntOp $3 $3 * 16777216
+      IntOp $0 $0 + $1
+      IntOp $0 $0 + $2
+      IntOp $0 $0 + $3 ; PE header offset
+      IntOp $0 $0 + 24 ; optional header
+      FileSeek $5 $0 SET
+      FileReadByte $5 $1
+      FileReadByte $5 $2
+      IntOp $2 $2 * 256
+      IntOp $1 $1 + $2
+      ${If} $1 == 523 ; PE32+
+        IntOp $0 $0 + 144 ; security directory entry
+      ${ElseIf} $1 == 267 ; PE32
+        IntOp $0 $0 + 128
+      ${Else}
+        StrCpy $0 0
+      ${EndIf}
+      ${If} $0 != 0
+        FileSeek $5 $0 SET
+        FileReadByte $5 $1
+        FileReadByte $5 $2
+        FileReadByte $5 $3
+        FileReadByte $5 $6
+        IntOp $2 $2 * 256
+        IntOp $3 $3 * 65536
+        IntOp $6 $6 * 16777216
+        IntOp $1 $1 + $2
+        IntOp $1 $1 + $3
+        IntOp $1 $1 + $6 ; certificate offset
+        FileReadByte $5 $2
+        FileReadByte $5 $3
+        FileReadByte $5 $6
+        FileReadByte $5 $7
+        IntOp $3 $3 * 256
+        IntOp $6 $6 * 65536
+        IntOp $7 $7 * 16777216
+        IntOp $2 $2 + $3
+        IntOp $2 $2 + $6
+        IntOp $2 $2 + $7 ; certificate size
+        FileSeek $5 0 END $3
+        IntOp $6 $1 + $2
+        IntOp $7 $1 % 8
+        ${If} $1 > 0
+        ${AndIf} $2 >= 8
+        ${AndIf} $6 == $3
+        ${AndIf} $7 == 0
+          StrCpy $8 0 ; marker count
+          StrCpy $9 "" ; candidate embedded grant
+          IntOp $2 $3 - 69
+          ${Do}
+            ${If} $1 > $2
+              ${ExitDo}
+            ${EndIf}
+            FileSeek $5 $1 SET
+            FileRead $5 $6 70
+            StrCpy $7 $6 33 0
+            ${If} $7 == "urn:screenpipe:acquisition-grant:"
+              IntOp $8 $8 + 1
+              StrCpy $7 $6 36 33
+              StrCpy $6 "screenpipe-$7.exe"
+              !insertmacro _SP_ValidateAcquisitionFilename "$6" $7 $0 $3 $6
+              ${If} $7 != ""
+                StrCpy $9 $7
+              ${EndIf}
+            ${EndIf}
+            IntOp $1 $1 + 1
+          ${Loop}
+          ${If} $8 == 1
+          ${AndIf} $9 != ""
+            StrCpy $4 $9
+            StrCpy $R5 "certificate"
+            StrCpy $9 ""
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      FileClose $5
+    ${EndIf}
+    ${If} $R5 != "certificate"
     ClearErrors
     ; NSIS validates ordinary FileOpen paths and rejects the second colon in an
     ; ADS name. Open only this stream on the running installer with CreateFileW;
@@ -264,6 +354,7 @@
         StrCpy $R1 $1
       ${EndIf}
     ${EndIf}
+    ${EndIf}
     StrCpy $7 0 ; accepted ADS outcome
     ${If} $8 == 1
     ${AndIf} $9 != ""
@@ -272,6 +363,7 @@
     ${EndIf}
     ${If} $7 == 0
     ${AndIf} $4 != ""
+    ${AndIf} $R5 != "certificate"
       StrCpy $R5 "filename"
     ${EndIf}
     ${If} $4 != ""

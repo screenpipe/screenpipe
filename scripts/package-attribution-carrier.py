@@ -3,6 +3,7 @@
 # https://screenpipe.com
 """Prepare a versioned download carrier from a release artifact. Never uploads/publishes."""
 import argparse
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -19,6 +20,115 @@ import zipfile
 
 PLACEHOLDER = '00000000-0000-4000-8000-000000000000'
 LINUX_XATTR = 'user.screenpipe.acquisition-grant'
+WINDOWS_OID = '2.25.190389607246623950780965390285594181377'
+WINDOWS_MARKER = b'urn:screenpipe:acquisition-grant:'
+# Self-signed, deliberately untrusted certificate used only as an Authenticode
+# SignedData container. Its noncritical 2.25 UUID-derived extension is not an
+# identity assertion and does not alter the original signer or signed image.
+WINDOWS_DUMMY_CERT = base64.b64decode(
+    'MIIDljCCAn6gAwIBAgIUPuLEEsjs5wDqHEi7isxK/wpeHw8wDQYJKoZIhvcNAQELBQAwKTEnMCUGA1UEAwweU2NyZWVucGlwZSBhdHRyaWJ1dGlvbiBjYXJyaWVyMB4XDTI2MTEwMjE3MTkwNVoXDTM2MTAzMDE3MTkwNVowKTEnMCUGA1UEAwweU2NyZWVucGlwZSBhdHRyaWJ1dGlvbiBjYXJyaWVyMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqut+44LX4uLU8IykjHF8C3+g0krw4dsGvsEUbs+UFjG2HjxUJ5POy0lKEAFtaqNKpx1D6LrRWKxdqLp8EqjLFNAvblrtvxmGmZvE/3qWs1KsLOkzR3GEA9R2baDSX4KF7NZ0rSeRmJl4Y1q8wH29K3uFzUA9qdx8Mkx5RK6VmxMLXHEt6nd6hYj1GY9J4Tsjt/AsAeu8RiIgDHNyUZI7OkXOUSckgqz1UBrQOjyyB2EAl3+PcvPg8PbH7gEtOd8mYaHDDGNfw+aL1bil5JRk3sbNxLn+9zas5+ToVaF7GcUCiJBiHAJHIuykdMIScQPci/UVSAokF7Prf52AOsUPdQIDAQABo4G1MIGyMB0GA1UdDgQWBBQnzI1S5fhoX0c2cFPRa6qx7SgHJDAfBgNVHSMEGDAWgBQnzI1S5fhoX0c2cFPRa6qx7SgHJDAPBgNVHRMBAf8EBTADAQH/MF8GFGmCnrval9XQxobBjqavitPfkP4BBEcMRXVybjpzY3JlZW5waXBlOmFjcXVpc2l0aW9uLWdyYW50OjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMDANBgkqhkiG9w0BAQsFAAOCAQEAnoEOjwNe93RAoUikX+67BMbaXYRmppYN+vzr42kwG86FVPP6l4Js7zvCLc+B/4cJA5h82pzbO9kIMLnPf+ScJvZDJZQXBM2cEHqXydvj0pvJXLI7QpY/dLlzx6KXSDUvnN+OHsRJS8JjLsedgvu5fqfXHlgIoP++gzpk4ahFdAl5hnYjOFupQGpVjS6J8MNFF+6HtYKv6jgI9iXwLMy2N1/Ul1MTutCn1y9MIG1K6VKNKrPdHusGS5pKDuUUhPitRxU9nzUZbsLO03UCYOT61B27lg0+ShiMr31TCkQfPzmaRWTyOsUIkt9afAGspkTO/dmA2hVGRwb7kkgR01PP9w=='
+)
+
+
+def _der_length(length):
+    if length < 128:
+        return bytes([length])
+    encoded = length.to_bytes((length.bit_length() + 7) // 8, 'big')
+    return bytes([0x80 | len(encoded)]) + encoded
+
+
+def _der_tlv(data, offset=0):
+    if offset + 2 > len(data):
+        raise ValueError('truncated DER object')
+    tag, first = data[offset], data[offset + 1]
+    if first < 128:
+        length, header = first, 2
+    else:
+        count = first & 0x7f
+        if not count or offset + 2 + count > len(data):
+            raise ValueError('invalid DER length')
+        length, header = int.from_bytes(data[offset + 2:offset + 2 + count], 'big'), 2 + count
+    end = offset + header + length
+    if end > len(data):
+        raise ValueError('truncated DER value')
+    return tag, offset + header, end
+
+
+def _der_wrap(tag, value):
+    return bytes([tag]) + _der_length(len(value)) + value
+
+
+def _insert_dummy_certificate(pkcs7):
+    # ContentInfo SEQUENCE -> [0] EXPLICIT -> SignedData SEQUENCE. Preserve all
+    # primitive bytes and only rebuild the enclosing lengths and certificate SET.
+    tag, outer_value, outer_end = _der_tlv(pkcs7)
+    if tag != 0x30 or any(pkcs7[outer_end:]):
+        raise ValueError('invalid PKCS7 ContentInfo')
+    pkcs7 = pkcs7[:outer_end]
+    outer_children = []
+    cursor = outer_value
+    while cursor < outer_end:
+        child = _der_tlv(pkcs7, cursor)
+        outer_children.append(pkcs7[cursor:child[2]])
+        cursor = child[2]
+    if len(outer_children) != 2 or outer_children[1][0] != 0xa0:
+        raise ValueError('PKCS7 is not explicit SignedData')
+    _, explicit_value, explicit_end = _der_tlv(outer_children[1])
+    signed = outer_children[1][explicit_value:explicit_end]
+    _, signed_value, signed_end = _der_tlv(signed)
+    children, cursor = [], signed_value
+    while cursor < signed_end:
+        child = _der_tlv(signed, cursor)
+        children.append(signed[cursor:child[2]])
+        cursor = child[2]
+    cert_indexes = [i for i, child in enumerate(children) if child[0] == 0xa0]
+    if len(cert_indexes) != 1:
+        raise ValueError('PKCS7 must contain one certificate set')
+    index = cert_indexes[0]
+    _, cert_value, cert_end = _der_tlv(children[index])
+    certs = children[index][cert_value:cert_end]
+    if WINDOWS_MARKER + PLACEHOLDER.encode() in certs:
+        raise ValueError('Windows carrier certificate already present')
+    children[index] = _der_wrap(0xa0, certs + WINDOWS_DUMMY_CERT)
+    rebuilt_signed = _der_wrap(0x30, b''.join(children))
+    rebuilt_explicit = _der_wrap(0xa0, rebuilt_signed)
+    return _der_wrap(0x30, outer_children[0] + rebuilt_explicit)
+
+
+def _prepare_windows_certificate(artifact):
+    data = artifact.read_bytes()
+    if len(data) < 0x40 or data[:2] != b'MZ':
+        raise ValueError('invalid PE installer')
+    pe = struct.unpack_from('<I', data, 0x3c)[0]
+    if pe + 24 > len(data) or data[pe:pe+4] != b'PE\0\0':
+        raise ValueError('invalid PE header')
+    optional_size = struct.unpack_from('<H', data, pe + 20)[0]
+    optional = pe + 24
+    magic = struct.unpack_from('<H', data, optional)[0]
+    directory = optional + (112 if magic == 0x20b else 96 if magic == 0x10b else -1)
+    if directory < optional or directory + 8 * 5 > optional + optional_size:
+        raise ValueError('PE has no valid certificate directory')
+    size_offset = directory + 8 * 4 + 4
+    cert_offset, cert_size = struct.unpack_from('<II', data, directory + 8 * 4)
+    if cert_offset % 8 or cert_size < 8 or cert_offset + cert_size != len(data):
+        raise ValueError('certificate table must be aligned and end the PE')
+    win_length, revision, cert_type = struct.unpack_from('<IHH', data, cert_offset)
+    if win_length > cert_size or revision != 0x200 or cert_type != 2:
+        raise ValueError('unsupported WIN_CERTIFICATE')
+    if any(data[cert_offset + win_length:cert_offset + cert_size]):
+        raise ValueError('nonzero certificate padding')
+    pkcs7 = data[cert_offset + 8:cert_offset + win_length]
+    rebuilt = _insert_dummy_certificate(pkcs7)
+    win_length = 8 + len(rebuilt)
+    padded_size = (win_length + 7) & ~7
+    certificate = struct.pack('<IHH', win_length, revision, cert_type) + rebuilt
+    certificate += b'\0' * (padded_size - win_length)
+    prepared = bytearray(data[:cert_offset]) + certificate
+    struct.pack_into('<I', prepared, size_offset, padded_size)
+    marker = WINDOWS_MARKER + PLACEHOLDER.encode()
+    if prepared.count(marker) != 1:
+        raise ValueError('ambiguous Windows carrier marker')
+    return bytes(prepared), prepared.index(marker) + len(WINDOWS_MARKER)
 
 
 def package(app, output, platform, release):
@@ -163,6 +273,39 @@ def package_filename(artifact, output, platform, release):
     return target, manifest
 
 
+def package_windows_certificate(artifact, output, platform, release):
+    """Add a patchable untrusted certificate extension without changing signed image bytes."""
+    if platform not in ('windows', 'windows-arm'):
+        raise ValueError('Windows certificate carrier requires a Windows platform')
+    artifact, output = Path(artifact).resolve(), Path(output).resolve()
+    validate_artifact(artifact, platform, release)
+    prepared, grant_offset = _prepare_windows_certificate(artifact)
+    if len(prepared) > 2147483647:
+        raise ValueError('carrier exceeds the website streaming limit')
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / 'screenpipe-attribution-windows.exe'
+    manifest = output / 'screenpipe-attribution-windows.json'
+    if target.exists() or manifest.exists():
+        raise ValueError('refusing to overwrite prepared artifacts')
+    with target.open('xb') as destination:
+        destination.write(prepared)
+    # Recheck the exact bytes after writing; the original signed-image digest
+    # and signer are subsequently verified by the release workflow on Windows.
+    if prepared[grant_offset:grant_offset + 36] != PLACEHOLDER.encode():
+        raise ValueError('Windows grant patch location is invalid')
+    result = dict(
+        schema=4, carrier='windows-certificate', platform=platform, release=release,
+        size=len(prepared), sha256=hashlib.sha256(prepared).hexdigest(),
+        patch=dict(offset=grant_offset, length=36, placeholder=PLACEHOLDER),
+        certificate=dict(oid=WINDOWS_OID, critical=False,
+                         marker=WINDOWS_MARKER.decode(), table_at_end=True),
+    )
+    with manifest.open('x') as destination:
+        json.dump(result, destination, indent=2)
+        destination.write('\n')
+    return target, manifest
+
+
 def package_linux_xattr(artifact, output, platform, release):
     """PAX metadata personalizes the file's xattr without changing AppImage bytes."""
     if platform != 'linux':
@@ -219,7 +362,9 @@ def windows_metadata(artifact):
     """Read signature and version using Windows' supported PowerShell APIs."""
     if sys.platform != 'win32':
         raise ValueError('Windows packaging requires a Windows host')
-    script = ("$ErrorActionPreference='Stop';$p=$env:SCREENPIPE_ATTRIBUTION_ARTIFACT;"
+    script = ("$ErrorActionPreference='Stop';"
+              "Import-Module ($env:WINDIR+'\\System32\\WindowsPowerShell\\v1.0\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1');"
+              "$p=$env:SCREENPIPE_ATTRIBUTION_ARTIFACT;"
               "$s=Get-AuthenticodeSignature -LiteralPath $p;"
               "$v=[Diagnostics.FileVersionInfo]::GetVersionInfo($p);"
               "@{Status=[string]$s.Status;ProductVersion=$v.ProductVersion;"
@@ -239,9 +384,15 @@ if __name__ == '__main__':
     parser.add_argument('--platform', choices=['macos-arm', 'macos-intel', 'linux', 'windows', 'windows-arm'], required=True)
     parser.add_argument('--release', required=True)
     parser.add_argument('--linux-xattr', action='store_true', help='prepare a Linux PAX tar xattr carrier')
+    parser.add_argument('--windows-certificate', action='store_true', help='prepare a Windows certificate carrier')
     args = parser.parse_args()
     if args.linux_xattr and (not args.artifact or args.platform != 'linux'):
         parser.error('--linux-xattr requires --artifact and --platform linux')
-    prepare = package_linux_xattr if args.linux_xattr else package if args.app else package_filename
+    if args.windows_certificate and (not args.artifact or not args.platform.startswith('windows')):
+        parser.error('--windows-certificate requires a Windows --artifact')
+    if args.windows_certificate and args.linux_xattr:
+        parser.error('carrier modes are mutually exclusive')
+    prepare = (package_windows_certificate if args.windows_certificate else
+               package_linux_xattr if args.linux_xattr else package if args.app else package_filename)
     for artifact in prepare(args.app or args.artifact, args.output, args.platform, args.release):
         print(artifact)

@@ -107,9 +107,9 @@ $downloaded = Join-Path $download $filename
 $secondDownloaded = Join-Path $download $secondFilename
 $existingPartials = @(Get-ChildItem -LiteralPath $download -Filter 'Unconfirmed *.crdownload' `
   -ErrorAction SilentlyContinue | ForEach-Object FullName)
-$renamed = Join-Path $root $filename
+$renamed = Join-Path $root 'renamed-installer.exe'
 $secondRoot = Join-Path $root 'second-rename'
-$secondRenamed = Join-Path $secondRoot $secondFilename
+$secondRenamed = Join-Path $secondRoot 'renamed-installer.exe'
 $port = Get-Random -Minimum 41000 -Maximum 49000
 $fixtureHost = 'screenpipe-download.127.0.0.1.nip.io'
 $ticket = 'eyJhbGciOiJFUzI1NiIsImtpZCI6ImZpeHR1cmUifQ.eyJwdXJwb3NlIjoiZG93bmxvYWQifQ.fixture-signature'
@@ -166,12 +166,28 @@ SectionEnd
   & $signtool sign /fd sha256 /sm /s My /sha1 $signingCert.Thumbprint (Join-Path $root 'fixture.exe') | Out-Null
   $signatureBefore = Get-AuthenticodeSignature -LiteralPath (Join-Path $root 'fixture.exe')
   if ($signatureBefore.Status -ne 'Valid') { throw "fixture signature is $($signatureBefore.Status)" }
-  $fixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'fixture.exe')).Hash.ToLowerInvariant()
+  $python = Resolve-Tool @('python.exe')
+  $packager = (Resolve-Path (Join-Path $PSScriptRoot 'package-attribution-carrier.py')).Path
+  $firstArtifact = Join-Path $root 'fixture-first.exe'
+  $secondArtifact = Join-Path $root 'fixture-second.exe'
+  $prepareScript = @'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location('carrier', sys.argv[1])
+carrier = importlib.util.module_from_spec(spec); spec.loader.exec_module(carrier)
+data, offset = carrier._prepare_windows_certificate(pathlib.Path(sys.argv[2]))
+for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
+    patched = bytearray(data); patched[offset:offset+36] = grant.encode('ascii')
+    pathlib.Path(output).write_bytes(patched)
+'@
+  & $python -c $prepareScript $packager (Join-Path $root 'fixture.exe') $grant $firstArtifact $secondGrant $secondArtifact
+  if ($LASTEXITCODE -ne 0) { throw 'failed to prepare embedded certificate fixtures' }
+  $fixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $firstArtifact).Hash.ToLowerInvariant()
+  $secondFixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $secondArtifact).Hash.ToLowerInvariant()
 
   & netsh.exe http add urlacl url=$urlAcl 'user=Everyone' | Out-Null
   & netsh.exe http add sslcert "ipport=0.0.0.0:$port" "certhash=$($serverCert.Thumbprint)" "appid=$appid" | Out-Null
-  $serverJob = Start-Job -ArgumentList $urlAcl,(Join-Path $root 'fixture.exe'),$ordinaryUrl,$url,$secondUrl,$filename,$secondFilename -ScriptBlock {
-    param($Prefix, $Artifact, $OrdinaryUrl, $FinalUrl, $SecondUrl, $Filename, $SecondFilename)
+  $serverJob = Start-Job -ArgumentList $urlAcl,$firstArtifact,$secondArtifact,$ordinaryUrl,$url,$secondUrl,$filename,$secondFilename -ScriptBlock {
+    param($Prefix, $FirstArtifact, $SecondArtifact, $OrdinaryUrl, $FinalUrl, $SecondUrl, $Filename, $SecondFilename)
     $listener = [Net.HttpListener]::new()
     $listener.Prefixes.Add($Prefix)
     $listener.Start()
@@ -189,7 +205,8 @@ SectionEnd
           $context.Response.Close()
           continue
         }
-        $bytes = [IO.File]::ReadAllBytes($Artifact)
+        $artifact = if ($expected -eq $FinalUrl) { $FirstArtifact } else { $SecondArtifact }
+        $bytes = [IO.File]::ReadAllBytes($artifact)
         $servedFilename = if ($expected -eq $FinalUrl) { $Filename } else { $SecondFilename }
         $context.Response.StatusCode = 200
         $context.Response.ContentType = 'application/vnd.microsoft.portable-executable'
@@ -269,7 +286,7 @@ SectionEnd
   $zonePresentAfterExecution = Test-Path -LiteralPath "$renamed`:Zone.Identifier"
   $grantPath = Join-Path $install 'acquisition-grant'
   if (-not (Test-Path -LiteralPath $grantPath)) {
-    throw 'normal Windows execution consumed Zone.Identifier and canonical filename fallback did not preserve attribution'
+    throw 'normal Windows execution consumed Zone.Identifier and the embedded certificate carrier did not preserve attribution'
   }
   $received = [IO.File]::ReadAllText($grantPath)
   if ($received -ne $grant) { throw 'installed grant did not match the Edge HostUrl suffix' }
@@ -284,7 +301,7 @@ SectionEnd
   if (-not (Test-Path -LiteralPath $secondDownloaded)) {
     throw 'Edge did not complete the direct final-URL fixture download after confirmation'
   }
-  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $secondDownloaded).Hash.ToLowerInvariant() -ne $fixtureHash) {
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $secondDownloaded).Hash.ToLowerInvariant() -ne $secondFixtureHash) {
     throw 'second Edge download SHA-256 differs from the signed fixture'
   }
   $secondZone = [IO.File]::ReadAllText("$secondDownloaded`:Zone.Identifier")
@@ -319,8 +336,9 @@ SectionEnd
     zone_id = $zoneId
     host_url_preserved = $true
     same_volume_rename_preserved_stream = $true
+    renamed_to_noncanonical_filename = ($renamed -notlike "*$filename")
     zone_identifier_present_after_normal_execution = $zonePresentAfterExecution
-    canonical_filename_fallback_after_execution = (-not $zonePresentAfterExecution)
+    embedded_certificate_carrier_after_execution = (-not $zonePresentAfterExecution)
     authenticode_before = [string]$signatureBefore.Status
     authenticode_after_rename = [string]$signatureAfter.Status
     installed_grant_matches_url_suffix = $true

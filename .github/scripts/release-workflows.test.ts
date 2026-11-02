@@ -47,6 +47,20 @@ test("Linux carrier preparation preserves recovery of older app revisions", () =
   }
 });
 
+test("Windows builds prepare and upload legacy plus certificate attribution carriers", () => {
+  const steps = app.jobs["publish-tauri"].steps;
+  const prepare = steps.find((step: any) => step.name === "Prepare Windows certificate download carrier");
+  expect(prepare.if).toBe("matrix.os_type == 'windows'");
+  expect(prepare.run).toContain("--platform $platform --release $version");
+  expect(prepare.run).toContain("--windows-certificate");
+  expect(prepare.run).toContain("screenpipe-attribution-windows.exe");
+  expect(prepare.run).toContain("aarch64-pc-windows-msvc");
+  const dryRun = steps.find((step: any) => step.name === "Upload Windows dry-run artifacts");
+  expect(dryRun.with.path).toContain("bundle/attribution/*");
+  const upload = steps.find((step: any) => step.name === "Upload to Cloudflare R2 (Windows)");
+  expect(upload.run).toContain('"${BUNDLE_DIR}"/attribution/*');
+});
+
 function api(dispatchFails = false) {
   const calls: { method: string; args: any }[] = [];
   const github = { rest: {
