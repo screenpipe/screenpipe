@@ -20,6 +20,9 @@
 use crate::enterprise::sync as ee_sync;
 
 #[cfg(feature = "enterprise-support")]
+pub(crate) const NATIVE_POLICY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+#[cfg(feature = "enterprise-support")]
 mod imp {
     use super::ee_sync;
     use crate::recording::local_api_context_from_app;
@@ -1334,7 +1337,7 @@ mod imp {
             .unwrap_or_else(default_heartbeat_url);
         (policy_url, heartbeat_url)
     }
-    const NATIVE_POLICY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+    use super::NATIVE_POLICY_POLL_INTERVAL;
     const NATIVE_POLICY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
     const NATIVE_POLICY_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(15);
     const RECORDING_DISABLED_BY_ADMIN_CODE: &str = "recording_disabled_by_admin";
@@ -1971,7 +1974,7 @@ mod imp {
     ) -> Result<(), String> {
         let Some(credential_value) = credential.map(str::trim).filter(|value| !value.is_empty())
         else {
-            let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+            let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
             return Err("no enterprise credential was provided".to_string());
         };
         let credential = match credential_type {
@@ -1982,7 +1985,7 @@ mod imp {
                 EnterprisePolicyCredential::AccountToken(credential_value.to_string())
             }
             _ => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
                 return Err("unsupported enterprise credential type".to_string());
             }
         };
@@ -2041,13 +2044,13 @@ mod imp {
                     }
                     Err(NativePolicyFetchError::RecordingDisabled) => {
                         let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording(app)
+                            crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled")
                                 .await;
                         Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
                     }
                     Err(NativePolicyFetchError::CredentialRejected(_)) => {
                         let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording(app)
+                            crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected")
                                 .await;
                         Err("enterprise enrollment was rejected".to_string())
                     }
@@ -2057,19 +2060,19 @@ mod imp {
                 }
             }
             Ok(policy) if !policy.recording_allowed => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled").await;
                 Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
             }
             Ok(_) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "account_required").await;
                 Err("organization requires account sign-in".to_string())
             }
             Err(NativePolicyFetchError::CredentialRejected(_)) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
                 Err("enterprise credential was rejected".to_string())
             }
             Err(NativePolicyFetchError::RecordingDisabled) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled").await;
                 Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
             }
             Err(NativePolicyFetchError::Unavailable(error)) => {
@@ -2208,7 +2211,7 @@ mod imp {
                     NativeAuthorizationResult::RecordingDisabled => {
                         info!("enterprise: recording paused for this device by workspace admin");
                         crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app,
+                            &app, "admin_disabled",
                         );
                         // Publish cancellation and retain native teardown before
                         // reporting I/O; heartbeat failure cannot delay the stop.
@@ -2243,7 +2246,7 @@ mod imp {
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
                         crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app,
+                            &app, "account_required",
                         );
                         show_enterprise_auth_recovery(&app);
                     }
@@ -2254,7 +2257,7 @@ mod imp {
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
                         crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app,
+                            &app, "authorization_rejected",
                         );
                         show_enterprise_auth_recovery(&app);
                     }

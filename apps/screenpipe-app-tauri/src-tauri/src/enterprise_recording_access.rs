@@ -40,7 +40,7 @@ pub async fn set_enterprise_recording_authorized(
 /// Policy polling must continue while a busy lifecycle drains, but a stop must
 /// still proceed as soon as that lifecycle is released, without another poll.
 #[cfg(feature = "enterprise-support")]
-pub(crate) fn revoke_enterprise_recording_from_watcher(app: &tauri::AppHandle) {
+pub(crate) fn revoke_enterprise_recording_from_watcher(app: &tauri::AppHandle, reason: &'static str) {
     let state = app.state::<crate::recording::RecordingState>();
     state.set_capture_intent(false);
     crate::enterprise_policy::update_recording_authorized(false);
@@ -53,7 +53,7 @@ pub(crate) fn revoke_enterprise_recording_from_watcher(app: &tauri::AppHandle) {
         crate::enterprise_policy::recording_authorized,
         move || async move {
             let state = app.state::<crate::recording::RecordingState>();
-            let result = crate::recording::stop_screenpipe_inner(&state).await;
+            let result = crate::recording::stop_screenpipe_inner_with_reason(&state, reason).await;
             if let Err(error) = &result {
                 report_watcher_stop_failure(&crate::db_relaunch::active_data_dir(), error);
             } else {
@@ -107,9 +107,13 @@ where
 /// Revoke the process-local grant and tear down capture unless a newer native
 /// verification grants access while this request waits for the lifecycle.
 pub(crate) async fn revoke_enterprise_recording(app: &tauri::AppHandle) -> Result<(), String> {
+    revoke_enterprise_recording_with_reason(app, "authorization_revoked").await
+}
+
+pub(crate) async fn revoke_enterprise_recording_with_reason(app: &tauri::AppHandle, reason: &'static str) -> Result<(), String> {
     #[cfg(not(feature = "enterprise-support"))]
     {
-        let _ = app;
+        let _ = (app, reason);
         crate::enterprise_policy::update_recording_authorized(false);
         Ok(())
     }
@@ -126,7 +130,7 @@ pub(crate) async fn revoke_enterprise_recording(app: &tauri::AppHandle) -> Resul
         revoke_under_lifecycle(
             &state.server_lifecycle,
             crate::enterprise_policy::recording_authorized,
-            || crate::recording::stop_screenpipe_inner(&state),
+            || crate::recording::stop_screenpipe_inner_with_reason(&state, reason),
         )
         .await
     }

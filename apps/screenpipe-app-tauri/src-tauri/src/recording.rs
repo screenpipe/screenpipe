@@ -331,7 +331,7 @@ pub struct RecordingState {
     pub server: Arc<Mutex<Option<ServerCore>>>,
     pub(crate) server_shutdown: ServerShutdown,
     /// Current capture session. None when recording is stopped/paused.
-    /// Self-contained — `CaptureSession::stop()` needs no external references.
+    /// Self-contained — `CaptureSession::stop_with_reason()` needs no external references.
     pub capture: Arc<Mutex<Option<CaptureSession>>>,
     /// True while a server start is in progress (prevents race between main.rs boot and frontend)
     pub is_starting: Arc<AtomicBool>,
@@ -556,6 +556,12 @@ pub async fn stop_capture(
     state: State<'_, RecordingState>,
     _app: tauri::AppHandle,
 ) -> Result<(), String> {
+    stop_capture_with_reason(state, _app, "manual_pause").await
+}
+
+pub(crate) async fn stop_capture_with_reason(
+    state: State<'_, RecordingState>, _app: tauri::AppHandle, reason: &'static str,
+) -> Result<(), String> {
     info!("Stopping capture session (server stays alive)");
 
     // The tray/shortcut "stop recording" lands here (server stays up, capture
@@ -568,7 +574,7 @@ pub async fn stop_capture(
 
     let mut capture_guard = state.capture.lock().await;
     if let Some(session) = capture_guard.take() {
-        session.stop_checked().await?;
+        session.stop_checked_with_reason(reason).await?;
         info!("Capture session stopped");
     } else {
         debug!("No capture session running");
@@ -912,11 +918,15 @@ pub async fn stop_screenpipe(
 }
 
 pub(crate) async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), String> {
+    stop_screenpipe_inner_with_reason(state, "restart").await
+}
+
+pub(crate) async fn stop_screenpipe_inner_with_reason(state: &RecordingState, reason: &'static str) -> Result<(), String> {
     info!("stop_screenpipe: stopping capture and server");
 
     // Stop capture first
     {
-        // Must run BEFORE `session.stop()`: the meeting watcher's shutdown hook
+        // Must run BEFORE `session.stop_with_reason()`: the meeting watcher's shutdown hook
         // closes the row (`MEETING_END_REASON_SHUTDOWN`), and the next start
         // closes anything still open via `close_orphaned_meetings`. After that
         // there is no active meeting left to find, which is exactly how a
@@ -928,7 +938,7 @@ pub(crate) async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), 
         remember_active_meeting_for_capture_restart(state).await;
         let mut capture_guard = state.capture.lock().await;
         if let Some(session) = capture_guard.take() {
-            session.stop().await;
+            session.stop_with_reason(reason).await;
             info!("Capture stopped");
         } else {
             debug!("No capture session to stop");
@@ -977,7 +987,7 @@ where
 /// Hard ceiling on capture/server teardown that runs *immediately before* the
 /// process restarts or exits.
 ///
-/// A wedged `session.stop()` must never hold the process hostage: it's about to
+/// A wedged `session.stop_with_reason()` must never hold the process hostage: it's about to
 /// be replaced or killed, so a perfectly clean teardown is best-effort only
 /// (`server.rs` retries the port bind if the next boot races teardown). The
 /// macOS `VisionManager` shutdown only self-aborts after 10s, and audio-device
@@ -1486,7 +1496,7 @@ async fn spawn_screenpipe_after_migration(
     // --- Full start: server + capture ---
     // Stop any existing capture first (self-contained, no server lock needed)
     if let Some(session) = state.capture.lock().await.take() {
-        session.stop().await;
+        session.stop_with_reason("session_replaced").await;
     }
     // Shutdown existing server if any
     if let Err(error) = shutdown_server(

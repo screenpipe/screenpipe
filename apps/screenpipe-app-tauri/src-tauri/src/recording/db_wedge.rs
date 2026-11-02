@@ -248,7 +248,7 @@ async fn recover_from_db_wedge(
             warn!("active meeting lookup timed out during database recovery; live transcription could not be preserved");
         }
         if let Some(session) = capture {
-            session.stop().await;
+            session.stop_with_reason("database_recovery").await;
         }
         let shutdown_outcome = bounded_teardown(
             DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT,

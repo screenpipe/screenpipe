@@ -419,6 +419,18 @@ mod tests {
         assert!(!bundle.contains("hunter2"));
     }
 
+    #[tokio::test]
+    async fn recording_stop_failure_keeps_trigger_cause_and_outcome_in_support_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        crate::capture_session::record_stop_failure(root.path(), "update", &["vision_stop_timeout".into()]);
+        let report = collect_redacted_from_dirs(&[root.path().to_owned()]).await.unwrap();
+        assert!(report.contains("capture_stop_failed"));
+        assert!(report.contains("trigger=update"));
+        assert!(report.contains("vision_stop_timeout"));
+        assert!(report.contains("capture_shutdown_incomplete"));
+        assert!(!report.contains(root.path().to_str().unwrap()));
+    }
+
     #[cfg(feature = "enterprise-build")]
     #[tokio::test]
     async fn recording_event_missing_ack_survives_support_collection() {
