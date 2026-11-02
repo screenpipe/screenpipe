@@ -162,8 +162,16 @@ def _insert_dummy_certificate(pkcs7):
     certs = children[index][cert_value:cert_end]
     if _matching_extensions(certs):
         raise ValueError('Windows carrier certificate already present')
-    children[index] = _der_wrap(0xa0, certs + WINDOWS_DUMMY_CERT)
-    matches = _matching_extensions(certs + WINDOWS_DUMMY_CERT)
+    encoded_certificates = []
+    cursor = 0
+    while cursor < len(certs):
+        certificate = _der_tlv(certs, cursor)
+        encoded_certificates.append(certs[cursor:certificate[2]])
+        cursor = certificate[2]
+    encoded_certificates.append(WINDOWS_DUMMY_CERT)
+    canonical_certificates = b''.join(sorted(encoded_certificates))
+    children[index] = _der_wrap(0xa0, canonical_certificates)
+    matches = _matching_extensions(canonical_certificates)
     expected = _der_wrap(0x0c, WINDOWS_MARKER + PLACEHOLDER.encode())
     if matches != [(False, expected)]:
         raise ValueError('invalid Windows carrier extension contract')
@@ -224,11 +232,14 @@ def _prepare_windows_certificate(source, source_size):
         if count == 0 or count > 4 or der_prefix[2] == 0:
             raise ValueError('invalid PKCS7 length')
         encoded_size = first_length + int.from_bytes(der_prefix[2:first_length], 'big')
-    if encoded_size != pkcs7_size:
+    if encoded_size > pkcs7_size:
         raise ValueError('WIN_CERTIFICATE length does not match PKCS7')
-    pkcs7 = read_exact_at(cert_offset + 8, pkcs7_size, 'PKCS7 SignedData')
-    source.seek(cert_offset + win_length)
-    padding = cert_size - win_length
+    pkcs7 = read_exact_at(cert_offset + 8, encoded_size, 'PKCS7 SignedData')
+    # signtool may include the record's alignment zeros in dwLength. Treat
+    # both that representation and padding after dwLength identically: every
+    # byte between the DER object and the table end must be zero.
+    source.seek(cert_offset + 8 + encoded_size)
+    padding = cert_size - 8 - encoded_size
     while padding:
         block = source.read(min(1024 * 1024, padding))
         if not block or any(block):

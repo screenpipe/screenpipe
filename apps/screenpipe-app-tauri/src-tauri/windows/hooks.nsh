@@ -27,7 +27,11 @@
   IntOp ${ScratchA} ${ParentEnd} - ${Cursor}
   IntCmp ${ScratchA} 2 0 ${_SP_DER_INVALID} 0
   IntOp ${ScratchB} ${Base} + ${Cursor}
-  System::Call '*${ScratchB}(&i1.${Tag},&i1.${ScratchC})'
+  System::Call '*${ScratchB}(&i1.r2)'
+  StrCpy ${Tag} $2
+  IntOp ${ScratchB} ${ScratchB} + 1
+  System::Call '*${ScratchB}(&i1.r2)'
+  StrCpy ${ScratchC} $2
   IntOp ${Value} ${Cursor} + 2
   IntOp ${ScratchA} ${ScratchC} & 0x80
   ${If} ${ScratchA} == 0
@@ -54,8 +58,8 @@
     IntOp ${ScratchD} ${ScratchD} << 8
     IntOp ${ScratchB} ${Base} + ${Value}
     IntOp ${ScratchB} ${ScratchB} + ${ScratchC}
-    System::Call '*${ScratchB}(&i1.${ScratchB})'
-    IntOp ${ScratchD} ${ScratchD} | ${ScratchB}
+    System::Call '*${ScratchB}(&i1.r6)'
+    IntOp ${ScratchD} ${ScratchD} | $6
     IntOp ${ScratchC} ${ScratchC} + 1
     IntCmp ${ScratchC} ${ScratchA} ${_SP_DER_LONG_NEXT} ${_SP_DER_LONG_LOOP} ${_SP_DER_INVALID}
   ${_SP_DER_LONG_NEXT}:
@@ -306,7 +310,7 @@
               ${ExitDo}
             ${EndIf}
             StrCpy $0 $4
-            ${If} $1 != 0xa3
+            ${If} $1 != 163
               ${Continue}
             ${EndIf}
             ; [3] EXPLICIT Extensions must contain exactly one SEQUENCE.

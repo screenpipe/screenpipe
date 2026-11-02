@@ -736,19 +736,98 @@ SectionEnd
         assert!(std::fs::read_to_string(installed.join("acquisition-grant-diagnostic"))
             .unwrap().starts_with("v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;"));
 
+        // Build signed producer fixtures from this checkout and replace only
+        // the appended untrusted carrier certificate for each boundary case.
+        let evidence = dir.path().join("final-producer");
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors().nth(3).unwrap();
+        let prepared = std::process::Command::new("pwsh.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(repository.join("scripts/test_windows_browser_ads.ps1"))
+            .arg("-EvidenceDirectory").arg(&evidence).arg("-PrepareOnly")
+            .status().expect("PowerShell is required by the Windows producer fixture");
+        assert!(prepared.success());
+        let signed = evidence.join("signed-carrier-template.exe");
+        let oid = "2.25.190389607246623950780965390285594181377";
+        let marker = "urn:screenpipe:acquisition-grant:";
+        let certificates = dir.path().join("certificates");
+        std::fs::create_dir(&certificates).unwrap();
+        for (length, value) in [(35, &grant[..35]), (36, grant),
+            (37, "12345678-1234-4234-8234-123456789012x")] {
+            let certificate = certificates.join(format!("grant-{length}.der"));
+            let key = certificates.join(format!("grant-{length}.key"));
+            let generated = std::process::Command::new("openssl.exe")
+                .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout"])
+                .arg(&key).arg("-out").arg(&certificate)
+                .args(["-outform", "DER", "-days", "1", "-subj",
+                       "/CN=Screenpipe attribution fixture", "-addext"])
+                .arg(format!("{oid}=ASN1:UTF8String:{marker}{value}"))
+                .status().expect("OpenSSL is required by the Windows producer fixture");
+            assert!(generated.success());
+            std::fs::write(&key, []).unwrap();
+        }
+        let finalizer = dir.path().join("finalize_fixture.py");
+        std::fs::write(&finalizer, r#"# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+import importlib.util, pathlib, struct, sys
+spec = importlib.util.spec_from_file_location('carrier', sys.argv[1])
+c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+source, cert, value, output = map(pathlib.Path, sys.argv[2:]); extra = cert.read_bytes()
+def insert(pkcs7):
+    _, ov, oe = c._der_tlv(pkcs7); outer=[]; cursor=ov
+    while cursor < oe:
+        child=c._der_tlv(pkcs7,cursor); outer.append(pkcs7[cursor:child[2]]); cursor=child[2]
+    _, ev, ee=c._der_tlv(outer[1]); signed=outer[1][ev:ee]
+    _, sv, se=c._der_tlv(signed); children=[]; cursor=sv
+    while cursor < se:
+        child=c._der_tlv(signed,cursor); children.append(signed[cursor:child[2]]); cursor=child[2]
+    indexes=[i for i,x in enumerate(children) if x[0] == 0xa0]
+    if len(indexes) != 1: raise ValueError('PKCS7 certificate set')
+    i=indexes[0]; _, cv, ce=c._der_tlv(children[i]); certs=children[i][cv:ce]
+    kept=[]; cursor=0
+    while cursor < len(certs):
+        item=c._der_tlv(certs,cursor); encoded=certs[cursor:item[2]]
+        if not c._matching_extensions(encoded): kept.append(encoded)
+        cursor=item[2]
+    children[i]=c._der_wrap(0xa0,b''.join(sorted(kept+[extra])))
+    return c._der_wrap(0x30,outer[0]+c._der_wrap(0xa0,c._der_wrap(0x30,b''.join(children))))
+c.WINDOWS_DUMMY_CERT=extra; c.PLACEHOLDER=value.read_text(); c._insert_dummy_certificate=insert
+with source.open('rb') as stream:
+    offset,size_offset,table,_=c._prepare_windows_certificate(stream,source.stat().st_size)
+    stream.seek(0); prefix=bytearray(stream.read(offset))
+struct.pack_into('<I',prefix,size_offset,len(table)); output.write_bytes(prefix+table)
+"#).unwrap();
+        let packager = repository.join("scripts/package-attribution-carrier.py");
+        let mut produced = Vec::new();
+        for length in [35, 36, 37] {
+            let value = dir.path().join(format!("value-{length}"));
+            std::fs::write(&value, match length { 35 => &grant[..35], 36 => grant,
+                _ => "12345678-1234-4234-8234-123456789012x" }).unwrap();
+            let output = dir.path().join(format!("grant-{length}.exe"));
+            let finalized = std::process::Command::new("python.exe").arg(&finalizer)
+                .arg(&packager).arg(&signed)
+                .arg(certificates.join(format!("grant-{length}.der")))
+                .arg(&value).arg(&output).status().unwrap();
+            assert!(finalized.success());
+            let destination = dir.path().join(format!("installed-{length}"));
+            let status = std::process::Command::new(&output)
+                .args(["/S", &format!("/D={}", destination.display())]).status().unwrap();
+            assert!(status.success());
+            println!("producer {length}: {}", std::fs::read_to_string(
+                destination.join("acquisition-grant-diagnostic")
+            ).unwrap_or_else(|_| "accepted".into()));
+            produced.push((length, destination));
+        }
+
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(std::fs::File::create(&current).unwrap())
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             assert_eq!(carrier_from(&installed), Some(grant.into()));
-            for actual in [70, 72] {
-                std::fs::write(
-                    installed.join("acquisition-grant-diagnostic"),
-                    format!("v1;embedded-length;actual-bytes={actual};expected-bytes=71;fallback=none;persistence=not-attempted"),
-                ).unwrap();
-                assert_eq!(carrier_from(&installed), Some(grant.into()));
-            }
+            assert!(carrier_from(&produced[0].1).is_none());
+            assert_eq!(carrier_from(&produced[1].1), Some(grant.into()));
+            assert!(carrier_from(&produced[2].1).is_none());
         });
         assert!(!installed.join("acquisition-grant-diagnostic").exists());
         std::fs::rename(
