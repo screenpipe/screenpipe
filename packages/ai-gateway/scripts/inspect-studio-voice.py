@@ -66,3 +66,4 @@ if gateway:
 # Hosted accounting diagnosis uses the same existing authenticated inspection job.
 import runpy
 runpy.run_path(str(__import__("pathlib").Path(__file__).with_name("inspect-hosted-accounting.py")))
+runpy.run_path(str(__import__("pathlib").Path(__file__).with_name("inspect-gateway-auth-incident.py")))
