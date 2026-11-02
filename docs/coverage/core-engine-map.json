@@ -587,6 +587,7 @@
         "src/recording_coverage.rs",
         "src/resource_monitor.rs",
         "src/telemetry_context.rs",
+        "src/telemetry_reporting.rs",
         "src/telemetry_tasks.rs"
       ],
       "platforms": [

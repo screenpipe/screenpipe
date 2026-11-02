@@ -1067,7 +1067,10 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     let audio_devices_clone = audio_devices.clone();
 
     let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
-    resource_reporter.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
+    resource_reporter.start_monitoring(
+        Duration::from_secs(30),
+        Some(screenpipe_engine::telemetry_reporting::CLI_DIAGNOSTIC_REPORT_INTERVAL),
+    );
 
     // Initialize analytics for API tracking
     analytics::init(config.analytics_enabled);
@@ -1503,6 +1506,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
         config.use_pii_removal,
         config.video_quality.clone(),
     );
+    server.diagnostic_shutdown = resource_reporter.shutdown_handle();
     server.vision_metrics = vision_metrics;
     server.audio_metrics = audio_manager.metrics.clone();
     server.hot_frame_cache = Some(hot_frame_cache);
@@ -2483,6 +2487,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
         handle.stop();
     }
     let teardown = async {
+        resource_reporter.shutdown().await;
         if let Err(error) = audio_manager.shutdown().await {
             warn!("audio shutdown during database recovery: {error}");
         }
