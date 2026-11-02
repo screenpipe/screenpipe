@@ -254,7 +254,8 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 10] = [
+    "answer-recovery.ts",
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
@@ -1827,6 +1828,13 @@ fn ensure_context_pruning_extension(project_dir: &str) -> Result<(), String> {
 /// makes that class of drift impossible; only the deliberately different
 /// web-search variant stays per-branch.
 fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
+    let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        ext_dir.join("answer-recovery.ts"),
+        include_str!("../assets/extensions/answer-recovery.ts"),
+    )
+    .map_err(|e| format!("Failed to install answer-recovery extension: {}", e))?;
     ensure_self_improvement_extension(project_dir)?;
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
@@ -1850,6 +1858,7 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
 /// The files [`ensure_shared_pi_extensions`] writes, for the parity assertion.
 #[cfg(test)]
 const SHARED_PI_EXTENSION_FILES: &[&str] = &[
+    "answer-recovery.ts",
     "self-improvement.ts",
     "chat-control.ts",
     "context-usage.ts",

@@ -382,6 +382,23 @@ describe("pi-event-router: browser state preservation", () => {
 describe("pi-event-router: background content accumulation (the parallel-chat repro)", () => {
   beforeEach(reset);
 
+  it("persists a retry action when background tool work ends without an answer", async () => {
+    seed("A");
+    await handlePiEvent(piEvt("A", { type: "message_start", message: { role: "user", content: "Check the classification" } }));
+    await handlePiEvent(piEvt("A", { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Checking the evidence." } }));
+    await handlePiEvent(piEvt("A", { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: {} }));
+    await handlePiEvent(piEvt("A", { type: "tool_execution_end", toolCallId: "read-1", result: { content: [{ text: "Routine report" }] } }));
+    await handlePiEvent(piEvt("A", { type: "agent_end", messages: [
+      { role: "assistant", content: [] },
+    ] }));
+    await flushPendingSaves();
+    const saved = (saveConversationFile as any).mock.calls.at(-1)[0];
+    const assistant = saved.messages.find((message: any) => message.role === "assistant");
+    expect(assistant.content).toContain("without a final answer");
+    expect(assistant.retryPrompt).toBe("Check the classification");
+    expect(assistant.contentBlocks.some((block: any) => block.type === "tool")).toBe(true);
+  });
+
   it("grows messages for a session that is NOT the current one", async () => {
     // This is the load-bearing behavior for parallel chat. User starts
     // chat A, switches to B. Pi for A keeps streaming. The router must

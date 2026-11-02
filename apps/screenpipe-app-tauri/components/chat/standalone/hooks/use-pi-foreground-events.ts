@@ -51,6 +51,8 @@ import { extractFinalSteerMessage } from "@/components/chat/standalone/hooks/pi-
 import {
   connectionActionFromToolResult,
   firstAgentEndAssistantError,
+  incompleteAgentEndError,
+  reportIncompleteAgentEnd,
   isRecord,
   isTerminalQuotaError,
   piEventDataFromUnknown,
@@ -1191,6 +1193,14 @@ export function usePiForegroundEvents({
               }
             }
 
+            const incompleteError = !agentEndError && incompleteAgentEndError(
+              data, piContentBlocksRef.current, content, piActiveStopRequestedRef.current,
+            );
+            if (incompleteError) {
+              agentEndError = piLastErrorRef.current || incompleteError;
+              reportIncompleteAgentEnd(data, piSessionIdRef.current, agentEndError, getActivePreset());
+            }
+
             const agentEndProviderError = agentEndError
               ? buildProviderErrorPresentation(agentEndError, getActivePreset())
               : null;
@@ -1266,12 +1276,10 @@ export function usePiForegroundEvents({
               if ((wasStoppedByUser || authPending) && !content && contentBlocks.length === 0) {
                 return prev.filter((m) => m.id !== msgId);
               }
-              // If no text content but we have tool/thinking blocks, don't show "no response"
-              const hasNonTextBlocks = contentBlocks.some((b) => b.type === "tool" || b.type === "thinking");
+              // Tool/thinking activity cannot replace an answer after the
+              // agent has finished its in-loop recovery.
               let emptyResponseRetryPrompt: string | undefined;
-              if (!content && hasNonTextBlocks) {
-                content = ""; // empty — tool/thinking blocks will render
-              } else if (!content) {
+              if (!content && !wasStoppedByUser && !authPending && !contentBlocks.some((b) => b.type === "connection_action" || b.type === "agent_action")) {
                 // If any error text was observed during this stream (e.g. a 429
                 // credits_exhausted or daily_cost_limit_exceeded emitted as a
                 // message_update error or auto-retry failure) classify it
@@ -1304,7 +1312,7 @@ export function usePiForegroundEvents({
                     ...m,
                     content,
                     contentBlocks,
-                    retryPrompt: agentEndProviderError?.retryable
+                    retryPrompt: agentEndError && agentEndProviderError?.retryable !== false
                       ? lastUserMessageRef.current || undefined
                       : undefined,
                     ...(wasStoppedByUser

@@ -5,6 +5,7 @@
 import { classifyQuotaError } from "@/lib/chat/quota-errors";
 import type { AgentInnerEvent } from "@/lib/events/types";
 import type { ContentBlock } from "@/lib/chat/types";
+import { finalizeAssistantTextPhases } from "@/lib/chat/assistant-text-phases";
 
 type TextContentPart = {
   type?: unknown;
@@ -123,6 +124,58 @@ export function firstAgentEndAssistantError(messages: unknown): string | null {
     }
   }
   return null;
+}
+
+/** Tool results and progress prose do not complete a user's request. Keep
+ * explicit stops, provider retries and connection/permission handoffs intact. */
+export function incompleteAgentEndError(
+  event: AgentInnerEvent,
+  blocks: ContentBlock[],
+  streamedText: string,
+  stoppedByUser = false,
+): string | null {
+  if (stoppedByUser || event.willRetry === true || event.authPending === true) return null;
+  if (blocks.some((block) => block.type === "connection_action" || block.type === "agent_action")) return null;
+
+  const lastAssistant = Array.isArray(event.messages)
+    ? ([...event.messages] as AssistantLikeMessage[]).reverse().find((message) => message?.role === "assistant")
+    : undefined;
+  if (lastAssistant?.stopReason === "error") return null;
+  if (lastAssistant?.stopReason === "aborted") {
+    return stringValue(lastAssistant.errorMessage) || "The AI provider stopped before finishing. Try again to continue this chat.";
+  }
+  if (lastAssistant?.stopReason === "length") {
+    return "The model reached its response token limit before finishing. Try again to continue this chat.";
+  }
+  if (lastAssistant && lastAssistant.stopReason !== "toolUse" && textFromMessageContent(lastAssistant.content).trim()) return null;
+  if (!lastAssistant) {
+    const hasFinalText = finalizeAssistantTextPhases(blocks).some(
+      (block) => block.type === "text" && block.phase === "final_answer" && block.text.trim(),
+    );
+    if (hasFinalText || (blocks.length === 0 && streamedText.trim())) return null;
+  }
+  return "The AI stopped without a final answer. Your conversation and tool results are saved. Try again to continue this chat.";
+}
+
+/** Metadata only: prompts, tool arguments/results and reasoning stay private. */
+export function reportIncompleteAgentEnd(
+  event: AgentInnerEvent,
+  sessionId: string | null,
+  error: string,
+  preset?: { provider?: string; model?: string } | null,
+): void {
+  const lastAssistant = Array.isArray(event.messages)
+    ? ([...event.messages] as AssistantLikeMessage[]).reverse().find((message) => message?.role === "assistant")
+    : undefined;
+  console.error("[Pi] Incomplete response", {
+    sessionId,
+    provider: preset?.provider,
+    model: preset?.model,
+    stopReason: lastAssistant?.stopReason ?? "missing_final_answer",
+    errorMessage: error,
+    outcome: "incomplete",
+    recovery: "retry",
+  });
 }
 
 /**
