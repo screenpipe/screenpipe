@@ -374,15 +374,20 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 
 ### search-content
 Search through recorded content with content type filtering:
-- `all` — OCR + Audio + Accessibility (default)
-- `ocr` — Screen text from screenshots
+- `all` — Screen text + Audio + Accessibility + Input (default)
+- `screen` — Screen text, primarily from accessibility with OCR fallback (preferred)
+- `ocr` — Legacy alias for `screen`, including accessibility-derived text
 - `audio` — Audio transcriptions
 - `input` — User actions (clicks, keystrokes, clipboard, app switches)
-- `accessibility` — Accessibility tree text
+- `accessibility` — Accessibility-only text, excluding OCR fallback
 - `parsed` — Compact app-specific messages, emails, tasks, documents, and code review (experimental; may be empty when parsing is disabled or unsupported)
 - Time range, app/window, and speaker filtering
 - Parsed data can also be filtered by `frame_id` or resolved `actor_id`
 - Pagination support
+
+Screen-text results show their capture source: `[Screen·a11y]` for accessibility,
+`[Screen·ocr]` for OCR fallback, or `[Screen]` when unknown. The MCP server maps
+`screen` to the API's legacy `ocr` value, so it also works with existing backends.
 
 ### export-video
 Export screen recordings as video files:

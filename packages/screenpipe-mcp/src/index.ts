@@ -345,9 +345,9 @@ const TOOLS: Tool[] = [
         },
         content_type: {
           type: "string",
-          enum: ["all", "ocr", "audio", "input", "accessibility", "memory", "parsed"],
+          enum: ["all", "screen", "ocr", "audio", "input", "accessibility", "memory", "parsed"],
           description:
-            "Filter by content type. Use 'parsed' for compact app-specific records such as messages, emails, tasks, documents, and code review; it is experimental and may be empty when parsing is disabled or unsupported. NOTE on screen text: 'ocr' is a legacy label — it returns ALL screen-text rows, which are accessibility-derived for most apps (the result tag [Screen·a11y] vs [Screen·ocr] tells you which). Use 'ocr' for screen text (covers both paths), 'audio' for transcriptions, 'input' for keyboard/mouse events, 'memory' for stored facts. Default: 'all'.",
+            "Filter by content type. Use 'screen' for screen text: accessibility is the primary capture path, with OCR fallback. Results identify the actual source as [Screen·a11y] or [Screen·ocr]; [Screen] means the source is unknown. 'ocr' is a legacy alias for 'screen', not an OCR-only filter. Use 'accessibility' only when you explicitly need accessibility-only results; it excludes OCR fallback. Use 'parsed' for compact app-specific messages, emails, tasks, documents, and code review (experimental; may be empty when parsing is disabled or unsupported), 'audio' for transcriptions, 'input' for keyboard/mouse events, 'memory' for stored facts. Default: 'all'.",
           default: "all",
         },
         limit: { type: "integer", description: "Max results (default 10, max 20). Start with 5 for exploration.", default: 10 },
@@ -370,7 +370,7 @@ const TOOLS: Tool[] = [
         max_length: { type: "integer", description: "Max content length in characters" },
         include_frames: {
           type: "boolean",
-          description: "Include base64 screenshots (OCR only). Warning: large response.",
+          description: "Include base64 screenshots for screen-text results, including accessibility-derived captures. Warning: large response.",
           default: false,
         },
         speaker_ids: { type: "string", description: "Comma-separated speaker IDs to filter audio" },
@@ -378,7 +378,7 @@ const TOOLS: Tool[] = [
         tags: {
           type: "string",
           description:
-            "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set; 'parsed' does not support tags.",
+            "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'screen'/'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set; 'parsed' does not support tags.",
         },
         include_related: {
           type: "boolean",
@@ -1170,7 +1170,7 @@ current machine. Synced results must be attributed with their device and timesta
 - **Use max_content_length=500** to keep responses compact
 - **Don't use q for audio** — transcriptions are noisy, q filters too aggressively. Search audio by time range and speaker instead
 - **app_name is case-sensitive** — use exact names: "Google Chrome" not "chrome"
-- **Screen text is mostly accessibility-derived, not OCR.** Screenpipe walks the OS accessibility tree first; OCR is only a fallback (terminals, canvas-rendered apps, games). \`content_type=ocr\` returns both paths — the result label \`[Screen·a11y]\` vs \`[Screen·ocr]\` tells you which produced the row. Don't pre-filter to a11y/ocr unless you specifically need one or the other
+- **Use content_type=screen for screen text.** Screenpipe walks the OS accessibility tree first, with OCR fallback. The result label \`[Screen·a11y]\` or \`[Screen·ocr]\` identifies the actual capture source; \`[Screen]\` means unknown. \`content_type=ocr\` is a legacy alias for the same search, not an OCR-only filter. Use \`accessibility\` only for an explicit accessibility-only request, since it excludes OCR fallback.
 
 ## Common Patterns
 
@@ -1613,6 +1613,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
       case "search-content": {
         const includeFrames = args.include_frames === true;
         const normalized = normalizeTimeFields(args);
+        // Keep the clearer MCP name compatible with APIs that still call all
+        // screen-text rows "ocr", including accessibility-derived captures.
+        if (normalized.content_type === "screen") normalized.content_type = "ocr";
         // Default text cap if the caller didn't pass max_content_length.
         // Keeps single calls under Claude Code's per-tool output limit.
         const userCap = normalized.max_content_length;
