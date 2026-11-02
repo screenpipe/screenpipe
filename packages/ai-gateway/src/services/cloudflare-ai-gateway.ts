@@ -164,6 +164,39 @@ function localGatewayProviderUrl(baseUrl: string, gatewayId: string, provider: C
 	return `${url.origin}${gatewayRoot}/${provider}`;
 }
 
+/** The same-account binding authenticates requests without a stored Gateway
+ * token. Keep native SDK protocols, BYOK and spend-control headers intact. */
+export function cloudflareGatewayBindingFetch(
+	env: Env, provider: string, baseURL: string, endpointPrefix = '',
+): typeof fetch | undefined {
+	// Explicit URLs are used by local/staging HTTP harnesses and retain token auth.
+	if (env.CLOUDFLARE_AI_GATEWAY_BASE_URL?.trim() || !env.AI?.gateway) return undefined;
+	const binding = env.AI.gateway(String(env.CLOUDFLARE_AI_GATEWAY_ID));
+	if (typeof binding.run !== 'function') return undefined;
+	const prefix = baseURL.replace(/\/$/, '') + '/';
+	return async (input, init) => {
+		const request = new Request(input, init);
+		if (!request.url.startsWith(prefix) || request.method !== 'POST') {
+			throw new Error('Unexpected hosted Gateway SDK request');
+		}
+		const endpoint = request.url.slice(prefix.length);
+		const vertexEndpoint = provider === 'google-vertex-ai' && /^v1\/projects\/[^/?]+\/locations\/[^/?]+\/publishers\/google\/models\/[^/?]+:(?:generateContent|streamGenerateContent)(?:\?alt=sse)?$/.test(endpoint);
+		if (!vertexEndpoint && !['chat/completions', 'responses', 'v1/messages'].includes(endpoint)) {
+			throw new Error('Unexpected hosted Gateway protocol');
+		}
+		const headers: Record<string, string> = {};
+		const extraHeaders: Record<string, string> = {};
+		for (const [name, value] of request.headers) {
+			// A stale token must not override the binding's account authentication.
+			if (name === 'cf-aig-authorization' || name === 'content-length') continue;
+			(name.startsWith('cf-aig-') ? extraHeaders : headers)[name] = value;
+		}
+		const query = await request.json();
+		request.signal.throwIfAborted();
+		return binding.run({ provider, endpoint: endpointPrefix + endpoint, headers, query }, { extraHeaders });
+	};
+}
+
 /**
  * Resolve a provider-native Gateway URL from the Workers AI binding. getUrl()
  * supplies an address; native HTTP SDK calls still need Gateway authentication. Provider auth headers are explicitly removed so Cloudflare injects

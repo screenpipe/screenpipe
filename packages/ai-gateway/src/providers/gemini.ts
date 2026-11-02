@@ -135,7 +135,7 @@ export class GeminiProvider implements AIProvider {
 		console.log('[Gemini] Request', { model: body.model, gateway: !!this.connection?.baseURL });
 		const headers = await this.getAuthHeaders(body.serviceTier);
 
-		const response = await fetch(url, {
+		const response = await (this.connection?.fetch ?? fetch)(url, {
 			method: 'POST',
 			headers,
 			body: JSON.stringify(requestBody),
@@ -171,7 +171,7 @@ export class GeminiProvider implements AIProvider {
 		}));
 		const streamHeaders = await this.getAuthHeaders(body.serviceTier);
 
-		const response = await fetch(url, {
+		const response = await (this.connection?.fetch ?? fetch)(url, {
 			method: 'POST',
 			headers: streamHeaders,
 			body: JSON.stringify(requestBody),
