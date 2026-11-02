@@ -3936,7 +3936,8 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
- * Limit screenshot pixels to the focused window. Off preserves desktop context.
+ * Black out screenshot pixels outside the focused window area, preserving
+ * monitor dimensions and text coordinates. Off preserves desktop context.
  */
 focusedWindowScreenshots?: boolean;
 /**
