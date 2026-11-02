@@ -1580,7 +1580,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 (None, false, false)
             };
             #[cfg(feature = "enterprise-support")]
-            {
+            if crate::enterprise::recording_events::is_bound() {
                 let measurement = health_result.as_ref().ok().map(|h| {
                     crate::enterprise::recording_coverage::Measurement {
                         frame: h.frame_status.as_deref(),

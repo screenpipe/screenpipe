@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 static OUTBOX: Mutex<Option<Outbox>> = Mutex::new(None);
+static BOUND: AtomicBool = AtomicBool::new(false);
 static SESSION: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 static CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -196,6 +197,12 @@ pub(crate) fn bind(root: &Path, license_id: &str, device_id: &str, endpoint: &st
         diagnostic(root, &error);
     }
     *guard = Some(outbox);
+    BOUND.store(true, Ordering::SeqCst);
+}
+
+/// Continuous reporting starts only after an authenticated workspace binding.
+pub(crate) fn is_bound() -> bool {
+    BOUND.load(Ordering::SeqCst)
 }
 
 /// Preserve the trigger separately from the successful teardown outcome.
