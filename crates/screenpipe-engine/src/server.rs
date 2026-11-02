@@ -767,7 +767,8 @@ impl SCServer {
                             snap.transcription_errors,
                         ];
                         if !stopping
-                            && !reports.should_report(started.elapsed(), (failure_counts, devices.clone()))
+                            && !reports
+                                .should_report(started.elapsed(), (failure_counts, devices.clone()))
                         {
                             continue;
                         }

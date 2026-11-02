@@ -892,7 +892,6 @@ impl ResourceTelemetryReporter {
                 let _ = f.flush();
             }
         }
-
     }
 }
 
