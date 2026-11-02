@@ -37,14 +37,20 @@ with tempfile.TemporaryFile(mode="w+") as logs:
         "--log-level", "info", "--show-interactive-dev-session", "false",
     ], stdin=subprocess.DEVNULL, stdout=logs, stderr=logs, start_new_session=True)
     failed = False
+    ready = False
+    readiness = {}
     try:
         # Reuse the existing remote-development probe's readiness window.
         for _ in range(60):
             try:
-                if request("/test")[0] == 200:
+                status, headers, text = request("/test")
+                readiness = {"status": status, "content_type": headers.get("content-type"),
+                             "categories": re.findall(r"(?i)cloudflare|unauthorized|forbidden|not found|error|access denied|invalid", text)}
+                if status == 200:
+                    ready = True
                     break
-            except (OSError, TimeoutError):
-                pass
+            except (OSError, TimeoutError) as error:
+                readiness = {"error": type(error).__name__, "reason": type(getattr(error, "reason", None)).__name__}
             if process.poll() is not None:
                 raise RuntimeError("remote_dev_exited")
             time.sleep(1)
@@ -78,10 +84,12 @@ with tempfile.TemporaryFile(mode="w+") as logs:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
         print("remote_dev_stopped", process.poll() is not None, flush=True)
+        if not ready:
+            print("remote_dev_readiness", json.dumps(readiness), flush=True)
         logs.seek(0)
         for line in logs.read().splitlines():
-            if failed or re.search(r"error|warn|failed|not found|permission|ready|starting|building", line, re.I):
-                safe = re.sub(r"https?://\S+|[A-Za-z0-9_=-]{24,}", "[redacted]", line.replace(token, "[redacted]"))
+            if failed or not ready or re.search(r"error|warn|failed|not found|permission", line, re.I):
+                safe = re.sub(r"https?://(?!127\.0\.0\.1[:/])\S+|[A-Za-z0-9_=-]{24,}", "[redacted]", line.replace(token, "[redacted]"))
                 print("remote_dev_diagnostic", safe, flush=True)
     if failed:
         raise SystemExit(1)
