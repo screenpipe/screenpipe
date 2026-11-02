@@ -34,8 +34,8 @@ with tempfile.TemporaryFile(mode="w+") as logs:
     process = subprocess.Popen([
         "bunx", "wrangler", "dev", "--remote", "--ip", "127.0.0.1", "--port", "8791",
         "--var", "AI_GATEWAY_SERVICE_TOKEN:" + token,
-        "--log-level", "error", "--show-interactive-dev-session", "false",
-    ], stdout=logs, stderr=logs, start_new_session=True)
+        "--log-level", "info", "--show-interactive-dev-session", "false",
+    ], stdin=subprocess.DEVNULL, stdout=logs, stderr=logs, start_new_session=True)
     failed = False
     try:
         # Reuse the existing remote-development probe's readiness window.
@@ -80,7 +80,7 @@ with tempfile.TemporaryFile(mode="w+") as logs:
         print("remote_dev_stopped", process.poll() is not None, flush=True)
         logs.seek(0)
         for line in logs.read().splitlines():
-            if re.search(r"error|warn|failed|not found|permission", line, re.I):
+            if failed or re.search(r"error|warn|failed|not found|permission|ready|starting|building", line, re.I):
                 safe = re.sub(r"https?://\S+|[A-Za-z0-9_=-]{24,}", "[redacted]", line.replace(token, "[redacted]"))
                 print("remote_dev_diagnostic", safe, flush=True)
     if failed:
