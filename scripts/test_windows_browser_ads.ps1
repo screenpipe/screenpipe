@@ -14,7 +14,8 @@ HTTP.sys bindings, browser data, downloads, and fixture files are removed.
 [CmdletBinding()]
 param(
   [string]$OutputJson,
-  [string]$EvidenceDirectory
+  [string]$EvidenceDirectory,
+  [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,6 +140,9 @@ SilentInstall silent
 RequestExecutionLevel user
 !include "$hooks"
 Name "Screenpipe browser ADS fixture"
+VIProductVersion "2.7.135.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "2.7.135"
+VIAddVersionKey /LANG=1033 "FileVersion" "2.7.135"
 OutFile "fixture.exe"
 InstallDir "`$TEMP\screenpipe-browser-ads-fixture"
 Section
@@ -166,15 +170,24 @@ SectionEnd
   & $signtool sign /fd sha256 /sm /s My /sha1 $signingCert.Thumbprint (Join-Path $root 'fixture.exe') | Out-Null
   $signatureBefore = Get-AuthenticodeSignature -LiteralPath (Join-Path $root 'fixture.exe')
   if ($signatureBefore.Status -ne 'Valid') { throw "fixture signature is $($signatureBefore.Status)" }
+  if ($EvidenceDirectory) {
+    Copy-Item -LiteralPath (Join-Path $root 'fixture.exe') -Destination (Join-Path $EvidenceDirectory 'screenpipe_2.7.135_x64-setup.exe') -Force
+  }
   $python = Resolve-Tool @('python.exe')
   $packager = (Resolve-Path (Join-Path $PSScriptRoot 'package-attribution-carrier.py')).Path
   $firstArtifact = Join-Path $root 'fixture-first.exe'
   $secondArtifact = Join-Path $root 'fixture-second.exe'
   $prepareScript = @'
-import importlib.util, pathlib, sys
+import importlib.util, pathlib, struct, sys
 spec = importlib.util.spec_from_file_location('carrier', sys.argv[1])
 carrier = importlib.util.module_from_spec(spec); spec.loader.exec_module(carrier)
-data, offset = carrier._prepare_windows_certificate(pathlib.Path(sys.argv[2]))
+source_path = pathlib.Path(sys.argv[2])
+with source_path.open('rb') as source:
+    cert_offset, size_offset, certificate, relative_offset = carrier._prepare_windows_certificate(source, source_path.stat().st_size)
+    source.seek(0); data = bytearray(source.read(cert_offset))
+struct.pack_into('<I', data, size_offset, len(certificate))
+data += certificate
+offset = cert_offset + relative_offset
 for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
     patched = bytearray(data); patched[offset:offset+36] = grant.encode('ascii')
     pathlib.Path(output).write_bytes(patched)
@@ -183,6 +196,11 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   if ($LASTEXITCODE -ne 0) { throw 'failed to prepare embedded certificate fixtures' }
   $fixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $firstArtifact).Hash.ToLowerInvariant()
   $secondFixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $secondArtifact).Hash.ToLowerInvariant()
+  if ($EvidenceDirectory) {
+    Copy-Item -LiteralPath $firstArtifact -Destination (Join-Path $EvidenceDirectory 'signed-carrier-template.exe') -Force
+    Copy-Item -LiteralPath $secondArtifact -Destination (Join-Path $EvidenceDirectory 'signed-carrier-second.exe') -Force
+  }
+  if ($PrepareOnly) { return }
 
   & netsh.exe http add urlacl url=$urlAcl 'user=Everyone' | Out-Null
   & netsh.exe http add sslcert "ipport=0.0.0.0:$port" "certhash=$($serverCert.Thumbprint)" "appid=$appid" | Out-Null
@@ -286,7 +304,9 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   $zonePresentAfterExecution = Test-Path -LiteralPath "$renamed`:Zone.Identifier"
   $grantPath = Join-Path $install 'acquisition-grant'
   if (-not (Test-Path -LiteralPath $grantPath)) {
-    throw 'normal Windows execution consumed Zone.Identifier and the embedded certificate carrier did not preserve attribution'
+    $diagnosticPath = Join-Path $install 'acquisition-grant-diagnostic'
+    $diagnostic = if (Test-Path -LiteralPath $diagnosticPath) { [IO.File]::ReadAllText($diagnosticPath) } else { 'missing' }
+    throw "normal Windows execution consumed Zone.Identifier and the embedded certificate carrier did not preserve attribution: $diagnostic"
   }
   $received = [IO.File]::ReadAllText($grantPath)
   if ($received -ne $grant) { throw 'installed grant did not match the Edge HostUrl suffix' }

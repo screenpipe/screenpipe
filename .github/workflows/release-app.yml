@@ -1674,8 +1674,10 @@ jobs:
           $installer = Get-ChildItem "$bundle/nsis/*.exe" -ErrorAction Stop | Select-Object -First 1
           python scripts/package-attribution-carrier.py --artifact $installer.FullName `
             --output "$bundle/attribution" --platform $platform --release $version
+          if ($LASTEXITCODE -ne 0) { throw "legacy Windows attribution preparation failed with exit $LASTEXITCODE" }
           python scripts/package-attribution-carrier.py --artifact $installer.FullName `
             --output "$bundle/attribution" --platform $platform --release $version --windows-certificate
+          if ($LASTEXITCODE -ne 0) { throw "Windows certificate attribution preparation failed with exit $LASTEXITCODE" }
           $prepared = Get-Item "$bundle/attribution/screenpipe-attribution-windows.exe"
           if ((Get-AuthenticodeSignature $prepared.FullName).Status -ne 'Valid') {
             throw 'prepared Windows attribution installer lost its Authenticode validity'

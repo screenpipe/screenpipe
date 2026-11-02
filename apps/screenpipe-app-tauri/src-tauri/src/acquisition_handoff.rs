@@ -181,13 +181,17 @@ fn carrier_from(directory: &std::path::Path) -> Option<String> {
 #[cfg(target_os = "windows")]
 fn report_windows_installer_diagnostic(directory: &std::path::Path) {
     let path = directory.join("acquisition-grant-diagnostic");
-    // The installer emits a tiny, closed protocol. Never log marker text: the
-    // install directory is user-writable and arbitrary contents would be a log
-    // injection channel. The longest valid record is well below this bound.
-    let record = std::fs::metadata(&path)
-        .ok()
-        .filter(|metadata| metadata.len() <= 192)
-        .and_then(|_| std::fs::read_to_string(&path).ok());
+    // This maximum is derived from the closed v1 grammar below: longest cause,
+    // u32 measurement, longest unit-labelled expectation, source and outcome.
+    // Open once and read at most one byte beyond it; unknown user-writable data
+    // is discarded without ever entering a log message.
+    const MAX_RECORD: usize = "v1;embedded-duplicate;actual-extensions=4294967295;expected-extensions=1;fallback=certificate;persistence=not-attempted".len();
+    use std::io::Read;
+    let record = std::fs::File::open(&path).ok().and_then(|file| {
+        let mut bytes = Vec::with_capacity(MAX_RECORD + 1);
+        file.take((MAX_RECORD + 1) as u64).read_to_end(&mut bytes).ok()?;
+        (bytes.len() <= MAX_RECORD).then(|| String::from_utf8(bytes).ok()).flatten()
+    });
     if let Some(record) = record.as_deref().and_then(parse_windows_installer_diagnostic) {
         tracing::warn!(
             cause = record.cause,
@@ -196,6 +200,10 @@ fn report_windows_installer_diagnostic(directory: &std::path::Path) {
             windows_error = record.windows_error,
             actual_chars = record.actual_chars,
             threshold_chars = record.threshold_chars,
+            actual_bytes = record.actual_bytes,
+            expected_bytes = record.expected_bytes,
+            actual_extensions = record.actual_extensions,
+            expected_extensions = record.expected_extensions,
             "Windows acquisition origin metadata unavailable; installer attribution fallback completed"
         );
     }
@@ -211,13 +219,17 @@ struct WindowsInstallerDiagnostic<'a> {
     windows_error: Option<u32>,
     actual_chars: Option<u32>,
     threshold_chars: Option<u32>,
+    actual_bytes: Option<u32>,
+    expected_bytes: Option<u32>,
+    actual_extensions: Option<u32>,
+    expected_extensions: Option<u32>,
 }
 
 #[cfg(target_os = "windows")]
 fn parse_windows_installer_diagnostic(record: &str) -> Option<WindowsInstallerDiagnostic<'_>> {
     let fields: Vec<_> = record.split(';').collect();
     let common = |fallback: &str, persistence: &str| {
-        matches!(fallback, "filename" | "none")
+        matches!(fallback, "certificate" | "origin" | "filename" | "none")
             && matches!(persistence, "saved" | "failed" | "not-attempted")
     };
     match fields.as_slice() {
@@ -227,6 +239,8 @@ fn parse_windows_installer_diagnostic(record: &str) -> Option<WindowsInstallerDi
             common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
                 cause, fallback, persistence, windows_error: None,
                 actual_chars: None, threshold_chars: None,
+                actual_bytes: None, expected_bytes: None,
+                actual_extensions: None, expected_extensions: None,
             })
         }
         ["v1", cause @ ("origin-open-failed" | "origin-read-failed"), error, fallback, persistence] => {
@@ -236,6 +250,8 @@ fn parse_windows_installer_diagnostic(record: &str) -> Option<WindowsInstallerDi
             common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
                 cause, fallback, persistence, windows_error: Some(windows_error),
                 actual_chars: None, threshold_chars: None,
+                actual_bytes: None, expected_bytes: None,
+                actual_extensions: None, expected_extensions: None,
             })
         }
         ["v1", cause @ "host-url-overflow", actual, threshold, fallback, persistence] => {
@@ -247,7 +263,56 @@ fn parse_windows_installer_diagnostic(record: &str) -> Option<WindowsInstallerDi
                 .then_some(WindowsInstallerDiagnostic {
                     cause, fallback, persistence, windows_error: None,
                     actual_chars: Some(actual_chars), threshold_chars: Some(threshold_chars),
+                    actual_bytes: None, expected_bytes: None,
+                    actual_extensions: None, expected_extensions: None,
                 })
+        }
+        ["v1", cause @ "embedded-length", actual, expected, fallback, persistence] => {
+            let actual_bytes = actual.strip_prefix("actual-bytes=")?.parse().ok()?;
+            let expected_bytes = expected.strip_prefix("expected-bytes=")?.parse().ok()?;
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            (common(fallback, persistence) && actual_bytes != expected_bytes && expected_bytes == 71)
+                .then_some(WindowsInstallerDiagnostic {
+                    cause, fallback, persistence, windows_error: None,
+                    actual_chars: None, threshold_chars: None,
+                    actual_bytes: Some(actual_bytes), expected_bytes: Some(expected_bytes),
+                    actual_extensions: None, expected_extensions: None,
+                })
+        }
+        ["v1", cause @ "embedded-duplicate", actual, expected, fallback, persistence] => {
+            let actual_extensions = actual.strip_prefix("actual-extensions=")?.parse().ok()?;
+            let expected_extensions = expected.strip_prefix("expected-extensions=")?.parse().ok()?;
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            (common(fallback, persistence) && actual_extensions > 1 && expected_extensions == 1)
+                .then_some(WindowsInstallerDiagnostic {
+                    cause, fallback, persistence, windows_error: None,
+                    actual_chars: None, threshold_chars: None,
+                    actual_bytes: None, expected_bytes: None,
+                    actual_extensions: Some(actual_extensions), expected_extensions: Some(expected_extensions),
+                })
+        }
+        ["v1", cause @ ("embedded-critical" | "embedded-der" | "embedded-marker" | "embedded-grant"), fallback, persistence] => {
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
+                cause, fallback, persistence, windows_error: None,
+                actual_chars: None, threshold_chars: None,
+                actual_bytes: None, expected_bytes: None,
+                actual_extensions: None, expected_extensions: None,
+            })
+        }
+        ["v1", cause @ "embedded-decode", error, fallback, persistence] => {
+            let windows_error = error.strip_prefix("windows-error=")?.parse().ok()?;
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
+                cause, fallback, persistence, windows_error: Some(windows_error),
+                actual_chars: None, threshold_chars: None,
+                actual_bytes: None, expected_bytes: None,
+                actual_extensions: None, expected_extensions: None,
+            })
         }
         _ => None,
     }
@@ -590,6 +655,11 @@ mod tests {
             "v1;origin-open-failed;windows-error=5;fallback=filename;persistence=failed",
             "v1;origin-read-failed;windows-error=23;fallback=none;persistence=not-attempted",
             "v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;fallback=filename;persistence=saved",
+            "v1;embedded-length;actual-bytes=70;expected-bytes=71;fallback=none;persistence=not-attempted",
+            "v1;embedded-length;actual-bytes=72;expected-bytes=71;fallback=origin;persistence=saved",
+            "v1;embedded-duplicate;actual-extensions=2;expected-extensions=1;fallback=filename;persistence=saved",
+            "v1;embedded-critical;fallback=none;persistence=not-attempted",
+            "v1;embedded-decode;windows-error=13;fallback=origin;persistence=saved",
         ] {
             assert!(parse_windows_installer_diagnostic(valid).is_some(), "rejected {valid}");
         }
@@ -600,6 +670,8 @@ mod tests {
             "v1;origin-read-failed;windows-error=private-path;fallback=none;persistence=not-attempted",
             "v1;malformed-host-url;fallback=filename;persistence=saved\nforged log line",
             "v1;arbitrary-marker;fallback=filename;persistence=saved",
+            "v1;embedded-length;actual-bytes=71;expected-bytes=71;fallback=none;persistence=not-attempted",
+            "v1;embedded-duplicate;actual-extensions=1;expected-extensions=1;fallback=none;persistence=not-attempted",
         ] {
             assert!(parse_windows_installer_diagnostic(invalid).is_none(), "accepted {invalid}");
         }
@@ -670,6 +742,13 @@ SectionEnd
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             assert_eq!(carrier_from(&installed), Some(grant.into()));
+            for actual in [70, 72] {
+                std::fs::write(
+                    installed.join("acquisition-grant-diagnostic"),
+                    format!("v1;embedded-length;actual-bytes={actual};expected-bytes=71;fallback=none;persistence=not-attempted"),
+                ).unwrap();
+                assert_eq!(carrier_from(&installed), Some(grant.into()));
+            }
         });
         assert!(!installed.join("acquisition-grant-diagnostic").exists());
         std::fs::rename(
@@ -687,7 +766,8 @@ SectionEnd
         println!("redacted Windows acquisition installer report:\n{report}");
         for expected in ["cause=\"host-url-overflow\"", "fallback=\"filename\"",
                          "persistence=\"saved\"", "actual_chars=1024",
-                         "threshold_chars=1023"] {
+                         "threshold_chars=1023", "cause=\"embedded-length\"",
+                         "actual_bytes=70", "actual_bytes=72", "expected_bytes=71"] {
             assert!(report.contains(expected), "missing {expected}: {report}");
         }
         for private in [grant, private_grant, "https://downloads.test/private", "user_private", "acquisition-grant"] {

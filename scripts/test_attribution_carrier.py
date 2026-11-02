@@ -176,9 +176,10 @@ class CarrierTest(unittest.TestCase):
                 metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
                 with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
                      mock.patch.object(carrier, '_prepare_windows_certificate',
-                                       return_value=(placeholder_bytes, 6)):
+                                       return_value=(6, 1000, placeholder_bytes, 6)):
                     prepared, manifest = carrier.package_windows_certificate(
                         artifact, output, platform, '1.2.3')
+                expected_bytes = artifact.read_bytes()[:6] + placeholder_bytes
                 data = json.loads(manifest.read_text())
                 self.assertEqual(prepared.name, 'screenpipe-attribution-windows.exe')
                 self.assertEqual(manifest.name, 'screenpipe-attribution-windows.json')
@@ -186,11 +187,11 @@ class CarrierTest(unittest.TestCase):
                 self.assertEqual(data['carrier'], 'windows-certificate')
                 self.assertEqual(data['platform'], platform)
                 self.assertEqual(data['patch'], dict(
-                    offset=6, length=36, placeholder=carrier.PLACEHOLDER))
+                    offset=12, length=36, placeholder=carrier.PLACEHOLDER))
                 self.assertEqual(data['certificate'], dict(
                     oid=carrier.WINDOWS_OID, critical=False,
                     marker=carrier.WINDOWS_MARKER.decode(), table_at_end=True))
-                self.assertEqual(data['sha256'], hashlib.sha256(placeholder_bytes).hexdigest())
+                self.assertEqual(data['sha256'], hashlib.sha256(expected_bytes).hexdigest())
 
     @unittest.skipUnless(sys.platform == 'win32', 'requires Windows NSIS')
     def test_actual_nsis_filename_grant_fixture(self):
@@ -237,6 +238,9 @@ class CarrierTest(unittest.TestCase):
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
             install(f'screenpipe-{second}.exe', valid_dir)
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
+            mixed_case_dir = root / 'mixed-case'
+            install(f'ScreenPipe-{first}.EXE', mixed_case_dir)
+            self.assertEqual((mixed_case_dir / 'acquisition-grant').read_text(), first)
 
             ads = ('[ZoneTransfer]\r\nZoneId=3\r\n'
                    f'HostUrl=https://downloads.test/download/ticket/screenpipe-{second}.exe\r\n')
@@ -263,7 +267,9 @@ class CarrierTest(unittest.TestCase):
                 directory = root / f'ads-boundary-{logical_length}-{len(newline)}'
                 install('renamed.exe', directory, boundary_ads)
                 self.assertEqual((directory / 'acquisition-grant').read_text(), second)
-                self.assertFalse((directory / 'acquisition-grant-diagnostic').exists())
+            self.assertFalse((directory / 'acquisition-grant-diagnostic').exists(),
+                             (directory / 'acquisition-grant-diagnostic').read_text()
+                             if (directory / 'acquisition-grant-diagnostic').exists() else '')
 
             # An unrelated field may span as many fixed NSIS reads as the ADS
             # actually contains. It must not hide a later complete HostUrl.

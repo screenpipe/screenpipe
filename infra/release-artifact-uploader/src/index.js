@@ -63,8 +63,11 @@ export function artifactKey(scope, version, target, filename) {
 	const carrierArtifact = scope === "consumer" && (
 		(target.endsWith("-apple-darwin") && filename === "screenpipe-attribution.json") ||
 		(target === "x86_64-unknown-linux-gnu" &&
-			["screenpipe-attribution.tar", "screenpipe-attribution-linux.json"].includes(filename))
+			["screenpipe-attribution.tar", "screenpipe-attribution-linux.json"].includes(filename)) ||
+		(["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"].includes(target) &&
+			["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename))
 	);
+	const reservedWindowsCarrier = ["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename);
 	if (
 		!filename ||
 		filename.length > 255 ||
@@ -73,7 +76,7 @@ export function artifactKey(scope, version, target, filename) {
 		filename.includes("/") ||
 		filename.includes("\\") ||
 		filename.includes("\0") ||
-		(!carrierArtifact && !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix)))
+		(!carrierArtifact && (reservedWindowsCarrier || !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix))))
 	) {
 		throw new Error("invalid artifact filename");
 	}

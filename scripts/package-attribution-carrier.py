@@ -58,6 +58,70 @@ def _der_wrap(tag, value):
     return bytes([tag]) + _der_length(len(value)) + value
 
 
+def _der_oid(oid):
+    arcs = [int(part) for part in oid.split('.')]
+    encoded = bytearray([40 * arcs[0] + arcs[1]])
+    for arc in arcs[2:]:
+        groups = [arc & 0x7f]
+        arc >>= 7
+        while arc:
+            groups.append(0x80 | (arc & 0x7f))
+            arc >>= 7
+        encoded.extend(reversed(groups))
+    return _der_wrap(0x06, bytes(encoded))
+
+
+def _certificate_extensions(certificate):
+    """Yield structurally parsed (OID TLV, critical, extnValue contents)."""
+    tag, cert_value, cert_end = _der_tlv(certificate)
+    if tag != 0x30 or cert_end != len(certificate):
+        raise ValueError('invalid X.509 certificate')
+    tag, tbs_value, tbs_end = _der_tlv(certificate, cert_value)
+    if tag != 0x30:
+        raise ValueError('invalid X.509 TBSCertificate')
+    cursor = tbs_value
+    while cursor < tbs_end:
+        child = _der_tlv(certificate, cursor)
+        if child[0] == 0xa3:
+            tag, extensions_value, extensions_end = _der_tlv(certificate, child[1])
+            if tag != 0x30 or extensions_end != child[2]:
+                raise ValueError('invalid X.509 extensions')
+            extension = extensions_value
+            while extension < extensions_end:
+                tag, value, end = _der_tlv(certificate, extension)
+                if tag != 0x30:
+                    raise ValueError('invalid X.509 extension')
+                oid = _der_tlv(certificate, value)
+                oid_tlv = certificate[value:oid[2]]
+                field = oid[2]
+                critical = False
+                next_field = _der_tlv(certificate, field)
+                if next_field[0] == 0x01:
+                    critical = certificate[next_field[1]:next_field[2]] != b'\0'
+                    field = next_field[2]
+                    next_field = _der_tlv(certificate, field)
+                if next_field[0] != 0x04 or next_field[2] != end:
+                    raise ValueError('invalid X.509 extension value')
+                yield oid_tlv, critical, certificate[next_field[1]:next_field[2]]
+                extension = end
+            return
+        cursor = child[2]
+
+
+def _matching_extensions(certs):
+    wanted = _der_oid(WINDOWS_OID)
+    matches = []
+    cursor = 0
+    while cursor < len(certs):
+        cert = _der_tlv(certs, cursor)
+        if cert[0] != 0x30:
+            raise ValueError('unsupported certificate choice')
+        matches.extend((critical, value) for oid, critical, value in
+                       _certificate_extensions(certs[cursor:cert[2]]) if oid == wanted)
+        cursor = cert[2]
+    return matches
+
+
 def _insert_dummy_certificate(pkcs7):
     # ContentInfo SEQUENCE -> [0] EXPLICIT -> SignedData SEQUENCE. Preserve all
     # primitive bytes and only rebuild the enclosing lengths and certificate SET.
@@ -87,48 +151,60 @@ def _insert_dummy_certificate(pkcs7):
     index = cert_indexes[0]
     _, cert_value, cert_end = _der_tlv(children[index])
     certs = children[index][cert_value:cert_end]
-    if WINDOWS_MARKER + PLACEHOLDER.encode() in certs:
+    if _matching_extensions(certs):
         raise ValueError('Windows carrier certificate already present')
     children[index] = _der_wrap(0xa0, certs + WINDOWS_DUMMY_CERT)
+    matches = _matching_extensions(certs + WINDOWS_DUMMY_CERT)
+    expected = _der_wrap(0x0c, WINDOWS_MARKER + PLACEHOLDER.encode())
+    if matches != [(False, expected)]:
+        raise ValueError('invalid Windows carrier extension contract')
     rebuilt_signed = _der_wrap(0x30, b''.join(children))
     rebuilt_explicit = _der_wrap(0xa0, rebuilt_signed)
     return _der_wrap(0x30, outer_children[0] + rebuilt_explicit)
 
 
-def _prepare_windows_certificate(artifact):
-    data = artifact.read_bytes()
-    if len(data) < 0x40 or data[:2] != b'MZ':
+def _prepare_windows_certificate(source, source_size):
+    """Return (certificate offset, replacement table, grant offset in table)."""
+    source.seek(0)
+    header = source.read(0x1000)
+    if source_size < 0x40 or header[:2] != b'MZ':
         raise ValueError('invalid PE installer')
-    pe = struct.unpack_from('<I', data, 0x3c)[0]
-    if pe + 24 > len(data) or data[pe:pe+4] != b'PE\0\0':
+    pe = struct.unpack_from('<I', header, 0x3c)[0]
+    if pe + 24 > len(header):
+        source.seek(0)
+        header = source.read(pe + 24 + 512)
+    if pe + 24 > len(header) or header[pe:pe+4] != b'PE\0\0':
         raise ValueError('invalid PE header')
-    optional_size = struct.unpack_from('<H', data, pe + 20)[0]
+    optional_size = struct.unpack_from('<H', header, pe + 20)[0]
     optional = pe + 24
-    magic = struct.unpack_from('<H', data, optional)[0]
+    magic = struct.unpack_from('<H', header, optional)[0]
     directory = optional + (112 if magic == 0x20b else 96 if magic == 0x10b else -1)
     if directory < optional or directory + 8 * 5 > optional + optional_size:
         raise ValueError('PE has no valid certificate directory')
     size_offset = directory + 8 * 4 + 4
-    cert_offset, cert_size = struct.unpack_from('<II', data, directory + 8 * 4)
-    if cert_offset % 8 or cert_size < 8 or cert_offset + cert_size != len(data):
+    cert_offset, cert_size = struct.unpack_from('<II', header, directory + 8 * 4)
+    if cert_offset % 8 or cert_size < 8 or cert_offset + cert_size != source_size:
         raise ValueError('certificate table must be aligned and end the PE')
-    win_length, revision, cert_type = struct.unpack_from('<IHH', data, cert_offset)
+    source.seek(cert_offset)
+    old_certificate = source.read(cert_size)
+    if len(old_certificate) != cert_size:
+        raise ValueError('installer changed while reading certificate table')
+    win_length, revision, cert_type = struct.unpack_from('<IHH', old_certificate)
     if win_length > cert_size or revision != 0x200 or cert_type != 2:
         raise ValueError('unsupported WIN_CERTIFICATE')
-    if any(data[cert_offset + win_length:cert_offset + cert_size]):
+    if any(old_certificate[win_length:cert_size]):
         raise ValueError('nonzero certificate padding')
-    pkcs7 = data[cert_offset + 8:cert_offset + win_length]
+    pkcs7 = old_certificate[8:win_length]
     rebuilt = _insert_dummy_certificate(pkcs7)
     win_length = 8 + len(rebuilt)
     padded_size = (win_length + 7) & ~7
     certificate = struct.pack('<IHH', win_length, revision, cert_type) + rebuilt
     certificate += b'\0' * (padded_size - win_length)
-    prepared = bytearray(data[:cert_offset]) + certificate
-    struct.pack_into('<I', prepared, size_offset, padded_size)
+    # The size field is before cert_offset and is patched while streaming.
     marker = WINDOWS_MARKER + PLACEHOLDER.encode()
-    if prepared.count(marker) != 1:
+    if certificate.count(marker) != 1:
         raise ValueError('ambiguous Windows carrier marker')
-    return bytes(prepared), prepared.index(marker) + len(WINDOWS_MARKER)
+    return cert_offset, size_offset, certificate, certificate.index(marker) + len(WINDOWS_MARKER)
 
 
 def package(app, output, platform, release):
@@ -279,23 +355,48 @@ def package_windows_certificate(artifact, output, platform, release):
         raise ValueError('Windows certificate carrier requires a Windows platform')
     artifact, output = Path(artifact).resolve(), Path(output).resolve()
     validate_artifact(artifact, platform, release)
-    prepared, grant_offset = _prepare_windows_certificate(artifact)
-    if len(prepared) > 2147483647:
-        raise ValueError('carrier exceeds the website streaming limit')
     output.mkdir(parents=True, exist_ok=True)
     target = output / 'screenpipe-attribution-windows.exe'
     manifest = output / 'screenpipe-attribution-windows.json'
     if target.exists() or manifest.exists():
         raise ValueError('refusing to overwrite prepared artifacts')
-    with target.open('xb') as destination:
-        destination.write(prepared)
-    # Recheck the exact bytes after writing; the original signed-image digest
-    # and signer are subsequently verified by the release workflow on Windows.
-    if prepared[grant_offset:grant_offset + 36] != PLACEHOLDER.encode():
-        raise ValueError('Windows grant patch location is invalid')
+    before = artifact.stat()
+    digest = hashlib.sha256()
+    try:
+        with artifact.open('rb') as source:
+            cert_offset, size_offset, certificate, relative_grant = _prepare_windows_certificate(source, before.st_size)
+            grant_offset = cert_offset + relative_grant
+            with target.open('xb') as destination:
+                source.seek(0)
+                remaining = cert_offset
+                position = 0
+                while remaining:
+                    block = source.read(min(1024 * 1024, remaining))
+                    if not block:
+                        raise ValueError('installer changed during streaming copy')
+                    block = bytearray(block)
+                    if position <= size_offset < position + len(block):
+                        struct.pack_into('<I', block, size_offset - position, len(certificate))
+                    destination.write(block)
+                    digest.update(block)
+                    position += len(block)
+                    remaining -= len(block)
+                destination.write(certificate)
+                digest.update(certificate)
+        after = artifact.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise ValueError('installer changed during streaming copy')
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    prepared_size = target.stat().st_size
+    with target.open('rb') as prepared:
+        prepared.seek(grant_offset)
+        if prepared.read(36) != PLACEHOLDER.encode():
+            raise ValueError('Windows grant patch location is invalid')
     result = dict(
         schema=4, carrier='windows-certificate', platform=platform, release=release,
-        size=len(prepared), sha256=hashlib.sha256(prepared).hexdigest(),
+        size=prepared_size, sha256=digest.hexdigest(),
         patch=dict(offset=grant_offset, length=36, placeholder=PLACEHOLDER),
         certificate=dict(oid=WINDOWS_OID, critical=False,
                          marker=WINDOWS_MARKER.decode(), table_at_end=True),

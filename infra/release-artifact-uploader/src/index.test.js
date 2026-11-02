@@ -29,6 +29,19 @@ describe("release artifact capability boundary", () => {
 		expect(() => artifactKey("enterprise", "2.7.130", "aarch64-apple-darwin", "screenpipe-attribution.json")).toThrow();
 		expect(() => artifactKey("consumer", "2.7.130", "aarch64-apple-darwin", "latest.json")).toThrow();
 	});
+	test("admits only exact consumer Windows certificate carrier artifacts", () => {
+		const targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"];
+		const files = ["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"];
+		for (const target of targets) for (const filename of files) {
+			expect(artifactKey("consumer", "2.7.130", target, filename))
+				.toBe(`releases/2.7.130/${target}/${filename}`);
+			expect(() => artifactKey("enterprise", "2.7.130", target, filename)).toThrow();
+		}
+		for (const filename of ["screenpipe-attribution-windows-other.json", "latest.json", "published.json"]) {
+			for (const target of targets) expect(() => artifactKey("consumer", "2.7.130", target, filename)).toThrow();
+		}
+		expect(() => artifactKey("consumer", "2.7.130", "x86_64-unknown-linux-gnu", files[1])).toThrow();
+	});
 	test("allows only versioned consumer and enterprise artifact keys", () => {
 		expect(
 			artifactKey(

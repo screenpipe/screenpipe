@@ -24,9 +24,9 @@
   StrLen ${ScratchA} ${Input}
   IntCmp ${ScratchA} 51 0 ${_SP_UUID_INVALID} ${_SP_UUID_INVALID}
   StrCpy ${ScratchA} ${Input} 11 0
-  StrCmpS ${ScratchA} "screenpipe-" 0 ${_SP_UUID_INVALID}
+  StrCmp ${ScratchA} "screenpipe-" 0 ${_SP_UUID_INVALID}
   StrCpy ${ScratchA} ${Input} 4 47
-  StrCmpS ${ScratchA} ".exe" 0 ${_SP_UUID_INVALID}
+  StrCmp ${ScratchA} ".exe" 0 ${_SP_UUID_INVALID}
   StrCpy ${ScratchA} ${Input} 36 11
   StrCmpS ${ScratchA} "00000000-0000-4000-8000-000000000000" ${_SP_UUID_INVALID} 0
   StrCpy ${ScratchB} ${ScratchA} 1 14
@@ -118,98 +118,167 @@
     StrCpy $7 0 ; inside [ZoneTransfer]
     StrCpy $8 0 ; HostUrl count
     StrCpy $9 "" ; valid ADS grant
-    ; The primary Windows carrier is a noncritical extension on an untrusted
-    ; extra PKCS#7 certificate. Read only the PE certificate table, require the
-    ; application-qualified marker to be unique, and validate its exact 36-byte
-    ; canonical UUID. This does not treat the carrier as signer-authenticated.
-    ClearErrors
-    FileOpen $5 "$EXEPATH" r
-    ${IfNot} ${Errors}
-      FileSeek $5 60 SET
-      FileReadByte $5 $0
-      FileReadByte $5 $1
-      FileReadByte $5 $2
-      FileReadByte $5 $3
-      IntOp $1 $1 * 256
-      IntOp $2 $2 * 65536
-      IntOp $3 $3 * 16777216
-      IntOp $0 $0 + $1
-      IntOp $0 $0 + $2
-      IntOp $0 $0 + $3 ; PE header offset
-      IntOp $0 $0 + 24 ; optional header
-      FileSeek $5 $0 SET
-      FileReadByte $5 $1
-      FileReadByte $5 $2
-      IntOp $2 $2 * 256
-      IntOp $1 $1 + $2
-      ${If} $1 == 523 ; PE32+
-        IntOp $0 $0 + 144 ; security directory entry
-      ${ElseIf} $1 == 267 ; PE32
-        IntOp $0 $0 + 128
-      ${Else}
-        StrCpy $0 0
-      ${EndIf}
-      ${If} $0 != 0
-        FileSeek $5 $0 SET
-        FileReadByte $5 $1
-        FileReadByte $5 $2
-        FileReadByte $5 $3
-        FileReadByte $5 $6
-        IntOp $2 $2 * 256
-        IntOp $3 $3 * 65536
-        IntOp $6 $6 * 16777216
-        IntOp $1 $1 + $2
-        IntOp $1 $1 + $3
-        IntOp $1 $1 + $6 ; certificate offset
-        FileReadByte $5 $2
-        FileReadByte $5 $3
-        FileReadByte $5 $6
-        FileReadByte $5 $7
-        IntOp $3 $3 * 256
-        IntOp $6 $6 * 65536
-        IntOp $7 $7 * 16777216
-        IntOp $2 $2 + $3
-        IntOp $2 $2 + $6
-        IntOp $2 $2 + $7 ; certificate size
-        FileSeek $5 0 END $3
-        IntOp $6 $1 + $2
-        IntOp $7 $1 % 8
-        ${If} $1 > 0
-        ${AndIf} $2 >= 8
-        ${AndIf} $6 == $3
-        ${AndIf} $7 == 0
-          StrCpy $8 0 ; marker count
-          StrCpy $9 "" ; candidate embedded grant
-          IntOp $2 $3 - 69
+    ; CryptoAPI bounds the embedded SignedData and its X.509 certificates. The
+    ; value must be one exact DER UTF8String containing the 33-byte marker plus
+    ; 36-byte grant under the agreed noncritical UUID-derived 2.25 extension.
+    ; The carrier is capability data, not a signer identity assertion.
+    StrCpy $8 0 ; exact OID extension count across every certificate
+    StrCpy $9 "" ; sole valid embedded grant
+    StrCpy $0 0
+    System::Call 'kernel32::CreateFileW(w "$EXEPATH", i 0x80000000, i 7, p 0, i 3, i 0x80, p 0)p.r5'
+    ${If} $5 != -1
+      System::Call 'imagehlp::ImageEnumerateCertificates(p r5, i 255, *i .r0, p 0, i 0)i.r1'
+      System::Call 'kernel32::CloseHandle(p r5)'
+    ${EndIf}
+    ; A zero certificate count is normal: embedded attribution is optional.
+    ${If} $0 > 0
+      System::Call 'crypt32::CryptQueryObject(i 1, w "$EXEPATH", i 0x400, i 2, i 0, *i .r0, *i .r1, *i .r2, *p .r5, p 0, p 0)i.r3'
+      ${If} $3 != 0
+        StrCpy $R3 $5
+        ; CryptoAPI accepts the certificate but its OID decoder omits this very
+        ; large UUID arc. Parse bounded DER inside each enumerated certificate
+        ; instead of changing the protocol or scanning arbitrary file bytes.
+        System::Alloc 22
+        Pop $2
+        System::Call '*$2(&i1 0x06)'
+        IntOp $3 $2 + 1
+        System::Call '*$3(&i1 0x14)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x69)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x82)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x9e)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xbb)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xda)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x97)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd5)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd0)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xc6)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x86)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xc1)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x8e)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xa6)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xaf)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x8a)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd3)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xdf)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x90)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xfe)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x01)'
+        StrCpy $6 0
+        ${Do}
+          System::Call 'crypt32::CertEnumCertificatesInStore(p $R3, p r6)p.r6'
+          ${If} $6 == 0
+            ${ExitDo}
+          ${EndIf}
+          ; CERT_CONTEXT is native 32-bit because NSIS is a 32-bit process.
+          System::Call '*$6(i, p.r1, i.r3, p)'
+          StrCpy $R7 $1
+          StrCpy $R4 $3
+          StrCpy $0 2
           ${Do}
-            ${If} $1 > $2
+            IntOp $1 $0 + 22
+            ${If} $1 > $R4
               ${ExitDo}
             ${EndIf}
-            FileSeek $5 $1 SET
-            FileRead $5 $6 70
-            StrCpy $7 $6 33 0
-            ${If} $7 == "urn:screenpipe:acquisition-grant:"
+            IntOp $1 $R7 + $0
+            System::Call 'msvcrt::memcmp(p r1, p r2, i 22)i.r3'
+            ${If} $3 == 0
               IntOp $8 $8 + 1
-              StrCpy $7 $6 36 33
-              StrCpy $6 "screenpipe-$7.exe"
-              !insertmacro _SP_ValidateAcquisitionFilename "$6" $7 $0 $3 $6
-              ${If} $7 != ""
-                StrCpy $9 $7
+              ; Extension ::= SEQUENCE { oid, critical DEFAULT FALSE,
+              ; extnValue OCTET STRING }. All agreed lengths are short-form DER.
+              IntOp $3 $1 - 2
+              System::Call '*$3(&i1.r4,&i1.r7)'
+              IntOp $3 $1 + 22
+              StrCpy $R2 $3
+              System::Call '*$3(&i1.r1,&i1.r3)'
+              ${If} $4 != 48
+                StrCpy $R0 "embedded-der"
+              ${ElseIf} $1 == 1
+                StrCpy $R0 "embedded-critical"
+              ${ElseIf} $1 != 4
+                StrCpy $R0 "embedded-der"
+              ${Else}
+                IntOp $4 $R2 + 2
+                System::Call '*$4(&i1.r1,&i1.r5)'
+                IntOp $5 $5 + 2
+                IntOp $5 $5 - $3
+                ${If} $1 != 12
+                ${OrIf} $5 != 0
+                  StrCpy $R0 "embedded-der"
+                ${Else}
+                  IntOp $5 $3 + 24
+                  ${If} $7 != $5
+                    StrCpy $R0 "embedded-der"
+                  ${ElseIf} $3 != 71
+                    StrCpy $R0 "embedded-length"
+                    StrCpy $R1 $3
+                  ${Else}
+                    IntOp $4 $4 + 2
+                    System::Call '*$4(&m69.r7)'
+                    StrCpy $1 $7 33 0
+                    ${If} $1 != "urn:screenpipe:acquisition-grant:"
+                      StrCpy $R0 "embedded-marker"
+                    ${Else}
+                      StrCpy $1 $7 36 33
+                      StrCpy $3 "screenpipe-$1.exe"
+                      !insertmacro _SP_ValidateAcquisitionFilename "$3" $1 $4 $5 $7
+                      ${If} $1 == ""
+                        StrCpy $R0 "embedded-grant"
+                      ${Else}
+                        StrCpy $9 $1
+                      ${EndIf}
+                    ${EndIf}
+                  ${EndIf}
+                ${EndIf}
               ${EndIf}
             ${EndIf}
-            IntOp $1 $1 + 1
+            IntOp $0 $0 + 1
           ${Loop}
-          ${If} $8 == 1
-          ${AndIf} $9 != ""
-            StrCpy $4 $9
-            StrCpy $R5 "certificate"
-            StrCpy $9 ""
-          ${EndIf}
-        ${EndIf}
+        ${Loop}
+        System::Free $2
+        System::Call 'crypt32::CertCloseStore(p $R3, i 0)'
+      ${If} $8 > 1
+        StrCpy $R0 "embedded-duplicate"
+        StrCpy $R1 $8
+        StrCpy $9 ""
+      ${ElseIf} $8 == 1
+      ${AndIf} $9 != ""
+        StrCpy $4 $9
+        StrCpy $R5 "certificate"
       ${EndIf}
-      FileClose $5
+      ${Else}
+        System::Call 'kernel32::GetLastError()i.r1'
+        StrCpy $R0 "embedded-decode"
+        StrCpy $R1 $1
+      ${EndIf}
     ${EndIf}
     ${If} $R5 != "certificate"
+    Push $R0 ; retain the originating embedded cause across fallback parsing
+    Push $R1
+    ; Parser scratch must never become a filename fallback candidate.
+    !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
+    StrCpy $8 0
+    StrCpy $R2 0
+    StrCpy $R3 0
     ClearErrors
     ; NSIS validates ordinary FileOpen paths and rejects the second colon in an
     ; ADS name. Open only this stream on the running installer with CreateFileW;
@@ -350,16 +419,27 @@
       ; ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND means no ADS, not failed I/O.
       ${If} $1 != 2
       ${AndIf} $1 != 3
-        StrCpy $R0 "origin-open-failed"
-        StrCpy $R1 $1
+        ${If} $R0 == ""
+          StrCpy $R0 "origin-open-failed"
+          StrCpy $R1 $1
+        ${EndIf}
       ${EndIf}
     ${EndIf}
+    ${EndIf}
+    Pop $6
+    Pop $5
+    ${If} $5 != ""
+      StrCpy $R0 $5
+      StrCpy $R1 $6
     ${EndIf}
     StrCpy $7 0 ; accepted ADS outcome
     ${If} $8 == 1
     ${AndIf} $9 != ""
       StrCpy $4 $9
       StrCpy $7 1
+      ${If} $R5 != "certificate"
+        StrCpy $R5 "origin"
+      ${EndIf}
     ${EndIf}
     ${If} $7 == 0
     ${AndIf} $4 != ""
@@ -383,8 +463,13 @@
       StrCpy $6 "v1;$R0"
       ${If} $R0 == "host-url-overflow"
         StrCpy $6 "$6;actual-chars=$R1;threshold-chars=1023"
+      ${ElseIf} $R0 == "embedded-length"
+        StrCpy $6 "$6;actual-bytes=$R1;expected-bytes=71"
+      ${ElseIf} $R0 == "embedded-duplicate"
+        StrCpy $6 "$6;actual-extensions=$R1;expected-extensions=1"
       ${ElseIf} $R0 == "origin-open-failed"
       ${OrIf} $R0 == "origin-read-failed"
+      ${OrIf} $R0 == "embedded-decode"
         StrCpy $6 "$6;windows-error=$R1"
       ${EndIf}
       StrCpy $6 "$6;fallback=$R5;persistence=$R6"
