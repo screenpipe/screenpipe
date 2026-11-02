@@ -792,7 +792,8 @@ impl ResourceTelemetryReporter {
         // analytics/debug/file logging are disabled.
         let monitor = Arc::clone(self);
         let posthog_interval = posthog_interval.unwrap_or(interval);
-        let mut last_posthog_update = Instant::now();
+        // Keep a startup sample for short sessions, then send window summaries.
+        let mut last_posthog_update: Option<Instant> = None;
         let mut window = ResourceReportWindow::default();
 
         tokio::spawn(async move {
@@ -835,10 +836,11 @@ impl ResourceTelemetryReporter {
                             snapshot.phys_footprint_gb,
                         );
                         let now = Instant::now();
-                        let should_send_to_posthog = now.duration_since(last_posthog_update) >= posthog_interval;
+                        let should_send_to_posthog = last_posthog_update
+                            .is_none_or(|last| now.duration_since(last) >= posthog_interval);
 
                         if should_send_to_posthog {
-                            last_posthog_update = now;
+                            last_posthog_update = Some(now);
                             monitor.log_status(&snapshot, &std::mem::take(&mut window)).await;
                         } else {
                             monitor.log_status_local(&snapshot).await;

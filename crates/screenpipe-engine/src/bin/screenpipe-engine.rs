@@ -1067,7 +1067,10 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     let audio_devices_clone = audio_devices.clone();
 
     let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
-    resource_reporter.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
+    resource_reporter.start_monitoring(
+        Duration::from_secs(30),
+        Some(screenpipe_engine::telemetry_reporting::DIAGNOSTIC_REPORT_INTERVAL),
+    );
 
     // Initialize analytics for API tracking
     analytics::init(config.analytics_enabled);

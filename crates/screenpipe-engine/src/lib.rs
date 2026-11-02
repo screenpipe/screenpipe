@@ -100,6 +100,7 @@ pub mod structured_outputs;
 mod sync_api;
 pub mod sync_provider;
 pub mod telemetry_context;
+pub mod telemetry_reporting;
 mod telemetry_tasks;
 pub mod ui_recorder;
 // Exposed publicly so the commercial `screenpipe-sdk` (screenpipe/sdk repo)
