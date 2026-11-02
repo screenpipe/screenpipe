@@ -428,6 +428,11 @@ pub struct RecordingSettings {
     #[serde(rename = "disableScreenshots", default)]
     pub disable_screenshots: bool,
 
+    /// Black out screenshot pixels outside the focused window area, preserving
+    /// monitor dimensions and text coordinates. Off preserves desktop context.
+    #[serde(rename = "focusedWindowScreenshots", default)]
+    pub focused_window_screenshots: bool,
+
     /// Build normalized semantic context from captured accessibility trees.
     /// Experimental and opt-in. False preserves the historical capture path
     /// without starting a parser worker or writing semantic tables.
@@ -969,6 +974,7 @@ impl Default for RecordingSettings {
             vocabulary: vec![],
             disable_vision: false,
             disable_screenshots: false,
+            focused_window_screenshots: false,
             enable_semantic_context: false,
             semantic_context_mode: SemanticContextMode::Memory,
             disable_timeline: false,
@@ -1344,6 +1350,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(settings.effective_aec_flags(), (false, true, false));
+    }
+
+    #[test]
+    fn focused_window_screenshots_default_off_and_round_trip() {
+        let legacy: RecordingSettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.focused_window_screenshots);
+        for value in [true, false] {
+            let settings: RecordingSettings =
+                serde_json::from_value(serde_json::json!({"focusedWindowScreenshots": value}))
+                    .unwrap();
+            assert_eq!(settings.focused_window_screenshots, value);
+            assert_eq!(
+                serde_json::to_value(settings).unwrap()["focusedWindowScreenshots"],
+                value
+            );
+        }
     }
 
     #[test]

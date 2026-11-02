@@ -3936,6 +3936,11 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
+ * Black out screenshot pixels outside the focused window area, preserving
+ * monitor dimensions and text coordinates. Off preserves desktop context.
+ */
+focusedWindowScreenshots?: boolean;
+/**
  * Build normalized semantic context from captured accessibility trees.
  * Experimental and opt-in. False preserves the historical capture path
  * without starting a parser worker or writing semantic tables.

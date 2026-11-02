@@ -515,6 +515,9 @@ pub struct TreeWalkerConfig {
     pub monitor_width: f64,
     /// Monitor height in screen points.
     pub monitor_height: f64,
+    /// Export Linux window extents for opt-in focused screenshot scoping.
+    /// False preserves the historical Linux full-frame OCR behavior.
+    pub capture_window_bounds: bool,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
     /// Use browser-native APIs for more reliable incognito detection where
@@ -578,6 +581,7 @@ impl Default for TreeWalkerConfig {
             monitor_y: 0.0,
             monitor_width: 0.0,
             monitor_height: 0.0,
+            capture_window_bounds: false,
             ignore_incognito_windows: true,
             enhanced_incognito_detection: false,
             capture_app_identity: false,

@@ -626,6 +626,12 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_screenshots: bool,
 
+    /// Black out pixels outside the focused window area, keeping image dimensions.
+    /// False keeps desktop context. Missing focus/bounds suppresses screenshots.
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1,
+        default_value_t = false, default_missing_value = "true")]
+    pub focused_window_screenshots: bool,
+
     /// Select structured app context: off, memory, automation, or both.
     /// Memory builds compact context for retrieval and pipes; automation keeps
     /// action controls, state, and bounds for computer-use agents. New CLI
@@ -942,6 +948,7 @@ pub struct RecordArgSources {
     pub filter_music: bool,
     pub disable_vision: bool,
     pub disable_screenshots: bool,
+    pub focused_window_screenshots: bool,
     pub app_context: bool,
     pub enable_semantic_context: bool,
     pub ignored_windows: bool,
@@ -1011,6 +1018,7 @@ impl RecordArgSources {
             filter_music: from_command_line(record, "filter_music"),
             disable_vision: from_command_line(record, "disable_vision"),
             disable_screenshots: from_command_line(record, "disable_screenshots"),
+            focused_window_screenshots: from_command_line(record, "focused_window_screenshots"),
             app_context: from_command_line(record, "app_context"),
             enable_semantic_context: matches!(
                 record.value_source("enable_semantic_context"),
@@ -1072,6 +1080,7 @@ impl RecordArgSources {
             || self.filter_music
             || self.disable_vision
             || self.disable_screenshots
+            || self.focused_window_screenshots
             || self.app_context
             || self.enable_semantic_context
             || self.ignored_windows
@@ -1238,6 +1247,7 @@ impl RecordArgs {
             disable_audio: self.disable_audio,
             disable_vision: self.disable_vision,
             disable_screenshots: self.disable_screenshots,
+            focused_window_screenshots: self.focused_window_screenshots,
             enable_semantic_context,
             semantic_context_mode,
             // CLI has no --disable-timeline flag; the desktop app drives this
@@ -1563,6 +1573,9 @@ impl RecordArgs {
         }
         if sources.disable_screenshots {
             settings.disable_screenshots = self.disable_screenshots;
+        }
+        if sources.focused_window_screenshots {
+            settings.focused_window_screenshots = self.focused_window_screenshots;
         }
         if sources.app_context {
             let (enabled, mode) = self
@@ -3304,6 +3317,47 @@ mod tests {
             }
             _ => panic!("expected Record command"),
         }
+    }
+
+    #[test]
+    fn focused_window_screenshots_explicit_on_off_and_saved_choice() {
+        for (argv, saved, expected) in [
+            (vec!["screenpipe", "record"], true, true),
+            (
+                vec!["screenpipe", "record", "--focused-window-screenshots"],
+                false,
+                true,
+            ),
+            (
+                vec!["screenpipe", "record", "--focused-window-screenshots=false"],
+                true,
+                false,
+            ),
+        ] {
+            let matches = Cli::command().try_get_matches_from(&argv).unwrap();
+            let sources = RecordArgSources::from_cli_matches(&matches);
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let mut settings = screenpipe_config::RecordingSettings {
+                focused_window_screenshots: saved,
+                ..Default::default()
+            };
+            let Command::Record(args) = cli.command else {
+                panic!("expected record")
+            };
+            args.apply_explicit_overrides(&mut settings, &sources);
+            assert_eq!(settings.focused_window_screenshots, expected);
+            assert_eq!(
+                args.to_recording_settings().focused_window_screenshots,
+                args.focused_window_screenshots
+            );
+        }
+        let Command::Record(args) = Cli::try_parse_from(["screenpipe", "record"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected record")
+        };
+        assert!(!args.focused_window_screenshots);
     }
 
     #[test]

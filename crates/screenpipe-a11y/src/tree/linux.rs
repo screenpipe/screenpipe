@@ -1325,6 +1325,19 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
+        // Reuse the extents already read above; no additional AT-SPI calls on
+        // the capture path. Keep negative monitor-relative origins intact.
+        let window_bounds = (self.config.capture_window_bounds
+            && state.monitor_w > 0.0
+            && state.monitor_h > 0.0
+            && state.window_w > 0.0
+            && state.window_h > 0.0)
+            .then(|| super::WindowBounds {
+                x: (state.window_x - state.monitor_x) / state.monitor_w,
+                y: (state.window_y - state.monitor_y) / state.monitor_h,
+                width: state.window_w / state.monitor_w,
+                height: state.window_h / state.monitor_h,
+            });
         let text_content = state.text_buffer;
 
         // Truncate if needed
@@ -1394,7 +1407,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             truncation_reason: state.truncation_reason,
             retained_work_pending: false,
             max_depth_reached: state.max_depth_reached,
-            window_bounds: None,
+            window_bounds,
         }))
     }
 }

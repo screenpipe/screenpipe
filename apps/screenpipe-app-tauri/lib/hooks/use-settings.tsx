@@ -822,6 +822,7 @@ let DEFAULT_SETTINGS: Settings = {
 			starSessionShortcut: "Control+Super+B",
 			disableVision: false,
 			disableScreenshots: false,
+			focusedWindowScreenshots: false,
 			enableSemanticContext: true,
 			remoteControlPreferences: {
 				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,

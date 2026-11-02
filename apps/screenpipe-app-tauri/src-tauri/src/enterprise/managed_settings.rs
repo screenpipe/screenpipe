@@ -465,7 +465,8 @@ mod tests {
             "disableAudio": "true", "disableVision": "true",
             "ignoredWindows": ["Private"], "audioChunkDuration": 60,
             "localRetentionEnabled": "true", "localRetentionDays": 7,
-            "listen_on_lan": "true", "captureMaxWidth": 1920
+            "listen_on_lan": "true", "captureMaxWidth": 1920,
+            "focusedWindowScreenshots": "true"
         }));
         assert!(persist_store(store.as_ref(), &locked, false, || store
             .save()
@@ -480,6 +481,7 @@ mod tests {
         assert!(config.listen_on_lan);
         assert_eq!(config.audio_chunk_duration, 60);
         assert_eq!(config.capture_max_width, 1920);
+        assert!(config.focused_window_screenshots);
         assert_eq!(config.ignored_windows, vec!["Private"]);
         assert_eq!(saved["settings"]["localRetentionDays"], 7);
         assert_eq!(saved["settings"]["listenOnLan"], true);
