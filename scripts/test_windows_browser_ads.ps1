@@ -246,6 +246,23 @@ SectionEnd
   if ([IO.File]::ReadAllText("$renamed`:Zone.Identifier") -ne $zone) {
     throw 'Zone.Identifier changed during same-volume rename'
   }
+  if ($EvidenceDirectory) {
+    [ordered]@{
+      edge_version = [Diagnostics.FileVersionInfo]::GetVersionInfo($edge).ProductVersion
+      architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+      entry_url = $ordinaryUrl
+      redirect_status = 302
+      final_source = $url
+      completed_filename = $filename
+      fixture_sha256 = $fixtureHash
+      edge_download_sha256 = $downloadHash
+      authenticode_before = [string]$signatureBefore.Status
+      authenticode_after_rename = [string]$signatureAfter.Status
+      zone_id = $zoneId
+      same_volume_ntfs_rename_preserved_zone_identifier = $true
+      policies_changed = $false
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'preinstall-facts.json') -Encoding utf8
+  }
   $installer = Start-Process -FilePath $renamed -ArgumentList @('/S', "/D=$install") -Wait -PassThru
   if ($installer.ExitCode -ne 0) { throw "fixture installer exited $($installer.ExitCode)" }
   $grantPath = Join-Path $install 'acquisition-grant'
