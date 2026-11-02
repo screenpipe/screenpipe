@@ -22,6 +22,7 @@ PLACEHOLDER = '00000000-0000-4000-8000-000000000000'
 LINUX_XATTR = 'user.screenpipe.acquisition-grant'
 WINDOWS_OID = '2.25.190389607246623950780965390285594181377'
 WINDOWS_MARKER = b'urn:screenpipe:acquisition-grant:'
+LEGACY_SCHEMA1_STREAMING_MAX = 2147483647
 # Self-signed, deliberately untrusted certificate used only as an Authenticode
 # SignedData container. Its noncritical 2.25 UUID-derived extension is not an
 # identity assertion and does not alter the original signer or signed image.
@@ -165,36 +166,66 @@ def _insert_dummy_certificate(pkcs7):
 
 def _prepare_windows_certificate(source, source_size):
     """Return (certificate offset, replacement table, grant offset in table)."""
-    source.seek(0)
-    header = source.read(0x1000)
-    if source_size < 0x40 or header[:2] != b'MZ':
+    def read_exact_at(offset, length, description):
+        if offset < 0 or length < 0 or offset > source_size or length > source_size - offset:
+            raise ValueError(f'{description} is outside installer')
+        source.seek(offset)
+        value = source.read(length)
+        if len(value) != length:
+            raise ValueError('installer changed while reading ' + description)
+        return value
+
+    dos = read_exact_at(0, 0x40, 'DOS header') if source_size >= 0x40 else b''
+    if len(dos) != 0x40 or dos[:2] != b'MZ':
         raise ValueError('invalid PE installer')
-    pe = struct.unpack_from('<I', header, 0x3c)[0]
-    if pe + 24 > len(header):
-        source.seek(0)
-        header = source.read(pe + 24 + 512)
-    if pe + 24 > len(header) or header[pe:pe+4] != b'PE\0\0':
+    pe = struct.unpack_from('<I', dos, 0x3c)[0]
+    coff = read_exact_at(pe, 24, 'PE header')
+    if coff[:4] != b'PE\0\0':
         raise ValueError('invalid PE header')
-    optional_size = struct.unpack_from('<H', header, pe + 20)[0]
-    optional = pe + 24
-    magic = struct.unpack_from('<H', header, optional)[0]
-    directory = optional + (112 if magic == 0x20b else 96 if magic == 0x10b else -1)
-    if directory < optional or directory + 8 * 5 > optional + optional_size:
+    optional_size = struct.unpack_from('<H', coff, 20)[0]
+    optional_offset = pe + 24
+    optional = read_exact_at(optional_offset, optional_size, 'PE optional header')
+    if len(optional) < 2:
         raise ValueError('PE has no valid certificate directory')
-    size_offset = directory + 8 * 4 + 4
-    cert_offset, cert_size = struct.unpack_from('<II', header, directory + 8 * 4)
-    if cert_offset % 8 or cert_size < 8 or cert_offset + cert_size != source_size:
+    magic = struct.unpack_from('<H', optional)[0]
+    directory = 112 if magic == 0x20b else 96 if magic == 0x10b else -1
+    if directory < 0 or directory + 8 * 5 > len(optional):
+        raise ValueError('PE has no valid certificate directory')
+    size_offset = optional_offset + directory + 8 * 4 + 4
+    cert_offset, cert_size = struct.unpack_from('<II', optional, directory + 8 * 4)
+    if (cert_offset % 8 or cert_size < 8 or cert_offset > source_size or
+            cert_size != source_size - cert_offset):
         raise ValueError('certificate table must be aligned and end the PE')
-    source.seek(cert_offset)
-    old_certificate = source.read(cert_size)
-    if len(old_certificate) != cert_size:
-        raise ValueError('installer changed while reading certificate table')
-    win_length, revision, cert_type = struct.unpack_from('<IHH', old_certificate)
+    win_header = read_exact_at(cert_offset, 8, 'WIN_CERTIFICATE header')
+    win_length, revision, cert_type = struct.unpack('<IHH', win_header)
     if win_length > cert_size or revision != 0x200 or cert_type != 2:
         raise ValueError('unsupported WIN_CERTIFICATE')
-    if any(old_certificate[win_length:cert_size]):
-        raise ValueError('nonzero certificate padding')
-    pkcs7 = old_certificate[8:win_length]
+    pkcs7_size = win_length - 8
+    if pkcs7_size < 2:
+        raise ValueError('unsupported WIN_CERTIFICATE')
+    # Allocate the SignedData's actual DER length, not the certificate table's
+    # declared size. Padding is checked incrementally below.
+    der_prefix = read_exact_at(cert_offset + 8, min(6, pkcs7_size), 'PKCS7 header')
+    first_length = 2 if der_prefix[1] < 0x80 else 2 + (der_prefix[1] & 0x7f)
+    if first_length > len(der_prefix):
+        raise ValueError('invalid PKCS7 length')
+    if der_prefix[1] < 0x80:
+        encoded_size = 2 + der_prefix[1]
+    else:
+        count = der_prefix[1] & 0x7f
+        if count == 0 or count > 4 or der_prefix[2] == 0:
+            raise ValueError('invalid PKCS7 length')
+        encoded_size = first_length + int.from_bytes(der_prefix[2:first_length], 'big')
+    if encoded_size != pkcs7_size:
+        raise ValueError('WIN_CERTIFICATE length does not match PKCS7')
+    pkcs7 = read_exact_at(cert_offset + 8, pkcs7_size, 'PKCS7 SignedData')
+    source.seek(cert_offset + win_length)
+    padding = cert_size - win_length
+    while padding:
+        block = source.read(min(1024 * 1024, padding))
+        if not block or any(block):
+            raise ValueError('nonzero or truncated certificate padding')
+        padding -= len(block)
     rebuilt = _insert_dummy_certificate(pkcs7)
     win_length = 8 + len(rebuilt)
     padded_size = (win_length + 7) & ~7
@@ -324,7 +355,7 @@ def package_filename(artifact, output, platform, release):
     artifact, output = Path(artifact).resolve(), Path(output).resolve()
     validate_artifact(artifact, platform, release)
     size = artifact.stat().st_size
-    if not 100 <= size <= 2147483647:
+    if not 100 <= size <= LEGACY_SCHEMA1_STREAMING_MAX:
         raise ValueError('carrier size outside streaming limit')
     output.mkdir(parents=True, exist_ok=True)
     target = output / ('screenpipe-attribution.exe' if platform.startswith('windows')
@@ -349,6 +380,26 @@ def package_filename(artifact, output, platform, release):
     return target, manifest
 
 
+def package_windows_release_carriers(artifact, output, platform, release):
+    """Prepare schema 4 and, where Website schema 1 supports it, compatibility output."""
+    artifact, output = Path(artifact).resolve(), Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    if any(output.iterdir()):
+        raise ValueError('refusing to overwrite prepared artifacts')
+    with tempfile.TemporaryDirectory(prefix='.screenpipe-windows-carriers-', dir=output.parent) as staging:
+        staging = Path(staging)
+        package_windows_certificate(artifact, staging, platform, release)
+        if artifact.stat().st_size <= LEGACY_SCHEMA1_STREAMING_MAX:
+            package_filename(artifact, staging, platform, release)
+        else:
+            print('legacy schema 1 filename carrier omitted: source exceeds Website signed 32-bit streaming limit',
+                  file=sys.stderr)
+        prepared = tuple(staging.iterdir())
+        for item in prepared:
+            os.replace(item, output / item.name)
+    return tuple(output / item.name for item in prepared)
+
+
 def package_windows_certificate(artifact, output, platform, release):
     """Add a patchable untrusted certificate extension without changing signed image bytes."""
     if platform not in ('windows', 'windows-arm'):
@@ -358,36 +409,50 @@ def package_windows_certificate(artifact, output, platform, release):
     output.mkdir(parents=True, exist_ok=True)
     target = output / 'screenpipe-attribution-windows.exe'
     manifest = output / 'screenpipe-attribution-windows.json'
+    # A killed prior preparation can leave the completed executable before its
+    # manifest commit. That state is incomplete and safe to retry.
+    if target.exists() and not manifest.exists():
+        target.unlink()
     if target.exists() or manifest.exists():
         raise ValueError('refusing to overwrite prepared artifacts')
     before = artifact.stat()
     digest = hashlib.sha256()
+    temporary = None
+    manifest_name = None
     try:
         with artifact.open('rb') as source:
             cert_offset, size_offset, certificate, relative_grant = _prepare_windows_certificate(source, before.st_size)
             grant_offset = cert_offset + relative_grant
-            with target.open('xb') as destination:
+            fd, temporary_name = tempfile.mkstemp(prefix='.screenpipe-attribution-windows-', suffix='.tmp', dir=output)
+            os.close(fd)
+            temporary = Path(temporary_name)
+            with temporary.open('wb') as destination:
+                def copy_bytes(length):
+                    while length:
+                        block = source.read(min(1024 * 1024, length))
+                        if not block:
+                            raise ValueError('installer changed during streaming copy')
+                        destination.write(block)
+                        digest.update(block)
+                        length -= len(block)
+
                 source.seek(0)
-                remaining = cert_offset
-                position = 0
-                while remaining:
-                    block = source.read(min(1024 * 1024, remaining))
-                    if not block:
-                        raise ValueError('installer changed during streaming copy')
-                    block = bytearray(block)
-                    if position <= size_offset < position + len(block):
-                        struct.pack_into('<I', block, size_offset - position, len(certificate))
-                    destination.write(block)
-                    digest.update(block)
-                    position += len(block)
-                    remaining -= len(block)
+                copy_bytes(size_offset)
+                replacement = struct.pack('<I', len(certificate))
+                destination.write(replacement)
+                digest.update(replacement)
+                source.seek(size_offset + 4)
+                copy_bytes(cert_offset - size_offset - 4)
                 destination.write(certificate)
                 digest.update(certificate)
         after = artifact.stat()
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError('installer changed during streaming copy')
+        os.replace(temporary, target)
+        temporary = None
     except Exception:
-        target.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
         raise
     prepared_size = target.stat().st_size
     with target.open('rb') as prepared:
@@ -401,9 +466,19 @@ def package_windows_certificate(artifact, output, platform, release):
         certificate=dict(oid=WINDOWS_OID, critical=False,
                          marker=WINDOWS_MARKER.decode(), table_at_end=True),
     )
-    with manifest.open('x') as destination:
-        json.dump(result, destination, indent=2)
-        destination.write('\n')
+    try:
+        fd, manifest_name = tempfile.mkstemp(prefix='.screenpipe-attribution-windows-', suffix='.json.tmp', dir=output)
+        with os.fdopen(fd, 'w') as destination:
+            json.dump(result, destination, indent=2)
+            destination.write('\n')
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(manifest_name, manifest)
+    except Exception:
+        if manifest_name is not None:
+            Path(manifest_name).unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        raise
     return target, manifest
 
 
@@ -486,6 +561,8 @@ if __name__ == '__main__':
     parser.add_argument('--release', required=True)
     parser.add_argument('--linux-xattr', action='store_true', help='prepare a Linux PAX tar xattr carrier')
     parser.add_argument('--windows-certificate', action='store_true', help='prepare a Windows certificate carrier')
+    parser.add_argument('--windows-release-carriers', action='store_true',
+                        help='prepare schema 4 plus supported schema 1 Windows compatibility output')
     args = parser.parse_args()
     if args.linux_xattr and (not args.artifact or args.platform != 'linux'):
         parser.error('--linux-xattr requires --artifact and --platform linux')
@@ -493,7 +570,12 @@ if __name__ == '__main__':
         parser.error('--windows-certificate requires a Windows --artifact')
     if args.windows_certificate and args.linux_xattr:
         parser.error('carrier modes are mutually exclusive')
-    prepare = (package_windows_certificate if args.windows_certificate else
+    if args.windows_release_carriers and (not args.artifact or not args.platform.startswith('windows')):
+        parser.error('--windows-release-carriers requires a Windows --artifact')
+    if sum((args.windows_certificate, args.windows_release_carriers, args.linux_xattr)) > 1:
+        parser.error('carrier modes are mutually exclusive')
+    prepare = (package_windows_release_carriers if args.windows_release_carriers else
+               package_windows_certificate if args.windows_certificate else
                package_linux_xattr if args.linux_xattr else package if args.app else package_filename)
     for artifact in prepare(args.app or args.artifact, args.output, args.platform, args.release):
         print(artifact)

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import subprocess
 import tempfile
 import tarfile
@@ -21,6 +22,83 @@ spec.loader.exec_module(carrier)
 
 
 class CarrierTest(unittest.TestCase):
+    @staticmethod
+    def _sparse_pe(path, pe_offset=64 * 1024 * 1024):
+        optional = bytearray(112 + 8 * 5)
+        struct.pack_into('<H', optional, 0, 0x20b)
+        cert_offset = (pe_offset + 24 + len(optional) + 7) & ~7
+        pkcs7 = b'0\x03\x02\x01\x01'
+        win_length = 8 + len(pkcs7)
+        certificate = struct.pack('<IHH', win_length, 0x200, 2) + pkcs7
+        certificate += bytes((8 - len(certificate) % 8) % 8)
+        struct.pack_into('<II', optional, 112 + 8 * 4, cert_offset, len(certificate))
+        with path.open('wb') as stream:
+            dos = bytearray(64)
+            dos[:2] = b'MZ'
+            struct.pack_into('<I', dos, 0x3c, pe_offset)
+            stream.write(dos)
+            stream.seek(pe_offset)
+            stream.write(b'PE\0\0' + bytes(16) + struct.pack('<H', len(optional)) + bytes(2))
+            stream.write(optional)
+            stream.seek(cert_offset)
+            stream.write(certificate)
+        return cert_offset
+
+    def test_windows_pe_headers_are_seeked_and_read_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / 'distant.exe'
+            cert_offset = self._sparse_pe(artifact)
+
+            class RecordingReader:
+                def __init__(self, source):
+                    self.source, self.requests = source, []
+                def seek(self, *args):
+                    return self.source.seek(*args)
+                def read(self, size):
+                    self.requests.append(size)
+                    return self.source.read(size)
+
+            with artifact.open('rb') as raw:
+                source = RecordingReader(raw)
+                rebuilt = carrier.WINDOWS_MARKER + carrier.PLACEHOLDER.encode()
+                with mock.patch.object(carrier, '_insert_dummy_certificate', return_value=rebuilt):
+                    found, _, _, _ = carrier._prepare_windows_certificate(source, artifact.stat().st_size)
+            self.assertEqual(found, cert_offset)
+            self.assertLessEqual(max(source.requests), 1024 * 1024)
+            self.assertNotIn(64 * 1024 * 1024, source.requests)
+
+    def test_windows_release_orchestration_schema1_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for delta, expects_legacy in [(-1, True), (0, True), (1, False)]:
+                artifact = root / f'screenpipe_1.2.3_x64-{delta}-setup.exe'
+                artifact.write_bytes(b'fixture')
+                output = root / f'out-{delta}'
+
+                def certificate(_artifact, staging, _platform, _release):
+                    first = Path(staging) / 'screenpipe-attribution-windows.exe'
+                    second = Path(staging) / 'screenpipe-attribution-windows.json'
+                    first.write_bytes(b'certificate')
+                    second.write_text('{}')
+                    return first, second
+
+                def legacy(_artifact, staging, _platform, _release):
+                    first = Path(staging) / 'screenpipe-attribution.exe'
+                    second = Path(staging) / 'screenpipe-attribution.json'
+                    first.write_bytes(b'legacy')
+                    second.write_text('{}')
+                    return first, second
+
+                with mock.patch.object(carrier, 'package_windows_certificate', side_effect=certificate), \
+                     mock.patch.object(carrier, 'package_filename', side_effect=legacy) as legacy_call, \
+                     mock.patch.object(carrier.Path, 'stat') as stat:
+                    stat.return_value.st_size = carrier.LEGACY_SCHEMA1_STREAMING_MAX + delta
+                    produced = carrier.package_windows_release_carriers(
+                        artifact, output, 'windows', '1.2.3')
+                self.assertEqual(legacy_call.called, expects_legacy)
+                self.assertTrue((output / 'screenpipe-attribution-windows.exe').is_file())
+                self.assertEqual(len(produced), 4 if expects_legacy else 2)
+
     def test_linux_xattr_tar_preserves_appimage_and_exact_patch_location(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -171,15 +249,16 @@ class CarrierTest(unittest.TestCase):
             placeholder_bytes = b'prefix' + carrier.PLACEHOLDER.encode() + b'suffix'
             for platform, arch in [('windows', 'x64'), ('windows-arm', 'arm64')]:
                 artifact = root / f'screenpipe_1.2.3_{arch}-setup.exe'
-                artifact.write_bytes(b'MZ' + bytes(128))
+                artifact.write_bytes(b'MZ' + bytes(126))
                 output = root / f'certificate-{platform}'
                 metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
                 with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
                      mock.patch.object(carrier, '_prepare_windows_certificate',
-                                       return_value=(6, 1000, placeholder_bytes, 6)):
+                                       return_value=(100, 64, placeholder_bytes, 6)):
                     prepared, manifest = carrier.package_windows_certificate(
                         artifact, output, platform, '1.2.3')
-                expected_bytes = artifact.read_bytes()[:6] + placeholder_bytes
+                expected_bytes = (artifact.read_bytes()[:64] + struct.pack('<I', len(placeholder_bytes))
+                                  + artifact.read_bytes()[68:100] + placeholder_bytes)
                 data = json.loads(manifest.read_text())
                 self.assertEqual(prepared.name, 'screenpipe-attribution-windows.exe')
                 self.assertEqual(manifest.name, 'screenpipe-attribution-windows.json')
@@ -187,11 +266,33 @@ class CarrierTest(unittest.TestCase):
                 self.assertEqual(data['carrier'], 'windows-certificate')
                 self.assertEqual(data['platform'], platform)
                 self.assertEqual(data['patch'], dict(
-                    offset=12, length=36, placeholder=carrier.PLACEHOLDER))
+                    offset=106, length=36, placeholder=carrier.PLACEHOLDER))
                 self.assertEqual(data['certificate'], dict(
                     oid=carrier.WINDOWS_OID, critical=False,
                     marker=carrier.WINDOWS_MARKER.decode(), table_at_end=True))
                 self.assertEqual(data['sha256'], hashlib.sha256(expected_bytes).hexdigest())
+
+    def test_windows_certificate_patch_crosses_copy_boundary_and_recovers_orphan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / 'screenpipe_1.2.3_x64-setup.exe'
+            artifact.write_bytes(b'MZ' + bytes(1024 * 1024 + 126))
+            output = root / 'out'
+            output.mkdir()
+            (output / 'screenpipe-attribution-windows.exe').write_bytes(b'interrupted')
+            certificate = carrier.WINDOWS_MARKER + carrier.PLACEHOLDER.encode()
+            size_offset = 1024 * 1024 - 2
+            cert_offset = 1024 * 1024 + 64
+            metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
+            with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                 mock.patch.object(carrier, '_prepare_windows_certificate',
+                                   return_value=(cert_offset, size_offset, certificate, 33)):
+                prepared, manifest = carrier.package_windows_certificate(
+                    artifact, output, 'windows', '1.2.3')
+            data = prepared.read_bytes()
+            self.assertEqual(struct.unpack_from('<I', data, size_offset)[0], len(certificate))
+            self.assertEqual(data[cert_offset:cert_offset + len(certificate)], certificate)
+            self.assertTrue(manifest.is_file())
 
     @unittest.skipUnless(sys.platform == 'win32', 'requires Windows NSIS')
     def test_actual_nsis_filename_grant_fixture(self):

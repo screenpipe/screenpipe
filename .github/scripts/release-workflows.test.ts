@@ -52,7 +52,8 @@ test("Windows builds prepare and upload legacy plus certificate attribution carr
   const prepare = steps.find((step: any) => step.name === "Prepare Windows certificate download carrier");
   expect(prepare.if).toBe("matrix.os_type == 'windows'");
   expect(prepare.run).toContain("--platform $platform --release $version");
-  expect(prepare.run).toContain("--windows-certificate");
+  expect(prepare.run).toContain("--windows-release-carriers");
+  expect(prepare.run.match(/python scripts\/package-attribution-carrier\.py/g)).toHaveLength(1);
   expect(prepare.run).toContain("screenpipe-attribution-windows.exe");
   expect(prepare.run).toContain("aarch64-pc-windows-msvc");
   const dryRun = steps.find((step: any) => step.name === "Upload Windows dry-run artifacts");

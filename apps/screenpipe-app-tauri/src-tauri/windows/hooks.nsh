@@ -9,6 +9,90 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 
+; Decode one definite-length DER TLV using offsets relative to a bounded buffer.
+; Every byte is checked against ParentEnd before it is read. Valid is set to 1
+; only when Tag, Value, and End describe a complete minimally encoded DER TLV.
+!macro _SP_DerTlv Base Cursor ParentEnd Tag Value End Valid ScratchA ScratchB ScratchC ScratchD
+  !define _SP_DER_INVALID sp_der_invalid_${__LINE__}
+  !define _SP_DER_SHORT sp_der_short_${__LINE__}
+  !define _SP_DER_LONG_LOOP sp_der_long_loop_${__LINE__}
+  !define _SP_DER_LONG_NEXT sp_der_long_next_${__LINE__}
+  !define _SP_DER_FINISH sp_der_finish_${__LINE__}
+  !define _SP_DER_DONE sp_der_done_${__LINE__}
+  StrCpy ${Valid} 0
+  StrCpy ${Tag} 0
+  StrCpy ${Value} 0
+  StrCpy ${End} 0
+  IntCmp ${Cursor} 0 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchA} ${ParentEnd} - ${Cursor}
+  IntCmp ${ScratchA} 2 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchB} ${Base} + ${Cursor}
+  System::Call '*${ScratchB}(&i1.${Tag},&i1.${ScratchC})'
+  IntOp ${Value} ${Cursor} + 2
+  IntOp ${ScratchA} ${ScratchC} & 0x80
+  ${If} ${ScratchA} == 0
+    StrCpy ${ScratchD} ${ScratchC}
+    Goto ${_SP_DER_FINISH}
+  ${EndIf}
+  IntOp ${ScratchA} ${ScratchC} & 0x7f
+  ; A 32-bit process can represent at most four DER length octets. This is a
+  ; representation check, not a certificate-size policy cap.
+  IntCmp ${ScratchA} 1 0 ${_SP_DER_INVALID} 0
+  IntCmp ${ScratchA} 4 0 0 ${_SP_DER_INVALID}
+  IntOp ${ScratchB} ${ParentEnd} - ${Value}
+  IntCmp ${ScratchB} ${ScratchA} 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchB} ${Base} + ${Value}
+  System::Call '*${ScratchB}(&i1.${ScratchC})'
+  ${If} ${ScratchC} == 0
+    Goto ${_SP_DER_INVALID}
+  ${EndIf}
+  StrCpy ${ScratchD} 0
+  StrCpy ${ScratchC} 0
+  ${_SP_DER_LONG_LOOP}:
+    ; Refuse a shift that would overflow signed offset arithmetic.
+    IntCmp ${ScratchD} 0x007fffff 0 0 ${_SP_DER_INVALID}
+    IntOp ${ScratchD} ${ScratchD} << 8
+    IntOp ${ScratchB} ${Base} + ${Value}
+    IntOp ${ScratchB} ${ScratchB} + ${ScratchC}
+    System::Call '*${ScratchB}(&i1.${ScratchB})'
+    IntOp ${ScratchD} ${ScratchD} | ${ScratchB}
+    IntOp ${ScratchC} ${ScratchC} + 1
+    IntCmp ${ScratchC} ${ScratchA} ${_SP_DER_LONG_NEXT} ${_SP_DER_LONG_LOOP} ${_SP_DER_INVALID}
+  ${_SP_DER_LONG_NEXT}:
+  IntOp ${Value} ${Value} + ${ScratchA}
+  ; DER requires short form for values below 128.
+  IntCmp ${ScratchD} 128 0 ${_SP_DER_INVALID} 0
+  ${_SP_DER_FINISH}:
+  IntOp ${ScratchA} ${ParentEnd} - ${Value}
+  IntCmp ${ScratchA} ${ScratchD} 0 ${_SP_DER_INVALID} 0
+  IntOp ${End} ${Value} + ${ScratchD}
+  StrCpy ${Valid} 1
+  Goto ${_SP_DER_DONE}
+  ${_SP_DER_INVALID}:
+  StrCpy ${Valid} 0
+  ${_SP_DER_DONE}:
+  !undef _SP_DER_DONE
+  !undef _SP_DER_FINISH
+  !undef _SP_DER_LONG_NEXT
+  !undef _SP_DER_LONG_LOOP
+  !undef _SP_DER_SHORT
+  !undef _SP_DER_INVALID
+!macroend
+
+; Keep the parser's four scratch registers transparent to its caller. Parser
+; outputs must not alias Base, Cursor, ParentEnd, or these scratch registers.
+!macro _SP_ReadDer Base Cursor ParentEnd Tag Value End Valid
+  Push $2
+  Push $6
+  Push $R2
+  Push $R3
+  !insertmacro _SP_DerTlv ${Base} ${Cursor} ${ParentEnd} ${Tag} ${Value} ${End} ${Valid} $2 $6 $R2 $R3
+  Pop $R3
+  Pop $R2
+  Pop $6
+  Pop $2
+!macroend
+
 ; Validate the one acquisition filename shape shared by the browser origin
 ; metadata and the legacy installer filename. Input and output may be the same
 ; register. Invalid input produces an empty output.
@@ -191,67 +275,159 @@
           ${EndIf}
           ; CERT_CONTEXT is native 32-bit because NSIS is a 32-bit process.
           System::Call '*$6(i, p.r1, i.r3, p)'
-          StrCpy $R7 $1
-          StrCpy $R4 $3
-          StrCpy $0 2
+          StrCpy $R7 $1 ; certificate base
+          StrCpy $R4 $3 ; current parent end offset
+          StrCpy $0 0
+          !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+          ${If} $5 == 0
+          ${OrIf} $1 != 48
+          ${OrIf} $4 != $R4
+            StrCpy $R0 "embedded-der"
+            ${Continue}
+          ${EndIf}
+          ; Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm,
+          ; signatureValue }. Only the direct TBSCertificate child can own [3].
+          StrCpy $0 $3
+          !insertmacro _SP_ReadDer $R7 $0 $4 $1 $3 $4 $5
+          ${If} $5 == 0
+          ${OrIf} $1 != 48
+            StrCpy $R0 "embedded-der"
+            ${Continue}
+          ${EndIf}
+          StrCpy $0 $3
+          StrCpy $R4 $4
           ${Do}
-            IntOp $1 $0 + 22
-            ${If} $1 > $R4
+            ${If} $0 >= $R4
               ${ExitDo}
             ${EndIf}
-            IntOp $1 $R7 + $0
-            System::Call 'msvcrt::memcmp(p r1, p r2, i 22)i.r3'
-            ${If} $3 == 0
+            !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+            ${If} $5 == 0
+              StrCpy $R0 "embedded-der"
+              ${ExitDo}
+            ${EndIf}
+            StrCpy $0 $4
+            ${If} $1 != 0xa3
+              ${Continue}
+            ${EndIf}
+            ; [3] EXPLICIT Extensions must contain exactly one SEQUENCE.
+            Push $0 ; next TBSCertificate sibling
+            Push $R4
+            StrCpy $0 $3
+            StrCpy $R4 $4
+            !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+            ${If} $5 == 0
+            ${OrIf} $1 != 48
+            ${OrIf} $4 != $R4
+              StrCpy $R0 "embedded-der"
+              Pop $R4
+              Pop $0
+              ${ExitDo}
+            ${EndIf}
+            ; Extensions ::= SEQUENCE OF Extension.
+            StrCpy $0 $3
+            StrCpy $R4 $4
+            !define _SP_EXTENSION_DONE sp_extension_done_${__LINE__}
+            ${Do}
+              ${If} $0 >= $R4
+                ${ExitDo}
+              ${EndIf}
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 48
+                StrCpy $R0 "embedded-der"
+                ${ExitDo}
+              ${EndIf}
+              Push $R4 ; Extensions end
+              Push $4  ; next Extension
+              StrCpy $0 $3
+              StrCpy $R4 $4
+              ; extnID OBJECT IDENTIFIER is the first Extension child.
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 6
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $4 - $3
+              ${If} $5 != 20
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $R7 + $3
+              IntOp $1 $2 + 2
+              System::Call 'msvcrt::memcmp(p r5, p r1, i 20)i.r5'
+              ${If} $5 != 0
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
               IntOp $8 $8 + 1
-              ; Extension ::= SEQUENCE { oid, critical DEFAULT FALSE,
-              ; extnValue OCTET STRING }. All agreed lengths are short-form DER.
-              IntOp $3 $1 - 2
-              System::Call '*$3(&i1.r4,&i1.r7)'
-              IntOp $3 $1 + 22
-              StrCpy $R2 $3
-              System::Call '*$3(&i1.r1,&i1.r3)'
-              ${If} $4 != 48
+              StrCpy $0 $4
+              ; critical BOOLEAN is optional. Explicit FALSE is noncritical;
+              ; any other encoding or TRUE value is rejected.
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
                 StrCpy $R0 "embedded-der"
-              ${ElseIf} $1 == 1
-                StrCpy $R0 "embedded-critical"
-              ${ElseIf} $1 != 4
-                StrCpy $R0 "embedded-der"
-              ${Else}
-                IntOp $4 $R2 + 2
-                System::Call '*$4(&i1.r1,&i1.r5)'
-                IntOp $5 $5 + 2
-                IntOp $5 $5 - $3
-                ${If} $1 != 12
-                ${OrIf} $5 != 0
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              ${If} $1 == 1
+                IntOp $5 $4 - $3
+                ${If} $5 != 1
                   StrCpy $R0 "embedded-der"
+                  Goto ${_SP_EXTENSION_DONE}
+                ${EndIf}
+                IntOp $5 $R7 + $3
+                System::Call '*$5(&i1.r5)'
+                ${If} $5 != 0
+                  StrCpy $R0 "embedded-critical"
+                  Goto ${_SP_EXTENSION_DONE}
+                ${EndIf}
+                StrCpy $0 $4
+                !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${EndIf}
+              ${If} $5 == 0
+              ${OrIf} $1 != 4
+              ${OrIf} $4 != $R4
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              ; extnValue contains exactly one 71-byte DER UTF8String.
+              StrCpy $0 $3
+              StrCpy $R4 $4
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 12
+              ${OrIf} $4 != $R4
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $4 - $3
+              ${If} $5 != 69
+                StrCpy $R0 "embedded-length"
+                IntOp $R1 $5 + 2
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $R7 + $3
+              System::Call '*$5(&m69.r7)'
+              StrCpy $1 $7 33 0
+              ${If} $1 != "urn:screenpipe:acquisition-grant:"
+                StrCpy $R0 "embedded-marker"
+              ${Else}
+                StrCpy $1 $7 36 33
+                StrCpy $3 "screenpipe-$1.exe"
+                !insertmacro _SP_ValidateAcquisitionFilename "$3" $1 $4 $5 $7
+                ${If} $1 == ""
+                  StrCpy $R0 "embedded-grant"
                 ${Else}
-                  IntOp $5 $3 + 24
-                  ${If} $7 != $5
-                    StrCpy $R0 "embedded-der"
-                  ${ElseIf} $3 != 71
-                    StrCpy $R0 "embedded-length"
-                    StrCpy $R1 $3
-                  ${Else}
-                    IntOp $4 $4 + 2
-                    System::Call '*$4(&m69.r7)'
-                    StrCpy $1 $7 33 0
-                    ${If} $1 != "urn:screenpipe:acquisition-grant:"
-                      StrCpy $R0 "embedded-marker"
-                    ${Else}
-                      StrCpy $1 $7 36 33
-                      StrCpy $3 "screenpipe-$1.exe"
-                      !insertmacro _SP_ValidateAcquisitionFilename "$3" $1 $4 $5 $7
-                      ${If} $1 == ""
-                        StrCpy $R0 "embedded-grant"
-                      ${Else}
-                        StrCpy $9 $1
-                      ${EndIf}
-                    ${EndIf}
-                  ${EndIf}
+                  StrCpy $9 $1
                 ${EndIf}
               ${EndIf}
-            ${EndIf}
-            IntOp $0 $0 + 1
+              ${_SP_EXTENSION_DONE}:
+              Pop $0
+              Pop $R4
+            ${Loop}
+            !undef _SP_EXTENSION_DONE
+            Pop $R4
+            Pop $0
+            ; DER TBSCertificate has at most one [3] extensions field.
+            ${ExitDo}
           ${Loop}
         ${Loop}
         System::Free $2
