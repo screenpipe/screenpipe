@@ -289,6 +289,16 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   if (-not (Test-Path -LiteralPath $downloaded)) {
     throw 'Edge did not complete the fixture download after normal visible confirmation'
   }
+  # Edge may expose the final pathname briefly before its reputation scan has
+  # finished the atomic replacement that attaches Zone.Identifier. Wait for a
+  # stable file instead of racing that last browser-owned rename.
+  $lastLength = -1
+  do {
+    $length = (Get-Item -LiteralPath $downloaded).Length
+    Start-Sleep -Milliseconds 500
+    $stable = $length -eq $lastLength -and -not (Test-Path -LiteralPath "$downloaded.crdownload")
+    $lastLength = $length
+  } while (-not $stable)
   $downloadHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloaded).Hash.ToLowerInvariant()
   if ($downloadHash -ne $fixtureHash) { throw 'Edge download SHA-256 differs from the signed fixture' }
   $zonePath = "$downloaded`:Zone.Identifier"
@@ -350,6 +360,13 @@ for grant, output in ((sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])):
   if (-not (Test-Path -LiteralPath $secondDownloaded)) {
     throw 'Edge did not complete the direct final-URL fixture download after confirmation'
   }
+  $lastLength = -1
+  do {
+    $length = (Get-Item -LiteralPath $secondDownloaded).Length
+    Start-Sleep -Milliseconds 500
+    $stable = $length -eq $lastLength -and -not (Test-Path -LiteralPath "$secondDownloaded.crdownload")
+    $lastLength = $length
+  } while (-not $stable)
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $secondDownloaded).Hash.ToLowerInvariant() -ne $secondFixtureHash) {
     throw 'second Edge download SHA-256 differs from the signed fixture'
   }
