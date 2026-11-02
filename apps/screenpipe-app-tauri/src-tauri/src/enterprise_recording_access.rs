@@ -43,6 +43,10 @@ pub async fn set_enterprise_recording_authorized(
 pub(crate) fn revoke_enterprise_recording_from_watcher(app: &tauri::AppHandle, reason: &'static str) {
     let state = app.state::<crate::recording::RecordingState>();
     state.set_capture_intent(false);
+    crate::enterprise::recording_events::record_reason(
+        crate::enterprise::recording_events::State::Stopping,
+        reason,
+    );
     crate::enterprise_policy::update_recording_authorized(false);
     let lifecycle = state.server_lifecycle.clone();
     let app = app.clone();
@@ -126,6 +130,10 @@ pub(crate) async fn revoke_enterprise_recording_with_reason(app: &tauri::AppHand
         }
         let state = app.state::<crate::recording::RecordingState>();
         state.set_capture_intent(false);
+        crate::enterprise::recording_events::record_reason(
+            crate::enterprise::recording_events::State::Stopping,
+            reason,
+        );
         crate::enterprise_policy::update_recording_authorized(false);
         revoke_under_lifecycle(
             &state.server_lifecycle,

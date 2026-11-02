@@ -30,6 +30,10 @@ pub(crate) struct Event {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<super::recording_coverage::CaptureEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -83,6 +87,18 @@ impl Outbox {
         coverage_start: Option<chrono::DateTime<chrono::Utc>>,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), String> {
+        self.write_evidence(state, reason, coverage_start, at, None, None)
+    }
+
+    fn write_evidence(
+        &mut self,
+        state: State,
+        reason: Option<&str>,
+        coverage_start: Option<chrono::DateTime<chrono::Utc>>,
+        at: chrono::DateTime<chrono::Utc>,
+        expected: Option<bool>,
+        capture: Option<super::recording_coverage::CaptureEvidence>,
+    ) -> Result<(), String> {
         let event = Event {
             event_id: uuid::Uuid::new_v4().to_string(),
             license_id: self.license_id.clone(),
@@ -91,6 +107,8 @@ impl Outbox {
             sequence: SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1,
             occurred_at: at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             reason: reason.map(str::to_owned),
+            expected,
+            capture,
             coverage_start: coverage_start
                 .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
             state,
@@ -182,19 +200,26 @@ pub(crate) fn bind(root: &Path, license_id: &str, device_id: &str, endpoint: &st
 
 /// Preserve the trigger separately from the successful teardown outcome.
 pub(crate) fn record_reason(state: State, reason: &str) {
-    crate::enterprise::recording_coverage::interrupt(state, reason);
-    write_observation(state, reason, None, chrono::Utc::now());
+    if state == State::Stopping && crate::enterprise::recording_coverage::control_is_current(reason)
+    {
+        return;
+    }
+    let (state, expected) = crate::enterprise::recording_coverage::interrupt(state, reason);
+    write_evidence(state, reason, None, chrono::Utc::now(), expected, None);
 }
 
-pub(crate) fn write_observation(
+pub(crate) fn write_evidence(
     state: State,
     reason: &str,
     start: Option<chrono::DateTime<chrono::Utc>>,
     at: chrono::DateTime<chrono::Utc>,
+    expected: Option<bool>,
+    capture: Option<super::recording_coverage::CaptureEvidence>,
 ) {
     let mut guard = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(outbox) = guard.as_mut() {
-        if let Err(error) = outbox.write(state, Some(reason), start, at) {
+        if let Err(error) = outbox.write_evidence(state, Some(reason), start, at, expected, capture)
+        {
             diagnostic(&outbox.root, &error);
         }
     }
@@ -362,6 +387,50 @@ mod tests {
             &path,
             &event,
             &serde_json::json!({"recording_event_ack": event.event_id}),
+        );
+        assert!(reopened.pending().unwrap().is_none());
+    }
+
+    #[test]
+    fn required_failure_evidence_survives_reopen_and_receipt_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let mut outbox = Outbox::open(root.path(), "workspace", "device", "endpoint");
+        let end = chrono::Utc::now();
+        let capture = super::super::recording_coverage::CaptureEvidence {
+            screen: super::super::recording_coverage::ChannelEvidence {
+                expected: Some(true),
+                status: Some("ok".into()),
+                reason: Some("ok".into()),
+            },
+            audio: super::super::recording_coverage::ChannelEvidence {
+                expected: Some(true),
+                status: Some("error".into()),
+                reason: Some("audio_stalled".into()),
+            },
+            locked: false,
+            suspended: false,
+            persistence_failed: false,
+        };
+        outbox
+            .write_evidence(
+                State::Error,
+                Some("audio_stalled"),
+                Some(end - chrono::Duration::seconds(5)),
+                end,
+                Some(true),
+                Some(capture.clone()),
+            )
+            .unwrap();
+        let reopened = Outbox::open(root.path(), "workspace", "device", "endpoint");
+        let (path, event) = reopened.pending().unwrap().unwrap();
+        assert_eq!(event.expected, Some(true));
+        assert_eq!(event.capture, Some(capture));
+        acknowledge(&path, &event, &serde_json::json!({"ok":true}));
+        assert_eq!(reopened.pending().unwrap().unwrap().1, event);
+        acknowledge(
+            &path,
+            &event,
+            &serde_json::json!({"recording_event_ack":event.event_id}),
         );
         assert!(reopened.pending().unwrap().is_none());
     }

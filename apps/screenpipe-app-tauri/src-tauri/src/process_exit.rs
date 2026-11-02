@@ -155,6 +155,7 @@ pub(crate) fn panic_thread_label() -> String {
 
 /// Set by intentional quit paths so `ExitRequested` does not `prevent_exit`.
 pub static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static OS_SESSION_ENDING: AtomicBool = AtomicBool::new(false);
 
 /// Latched once quit teardown starts — ignores duplicate Quit clicks.
 pub static QUIT_TEARDOWN_STARTED: AtomicBool = AtomicBool::new(false);
@@ -167,9 +168,26 @@ pub static PENDING_RESTART: AtomicBool = AtomicBool::new(false);
 /// Stop capture, shut down the embedded server (ort sessions, ggml Metal, redact
 /// workers), and stop Pi sidecars. Best-effort; callers bound with a timeout.
 pub async fn run_pre_exit_teardown(app: &AppHandle) {
+    run_pre_exit_teardown_with_reason(
+        app,
+        if OS_SESSION_ENDING.load(Ordering::SeqCst) {
+            "os_session_ending"
+        } else if PENDING_RESTART.load(Ordering::SeqCst) {
+            "app_restart"
+        } else {
+            "app_exit"
+        },
+    )
+    .await;
+}
+
+async fn run_pre_exit_teardown_with_reason(app: &AppHandle, reason: &'static str) {
+    #[cfg(feature = "enterprise-support")]
+    crate::enterprise::recording_events::record_reason(crate::enterprise::recording_events::State::Stopping, reason);
+
     if let Some(recording_state) = app.try_state::<RecordingState>() {
         if let Some(session) = recording_state.capture.lock().await.take() {
-            session.stop_with_reason(if PENDING_RESTART.load(Ordering::SeqCst) { "app_restart" } else { "app_exit" }).await;
+            session.stop_with_reason(reason).await;
         }
         if let Some(server) = recording_state.server.lock().await.take() {
             server.shutdown().await;
@@ -528,6 +546,7 @@ pub fn setup_terminate_interceptor(app_handle: AppHandle) {
             }
             if os_session_is_ending() {
                 info!("terminate: OS session ending — allowing exit without confirmation");
+                OS_SESSION_ENDING.store(true, Ordering::SeqCst);
                 QUIT_REQUESTED.store(true, Ordering::SeqCst);
                 return 1;
             }
@@ -800,12 +819,16 @@ pub fn request_app_quit(app: AppHandle) {
     if crate::search_only::keep_after_quit(&app) {
         crate::search_only::request_enter(app);
     } else {
-        request_full_app_quit(app);
+        request_full_app_quit_with_reason(app, "user_quit");
     }
 }
 
 /// Full exit for confirmed opt-out Quit, updater handoffs, and failed teardown.
 pub(crate) fn request_full_app_quit(app: AppHandle) {
+    request_full_app_quit_with_reason(app, "app_exit");
+}
+
+fn request_full_app_quit_with_reason(app: AppHandle, reason: &'static str) {
     if crate::db_recovery_notifications::recovery_active() {
         info!("Quit ignored while protected database recovery is active");
         crate::db_recovery_notifications::notify_recovery_quit_blocked();
@@ -822,7 +845,7 @@ pub(crate) fn request_full_app_quit(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         info!("Quit requested — running pre-exit teardown");
         match bounded_teardown(PRE_EXIT_TEARDOWN_TIMEOUT, async {
-            run_pre_exit_teardown(&app).await;
+            run_pre_exit_teardown_with_reason(&app, reason).await;
             Ok(())
         })
         .await

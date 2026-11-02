@@ -317,7 +317,7 @@ pub fn request_enter(app: AppHandle) {
             screenpipe_engine::search_only::finish_in_flight_mutations().await;
             crate::recording::stop_capture_with_reason(
                 app_for_stop.state::<crate::recording::RecordingState>(),
-                app_for_stop.clone(), "search_only",
+                app_for_stop.clone(), "user_quit",
             )
             .await?;
             saved?;

@@ -448,6 +448,7 @@ mod tests {
             &event,
             &serde_json::json!({"ok": true, "recording_event_error": "persistence_failed", "recording_event_storage_code": "42P01"}),
         );
+        crate::enterprise::recording_events::acknowledge(&path, &event, &serde_json::json!({"recording_event_error":"expectation_state_mismatch"}));
         let report = collect_redacted_from_dirs(&[root.path().to_owned()])
             .await
             .unwrap();
@@ -455,6 +456,7 @@ mod tests {
         assert!(report.contains("persistence_failed"));
         assert!(report.contains("42P01"));
         assert!(report.contains("delivery_pending"));
+        assert!(report.contains("expectation_state_mismatch"));
         assert!(
             path.exists(),
             "support collection must preserve pending events"

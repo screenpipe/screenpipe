@@ -568,6 +568,12 @@ pub(crate) async fn stop_capture_with_reason(
     // off). Clear the intent so a later engine crash doesn't get auto-respawned
     // — which would resurrect capture the user deliberately stopped.
     state.set_capture_intent(false);
+    #[cfg(feature = "enterprise-support")]
+    crate::enterprise::recording_events::record_reason(
+        crate::enterprise::recording_events::State::Stopping,
+        reason,
+    );
+
     screenpipe_engine::meeting_watcher::set_capture_stopped(true);
 
     remember_active_meeting_for_capture_restart(&state).await;
