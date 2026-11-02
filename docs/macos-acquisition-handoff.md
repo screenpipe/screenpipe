@@ -87,8 +87,15 @@ must both end in the same `screenpipe-<canonical lowercase UUID v4>.exe` bound
 by the download ticket. The installer reads only its own `Zone.Identifier`
 stream with Win32 APIs and accepts one `[ZoneTransfer]` `HostUrl` whose HTTPS
 URL path ends in that exact filename. A valid origin candidate wins over the
-legacy current filename. Missing, malformed, duplicated, oversized, query-like,
-or non-HTTPS metadata falls back to the current filename. `ZoneId` is not
+legacy current filename. The parser consumes the stream incrementally at the
+NSIS 1023-character read boundary: unrelated long fields are discarded through
+their newline, while a `HostUrl` longer than that boundary is rejected only
+after all of its chunks are consumed and measured. Missing, malformed,
+duplicated, oversized, query-like, or non-HTTPS origin metadata falls back to
+the current filename. A closed, privacy-safe diagnostic records the fixed cause,
+measured boundary or Windows I/O error when applicable, and the actual fallback
+and persistence outcome; the app validates that protocol before logging it and
+never logs the URL, grant, installer path, or marker text. `ZoneId` is not
 authorization, and the installed app never searches download directories.
 
 For Linux xattr downloads, use the same versioned AppImage with `--linux-xattr`:

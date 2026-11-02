@@ -227,6 +227,38 @@ class CarrierTest(unittest.TestCase):
                     ads.replace(second, '11111111-1111-4111-8111-111111111111'))
             self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
 
+            host_prefix = 'HostUrl=https://downloads.test/download/'
+            host_suffix = f'/screenpipe-{second}.exe'
+            for logical_length, newline in [(1022, ''), (1023, ''), (1023, '\r\n')]:
+                boundary_ads = ('[ZoneTransfer]\r\n' + host_prefix
+                                + ('x' * (logical_length - len(host_prefix) - len(host_suffix)))
+                                + host_suffix + newline)
+                directory = root / f'ads-boundary-{logical_length}-{len(newline)}'
+                install('renamed.exe', directory, boundary_ads)
+                self.assertEqual((directory / 'acquisition-grant').read_text(), second)
+                self.assertFalse((directory / 'acquisition-grant-diagnostic').exists())
+
+            # An unrelated field may span as many fixed NSIS reads as the ADS
+            # actually contains. It must not hide a later complete HostUrl.
+            unrelated = ('[ZoneTransfer]\r\nReferrerUrl=https://referrer.test/'
+                         + ('r' * 2500) + '\r\n' + host_prefix + host_suffix + '\r\n')
+            unrelated_dir = root / 'ads-overlong-referrer'
+            install('renamed.exe', unrelated_dir, unrelated)
+            self.assertEqual((unrelated_dir / 'acquisition-grant').read_text(), second)
+            self.assertFalse((unrelated_dir / 'acquisition-grant-diagnostic').exists())
+
+            overflow_length = 1024
+            overflow_ads = ('[ZoneTransfer]\r\n' + host_prefix
+                            + ('x' * (overflow_length - len(host_prefix) - len(host_suffix)))
+                            + host_suffix + '\r\n')
+            overflow_dir = root / 'ads-host-overflow'
+            install(f'screenpipe-{first}.exe', overflow_dir, overflow_ads)
+            self.assertEqual((overflow_dir / 'acquisition-grant').read_text(), first)
+            self.assertEqual(
+                (overflow_dir / 'acquisition-grant-diagnostic').read_text(),
+                'v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;'
+                'fallback=filename;persistence=saved')
+
             fallback_cases = [
                 '[ZoneTransfer]\r\nZoneId=3\r\n',
                 '[ZoneTransfer]\r\nHostUrl=http://downloads.test/'
@@ -236,20 +268,25 @@ class CarrierTest(unittest.TestCase):
                 '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
                 f'screenpipe-{second}.exe\r\nHostUrl=https://downloads.test/download/'
                 f'screenpipe-{second}.exe\r\n',
-                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
-                + ('x' * 1100) + f'/screenpipe-{second}.exe\r\n',
                 '[Other]\r\nHostUrl=https://downloads.test/download/'
                 f'screenpipe-{second}.exe\r\n',
                 '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
                 'screenpipe-12345678-1234-4234-C234-123456789012.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-ABCDEFAB-cdef-4abc-9def-abcdefabcdef.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-abcdefab-cdef-4abc-Bdef-abcdefabcdef.exe\r\n',
             ]
             for index, malformed_ads in enumerate(fallback_cases):
                 directory = root / f'ads-fallback-{index}'
                 install(f'screenpipe-{first}.exe', directory, malformed_ads)
                 self.assertEqual((directory / 'acquisition-grant').read_text(), first)
                 diagnostic = directory / 'acquisition-grant-diagnostic'
-                if index in {1, 2, 3, 4, 6}:
-                    self.assertEqual(diagnostic.read_text(), 'invalid-origin-metadata')
+                if index in {1, 2, 3, 5, 6, 7}:
+                    cause = ('duplicate-host-url' if index == 3 else 'malformed-host-url')
+                    self.assertEqual(
+                        diagnostic.read_text(),
+                        f'v1;{cause};fallback=filename;persistence=saved')
                     self.assertNotIn(first, diagnostic.read_text())
                     self.assertNotIn(second, diagnostic.read_text())
                 else:
@@ -258,6 +295,8 @@ class CarrierTest(unittest.TestCase):
                 f'screenpipe-{carrier.PLACEHOLDER}.exe',
                 'screenpipe-12345678-1234-4234-7234-123456789012.exe',
                 'screenpipe-12345678-1234-4234-C234-123456789012.exe',
+                'screenpipe-ABCDEFAB-cdef-4abc-9def-abcdefabcdef.exe',
+                'screenpipe-abcdefab-cdef-4abc-Bdef-abcdefabcdef.exe',
                 'screenpipe.exe',
             ]):
                 directory = root / f'invalid-{index}'

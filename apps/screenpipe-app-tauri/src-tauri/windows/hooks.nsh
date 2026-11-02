@@ -13,70 +13,76 @@
 ; metadata and the legacy installer filename. Input and output may be the same
 ; register. Invalid input produces an empty output.
 !macro _SP_ValidateAcquisitionFilename Input Output ScratchA ScratchB ScratchC
+  !define _SP_UUID_LOOP sp_uuid_loop_${__LINE__}
+  !define _SP_UUID_HEX sp_uuid_hex_${__LINE__}
+  !define _SP_UUID_NEXT sp_uuid_next_${__LINE__}
+  !define _SP_UUID_ADVANCE sp_uuid_advance_${__LINE__}
+  !define _SP_UUID_VALID sp_uuid_valid_${__LINE__}
+  !define _SP_UUID_INVALID sp_uuid_invalid_${__LINE__}
+  !define _SP_UUID_DONE sp_uuid_done_${__LINE__}
   StrCpy ${Output} ""
   StrLen ${ScratchA} ${Input}
-  ${If} ${ScratchA} == 51
-    StrCpy ${ScratchA} ${Input} 11 0
-    StrCpy ${ScratchB} ${Input} 4 47
-    ${If} ${ScratchA} == "screenpipe-"
-    ${AndIf} ${ScratchB} == ".exe"
-      StrCpy ${ScratchA} ${Input} 36 11
-      ${If} ${ScratchA} != "00000000-0000-4000-8000-000000000000"
-        StrCpy ${ScratchB} ${ScratchA} 1 14
-        ${If} ${ScratchB} == "4"
-          StrCpy ${ScratchB} ${ScratchA} 1 19
-          ${If} ${ScratchB} == "8"
-          ${OrIf} ${ScratchB} == "9"
-          ${OrIf} ${ScratchB} == "a"
-          ${OrIf} ${ScratchB} == "b"
-            StrCpy ${ScratchB} 0
-            StrCpy ${ScratchC} 1
-            ${Do}
-              StrCpy ${Output} ${ScratchA} 1 ${ScratchB}
-              ${If} ${ScratchB} == 8
-              ${OrIf} ${ScratchB} == 13
-              ${OrIf} ${ScratchB} == 18
-              ${OrIf} ${ScratchB} == 23
-                ${If} ${Output} != "-"
-                  StrCpy ${ScratchC} 0
-                  ${ExitDo}
-                ${EndIf}
-              ${Else}
-                ${If} ${Output} != "0"
-                ${AndIf} ${Output} != "1"
-                ${AndIf} ${Output} != "2"
-                ${AndIf} ${Output} != "3"
-                ${AndIf} ${Output} != "4"
-                ${AndIf} ${Output} != "5"
-                ${AndIf} ${Output} != "6"
-                ${AndIf} ${Output} != "7"
-                ${AndIf} ${Output} != "8"
-                ${AndIf} ${Output} != "9"
-                ${AndIf} ${Output} != "a"
-                ${AndIf} ${Output} != "b"
-                ${AndIf} ${Output} != "c"
-                ${AndIf} ${Output} != "d"
-                ${AndIf} ${Output} != "e"
-                ${AndIf} ${Output} != "f"
-                  StrCpy ${ScratchC} 0
-                  ${ExitDo}
-                ${EndIf}
-              ${EndIf}
-              IntOp ${ScratchB} ${ScratchB} + 1
-              ${If} ${ScratchB} >= 36
-                ${ExitDo}
-              ${EndIf}
-            ${Loop}
-            ${If} ${ScratchC} == 1
-              StrCpy ${Output} ${ScratchA}
-            ${Else}
-              StrCpy ${Output} ""
-            ${EndIf}
-          ${EndIf}
-        ${EndIf}
-      ${EndIf}
+  IntCmp ${ScratchA} 51 0 ${_SP_UUID_INVALID} ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 11 0
+  StrCmpS ${ScratchA} "screenpipe-" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 4 47
+  StrCmpS ${ScratchA} ".exe" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 36 11
+  StrCmpS ${ScratchA} "00000000-0000-4000-8000-000000000000" ${_SP_UUID_INVALID} 0
+  StrCpy ${ScratchB} ${ScratchA} 1 14
+  StrCmpS ${ScratchB} "4" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchB} ${ScratchA} 1 19
+  StrCmpS ${ScratchB} "8" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "9" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "a" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "b" ${_SP_UUID_VALID} ${_SP_UUID_INVALID}
+
+  ${_SP_UUID_VALID}:
+  StrCpy ${ScratchB} 0
+  ${_SP_UUID_LOOP}:
+    StrCpy ${ScratchC} ${ScratchA} 1 ${ScratchB}
+    ${If} ${ScratchB} == 8
+    ${OrIf} ${ScratchB} == 13
+    ${OrIf} ${ScratchB} == 18
+    ${OrIf} ${ScratchB} == 23
+      Goto ${_SP_UUID_NEXT}
     ${EndIf}
-  ${EndIf}
+    Goto ${_SP_UUID_HEX}
+  ${_SP_UUID_NEXT}:
+    StrCmpS ${ScratchC} "-" 0 ${_SP_UUID_INVALID}
+    Goto ${_SP_UUID_ADVANCE}
+  ${_SP_UUID_HEX}:
+    StrCmpS ${ScratchC} "0" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "1" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "2" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "3" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "4" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "5" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "6" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "7" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "8" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "9" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "a" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "b" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "c" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "d" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "e" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "f" ${_SP_UUID_ADVANCE} ${_SP_UUID_INVALID}
+  ${_SP_UUID_ADVANCE}:
+    IntOp ${ScratchB} ${ScratchB} + 1
+    IntCmp ${ScratchB} 36 0 ${_SP_UUID_LOOP} ${_SP_UUID_INVALID}
+    StrCpy ${Output} ${ScratchA}
+    Goto ${_SP_UUID_DONE}
+  ${_SP_UUID_INVALID}:
+    StrCpy ${Output} ""
+  ${_SP_UUID_DONE}:
+  !undef _SP_UUID_DONE
+  !undef _SP_UUID_INVALID
+  !undef _SP_UUID_VALID
+  !undef _SP_UUID_NEXT
+  !undef _SP_UUID_ADVANCE
+  !undef _SP_UUID_HEX
+  !undef _SP_UUID_LOOP
 !macroend
 
 ; Save a browser-origin or filename-carried acquisition grant once. This is a
@@ -95,13 +101,24 @@
   Push $8
   Push $9
   Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
   ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
     !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
-
-    ; Parse the stream ourselves so duplicate HostUrl keys and lines wider than
-    ; NSIS's fixed string buffer are rejected, never silently truncated.
+    StrCpy $R0 "" ; fixed diagnostic cause
+    StrCpy $R1 0 ; measured chars or Win32 error
+    StrCpy $R2 0 ; current logical line continues from an earlier read
+    StrCpy $R3 0 ; current logical line length in NSIS characters
+    StrCpy $R4 0 ; current logical line is HostUrl
+    StrCpy $R5 "none" ; fallback actually selected
+    StrCpy $R6 "not-attempted" ; acquisition-grant persistence outcome
     StrCpy $7 0 ; inside [ZoneTransfer]
-    StrCpy $8 0 ; HostUrl count/error sentinel
+    StrCpy $8 0 ; HostUrl count
     StrCpy $9 "" ; valid ADS grant
     ClearErrors
     ; NSIS validates ordinary FileOpen paths and rejects the second colon in an
@@ -111,25 +128,34 @@
     ${If} $5 != -1
     ${AndIf} $5 != ""
       ${Do}
+        StrCpy $6 ""
         ClearErrors
+        System::Call 'kernel32::SetLastError(i 0)'
         FileRead $5 $6
         ${If} ${Errors}
+          ; EOF is ordinary and distinct from a failed stream read. FileRead
+          ; may report either zero or ERROR_HANDLE_EOF after the final bytes.
+          System::Call 'kernel32::GetLastError()i.r1'
+          ${If} $1 != 0
+          ${AndIf} $1 != 38
+          ${AndIf} $1 != 80
+            StrCpy $R0 "origin-read-failed"
+            StrCpy $R1 $1
+            StrCpy $9 ""
+          ${EndIf}
           ${ExitDo}
         ${EndIf}
+
+        ; Strip the line ending before measuring. A line exactly 1023 chars
+        ; followed by a newline can produce an empty continuation read and is
+        ; still complete; one additional content char is a real overflow.
         StrLen $0 $6
+        StrCpy $R7 0 ; this read ends the logical line
         ${If} $0 > 0
           IntOp $1 $0 - 1
           StrCpy $2 $6 1 $1
-          ${If} $2 != "$\n"
-            ; A second successful read means this logical line exceeded the
-            ; fixed buffer. Reject all ADS metadata rather than using a suffix.
-            ClearErrors
-            FileRead $5 $R0
-            ${IfNot} ${Errors}
-              StrCpy $8 2
-              ${ExitDo}
-            ${EndIf}
-          ${Else}
+          ${If} $2 == "$\n"
+            StrCpy $R7 1
             StrCpy $6 $6 $1
             StrLen $0 $6
             ${If} $0 > 0
@@ -141,57 +167,102 @@
             ${EndIf}
           ${EndIf}
         ${EndIf}
-        StrCpy $0 $6 1 0
-        ${If} $0 == "["
-          ${If} $6 == "[ZoneTransfer]"
-            StrCpy $7 1
-          ${Else}
-            StrCpy $7 0
+        StrLen $0 $6
+        IntOp $R3 $R3 + $0
+
+        ${If} $R2 == 1
+          ; Continuations of unrelated fields are discarded incrementally.
+          ; A HostUrl continuation invalidates the tentative first chunk and
+          ; records the actual logical length once its end is known.
+          ${If} $R4 == 1
+          ${AndIf} $0 > 0
+            StrCpy $9 ""
+            StrCpy $R0 "host-url-overflow"
           ${EndIf}
-        ${ElseIf} $7 == 1
-          StrCpy $0 $6 8 0
-          ${If} $0 == "HostUrl="
-            IntOp $8 $8 + 1
-            ${If} $8 > 1
-              ${ExitDo}
+        ${Else}
+          StrCpy $0 $6 1 0
+          ${If} $0 == "["
+            ${If} $6 == "[ZoneTransfer]"
+              StrCpy $7 1
+            ${Else}
+              StrCpy $7 0
             ${EndIf}
-            StrCpy $0 $6 "" 8
-            StrCpy $1 $0 8 0
-            StrLen $2 $0
-            ${If} $1 == "https://"
-            ${AndIf} $2 >= 61
-              StrCpy $1 $0 1 8
-              ${If} $1 != "/"
-                ; Query/fragment text and backslashes are not URL paths. Scan
-                ; the received value without allocating or invoking a parser.
-                StrCpy $3 8
-                ${Do}
-                  StrCpy $R0 $0 1 $3
-                  ${If} $R0 == "?"
-                  ${OrIf} $R0 == "#"
-                  ${OrIf} $R0 == "\"
-                    StrCpy $3 -1
-                    ${ExitDo}
+          ${ElseIf} $7 == 1
+            StrCpy $0 $6 8 0
+            ${If} $0 == "HostUrl="
+              StrCpy $R4 1
+              IntOp $8 $8 + 1
+              ${If} $8 > 1
+                StrCpy $R0 "duplicate-host-url"
+                StrCpy $9 ""
+              ${Else}
+                StrCpy $0 $6 "" 8
+                StrCpy $1 $0 8 0
+                StrLen $2 $0
+                ${If} $1 == "https://"
+                ${AndIf} $2 >= 61
+                  StrCpy $1 $0 1 8
+                  ${If} $1 != "/"
+                    ; Query/fragment text and backslashes are not URL paths.
+                    StrCpy $3 8
+                    ${Do}
+                      StrCpy $1 $0 1 $3
+                      ${If} $1 == "?"
+                      ${OrIf} $1 == "#"
+                      ${OrIf} $1 == "\"
+                        StrCpy $3 -1
+                        ${ExitDo}
+                      ${EndIf}
+                      IntOp $3 $3 + 1
+                      ${If} $3 >= $2
+                        ${ExitDo}
+                      ${EndIf}
+                    ${Loop}
+                    ${If} $3 >= 0
+                      StrCpy $1 $0 52 -52
+                      StrCpy $2 $1 1 0
+                      ${If} $2 == "/"
+                        StrCpy $1 $1 "" 1
+                        !insertmacro _SP_ValidateAcquisitionFilename "$1" $9 $0 $2 $3
+                      ${EndIf}
+                    ${EndIf}
                   ${EndIf}
-                  IntOp $3 $3 + 1
-                  ${If} $3 >= $2
-                    ${ExitDo}
-                  ${EndIf}
-                ${Loop}
-                ${If} $3 >= 0
-                  StrCpy $1 $0 52 -52
-                  StrCpy $2 $1 1 0
-                  ${If} $2 == "/"
-                    StrCpy $1 $1 "" 1
-                    !insertmacro _SP_ValidateAcquisitionFilename "$1" $9 $0 $2 $3
-                  ${EndIf}
+                ${EndIf}
+                ${If} $9 == ""
+                  StrCpy $R0 "malformed-host-url"
                 ${EndIf}
               ${EndIf}
             ${EndIf}
           ${EndIf}
         ${EndIf}
+
+        ${If} $R7 == 1
+          ${If} $R4 == 1
+          ${AndIf} $R3 > 1023
+            StrCpy $R0 "host-url-overflow"
+            StrCpy $R1 $R3
+            StrCpy $9 ""
+          ${EndIf}
+          StrCpy $R2 0
+          StrCpy $R3 0
+          StrCpy $R4 0
+        ${Else}
+          StrCpy $R2 1
+        ${EndIf}
       ${Loop}
       FileClose $5
+      ${If} $R0 == "host-url-overflow"
+      ${AndIf} $R1 == 0
+        StrCpy $R1 $R3
+      ${EndIf}
+    ${Else}
+      System::Call 'kernel32::GetLastError()i.r1'
+      ; ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND means no ADS, not failed I/O.
+      ${If} $1 != 2
+      ${AndIf} $1 != 3
+        StrCpy $R0 "origin-open-failed"
+        StrCpy $R1 $1
+      ${EndIf}
     ${EndIf}
     StrCpy $7 0 ; accepted ADS outcome
     ${If} $8 == 1
@@ -199,16 +270,9 @@
       StrCpy $4 $9
       StrCpy $7 1
     ${EndIf}
-    ${If} $8 != 0
-    ${AndIf} $7 == 0
-      ; Persist only a fixed, privacy-safe outcome for normal support logs.
-      ; Never copy the URL, grant, account, or local installer path.
-      ClearErrors
-      FileOpen $0 "$INSTDIR\acquisition-grant-diagnostic" w
-      ${IfNot} ${Errors}
-        FileWrite $0 "invalid-origin-metadata"
-        FileClose $0
-      ${EndIf}
+    ${If} $7 == 0
+    ${AndIf} $4 != ""
+      StrCpy $R5 "filename"
     ${EndIf}
     ${If} $4 != ""
       ClearErrors
@@ -216,9 +280,37 @@
       ${IfNot} ${Errors}
         FileWrite $0 $4
         FileClose $0
+        StrCpy $R6 "saved"
+      ${Else}
+        StrCpy $R6 "failed"
+      ${EndIf}
+    ${EndIf}
+    ${If} $R0 != ""
+      ; Persist a closed, privacy-safe protocol only after the fallback write,
+      ; so support logs retain both the cause and the actual outcome.
+      StrCpy $6 "v1;$R0"
+      ${If} $R0 == "host-url-overflow"
+        StrCpy $6 "$6;actual-chars=$R1;threshold-chars=1023"
+      ${ElseIf} $R0 == "origin-open-failed"
+      ${OrIf} $R0 == "origin-read-failed"
+        StrCpy $6 "$6;windows-error=$R1"
+      ${EndIf}
+      StrCpy $6 "$6;fallback=$R5;persistence=$R6"
+      ClearErrors
+      FileOpen $0 "$INSTDIR\acquisition-grant-diagnostic" w
+      ${IfNot} ${Errors}
+        FileWrite $0 $6
+        FileClose $0
       ${EndIf}
     ${EndIf}
   ${EndIf}
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
   Pop $R0
   Pop $9
   Pop $8

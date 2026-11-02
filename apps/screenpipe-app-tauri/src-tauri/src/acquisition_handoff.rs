@@ -180,26 +180,77 @@ fn carrier_from(directory: &std::path::Path) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn report_windows_installer_diagnostic(directory: &std::path::Path) {
-    const DIAGNOSTIC: &str = "invalid-origin-metadata";
     let path = directory.join("acquisition-grant-diagnostic");
-    let valid = std::fs::metadata(&path)
-        .is_ok_and(|metadata| metadata.len() == DIAGNOSTIC.len() as u64)
-        && std::fs::File::open(&path).is_ok_and(|file| {
-            use std::io::Read;
-            let mut bytes = Vec::with_capacity(DIAGNOSTIC.len() + 1);
-            file.take((DIAGNOSTIC.len() + 1) as u64)
-                .read_to_end(&mut bytes)
-                .is_ok()
-                && bytes == DIAGNOSTIC.as_bytes()
-        });
-    if valid {
+    // The installer emits a tiny, closed protocol. Never log marker text: the
+    // install directory is user-writable and arbitrary contents would be a log
+    // injection channel. The longest valid record is well below this bound.
+    let record = std::fs::metadata(&path)
+        .ok()
+        .filter(|metadata| metadata.len() <= 192)
+        .and_then(|_| std::fs::read_to_string(&path).ok());
+    if let Some(record) = record.as_deref().and_then(parse_windows_installer_diagnostic) {
         tracing::warn!(
-            "Windows acquisition origin metadata invalid; installer tried filename attribution"
+            cause = record.cause,
+            fallback = record.fallback,
+            persistence = record.persistence,
+            windows_error = record.windows_error,
+            actual_chars = record.actual_chars,
+            threshold_chars = record.threshold_chars,
+            "Windows acquisition origin metadata unavailable; installer attribution fallback completed"
         );
     }
-    // This file contains only a fixed outcome and is single-use. Unknown data
-    // is discarded silently so it can never become a support-log injection.
+    // A valid record is single-use; unknown data is also discarded silently.
     let _ = std::fs::remove_file(path);
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsInstallerDiagnostic<'a> {
+    cause: &'a str,
+    fallback: &'a str,
+    persistence: &'a str,
+    windows_error: Option<u32>,
+    actual_chars: Option<u32>,
+    threshold_chars: Option<u32>,
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_installer_diagnostic(record: &str) -> Option<WindowsInstallerDiagnostic<'_>> {
+    let fields: Vec<_> = record.split(';').collect();
+    let common = |fallback: &str, persistence: &str| {
+        matches!(fallback, "filename" | "none")
+            && matches!(persistence, "saved" | "failed" | "not-attempted")
+    };
+    match fields.as_slice() {
+        ["v1", cause @ ("duplicate-host-url" | "malformed-host-url"), fallback, persistence] => {
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
+                cause, fallback, persistence, windows_error: None,
+                actual_chars: None, threshold_chars: None,
+            })
+        }
+        ["v1", cause @ ("origin-open-failed" | "origin-read-failed"), error, fallback, persistence] => {
+            let windows_error = error.strip_prefix("windows-error=")?.parse().ok()?;
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            common(fallback, persistence).then_some(WindowsInstallerDiagnostic {
+                cause, fallback, persistence, windows_error: Some(windows_error),
+                actual_chars: None, threshold_chars: None,
+            })
+        }
+        ["v1", cause @ "host-url-overflow", actual, threshold, fallback, persistence] => {
+            let actual_chars = actual.strip_prefix("actual-chars=")?.parse().ok()?;
+            let threshold_chars = threshold.strip_prefix("threshold-chars=")?.parse().ok()?;
+            let fallback = fallback.strip_prefix("fallback=")?;
+            let persistence = persistence.strip_prefix("persistence=")?;
+            (common(fallback, persistence) && actual_chars > threshold_chars && threshold_chars == 1023)
+                .then_some(WindowsInstallerDiagnostic {
+                    cause, fallback, persistence, windows_error: None,
+                    actual_chars: Some(actual_chars), threshold_chars: Some(threshold_chars),
+                })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -531,25 +582,96 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_diagnostic_protocol_is_closed_and_requires_boundary_facts() {
+        for valid in [
+            "v1;duplicate-host-url;fallback=filename;persistence=saved",
+            "v1;malformed-host-url;fallback=none;persistence=not-attempted",
+            "v1;origin-open-failed;windows-error=5;fallback=filename;persistence=failed",
+            "v1;origin-read-failed;windows-error=23;fallback=none;persistence=not-attempted",
+            "v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;fallback=filename;persistence=saved",
+        ] {
+            assert!(parse_windows_installer_diagnostic(valid).is_some(), "rejected {valid}");
+        }
+        for invalid in [
+            "invalid-origin-metadata",
+            "v1;host-url-overflow;fallback=filename;persistence=saved",
+            "v1;host-url-overflow;actual-chars=1023;threshold-chars=1023;fallback=filename;persistence=saved",
+            "v1;origin-read-failed;windows-error=private-path;fallback=none;persistence=not-attempted",
+            "v1;malformed-host-url;fallback=filename;persistence=saved\nforged log line",
+            "v1;arbitrary-marker;fallback=filename;persistence=saved",
+        ] {
+            assert!(parse_windows_installer_diagnostic(invalid).is_none(), "accepted {invalid}");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn windows_ads_failure_survives_support_rotation_without_private_data() {
         let dir = tempfile::tempdir().unwrap();
-        let current = dir.path().join("screenpipe-app.2026-11-02.log");
-        let grant = "12345678-1234-4234-8234-123456789012";
-        std::fs::write(dir.path().join("acquisition-grant"), format!("{grant}\n")).unwrap();
+        let fixture = dir.path().join("fixture.nsi");
+        let hooks = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("windows/hooks.nsh");
+        let hooks = hooks.display().to_string().replace('/', "\\");
         std::fs::write(
-            dir.path().join("acquisition-grant-diagnostic"),
-            "invalid-origin-metadata",
+            &fixture,
+            format!(
+                r#"; screenpipe — AI that knows everything you've seen, said, or heard
+; https://screenpipe.com
+Unicode true
+SilentInstall silent
+RequestExecutionLevel user
+!include "{}"
+Name "Screenpipe acquisition diagnostic fixture"
+OutFile "fixture.exe"
+InstallDir "$TEMP\screenpipe-acquisition-diagnostic-fixture"
+Section
+  CreateDirectory "$INSTDIR"
+  !insertmacro _SP_SaveAcquisitionGrant
+SectionEnd
+"#,
+                hooks
+            ),
         )
         .unwrap();
+        let compiled = std::process::Command::new("makensis.exe")
+            .args(["/V2", fixture.to_str().unwrap()])
+            .current_dir(dir.path())
+            .status()
+            .expect("makensis.exe is required by the Windows native fixture");
+        assert!(compiled.success());
+
+        let current = dir.path().join("screenpipe-app.2026-11-02.log");
+        let grant = "12345678-1234-4234-8234-123456789012";
+        let installer = dir.path().join(format!("screenpipe-{grant}.exe"));
+        std::fs::copy(dir.path().join("fixture.exe"), &installer).unwrap();
+        let private_grant = "abcdefab-cdef-4abc-9def-abcdefabcdef";
+        let prefix = "HostUrl=https://downloads.test/private/";
+        let suffix = format!("/screenpipe-{private_grant}.exe");
+        let host_url = format!("{prefix}{}{suffix}", "x".repeat(1024 - prefix.len() - suffix.len()));
+        std::fs::write(
+            format!("{}:Zone.Identifier", installer.display()),
+            format!("[ZoneTransfer]\r\nZoneId=3\r\n{host_url}\r\n"),
+        )
+        .unwrap();
+        let installed = dir.path().join("installed");
+        let status = std::process::Command::new(&installer)
+            .args(["/S", &format!("/D={}", installed.display())])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read_to_string(installed.join("acquisition-grant")).unwrap(), grant);
+        assert!(std::fs::read_to_string(installed.join("acquisition-grant-diagnostic"))
+            .unwrap().starts_with("v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;"));
+
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(std::fs::File::create(&current).unwrap())
             .finish();
         tracing::subscriber::with_default(subscriber, || {
-            assert!(carrier_from(dir.path()).is_none());
+            assert_eq!(carrier_from(&installed), Some(grant.into()));
         });
-        assert!(!dir.path().join("acquisition-grant-diagnostic").exists());
+        assert!(!installed.join("acquisition-grant-diagnostic").exists());
         std::fs::rename(
             &current,
             dir.path().join("screenpipe-app.2026-11-02.1.log"),
@@ -562,10 +684,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(report.contains(
-            "Windows acquisition origin metadata invalid; installer tried filename attribution"
-        ));
-        for private in [grant, "https://downloads.test/private", "user_private", "acquisition-grant"] {
+        for expected in ["cause=\"host-url-overflow\"", "fallback=\"filename\"",
+                         "persistence=\"saved\"", "actual_chars=1024",
+                         "threshold_chars=1023"] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        for private in [grant, private_grant, "https://downloads.test/private", "user_private", "acquisition-grant"] {
             assert!(!report.contains(private), "support report leaked {private}: {report}");
         }
     }
