@@ -1664,7 +1664,7 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path scripts/package-attribution-carrier.py) -or
-              -not (Select-String -Quiet -LiteralPath scripts/package-attribution-carrier.py -Pattern '--windows-certificate' -SimpleMatch)) {
+              -not (Select-String -Quiet -LiteralPath scripts/package-attribution-carrier.py -Pattern '--windows-release-carriers' -SimpleMatch)) {
             Write-Host 'Windows app revision predates certificate carriers; retaining ordinary installer'
             exit 0
           }

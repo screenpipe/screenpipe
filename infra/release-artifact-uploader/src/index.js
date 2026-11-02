@@ -60,14 +60,15 @@ export function artifactKey(scope, version, target, filename) {
 		throw new Error("invalid version");
 	}
 	if (!TARGETS.has(target)) throw new Error("unsupported target");
+	const windowsTarget = target.endsWith("-pc-windows-msvc");
+	const reservedWindowsCarrier = ["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename);
 	const carrierArtifact = scope === "consumer" && (
-		(target.endsWith("-apple-darwin") && filename === "screenpipe-attribution.json") ||
+		((target.endsWith("-apple-darwin") || windowsTarget) &&
+			filename === "screenpipe-attribution.json") ||
 		(target === "x86_64-unknown-linux-gnu" &&
 			["screenpipe-attribution.tar", "screenpipe-attribution-linux.json"].includes(filename)) ||
-		(["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"].includes(target) &&
-			["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename))
+		(windowsTarget && reservedWindowsCarrier)
 	);
-	const reservedWindowsCarrier = ["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename);
 	if (
 		!filename ||
 		filename.length > 255 ||
