@@ -263,7 +263,12 @@ fn classify(
         return Status::new(State::Recording, "capture_healthy");
     }
     if m.frame == Some("disabled") && m.audio == Some("disabled") {
-        return Status::new(State::Stopped, "capture_disabled");
+        return Status::new(
+            State::Stopped,
+            m.vision_reason
+                .filter(|reason| *reason != "ok")
+                .unwrap_or("capture_disabled"),
+        );
     }
     if matches!(m.frame, Some("stale" | "degraded"))
         || matches!(m.audio, Some("stale" | "degraded"))
