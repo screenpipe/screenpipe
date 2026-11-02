@@ -1646,6 +1646,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Recovery builds can select app source from before this carrier.
+          # Only prepare metadata when the matching app revision supports it.
+          if [[ ! -f scripts/package-attribution-carrier.py ]] || ! grep -q -- '--linux-xattr' scripts/package-attribution-carrier.py; then
+            echo "Linux app revision predates xattr carriers; retaining ordinary AppImage"
+            exit 0
+          fi
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           for appimage in "$BUNDLE_DIR"/appimage/*.AppImage; do
