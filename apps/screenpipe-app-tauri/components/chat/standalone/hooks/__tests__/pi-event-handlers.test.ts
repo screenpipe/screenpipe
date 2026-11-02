@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectionActionFromToolResult,
   firstAgentEndAssistantError,
+  incompleteAgentEndError,
   isPiPromptStartTimeout,
   isTerminalQuotaError,
   piPromptStartTimeoutMessage,
@@ -49,6 +50,28 @@ describe("pi foreground event helpers", () => {
     expect(piPromptStartTimeoutMessage()).toBe(
       "The AI did not start responding, so screenpipe restarted it. Retry your message.",
     );
+  });
+
+  it("distinguishes a missing final answer from progress, Stop and handoffs", () => {
+    const event = { type: "agent_end", messages: [
+      { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "Checking." }] },
+      { role: "toolResult", content: [{ type: "text", text: "Found evidence." }] },
+      { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "Reviewing." }] },
+    ] };
+    expect(incompleteAgentEndError(event, [], "Checking.")).toContain("without a final answer");
+    expect(incompleteAgentEndError(event, [], "", true)).toBeNull();
+    expect(incompleteAgentEndError({ ...event, willRetry: true }, [], "")).toBeNull();
+    expect(incompleteAgentEndError({ ...event, authPending: true }, [], "")).toBeNull();
+    expect(incompleteAgentEndError(event, [{ type: "connection_action", connectionId: "gmail", connectionName: "Gmail" }], "")).toBeNull();
+    expect(incompleteAgentEndError({ type: "agent_end" }, [
+      { type: "text", text: "Finished.", phase: "final_answer" },
+    ], "Finished.")).toBeNull();
+    expect(incompleteAgentEndError({ ...event, messages: [
+      { role: "assistant", stopReason: "length", content: [{ type: "text", text: "Partial" }] },
+    ] }, [], "Partial")).toContain("token limit");
+    expect(incompleteAgentEndError({ ...event, messages: [
+      { role: "assistant", stopReason: "aborted", errorMessage: "The operation was aborted.", content: [] },
+    ] }, [], "")).toBe("The operation was aborted.");
   });
 });
 

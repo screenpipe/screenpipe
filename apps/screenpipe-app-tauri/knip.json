@@ -16,6 +16,7 @@
     "scripts/eval-pi-compaction.ts",
     "scripts/eval-glm-compaction.ts",
     "scripts/eval-pi-extensions.ts",
+    "scripts/eval-pi-answer-recovery.ts",
     "scripts/eval-workflow-assistant.ts",
     "scripts/eval-workflow-discovery.ts",
     "scripts/eval-workflow-guide.ts",

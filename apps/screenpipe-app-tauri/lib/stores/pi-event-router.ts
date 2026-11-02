@@ -89,7 +89,11 @@ import {
   type SessionStatus,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { connectionActionFromToolResult } from "@/components/chat/standalone/hooks/pi-event-handlers";
+import {
+  connectionActionFromToolResult,
+  incompleteAgentEndError,
+  reportIncompleteAgentEnd,
+} from "@/components/chat/standalone/hooks/pi-event-handlers";
 import { normalizePlanEntries, upsertPlanBlock } from "@/lib/chat/acp-plan";
 import type { ContentBlock } from "@/lib/chat/types";
 import {
@@ -963,9 +967,20 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
       const blocks = finalizeAssistantTextPhases(
         (active.contentBlocks as ContentBlock[] | undefined) ?? [],
       );
+      const messages = (active.messages ?? []) as MutableMessage[];
+      const message = messages.find((item) => item.id === active.streamingMessageId);
+      const incompleteError = incompleteAgentEndError(
+        payload, blocks, active.streamingText || message?.content || "", message?.stoppedByUser === true,
+      );
+      const retryPrompt = messages.findLast((item) => item.role === "user")?.content;
+      if (incompleteError) reportIncompleteAgentEnd(payload, sid, incompleteError);
       store.actions.patchMessage(sid, active.streamingMessageId, (message: any) => ({
         ...message,
         contentBlocks: blocks,
+        ...(incompleteError && !message.content?.startsWith("Error:") ? {
+          content: `Error: ${incompleteError}`,
+          retryPrompt,
+        } : {}),
       }));
     }
     store.actions.endTurn(sid);
@@ -1178,6 +1193,7 @@ async function persistBackgroundSession(
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
             ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
             ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
+            ...(m.retryPrompt ? { retryPrompt: m.retryPrompt } : {}),
             ...(interruptedByQuit ? { interruptedByQuit: true } : {}),
           };
         }),
