@@ -1228,9 +1228,10 @@ pub(crate) async fn event_driven_capture_loop(
         {
             Ok(Ok(output)) => {
                 state.mark_captured();
-                if !capture_params.window_filters.has_window_patterns()
-                    && !capture_params.window_filters.has_url_allowlist()
-                {
+                if capture_can_seed_visual_comparer(
+                    &capture_params.window_filters,
+                    capture_params.focused_window_screenshots,
+                ) {
                     if let Some(ref mut comparer) = frame_comparer {
                         let _ = comparer.compare(&output.image);
                     }
@@ -2150,9 +2151,10 @@ pub(crate) async fn event_driven_capture_loop(
                         // redacted capture is a different image of a static
                         // desktop; seeding it here would retrigger capture on
                         // every probe. Let probes maintain their own reference.
-                        if !capture_params.window_filters.has_window_patterns()
-                            && !capture_params.window_filters.has_url_allowlist()
-                        {
+                        if capture_can_seed_visual_comparer(
+                            &capture_params.window_filters,
+                            capture_params.focused_window_screenshots,
+                        ) {
                             if let Some(ref mut comparer) = frame_comparer {
                                 let _ = comparer.compare(&output.image);
                             }
@@ -2486,6 +2488,10 @@ struct CaptureOutput {
 struct LightweightFocusedMetadata {
     app_name: Option<String>,
     window_name: Option<String>,
+}
+
+fn capture_can_seed_visual_comparer(filters: &WindowFilters, focused_only: bool) -> bool {
+    !focused_only && !filters.has_window_patterns() && !filters.has_url_allowlist()
 }
 
 fn mask_image_to_focused_window(
@@ -4444,6 +4450,19 @@ mod tests {
         assert!(!permits_redacted_desktop_without_focus(
             &filters, &config, true, false
         ));
+    }
+
+    #[test]
+    fn focused_window_screenshots_do_not_seed_visual_comparer() {
+        let desktop = WindowFilters::new(&[], &[], &[]);
+        assert!(capture_can_seed_visual_comparer(&desktop, false));
+        assert!(!capture_can_seed_visual_comparer(&desktop, true));
+        let filtered = WindowFilters::new(&["Private".into()], &[], &[]);
+        assert!(!capture_can_seed_visual_comparer(&filtered, false));
+        let urls: Vec<screenpipe_config::DomainRule> =
+            serde_json::from_str(r#"[{"domain":"work.example"}]"#).unwrap();
+        let allowlist = WindowFilters::with_url_rules(&[], &[], &[], &urls);
+        assert!(!capture_can_seed_visual_comparer(&allowlist, false));
     }
 
     #[test]

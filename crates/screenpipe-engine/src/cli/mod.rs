@@ -3334,7 +3334,8 @@ mod tests {
                 false,
             ),
         ] {
-            let sources = record_sources(argv.clone());
+            let matches = Cli::command().try_get_matches_from(&argv).unwrap();
+            let sources = RecordArgSources::from_cli_matches(&matches);
             let cli = Cli::try_parse_from(argv).unwrap();
             let mut settings = screenpipe_config::RecordingSettings {
                 focused_window_screenshots: saved,
