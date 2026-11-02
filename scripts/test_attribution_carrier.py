@@ -3,12 +3,14 @@
 """Local attribution-carrier packaging regressions; never publish artifacts."""
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import sys
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import subprocess
 import tempfile
 import tarfile
@@ -21,6 +23,90 @@ spec.loader.exec_module(carrier)
 
 
 class CarrierTest(unittest.TestCase):
+    @staticmethod
+    def _sparse_pe(path, pe_offset=64 * 1024 * 1024):
+        optional = bytearray(112 + 8 * 5)
+        struct.pack_into('<H', optional, 0, 0x20b)
+        cert_offset = (pe_offset + 24 + len(optional) + 7) & ~7
+        pkcs7 = b'0\x03\x02\x01\x01'
+        win_length = 8 + len(pkcs7)
+        certificate = struct.pack('<IHH', win_length, 0x200, 2) + pkcs7
+        certificate += bytes((8 - len(certificate) % 8) % 8)
+        struct.pack_into('<II', optional, 112 + 8 * 4, cert_offset, len(certificate))
+        with path.open('wb') as stream:
+            dos = bytearray(64)
+            dos[:2] = b'MZ'
+            struct.pack_into('<I', dos, 0x3c, pe_offset)
+            stream.write(dos)
+            stream.seek(pe_offset)
+            stream.write(b'PE\0\0' + bytes(16) + struct.pack('<H', len(optional)) + bytes(2))
+            stream.write(optional)
+            stream.seek(cert_offset)
+            stream.write(certificate)
+        return cert_offset
+
+    def test_windows_pe_headers_are_seeked_and_read_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / 'distant.exe'
+            cert_offset = self._sparse_pe(artifact)
+
+            class RecordingReader:
+                def __init__(self, source):
+                    self.source, self.requests = source, []
+                def seek(self, *args):
+                    return self.source.seek(*args)
+                def read(self, size):
+                    self.requests.append(size)
+                    return self.source.read(size)
+
+            with artifact.open('rb') as raw:
+                source = RecordingReader(raw)
+                rebuilt = carrier.WINDOWS_MARKER + carrier.PLACEHOLDER.encode()
+                with mock.patch.object(carrier, '_insert_dummy_certificate', return_value=rebuilt):
+                    found, _, _, _ = carrier._prepare_windows_certificate(source, artifact.stat().st_size)
+            self.assertEqual(found, cert_offset)
+            self.assertLessEqual(max(source.requests), 1024 * 1024)
+            self.assertNotIn(64 * 1024 * 1024, source.requests)
+
+    def test_windows_release_orchestration_schema1_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for delta, expects_legacy in [(-1, True), (0, True), (1, False)]:
+                artifact = root / f'screenpipe_1.2.3_x64-{delta}-setup.exe'
+                artifact.write_bytes(b'fixture')
+                output = root / f'out-{delta}'
+
+                def certificate(_artifact, staging, _platform, _release):
+                    first = Path(staging) / 'screenpipe-attribution-windows.exe'
+                    second = Path(staging) / 'screenpipe-attribution-windows.json'
+                    first.write_bytes(b'certificate')
+                    second.write_text('{}')
+                    return first, second
+
+                def legacy(_artifact, staging, _platform, _release):
+                    first = Path(staging) / 'screenpipe-attribution.exe'
+                    second = Path(staging) / 'screenpipe-attribution.json'
+                    first.write_bytes(b'legacy')
+                    second.write_text('{}')
+                    return first, second
+
+                with mock.patch.object(carrier, 'package_windows_certificate', side_effect=certificate), \
+                     mock.patch.object(carrier, 'package_filename', side_effect=legacy) as legacy_call, \
+                     mock.patch.object(carrier.Path, 'stat') as stat, \
+                     mock.patch.object(carrier.sys, 'stderr', new_callable=io.StringIO) as diagnostics:
+                    stat.return_value.st_size = carrier.LEGACY_SCHEMA1_STREAMING_MAX + delta
+                    produced = carrier.package_windows_release_carriers(
+                        artifact, output, 'windows', '1.2.3')
+                self.assertEqual(legacy_call.called, expects_legacy)
+                self.assertTrue((output / 'screenpipe-attribution-windows.exe').is_file())
+                self.assertEqual(len(produced), 4 if expects_legacy else 2)
+                if expects_legacy:
+                    self.assertEqual(diagnostics.getvalue(), '')
+                else:
+                    self.assertIn(f'source size {carrier.LEGACY_SCHEMA1_STREAMING_MAX + delta} bytes', diagnostics.getvalue())
+                    self.assertIn(f'limit {carrier.LEGACY_SCHEMA1_STREAMING_MAX} bytes', diagnostics.getvalue())
+                    self.assertIn('schema 4 Windows certificate carrier prepared', diagnostics.getvalue())
+
     def test_linux_xattr_tar_preserves_appimage_and_exact_patch_location(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -165,6 +251,71 @@ class CarrierTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'version metadata'):
                         carrier.package_filename(artifact, root / f'version-{platform}', platform, '1.2.3')
 
+    def test_windows_certificate_manifest_contract_for_both_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            placeholder_bytes = b'prefix' + carrier.PLACEHOLDER.encode() + b'suffix'
+            for platform, arch in [('windows', 'x64'), ('windows-arm', 'arm64')]:
+                artifact = root / f'screenpipe_1.2.3_{arch}-setup.exe'
+                artifact.write_bytes(b'MZ' + bytes(126))
+                output = root / f'certificate-{platform}'
+                metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
+                with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                     mock.patch.object(carrier, '_prepare_windows_certificate',
+                                       return_value=(100, 64, placeholder_bytes, 6)):
+                    prepared, manifest = carrier.package_windows_certificate(
+                        artifact, output, platform, '1.2.3')
+                expected_bytes = (artifact.read_bytes()[:64] + struct.pack('<I', len(placeholder_bytes))
+                                  + artifact.read_bytes()[68:100] + placeholder_bytes)
+                data = json.loads(manifest.read_text())
+                self.assertEqual(prepared.name, 'screenpipe-attribution-windows.exe')
+                self.assertEqual(manifest.name, 'screenpipe-attribution-windows.json')
+                self.assertEqual(data['schema'], 4)
+                self.assertEqual(data['carrier'], 'windows-certificate')
+                self.assertEqual(data['platform'], platform)
+                self.assertEqual(data['patch'], dict(
+                    offset=106, length=36, placeholder=carrier.PLACEHOLDER))
+                self.assertEqual(data['certificate'], dict(
+                    oid=carrier.WINDOWS_OID, critical=False,
+                    marker=carrier.WINDOWS_MARKER.decode(), table_at_end=True))
+                self.assertEqual(data['sha256'], hashlib.sha256(expected_bytes).hexdigest())
+
+    def test_windows_certificate_patch_crosses_copy_boundary_and_recovers_owned_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / 'screenpipe_1.2.3_x64-setup.exe'
+            artifact.write_bytes(b'MZ' + bytes(1024 * 1024 + 126))
+            output = root / 'out'
+            output.mkdir()
+            target = output / 'screenpipe-attribution-windows.exe'
+            target.write_bytes(b'unrelated-builder-output')
+            certificate = carrier.WINDOWS_MARKER + carrier.PLACEHOLDER.encode()
+            size_offset = 1024 * 1024 - 2
+            cert_offset = 1024 * 1024 + 64
+            metadata = dict(Status='Valid', ProductVersion='1.2.3', FileVersion='1.2.3')
+            with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                 mock.patch.object(carrier, '_prepare_windows_certificate',
+                                   return_value=(cert_offset, size_offset, certificate, 33)):
+                with self.assertRaisesRegex(ValueError, 'refusing to overwrite'):
+                    carrier.package_windows_certificate(artifact, output, 'windows', '1.2.3')
+                self.assertEqual(target.read_bytes(), b'unrelated-builder-output')
+                target.unlink()
+                prepared, manifest = carrier.package_windows_certificate(
+                    artifact, output, 'windows', '1.2.3')
+            data = prepared.read_bytes()
+            self.assertEqual(struct.unpack_from('<I', data, size_offset)[0], len(certificate))
+            self.assertEqual(data[cert_offset:cert_offset + len(certificate)], certificate)
+            self.assertTrue(manifest.is_file())
+            expected = prepared.read_bytes()
+            manifest.unlink()
+            with mock.patch.object(carrier, 'windows_metadata', return_value=metadata), \
+                 mock.patch.object(carrier, '_prepare_windows_certificate',
+                                   return_value=(cert_offset, size_offset, certificate, 33)):
+                prepared, manifest = carrier.package_windows_certificate(
+                    artifact, output, 'windows', '1.2.3')
+            self.assertEqual(prepared.read_bytes(), expected)
+            self.assertTrue(manifest.is_file())
+
     @unittest.skipUnless(sys.platform == 'win32', 'requires Windows NSIS')
     def test_actual_nsis_filename_grant_fixture(self):
         makensis = shutil.which('makensis') or shutil.which('makensis.exe')
@@ -178,11 +329,23 @@ class CarrierTest(unittest.TestCase):
                 '; https://screenpipe.com\n'
                 'Unicode true\nSilentInstall silent\nRequestExecutionLevel user\n'
                 f'!include "{hooks}"\n'
-                'Name "Screenpipe attribution fixture"\nOutFile "fixture.exe"\nInstallDir "$TEMP\\screenpipe-attribution-fixture"\n'
+                'Name "Screenpipe attribution fixture"\n!ifndef OUTFILE\n!define OUTFILE "fixture.exe"\n!endif\n'
+                'OutFile "${OUTFILE}"\nInstallDir "$TEMP\\screenpipe-attribution-fixture"\n'
                 'Section\nCreateDirectory "$INSTDIR"\nFileOpen $0 "$INSTDIR\\installed" w\nFileWrite $0 "ok"\nFileClose $0\n'
-                '!insertmacro _SP_SaveAcquisitionGrant\nSectionEnd\n',
+                'StrCpy $0 "c0"\nStrCpy $1 "c1"\nStrCpy $2 "c2"\nStrCpy $3 "c3"\nStrCpy $4 "c4"\n'
+                'StrCpy $5 "c5"\nStrCpy $6 "c6"\nStrCpy $7 "c7"\nStrCpy $8 "c8"\nStrCpy $9 "c9"\n'
+                'StrCpy $R0 "r0"\nStrCpy $R1 "r1"\nStrCpy $R2 "r2"\nStrCpy $R3 "r3"\n'
+                'StrCpy $R4 "r4"\nStrCpy $R5 "r5"\nStrCpy $R6 "r6"\nStrCpy $R7 "r7"\n'
+                '!ifdef INITIAL_ERROR\nSetErrors\n!else\nClearErrors\n!endif\n'
+                '!insertmacro _SP_SaveAcquisitionGrant\n'
+                'StrCpy $R8 "0"\nIfErrors 0 +2\nStrCpy $R8 "1"\n'
+                'FileOpen $R9 "$INSTDIR\\caller-state" w\n'
+                'FileWrite $R9 "$0|$1|$2|$3|$4|$5|$6|$7|$8|$9|$R0|$R1|$R2|$R3|$R4|$R5|$R6|$R7|$R8"\n'
+                'FileClose $R9\nSectionEnd\n',
                 encoding='utf-8')
             subprocess.run([makensis, '/V2', str(fixture)], cwd=root, check=True)
+            subprocess.run([makensis, '/V2', '/DOUTFILE=fixture-error.exe',
+                            '/DINITIAL_ERROR=1', str(fixture)], cwd=root, check=True)
 
             # Exercise the real PowerShell adapter, including a path whose
             # spaces and metacharacters must remain data, never command text.
@@ -193,21 +356,139 @@ class CarrierTest(unittest.TestCase):
             first = '12345678-1234-4234-8234-123456789012'
             second = 'abcdefab-cdef-4abc-9def-abcdefabcdef'
 
-            def install(filename, directory):
+            expected_canaries = ('c0|c1|c2|c3|c4|c5|c6|c7|c8|c9|'
+                                 'r0|r1|r2|r3|r4|r5|r6|r7')
+
+            def install(filename, directory, zone_identifier=None,
+                        source='fixture.exe', initial_error='0'):
                 installer = root / filename
-                shutil.copyfile(root / 'fixture.exe', installer)
+                shutil.copyfile(root / source, installer)
+                if zone_identifier is not None:
+                    Path(str(installer) + ':Zone.Identifier').write_text(
+                        zone_identifier, encoding='ascii', newline='')
+                    with Path(str(installer) + ':Zone.Identifier').open(
+                            encoding='ascii', newline='') as stream:
+                        self.assertEqual(stream.read(), zone_identifier)
                 subprocess.run([str(installer), '/S', f'/D={directory}'], check=True)
                 self.assertEqual((directory / 'installed').read_text(), 'ok')
+                self.assertEqual((directory / 'caller-state').read_text(),
+                                 f'{expected_canaries}|{initial_error}')
 
             valid_dir = root / 'valid'
             install(f'screenpipe-{first}.exe', valid_dir)
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
             install(f'screenpipe-{second}.exe', valid_dir)
             self.assertEqual((valid_dir / 'acquisition-grant').read_text(), first)
+            mixed_case_dir = root / 'mixed-case'
+            install(f'ScreenPipe-{first}.EXE', mixed_case_dir)
+            self.assertEqual((mixed_case_dir / 'acquisition-grant').read_text(), first)
+
+            ads = ('[ZoneTransfer]\r\nZoneId=3\r\n'
+                   f'HostUrl=https://downloads.test/download/ticket/screenpipe-{second}.exe\r\n')
+            ads_dir = root / 'ads-renamed'
+            install('renamed.exe', ads_dir, ads)
+            self.assertTrue((ads_dir / 'acquisition-grant').is_file(),
+                            [(p.name, p.read_text(errors='replace')) for p in ads_dir.iterdir()])
+            self.assertEqual((ads_dir / 'acquisition-grant').read_text(), second)
+            # A valid browser origin is preferred over a conflicting legacy
+            # filename, while a previous install remains first-grant wins.
+            conflict_dir = root / 'ads-conflict'
+            install(f'screenpipe-{first}.exe', conflict_dir, ads)
+            self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
+            install('renamed-again.exe', conflict_dir,
+                    ads.replace(second, '11111111-1111-4111-8111-111111111111'))
+            self.assertEqual((conflict_dir / 'acquisition-grant').read_text(), second)
+
+            # Both incoming error states survive the absent, invalid, fallback,
+            # and existing-grant branches while ordinary installation continues.
+            for label, filename, zone, existing in [
+                    ('absent', 'renamed.exe', None, False),
+                    ('invalid', 'screenpipe-NOT-A-GRANT.exe',
+                     '[ZoneTransfer]\r\nHostUrl=http://invalid.test/x\r\n', False),
+                    ('fallback', f'screenpipe-{first}.exe', None, False),
+                    ('existing', f'screenpipe-{second}.exe', None, True)]:
+                for initial_error in ('0', '1'):
+                    directory = root / f'canary-{label}-{initial_error}'
+                    if existing:
+                        directory.mkdir()
+                        (directory / 'acquisition-grant').write_text(first)
+                    install(filename, directory, zone, 'fixture-error.exe'
+                            if initial_error == '1' else 'fixture.exe', initial_error)
+                    if existing:
+                        self.assertEqual((directory / 'acquisition-grant').read_text(), first)
+
+            host_prefix = 'HostUrl=https://downloads.test/download/'
+            host_suffix = f'/screenpipe-{second}.exe'
+            for logical_length, newline in [(1022, ''), (1023, ''), (1023, '\r\n')]:
+                boundary_ads = ('[ZoneTransfer]\r\n' + host_prefix
+                                + ('x' * (logical_length - len(host_prefix) - len(host_suffix)))
+                                + host_suffix + newline)
+                directory = root / f'ads-boundary-{logical_length}-{len(newline)}'
+                install('renamed.exe', directory, boundary_ads)
+                self.assertEqual((directory / 'acquisition-grant').read_text(), second)
+            self.assertFalse((directory / 'acquisition-grant-diagnostic').exists(),
+                             (directory / 'acquisition-grant-diagnostic').read_text()
+                             if (directory / 'acquisition-grant-diagnostic').exists() else '')
+
+            # An unrelated field may span as many fixed NSIS reads as the ADS
+            # actually contains. It must not hide a later complete HostUrl.
+            unrelated = ('[ZoneTransfer]\r\nReferrerUrl=https://referrer.test/'
+                         + ('r' * 2500) + '\r\n' + host_prefix + host_suffix + '\r\n')
+            unrelated_dir = root / 'ads-overlong-referrer'
+            install('renamed.exe', unrelated_dir, unrelated)
+            self.assertEqual((unrelated_dir / 'acquisition-grant').read_text(), second)
+            self.assertFalse((unrelated_dir / 'acquisition-grant-diagnostic').exists())
+
+            overflow_length = 1024
+            overflow_ads = ('[ZoneTransfer]\r\n' + host_prefix
+                            + ('x' * (overflow_length - len(host_prefix) - len(host_suffix)))
+                            + host_suffix + '\r\n')
+            overflow_dir = root / 'ads-host-overflow'
+            install(f'screenpipe-{first}.exe', overflow_dir, overflow_ads)
+            self.assertEqual((overflow_dir / 'acquisition-grant').read_text(), first)
+            self.assertEqual(
+                (overflow_dir / 'acquisition-grant-diagnostic').read_text(),
+                'v1;host-url-overflow;actual-chars=1024;threshold-chars=1023;'
+                'fallback=filename;persistence=saved')
+
+            fallback_cases = [
+                '[ZoneTransfer]\r\nZoneId=3\r\n',
+                '[ZoneTransfer]\r\nHostUrl=http://downloads.test/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/?next=/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\n',
+                '[Other]\r\nHostUrl=https://downloads.test/download/'
+                f'screenpipe-{second}.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-12345678-1234-4234-C234-123456789012.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-ABCDEFAB-cdef-4abc-9def-abcdefabcdef.exe\r\n',
+                '[ZoneTransfer]\r\nHostUrl=https://downloads.test/download/'
+                'screenpipe-abcdefab-cdef-4abc-Bdef-abcdefabcdef.exe\r\n',
+            ]
+            for index, malformed_ads in enumerate(fallback_cases):
+                directory = root / f'ads-fallback-{index}'
+                install(f'screenpipe-{first}.exe', directory, malformed_ads)
+                self.assertEqual((directory / 'acquisition-grant').read_text(), first)
+                diagnostic = directory / 'acquisition-grant-diagnostic'
+                if index in {1, 2, 3, 5, 6, 7}:
+                    cause = ('duplicate-host-url' if index == 3 else 'malformed-host-url')
+                    self.assertEqual(
+                        diagnostic.read_text(),
+                        f'v1;{cause};fallback=filename;persistence=saved')
+                    self.assertNotIn(first, diagnostic.read_text())
+                    self.assertNotIn(second, diagnostic.read_text())
+                else:
+                    self.assertFalse(diagnostic.exists())
             for index, name in enumerate([
                 f'screenpipe-{carrier.PLACEHOLDER}.exe',
                 'screenpipe-12345678-1234-4234-7234-123456789012.exe',
                 'screenpipe-12345678-1234-4234-C234-123456789012.exe',
+                'screenpipe-ABCDEFAB-cdef-4abc-9def-abcdefabcdef.exe',
+                'screenpipe-abcdefab-cdef-4abc-Bdef-abcdefabcdef.exe',
                 'screenpipe.exe',
             ]):
                 directory = root / f'invalid-{index}'

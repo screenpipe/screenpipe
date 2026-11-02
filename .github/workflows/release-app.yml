@@ -1659,6 +1659,27 @@ jobs:
               --output "$BUNDLE_DIR/attribution" --platform linux --release "$VERSION" --linux-xattr
           done
 
+      - name: Prepare Windows certificate download carrier
+        if: matrix.os_type == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path scripts/package-attribution-carrier.py) -or
+              -not (Select-String -Quiet -LiteralPath scripts/package-attribution-carrier.py -Pattern '--windows-release-carriers' -SimpleMatch)) {
+            Write-Host 'Windows app revision predates certificate carriers; retaining ordinary installer'
+            exit 0
+          }
+          $bundle = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
+          $version = (Select-String '^version = "(.*)"' apps/screenpipe-app-tauri/src-tauri/Cargo.toml).Matches[0].Groups[1].Value
+          $platform = if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { 'windows-arm' } else { 'windows' }
+          $installer = Get-ChildItem "$bundle/nsis/*.exe" -ErrorAction Stop | Select-Object -First 1
+          python scripts/package-attribution-carrier.py --artifact $installer.FullName `
+            --output "$bundle/attribution" --platform $platform --release $version --windows-release-carriers
+          if ($LASTEXITCODE -ne 0) { throw "Windows attribution preparation failed with exit $LASTEXITCODE" }
+          $prepared = Get-Item "$bundle/attribution/screenpipe-attribution-windows.exe"
+          if ((Get-AuthenticodeSignature $prepared.FullName).Status -ne 'Valid') {
+            throw 'prepared Windows attribution installer lost its Authenticode validity'
+          }
+
       - name: Upload Linux dry-run artifacts
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -1691,6 +1712,7 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
           if-no-files-found: error
           compression-level: 0
 
@@ -1723,7 +1745,8 @@ jobs:
           .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
-            "${BUNDLE_DIR}"/nsis/*.sig
+            "${BUNDLE_DIR}"/nsis/*.sig \
+            "${BUNDLE_DIR}"/attribution/*
 
       - name: Upload to Cloudflare R2 (Linux)
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run != 'true'

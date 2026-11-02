@@ -16,7 +16,8 @@ retry, account-boundary, and retirement protocol.
 signed/notarized app -> unsigned DMG template -> Worker personalizes app xattr and DMG checksums
   -> Finder copies app -> existing native proof -> claim -> authenticated bind
 
-signed screenpipe-<UUID>.exe -> NSIS validates filename -> installed token
+signed EXE -> untrusted certificate extension -> Worker patches fixed UUID bytes
+  -> ordinary browser EXE download -> renamed installer -> installed token
   -> Windows credential-store proof -> claim -> authenticated bind
 
 signed screenpipe-<UUID>.AppImage -> APPIMAGE filename -> credential-store proof
@@ -82,6 +83,25 @@ Windows host and checks Authenticode, version metadata, and architecture evidenc
 in the versioned release filename. The NSIS bootstrap PE machine is not treated
 as payload architecture. Filename personalization preserves the signed bytes.
 Use `--platform windows` for x86_64 and `--platform windows-arm` for ARM64.
+The release job additionally prepares `screenpipe-attribution-windows.exe` and
+schema-4 `screenpipe-attribution-windows.json` with `--windows-certificate`.
+The EXE contains a fixed placeholder in a noncritical extension of an extra
+untrusted certificate under UUID-derived OID
+`2.25.190389607246623950780965390285594181377`. The original signed image digest,
+signer, code and NSIS payload remain unchanged; whole-file SHA-256 changes when
+the website patches only the manifest's 36-byte range. The installer validates
+that embedded UUID first, so ordinary browser download, rename, SmartScreen
+handoff and normal installation require no additional user step.
+
+Legacy browser `HostUrl` and canonical filename carriers remain fallbacks for
+already prepared releases. Windows may consume `Zone.Identifier` before NSIS
+starts, so origin metadata is not considered durable. The incremental parser
+still rejects malformed, duplicated, oversized, query-like, or non-HTTPS origin
+metadata. A closed, privacy-safe diagnostic records the fixed cause,
+measured boundary or Windows I/O error when applicable, and the actual fallback
+and persistence outcome; the app validates that protocol before logging it and
+never logs the URL, grant, installer path, or marker text. `ZoneId` is not
+authorization, and the installed app never searches download directories.
 
 For Linux xattr downloads, use the same versioned AppImage with `--linux-xattr`:
 
@@ -121,8 +141,10 @@ proof, consent, account and retirement rules are unchanged.
 The script never uploads artifacts or changes publication pointers. Production
 activation and versioned-artifact publication have not been performed. Human
 publication remains required. An ordinary, unpersonalized download installs and
-runs normally without optional attribution. Renaming a personalized Windows or
-raw Linux download before its first install/launch can lose attribution.
+runs normally without optional attribution. A same-volume rename preserves
+Windows attribution when the browser attached a valid origin stream; filesystems
+or transfer tools that strip the stream fall back to the renamed filename. Renaming
+a personalized raw Linux download before its first launch can lose attribution.
 
 The signature-exempt xattr and ZIP extraction behavior are documented by
 [Apple Developer Technical Support](https://developer.apple.com/forums/thread/796303).

@@ -9,82 +9,690 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 
-; Save a filename-carried acquisition grant once. This is deliberately a pure
-; NSIS parser: attribution is optional and never launches a shell or blocks an
-; install. Expected filename: screenpipe-<lowercase canonical UUID v4>.exe.
+; Decode one definite-length DER TLV using offsets relative to a bounded buffer.
+; Every byte is checked against ParentEnd before it is read. Valid is set to 1
+; only when Tag, Value, and End describe a complete minimally encoded DER TLV.
+!macro _SP_DerTlv Base Cursor ParentEnd Tag Value End Valid ScratchA ScratchB ScratchC ScratchD
+  !define _SP_DER_INVALID sp_der_invalid_${__LINE__}
+  !define _SP_DER_SHORT sp_der_short_${__LINE__}
+  !define _SP_DER_LONG_LOOP sp_der_long_loop_${__LINE__}
+  !define _SP_DER_LONG_NEXT sp_der_long_next_${__LINE__}
+  !define _SP_DER_FINISH sp_der_finish_${__LINE__}
+  !define _SP_DER_DONE sp_der_done_${__LINE__}
+  StrCpy ${Valid} 0
+  StrCpy ${Tag} 0
+  StrCpy ${Value} 0
+  StrCpy ${End} 0
+  IntCmp ${Cursor} 0 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchA} ${ParentEnd} - ${Cursor}
+  IntCmp ${ScratchA} 2 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchB} ${Base} + ${Cursor}
+  System::Call '*${ScratchB}(&i1.r2)'
+  StrCpy ${Tag} $2
+  IntOp ${ScratchB} ${ScratchB} + 1
+  System::Call '*${ScratchB}(&i1.r2)'
+  StrCpy ${ScratchC} $2
+  IntOp ${Value} ${Cursor} + 2
+  IntOp ${ScratchA} ${ScratchC} & 0x80
+  ${If} ${ScratchA} == 0
+    StrCpy ${ScratchD} ${ScratchC}
+    Goto ${_SP_DER_FINISH}
+  ${EndIf}
+  IntOp ${ScratchA} ${ScratchC} & 0x7f
+  ; A 32-bit process can represent at most four DER length octets. This is a
+  ; representation check, not a certificate-size policy cap.
+  IntCmp ${ScratchA} 1 0 ${_SP_DER_INVALID} 0
+  IntCmp ${ScratchA} 4 0 0 ${_SP_DER_INVALID}
+  IntOp ${ScratchB} ${ParentEnd} - ${Value}
+  IntCmp ${ScratchB} ${ScratchA} 0 ${_SP_DER_INVALID} 0
+  IntOp ${ScratchB} ${Base} + ${Value}
+  System::Call '*${ScratchB}(&i1.r6)'
+  StrCpy ${ScratchC} $6
+  ${If} ${ScratchC} == 0
+    Goto ${_SP_DER_INVALID}
+  ${EndIf}
+  StrCpy ${ScratchD} 0
+  StrCpy ${ScratchC} 0
+  ${_SP_DER_LONG_LOOP}:
+    ; Refuse a shift that would overflow signed offset arithmetic.
+    IntCmp ${ScratchD} 0x007fffff 0 0 ${_SP_DER_INVALID}
+    IntOp ${ScratchD} ${ScratchD} << 8
+    IntOp ${ScratchB} ${Base} + ${Value}
+    IntOp ${ScratchB} ${ScratchB} + ${ScratchC}
+    System::Call '*${ScratchB}(&i1.r6)'
+    IntOp ${ScratchD} ${ScratchD} | $6
+    IntOp ${ScratchC} ${ScratchC} + 1
+    IntCmp ${ScratchC} ${ScratchA} ${_SP_DER_LONG_NEXT} ${_SP_DER_LONG_LOOP} ${_SP_DER_INVALID}
+  ${_SP_DER_LONG_NEXT}:
+  IntOp ${Value} ${Value} + ${ScratchA}
+  ; DER requires short form for values below 128.
+  IntCmp ${ScratchD} 128 0 ${_SP_DER_INVALID} 0
+  ${_SP_DER_FINISH}:
+  IntOp ${ScratchA} ${ParentEnd} - ${Value}
+  IntCmp ${ScratchA} ${ScratchD} 0 ${_SP_DER_INVALID} 0
+  IntOp ${End} ${Value} + ${ScratchD}
+  StrCpy ${Valid} 1
+  Goto ${_SP_DER_DONE}
+  ${_SP_DER_INVALID}:
+  StrCpy ${Valid} 0
+  ${_SP_DER_DONE}:
+  !undef _SP_DER_DONE
+  !undef _SP_DER_FINISH
+  !undef _SP_DER_LONG_NEXT
+  !undef _SP_DER_LONG_LOOP
+  !undef _SP_DER_SHORT
+  !undef _SP_DER_INVALID
+!macroend
+
+; Keep the parser's four scratch registers transparent to its caller. Parser
+; outputs must not alias Base, Cursor, ParentEnd, or these scratch registers.
+!macro _SP_ReadDer Base Cursor ParentEnd Tag Value End Valid
+  Push $2
+  Push $6
+  Push $R2
+  Push $R3
+  !insertmacro _SP_DerTlv ${Base} ${Cursor} ${ParentEnd} ${Tag} ${Value} ${End} ${Valid} $2 $6 $R2 $R3
+  Pop $R3
+  Pop $R2
+  Pop $6
+  Pop $2
+!macroend
+
+; Validate the one acquisition filename shape shared by the browser origin
+; metadata and the legacy installer filename. Input and output may be the same
+; register. Invalid input produces an empty output.
+!macro _SP_ValidateAcquisitionFilename Input Output ScratchA ScratchB ScratchC
+  !define _SP_UUID_LOOP sp_uuid_loop_${__LINE__}
+  !define _SP_UUID_HEX sp_uuid_hex_${__LINE__}
+  !define _SP_UUID_NEXT sp_uuid_next_${__LINE__}
+  !define _SP_UUID_ADVANCE sp_uuid_advance_${__LINE__}
+  !define _SP_UUID_VALID sp_uuid_valid_${__LINE__}
+  !define _SP_UUID_INVALID sp_uuid_invalid_${__LINE__}
+  !define _SP_UUID_DONE sp_uuid_done_${__LINE__}
+  StrCpy ${Output} ""
+  StrLen ${ScratchA} ${Input}
+  IntCmp ${ScratchA} 51 0 ${_SP_UUID_INVALID} ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 11 0
+  StrCmp ${ScratchA} "screenpipe-" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 4 47
+  StrCmp ${ScratchA} ".exe" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchA} ${Input} 36 11
+  StrCmpS ${ScratchA} "00000000-0000-4000-8000-000000000000" ${_SP_UUID_INVALID} 0
+  StrCpy ${ScratchB} ${ScratchA} 1 14
+  StrCmpS ${ScratchB} "4" 0 ${_SP_UUID_INVALID}
+  StrCpy ${ScratchB} ${ScratchA} 1 19
+  StrCmpS ${ScratchB} "8" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "9" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "a" ${_SP_UUID_VALID} 0
+  StrCmpS ${ScratchB} "b" ${_SP_UUID_VALID} ${_SP_UUID_INVALID}
+
+  ${_SP_UUID_VALID}:
+  StrCpy ${ScratchB} 0
+  ${_SP_UUID_LOOP}:
+    StrCpy ${ScratchC} ${ScratchA} 1 ${ScratchB}
+    ${If} ${ScratchB} == 8
+    ${OrIf} ${ScratchB} == 13
+    ${OrIf} ${ScratchB} == 18
+    ${OrIf} ${ScratchB} == 23
+      Goto ${_SP_UUID_NEXT}
+    ${EndIf}
+    Goto ${_SP_UUID_HEX}
+  ${_SP_UUID_NEXT}:
+    StrCmpS ${ScratchC} "-" 0 ${_SP_UUID_INVALID}
+    Goto ${_SP_UUID_ADVANCE}
+  ${_SP_UUID_HEX}:
+    StrCmpS ${ScratchC} "0" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "1" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "2" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "3" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "4" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "5" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "6" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "7" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "8" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "9" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "a" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "b" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "c" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "d" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "e" ${_SP_UUID_ADVANCE} 0
+    StrCmpS ${ScratchC} "f" ${_SP_UUID_ADVANCE} ${_SP_UUID_INVALID}
+  ${_SP_UUID_ADVANCE}:
+    IntOp ${ScratchB} ${ScratchB} + 1
+    IntCmp ${ScratchB} 36 0 ${_SP_UUID_LOOP} ${_SP_UUID_INVALID}
+    StrCpy ${Output} ${ScratchA}
+    Goto ${_SP_UUID_DONE}
+  ${_SP_UUID_INVALID}:
+    StrCpy ${Output} ""
+  ${_SP_UUID_DONE}:
+  !undef _SP_UUID_DONE
+  !undef _SP_UUID_INVALID
+  !undef _SP_UUID_VALID
+  !undef _SP_UUID_NEXT
+  !undef _SP_UUID_ADVANCE
+  !undef _SP_UUID_HEX
+  !undef _SP_UUID_LOOP
+!macroend
+
+; Save an embedded-certificate, browser-origin, or filename-carried grant once.
+; Attribution is optional and never launches a shell or blocks installation.
 !macro _SP_SaveAcquisitionGrant
   Push $0
   Push $1
   Push $2
   Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  StrCpy $R7 0
+  IfErrors 0 +2
+    StrCpy $R7 1
+  Push $R7
   ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
-    StrLen $0 $EXEFILE
-    ${If} $0 == 51
-      StrCpy $1 $EXEFILE 11 0
-      StrCpy $2 $EXEFILE 4 47
-      ${If} $1 == "screenpipe-"
-      ${AndIf} $2 == ".exe"
-        StrCpy $1 $EXEFILE 36 11
-        ${If} $1 != "00000000-0000-4000-8000-000000000000"
-          StrCpy $2 $1 1 14
-          ${If} $2 == "4"
-            StrCpy $2 $1 1 19
-            ${If} $2 == "8"
-            ${OrIf} $2 == "9"
-            ${OrIf} $2 == "a"
-            ${OrIf} $2 == "b"
-              StrCpy $0 0
-              StrCpy $3 1
-              ${Do}
-                StrCpy $2 $1 1 $0
-                ${If} $0 == 8
-                ${OrIf} $0 == 13
-                ${OrIf} $0 == 18
-                ${OrIf} $0 == 23
-                  ${If} $2 != "-"
-                    StrCpy $3 0
-                    ${ExitDo}
-                  ${EndIf}
+    !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
+    StrCpy $R0 "" ; fixed diagnostic cause
+    StrCpy $R1 0 ; measured chars or Win32 error
+    StrCpy $R2 0 ; current logical line continues from an earlier read
+    StrCpy $R3 0 ; current logical line length in NSIS characters
+    StrCpy $R4 0 ; current logical line is HostUrl
+    StrCpy $R5 "none" ; fallback actually selected
+    StrCpy $R6 "not-attempted" ; acquisition-grant persistence outcome
+    StrCpy $7 0 ; inside [ZoneTransfer]
+    StrCpy $8 0 ; HostUrl count
+    StrCpy $9 "" ; valid ADS grant
+    ; CryptoAPI bounds the embedded SignedData and its X.509 certificates. The
+    ; value must be one exact DER UTF8String containing the 33-byte marker plus
+    ; 36-byte grant under the agreed noncritical UUID-derived 2.25 extension.
+    ; The carrier is capability data, not a signer identity assertion.
+    StrCpy $8 0 ; exact OID extension count across every certificate
+    StrCpy $9 "" ; sole valid embedded grant
+    StrCpy $0 0
+    System::Call 'kernel32::CreateFileW(w "$EXEPATH", i 0x80000000, i 7, p 0, i 3, i 0x80, p 0)p.r5'
+    ${If} $5 != -1
+      System::Call 'imagehlp::ImageEnumerateCertificates(p r5, i 255, *i .r0, p 0, i 0)i.r1'
+      System::Call 'kernel32::CloseHandle(p r5)'
+    ${EndIf}
+    ; A zero certificate count is normal: embedded attribution is optional.
+    ${If} $0 > 0
+      System::Call 'crypt32::CryptQueryObject(i 1, w "$EXEPATH", i 0x400, i 2, i 0, *i .r0, *i .r1, *i .r2, *p .r5, p 0, p 0)i.r3'
+      ${If} $3 != 0
+        StrCpy $R3 $5
+        ; CryptoAPI accepts the certificate but its OID decoder omits this very
+        ; large UUID arc. Parse bounded DER inside each enumerated certificate
+        ; instead of changing the protocol or scanning arbitrary file bytes.
+        System::Alloc 22
+        Pop $2
+        System::Call '*$2(&i1 0x06)'
+        IntOp $3 $2 + 1
+        System::Call '*$3(&i1 0x14)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x69)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x82)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x9e)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xbb)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xda)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x97)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd5)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd0)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xc6)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x86)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xc1)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x8e)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xa6)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xaf)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x8a)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xd3)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xdf)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x90)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0xfe)'
+        IntOp $3 $3 + 1
+        System::Call '*$3(&i1 0x01)'
+        StrCpy $6 0
+        ${Do}
+          System::Call 'crypt32::CertEnumCertificatesInStore(p $R3, p r6)p.r6'
+          ${If} $6 == 0
+            ${ExitDo}
+          ${EndIf}
+          ; CERT_CONTEXT is native 32-bit because NSIS is a 32-bit process.
+          System::Call '*$6(i, p.r1, i.r3, p)'
+          StrCpy $R7 $1 ; certificate base
+          StrCpy $R4 $3 ; current parent end offset
+          StrCpy $0 0
+          !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+          ${If} $5 == 0
+          ${OrIf} $1 != 48
+          ${OrIf} $4 != $R4
+            StrCpy $R0 "embedded-der"
+            ${Continue}
+          ${EndIf}
+          ; Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm,
+          ; signatureValue }. Only the direct TBSCertificate child can own [3].
+          StrCpy $0 $3
+          !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+          ${If} $5 == 0
+          ${OrIf} $1 != 48
+            StrCpy $R0 "embedded-der"
+            ${Continue}
+          ${EndIf}
+          StrCpy $0 $3
+          StrCpy $R4 $4
+          ${Do}
+            ${If} $0 >= $R4
+              ${ExitDo}
+            ${EndIf}
+            !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+            ${If} $5 == 0
+              StrCpy $R0 "embedded-der"
+              ${ExitDo}
+            ${EndIf}
+            StrCpy $0 $4
+            ${If} $1 != 163
+              ${Continue}
+            ${EndIf}
+            ; [3] EXPLICIT Extensions must contain exactly one SEQUENCE.
+            Push $0 ; next TBSCertificate sibling
+            Push $R4
+            StrCpy $0 $3
+            StrCpy $R4 $4
+            !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+            ${If} $5 == 0
+            ${OrIf} $1 != 48
+            ${OrIf} $4 != $R4
+              StrCpy $R0 "embedded-der"
+              Pop $R4
+              Pop $0
+              ${ExitDo}
+            ${EndIf}
+            ; Extensions ::= SEQUENCE OF Extension.
+            StrCpy $0 $3
+            StrCpy $R4 $4
+            !define _SP_EXTENSION_DONE sp_extension_done_${__LINE__}
+            ${Do}
+              ${If} $0 >= $R4
+                ${ExitDo}
+              ${EndIf}
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 48
+                StrCpy $R0 "embedded-der"
+                ${ExitDo}
+              ${EndIf}
+              Push $R4 ; Extensions end
+              Push $4  ; next Extension
+              StrCpy $0 $3
+              StrCpy $R4 $4
+              ; extnID OBJECT IDENTIFIER is the first Extension child.
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 6
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $4 - $3
+              ${If} $5 != 20
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $R7 + $3
+              IntOp $1 $2 + 2
+              System::Call 'msvcrt::memcmp(p r5, p r1, i 20)i.r5'
+              ${If} $5 != 0
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $8 $8 + 1
+              StrCpy $0 $4
+              ; critical BOOLEAN is optional. Explicit FALSE is noncritical;
+              ; any other encoding or TRUE value is rejected.
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              ${If} $1 == 1
+                IntOp $5 $4 - $3
+                ${If} $5 != 1
+                  StrCpy $R0 "embedded-der"
+                  Goto ${_SP_EXTENSION_DONE}
+                ${EndIf}
+                IntOp $5 $R7 + $3
+                System::Call '*$5(&i1.r5)'
+                ${If} $5 != 0
+                  StrCpy $R0 "embedded-critical"
+                  Goto ${_SP_EXTENSION_DONE}
+                ${EndIf}
+                StrCpy $0 $4
+                !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${EndIf}
+              ${If} $5 == 0
+              ${OrIf} $1 != 4
+              ${OrIf} $4 != $R4
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              ; extnValue contains exactly one 71-byte DER UTF8String.
+              StrCpy $0 $3
+              StrCpy $R4 $4
+              !insertmacro _SP_ReadDer $R7 $0 $R4 $1 $3 $4 $5
+              ${If} $5 == 0
+              ${OrIf} $1 != 12
+              ${OrIf} $4 != $R4
+                StrCpy $R0 "embedded-der"
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $4 - $3
+              ${If} $5 != 69
+                StrCpy $R0 "embedded-length"
+                IntOp $R1 $5 + 2
+                Goto ${_SP_EXTENSION_DONE}
+              ${EndIf}
+              IntOp $5 $R7 + $3
+              System::Call '*$5(&m69.r7)'
+              StrCpy $1 $7 33 0
+              ${If} $1 != "urn:screenpipe:acquisition-grant:"
+                StrCpy $R0 "embedded-marker"
+              ${Else}
+                StrCpy $1 $7 36 33
+                StrCpy $3 "screenpipe-$1.exe"
+                !insertmacro _SP_ValidateAcquisitionFilename "$3" $1 $4 $5 $7
+                ${If} $1 == ""
+                  StrCpy $R0 "embedded-grant"
                 ${Else}
-                  ${If} $2 != "0"
-                  ${AndIf} $2 != "1"
-                  ${AndIf} $2 != "2"
-                  ${AndIf} $2 != "3"
-                  ${AndIf} $2 != "4"
-                  ${AndIf} $2 != "5"
-                  ${AndIf} $2 != "6"
-                  ${AndIf} $2 != "7"
-                  ${AndIf} $2 != "8"
-                  ${AndIf} $2 != "9"
-                  ${AndIf} $2 != "a"
-                  ${AndIf} $2 != "b"
-                  ${AndIf} $2 != "c"
-                  ${AndIf} $2 != "d"
-                  ${AndIf} $2 != "e"
-                  ${AndIf} $2 != "f"
-                    StrCpy $3 0
-                    ${ExitDo}
+                  StrCpy $9 $1
+                ${EndIf}
+              ${EndIf}
+              ${_SP_EXTENSION_DONE}:
+              Pop $0
+              Pop $R4
+            ${Loop}
+            !undef _SP_EXTENSION_DONE
+            Pop $R4
+            Pop $0
+            ; DER TBSCertificate has at most one [3] extensions field.
+            ${ExitDo}
+          ${Loop}
+        ${Loop}
+        System::Free $2
+        System::Call 'crypt32::CertCloseStore(p $R3, i 0)'
+      ${If} $8 > 1
+        StrCpy $R0 "embedded-duplicate"
+        StrCpy $R1 $8
+        StrCpy $9 ""
+      ${ElseIf} $8 == 1
+      ${AndIf} $9 != ""
+        StrCpy $4 $9
+        StrCpy $R5 "certificate"
+      ${EndIf}
+      ${Else}
+        System::Call 'kernel32::GetLastError()i.r1'
+        StrCpy $R0 "embedded-decode"
+        StrCpy $R1 $1
+      ${EndIf}
+    ${EndIf}
+    ${If} $R5 != "certificate"
+    Push $R0 ; retain the originating embedded cause across fallback parsing
+    Push $R1
+    ; Parser scratch must never become a filename fallback candidate.
+    !insertmacro _SP_ValidateAcquisitionFilename "$EXEFILE" $4 $0 $1 $2
+    StrCpy $8 0
+    StrCpy $R2 0
+    StrCpy $R3 0
+    ClearErrors
+    ; NSIS validates ordinary FileOpen paths and rejects the second colon in an
+    ; ADS name. Open only this stream on the running installer with CreateFileW;
+    ; FileRead/FileClose use the same native HANDLE representation.
+    System::Call 'kernel32::CreateFileW(w "$EXEPATH:Zone.Identifier", i 0x80000000, i 7, p 0, i 3, i 0x80, p 0)p.r5'
+    ${If} $5 != -1
+    ${AndIf} $5 != ""
+      ${Do}
+        StrCpy $6 ""
+        ClearErrors
+        System::Call 'kernel32::SetLastError(i 0)'
+        FileRead $5 $6
+        ${If} ${Errors}
+          ; EOF is ordinary and distinct from a failed stream read. FileRead
+          ; may report either zero or ERROR_HANDLE_EOF after the final bytes.
+          System::Call 'kernel32::GetLastError()i.r1'
+          ${If} $1 != 0
+          ${AndIf} $1 != 38
+          ${AndIf} $1 != 80
+            StrCpy $R0 "origin-read-failed"
+            StrCpy $R1 $1
+            StrCpy $9 ""
+          ${EndIf}
+          ${ExitDo}
+        ${EndIf}
+
+        ; Strip the line ending before measuring. A line exactly 1023 chars
+        ; followed by a newline can produce an empty continuation read and is
+        ; still complete; one additional content char is a real overflow.
+        StrLen $0 $6
+        StrCpy $R7 0 ; this read ends the logical line
+        ${If} $0 > 0
+          IntOp $1 $0 - 1
+          StrCpy $2 $6 1 $1
+          ${If} $2 == "$\n"
+            StrCpy $R7 1
+            StrCpy $6 $6 $1
+            StrLen $0 $6
+            ${If} $0 > 0
+              IntOp $1 $0 - 1
+              StrCpy $2 $6 1 $1
+              ${If} $2 == "$\r"
+                StrCpy $6 $6 $1
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        StrLen $0 $6
+        IntOp $R3 $R3 + $0
+
+        ${If} $R2 == 1
+          ; Continuations of unrelated fields are discarded incrementally.
+          ; A HostUrl continuation invalidates the tentative first chunk and
+          ; records the actual logical length once its end is known.
+          ${If} $R4 == 1
+          ${AndIf} $0 > 0
+            StrCpy $9 ""
+            StrCpy $R0 "host-url-overflow"
+          ${EndIf}
+        ${Else}
+          StrCpy $0 $6 1 0
+          ${If} $0 == "["
+            ${If} $6 == "[ZoneTransfer]"
+              StrCpy $7 1
+            ${Else}
+              StrCpy $7 0
+            ${EndIf}
+          ${ElseIf} $7 == 1
+            StrCpy $0 $6 8 0
+            ${If} $0 == "HostUrl="
+              StrCpy $R4 1
+              IntOp $8 $8 + 1
+              ${If} $8 > 1
+                StrCpy $R0 "duplicate-host-url"
+                StrCpy $9 ""
+              ${Else}
+                StrCpy $0 $6 "" 8
+                StrCpy $1 $0 8 0
+                StrLen $2 $0
+                ${If} $1 == "https://"
+                ${AndIf} $2 >= 61
+                  StrCpy $1 $0 1 8
+                  ${If} $1 != "/"
+                    ; Query/fragment text and backslashes are not URL paths.
+                    StrCpy $3 8
+                    ${Do}
+                      StrCpy $1 $0 1 $3
+                      ${If} $1 == "?"
+                      ${OrIf} $1 == "#"
+                      ${OrIf} $1 == "\"
+                        StrCpy $3 -1
+                        ${ExitDo}
+                      ${EndIf}
+                      IntOp $3 $3 + 1
+                      ${If} $3 >= $2
+                        ${ExitDo}
+                      ${EndIf}
+                    ${Loop}
+                    ${If} $3 >= 0
+                      StrCpy $1 $0 52 -52
+                      StrCpy $2 $1 1 0
+                      ${If} $2 == "/"
+                        StrCpy $1 $1 "" 1
+                        !insertmacro _SP_ValidateAcquisitionFilename "$1" $9 $0 $2 $3
+                      ${EndIf}
+                    ${EndIf}
                   ${EndIf}
                 ${EndIf}
-                IntOp $0 $0 + 1
-                ${If} $0 >= 36
-                  ${ExitDo}
-                ${EndIf}
-              ${Loop}
-              ${If} $3 == 1
-                ClearErrors
-                FileOpen $0 "$INSTDIR\acquisition-grant" w
-                ${IfNot} ${Errors}
-                  FileWrite $0 $1
-                  FileClose $0
+                ${If} $9 == ""
+                  StrCpy $R0 "malformed-host-url"
                 ${EndIf}
               ${EndIf}
             ${EndIf}
           ${EndIf}
         ${EndIf}
+
+        ${If} $R7 == 1
+          ${If} $R4 == 1
+          ${AndIf} $R3 > 1023
+            StrCpy $R0 "host-url-overflow"
+            StrCpy $R1 $R3
+            StrCpy $9 ""
+          ${EndIf}
+          StrCpy $R2 0
+          StrCpy $R3 0
+          StrCpy $R4 0
+        ${Else}
+          StrCpy $R2 1
+        ${EndIf}
+      ${Loop}
+      FileClose $5
+      ${If} $R0 == "host-url-overflow"
+      ${AndIf} $R1 == 0
+        StrCpy $R1 $R3
+      ${EndIf}
+    ${Else}
+      System::Call 'kernel32::GetLastError()i.r1'
+      ; ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND means no ADS, not failed I/O.
+      ${If} $1 != 2
+      ${AndIf} $1 != 3
+        ${If} $R0 == ""
+          StrCpy $R0 "origin-open-failed"
+          StrCpy $R1 $1
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    Pop $6
+    Pop $5
+    ${If} $5 != ""
+      StrCpy $R0 $5
+      StrCpy $R1 $6
+    ${EndIf}
+    ${EndIf}
+    StrCpy $7 0 ; accepted ADS outcome
+    ${If} $8 == 1
+    ${AndIf} $9 != ""
+      StrCpy $4 $9
+      StrCpy $7 1
+      ${If} $R5 != "certificate"
+        StrCpy $R5 "origin"
+      ${EndIf}
+    ${EndIf}
+    ${If} $7 == 0
+    ${AndIf} $4 != ""
+    ${AndIf} $R5 != "certificate"
+      StrCpy $R5 "filename"
+    ${EndIf}
+    ${If} $4 != ""
+      StrCpy $R6 "failed"
+      ClearErrors
+      FileOpen $0 "$INSTDIR\acquisition-grant" w
+      ${IfNot} ${Errors}
+        StrCpy $1 0
+        FileWrite $0 $4
+        ${IfNot} ${Errors}
+          StrCpy $1 1
+        ${EndIf}
+        ClearErrors
+        FileClose $0
+        ${IfNot} ${Errors}
+        ${AndIf} $1 == 1
+          StrCpy $R6 "saved"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    ${If} $R0 != ""
+      ; Persist a closed, privacy-safe protocol only after the fallback write,
+      ; so support logs retain both the cause and the actual outcome.
+      StrCpy $6 "v1;$R0"
+      ${If} $R0 == "host-url-overflow"
+        StrCpy $6 "$6;actual-chars=$R1;threshold-chars=1023"
+      ${ElseIf} $R0 == "embedded-length"
+        StrCpy $6 "$6;actual-bytes=$R1;expected-bytes=71"
+      ${ElseIf} $R0 == "embedded-duplicate"
+        StrCpy $6 "$6;actual-extensions=$R1;expected-extensions=1"
+      ${ElseIf} $R0 == "origin-open-failed"
+      ${OrIf} $R0 == "origin-read-failed"
+      ${OrIf} $R0 == "embedded-decode"
+        StrCpy $6 "$6;windows-error=$R1"
+      ${EndIf}
+      StrCpy $6 "$6;fallback=$R5;persistence=$R6"
+      ClearErrors
+      FileOpen $0 "$INSTDIR\acquisition-grant-diagnostic" w
+      ${IfNot} ${Errors}
+        FileWrite $0 $6
+        FileClose $0
       ${EndIf}
     ${EndIf}
   ${EndIf}
+  Pop $R7
+  ${If} $R7 == 1
+    SetErrors
+  ${Else}
+    ClearErrors
+  ${EndIf}
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
   Pop $3
   Pop $2
   Pop $1
