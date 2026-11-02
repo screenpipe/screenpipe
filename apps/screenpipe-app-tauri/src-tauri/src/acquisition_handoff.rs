@@ -684,6 +684,7 @@ SectionEnd
         )
         .await
         .unwrap();
+        println!("redacted Windows acquisition installer report:\n{report}");
         for expected in ["cause=\"host-url-overflow\"", "fallback=\"filename\"",
                          "persistence=\"saved\"", "actual_chars=1024",
                          "threshold_chars=1023"] {
