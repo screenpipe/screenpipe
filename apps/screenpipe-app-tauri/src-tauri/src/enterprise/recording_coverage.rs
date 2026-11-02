@@ -73,7 +73,7 @@ impl Tracker {
     }
     fn flush(&mut self) -> Option<Span> {
         let run = self.run.as_mut()?;
-        if run.last <= run.start {
+        if run.last.timestamp_millis() <= run.start.timestamp_millis() {
             return None;
         }
         let span = Span {
@@ -352,6 +352,30 @@ mod tests {
         )
         .is_none());
     }
+    #[test]
+    fn coverage_is_nonempty_at_the_wire_protocols_millisecond_precision() {
+        let mut t = Tracker::new();
+        let at = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+        let tick = Instant::now();
+        let good = Status::new(State::Recording, "capture_healthy");
+        assert!(observe(&mut t, good.clone(), at, tick).is_none());
+        assert!(observe(
+            &mut t,
+            good.clone(),
+            at + chrono::Duration::nanoseconds(1),
+            tick + Duration::from_nanos(1)
+        )
+        .is_none());
+        let span = observe(
+            &mut t,
+            good,
+            at + chrono::Duration::milliseconds(1),
+            tick + Duration::from_millis(1),
+        )
+        .unwrap();
+        assert!(span.end.timestamp_millis() > span.start.timestamp_millis());
+    }
+
     #[test]
     fn changes_end_at_last_matching_sample_not_at_next_state_or_restart() {
         let mut t = Tracker::new();
