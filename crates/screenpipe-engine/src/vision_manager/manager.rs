@@ -65,6 +65,7 @@ pub struct VisionManagerConfig {
     pub capture_max_width: u32,
     /// Skip screenshot pixels/JPEG/OCR while keeping accessibility-tree capture.
     pub disable_screenshots: bool,
+    pub focused_window_screenshots: bool,
     /// Enable the bounded semantic projection worker. Off by default.
     pub enable_semantic_context: bool,
     /// Choose memory, computer-use, or both projections over one capture.
@@ -657,6 +658,7 @@ impl VisionManager {
             monitor_y: monitor.y() as f64,
             monitor_width: monitor.width() as f64,
             monitor_height: monitor.height() as f64,
+            capture_window_bounds: self.config.focused_window_screenshots,
             ignore_incognito_windows: self.config.ignore_incognito_windows,
             enhanced_incognito_detection: self.config.enhanced_incognito_detection,
             capture_app_identity: self.config.enable_semantic_context
@@ -675,6 +677,7 @@ impl VisionManager {
         let mut capture_config = EventDrivenCaptureConfig {
             jpeg_quality: baseline_q,
             disable_screenshots: self.config.disable_screenshots,
+            focused_window_screenshots: self.config.focused_window_screenshots,
             ..EventDrivenCaptureConfig::default()
         };
         // Mitsukeru fork: apply per-parameter CLI / settings overrides if any.
@@ -1056,6 +1059,7 @@ mod tests {
             video_quality: "balanced".to_string(),
             capture_max_width: 0,
             disable_screenshots: false,
+            focused_window_screenshots: false,
             enable_semantic_context,
             semantic_context_mode: SemanticContextMode::Memory,
             idle_capture_interval_ms: None,

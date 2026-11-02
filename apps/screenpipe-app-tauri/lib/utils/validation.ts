@@ -120,6 +120,7 @@ export const settingsStoreSchema = z.object({
   includedUrls: z.array(domainRuleSchema).optional(),
   disableVision: z.boolean(),
   disableScreenshots: z.boolean().optional(),
+  focusedWindowScreenshots: z.boolean().optional(),
   enableSemanticContext: z.boolean().optional(),
   remoteControlPreferences: remoteControlPreferencesSchema.optional(),
   remoteControlPolicy: remoteControlPolicySchema.optional(),

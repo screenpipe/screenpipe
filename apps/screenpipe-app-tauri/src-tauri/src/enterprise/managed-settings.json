@@ -15,6 +15,7 @@
   {"policyKey": "ignoredMeetingApps", "deviceKey": "ignoredMeetingApps", "apply": "engine", "kind": "string-array", "defaultValue": []},
   {"policyKey": "disableVision", "deviceKey": "disableVision", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "disableScreenshots", "deviceKey": "disableScreenshots", "apply": "engine", "kind": "boolean", "defaultValue": false},
+  {"policyKey": "focusedWindowScreenshots", "deviceKey": "focusedWindowScreenshots", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "semanticContextMode", "deviceKey": "semanticContextMode", "apply": "engine", "kind": "enum", "values": ["memory", "computerUse", "both"], "defaultValue": "memory"},
   {"policyKey": "disableTimeline", "deviceKey": "disableTimeline", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "useAllMonitors", "deviceKey": "useAllMonitors", "apply": "engine", "kind": "boolean", "defaultValue": true},
