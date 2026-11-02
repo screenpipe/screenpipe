@@ -13,10 +13,12 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 
 PLACEHOLDER = '00000000-0000-4000-8000-000000000000'
+LINUX_XATTR = 'user.screenpipe.acquisition-grant'
 
 
 def package(app, output, platform, release):
@@ -103,9 +105,7 @@ def package(app, output, platform, release):
     return archive, manifest
 
 
-def package_filename(artifact, output, platform, release):
-    """Copy an immutable executable; only its delivered filename is personalized."""
-    artifact, output = Path(artifact).resolve(), Path(output).resolve()
+def validate_artifact(artifact, platform, release):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', release):
         raise ValueError('valid release required')
     if not re.search(r'(?:^|[_-])' + re.escape(release) + r'(?:[_-]|\.)', artifact.name):
@@ -131,6 +131,12 @@ def package_filename(artifact, output, platform, release):
         versions = {str(metadata.get(key, '')).strip() for key in ('ProductVersion', 'FileVersion')}
         if release not in versions:
             raise ValueError('release must match Windows version metadata')
+
+
+def package_filename(artifact, output, platform, release):
+    """Copy an immutable executable; only its delivered filename is personalized."""
+    artifact, output = Path(artifact).resolve(), Path(output).resolve()
+    validate_artifact(artifact, platform, release)
     size = artifact.stat().st_size
     if not 100 <= size <= 2147483647:
         raise ValueError('carrier size outside streaming limit')
@@ -157,6 +163,58 @@ def package_filename(artifact, output, platform, release):
     return target, manifest
 
 
+def package_linux_xattr(artifact, output, platform, release):
+    """PAX metadata personalizes the file's xattr without changing AppImage bytes."""
+    if platform != 'linux':
+        raise ValueError('Linux xattr carrier requires platform linux')
+    artifact, output = Path(artifact).resolve(), Path(output).resolve()
+    validate_artifact(artifact, platform, release)
+    original_size = artifact.stat().st_size
+    original_digest = hashlib.sha256()
+    with artifact.open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            original_digest.update(block)
+    with tempfile.TemporaryDirectory(prefix='screenpipe-linux-carrier-') as tmp:
+        member = tarfile.TarInfo('screenpipe.AppImage')
+        member.size = original_size
+        member.mode = 0o755
+        member.pax_headers = {'SCHILY.xattr.' + LINUX_XATTR: PLACEHOLDER}
+        prefix = member.tobuf(format=tarfile.PAX_FORMAT)
+        if prefix.count(PLACEHOLDER.encode()) != 1:
+            raise ValueError('ambiguous or absent Linux xattr placeholder')
+        prepared = Path(tmp) / 'screenpipe-attribution.tar'
+        with tarfile.open(prepared, 'w', format=tarfile.PAX_FORMAT) as archive:
+            with artifact.open('rb') as source:
+                archive.addfile(member, source)
+        # Check the exact archived bytes, including a source modified mid-copy.
+        archived_digest = hashlib.sha256()
+        with tarfile.open(prepared) as archive:
+            source = archive.extractfile(member.name)
+            for block in iter(lambda: source.read(1024 * 1024), b''):
+                archived_digest.update(block)
+        if artifact.stat().st_size != original_size or archived_digest.digest() != original_digest.digest():
+            raise ValueError('artifact changed during copy')
+        digest = hashlib.sha256()
+        with prepared.open('rb') as source:
+            for block in iter(lambda: source.read(1024 * 1024), b''):
+                digest.update(block)
+        output.mkdir(parents=True, exist_ok=True)
+        archive = output / prepared.name
+        manifest = output / 'screenpipe-attribution-linux.json'
+        if archive.exists() or manifest.exists():
+            raise ValueError('refusing to overwrite prepared artifacts')
+        result = dict(schema=3, carrier='linux-xattr', platform=platform, release=release,
+                      size=prepared.stat().st_size, sha256=digest.hexdigest(),
+                      placeholder=PLACEHOLDER, grant_offset=prefix.index(PLACEHOLDER.encode()),
+                      appimage=dict(name=member.name, size=member.size, sha256=original_digest.hexdigest()))
+        with prepared.open('rb') as source, archive.open('xb') as destination:
+            shutil.copyfileobj(source, destination, 1024 * 1024)
+        with manifest.open('x') as destination:
+            json.dump(result, destination, indent=2)
+            destination.write('\n')
+    return archive, manifest
+
+
 def windows_metadata(artifact):
     """Read signature and version using Windows' supported PowerShell APIs."""
     if sys.platform != 'win32':
@@ -180,7 +238,10 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True)
     parser.add_argument('--platform', choices=['macos-arm', 'macos-intel', 'linux', 'windows', 'windows-arm'], required=True)
     parser.add_argument('--release', required=True)
+    parser.add_argument('--linux-xattr', action='store_true', help='prepare a Linux PAX tar xattr carrier')
     args = parser.parse_args()
-    prepare = package if args.app else package_filename
+    if args.linux_xattr and (not args.artifact or args.platform != 'linux'):
+        parser.error('--linux-xattr requires --artifact and --platform linux')
+    prepare = package_linux_xattr if args.linux_xattr else package if args.app else package_filename
     for artifact in prepare(args.app or args.artifact, args.output, args.platform, args.release):
         print(artifact)

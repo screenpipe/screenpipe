@@ -1641,6 +1641,29 @@ jobs:
               --platform "$PLATFORM" --release "$VERSION"
           done
 
+      - name: Prepare Linux xattr download carrier
+        if: matrix.os_type == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          for appimage in "$BUNDLE_DIR"/appimage/*.AppImage; do
+            python3 scripts/package-attribution-carrier.py --artifact "$appimage" \
+              --output "$BUNDLE_DIR/attribution" --platform linux --release "$VERSION" --linux-xattr
+          done
+
+      - name: Upload Linux dry-run artifacts
+        if: matrix.os_type == 'linux' && github.event.inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-linux-${{ matrix.target }}
+          path: |
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Upload macOS dry-run artifacts
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -1710,6 +1733,7 @@ jobs:
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.sig \
+            "${BUNDLE_DIR}"/attribution/* \
             "${BUNDLE_DIR}"/deb/*.deb
 
       # Sentry uploads run AFTER R2 so they don't delay release artifacts

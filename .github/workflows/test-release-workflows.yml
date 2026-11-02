@@ -28,6 +28,9 @@ on:
       - .github/scripts/setup-release-sccache.sh
       - .github/scripts/prepare-mlx-cache.sh
       - .github/scripts/finalize-macos-updater.sh
+      - scripts/package-attribution-carrier.py
+      - scripts/test_attribution_carrier.py
+      - infra/release-artifact-uploader/**
   push:
     branches: [main]
     paths:
@@ -51,6 +54,9 @@ on:
       - .github/scripts/setup-release-sccache.sh
       - .github/scripts/prepare-mlx-cache.sh
       - .github/scripts/finalize-macos-updater.sh
+      - scripts/package-attribution-carrier.py
+      - scripts/test_attribution_carrier.py
+      - infra/release-artifact-uploader/**
 
 permissions:
   contents: read
@@ -64,6 +70,10 @@ jobs:
         with:
           bun-version: "1.3.10"
       - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts ./.github/actions/install-windows-frontend-dependencies/prune-dependencies.test.ts
+      - name: Verify Linux xattr carrier with real GNU tar extraction
+        run: python3 -B scripts/test_attribution_carrier.py
+      - name: Verify scoped artifact upload admission
+        run: bun test ./infra/release-artifact-uploader/src/index.test.js
 
   localization-generation:
     if: github.event_name == 'workflow_dispatch'

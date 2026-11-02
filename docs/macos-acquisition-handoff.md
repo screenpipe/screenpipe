@@ -21,6 +21,10 @@ signed screenpipe-<UUID>.exe -> NSIS validates filename -> installed token
 
 signed screenpipe-<UUID>.AppImage -> APPIMAGE filename -> credential-store proof
   -> claim -> authenticated bind
+
+AppImage -> PAX tar with user.screenpipe.acquisition-grant -> Worker personalizes xattr
+  -> extract preserving xattrs -> APPIMAGE xattr -> existing credential-store proof
+  -> claim -> authenticated bind
 ```
 
 Retries reuse the same request and verifier. Saved proof survives app updates
@@ -79,11 +83,46 @@ in the versioned release filename. The NSIS bootstrap PE machine is not treated
 as payload architecture. Filename personalization preserves the signed bytes.
 Use `--platform windows` for x86_64 and `--platform windows-arm` for ARM64.
 
+For Linux xattr downloads, use the same versioned AppImage with `--linux-xattr`:
+
+```sh
+python3 scripts/package-attribution-carrier.py \
+  --artifact /path/to/screenpipe_VERSION_amd64.AppImage --platform linux \
+  --release VERSION --linux-xattr --output /path/to/new-output-directory
+```
+
+This prepares `screenpipe-attribution.tar` and `screenpipe-attribution-linux.json`.
+The schema-3 manifest identifies `carrier: linux-xattr`, platform, release, tar
+size/SHA-256, the placeholder and absolute `grant_offset`, and the enclosed
+AppImage name/size/SHA-256. The archive has one executable `screenpipe.AppImage`
+with PAX `SCHILY.xattr.user.screenpipe.acquisition-grant` metadata. The website
+replaces only the 36-byte opaque UUID in that metadata. AppImage bytes remain
+unchanged. The consumer Linux release job prepares and uploads these versioned
+artifacts alongside the ordinary AppImage; dry runs retain both as CI artifacts.
+
+A browser cannot directly set this custom xattr on a raw HTTP download. Extract
+the personalized tar with an extractor that preserves Linux xattrs; GNU tar
+requires the explicit flag:
+
+```sh
+tar --xattrs -xf screenpipe-attribution.tar
+./screenpipe.AppImage
+```
+
+The app reads the original path from `APPIMAGE`, preferring its xattr to the
+legacy filename grant. Renaming on the same filesystem preserves the xattr.
+Extraction without xattrs or copying to a filesystem that strips them loses
+optional attribution for this archive. Existing personalized raw AppImages
+continue to use their filenames. Missing or malformed carriers do not prevent
+recording; unreadable or invalid attributes report the failure category and
+expected UUID width without logging the grant or local file path. The saved
+proof, consent, account and retirement rules are unchanged.
+
 The script never uploads artifacts or changes publication pointers. Production
 activation and versioned-artifact publication have not been performed. Human
 publication remains required. An ordinary, unpersonalized download installs and
 runs normally without optional attribution. Renaming a personalized Windows or
-Linux download before its first install/launch can lose attribution.
+raw Linux download before its first install/launch can lose attribution.
 
 The signature-exempt xattr and ZIP extraction behavior are documented by
 [Apple Developer Technical Support](https://developer.apple.com/forums/thread/796303).
@@ -95,5 +134,8 @@ Before enabling website carrier admission, verify actual production artifacts,
 app startup, restart, login/logout, trial/purchase, updater recovery, and provider
 readback. The macOS test uses an ad-hoc signed fixture; Windows NSIS tests exercise
 the real grant macro but mock installer signature/version metadata boundaries;
-Linux uses a synthetic AppImage header. These local tests do not prove the full
+Linux packaging uses a synthetic AppImage header. The Linux carrier regression
+also runs GNU tar with and without xattrs and checks rename and fresh-process
+readback. Native reader tests exercise filesystem attributes, UUID validation,
+rename and filename compatibility on Unix. These tests do not prove the full
 production download or signing path.

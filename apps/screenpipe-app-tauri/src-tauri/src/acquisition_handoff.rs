@@ -181,7 +181,50 @@ fn carrier_from(directory: &std::path::Path) -> Option<String> {
 fn carrier() -> Option<String> {
     // AppImages execute from a temporary mount; APPIMAGE is the original file.
     let path = std::path::PathBuf::from(std::env::var_os("APPIMAGE")?);
-    grant_from_filename(path.file_name()?.to_str()?, ".AppImage")
+    linux_carrier_from(&path)
+}
+
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+fn linux_carrier_from(path: &std::path::Path) -> Option<String> {
+    linux_xattr_grant(path)
+        .or_else(|| grant_from_filename(path.file_name()?.to_str()?, ".AppImage"))
+}
+
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+fn linux_xattr_grant(path: &std::path::Path) -> Option<String> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let name = c"user.screenpipe.acquisition-grant";
+    // The protocol carries exactly one canonical UUID (36 ASCII bytes).
+    let mut bytes = [0u8; 36];
+    let read = |buffer: *mut libc::c_void, length: usize| {
+        #[cfg(target_os = "linux")]
+        unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), buffer, length) }
+        #[cfg(target_os = "macos")]
+        unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), buffer, length, 0, 0) }
+    };
+    let size = read(bytes.as_mut_ptr().cast(), bytes.len());
+    if size < 0 {
+        let error = std::io::Error::last_os_error();
+        #[cfg(target_os = "linux")]
+        let absent = error.raw_os_error() == Some(libc::ENODATA);
+        #[cfg(target_os = "macos")]
+        let absent = error.raw_os_error() == Some(libc::ENOATTR);
+        if !absent {
+            // On ERANGE the read returns no length; query it without allocating.
+            let actual_bytes = if error.raw_os_error() == Some(libc::ERANGE) {
+                Some(read(std::ptr::null_mut(), 0))
+            } else { None };
+            tracing::warn!(%error, ?actual_bytes, expected_bytes = bytes.len(), "Linux acquisition xattr unreadable; trying filename attribution");
+        }
+        return None;
+    }
+    let grant = std::str::from_utf8(&bytes).ok();
+    if size != bytes.len() as isize || !grant.is_some_and(uuid4) {
+        tracing::warn!(actual_bytes = size, expected_bytes = bytes.len(), "Linux acquisition xattr invalid; trying filename attribution");
+        return None;
+    }
+    grant.map(str::to_owned)
 }
 
 // Retirement never waits for the optional credential store. A late credential
@@ -357,6 +400,79 @@ async fn send(client: &reqwest::Client, origin: &reqwest::Url, action: &str, p: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn set_linux_xattr(path: &std::path::Path, value: &[u8]) {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let name = c"user.screenpipe.acquisition-grant";
+        #[cfg(target_os = "linux")]
+        let result = unsafe { libc::setxattr(path.as_ptr(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::setxattr(path.as_ptr(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0, 0) };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn linux_xattr_survives_rename_and_preserves_filename_compatibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let grant = "12345678-1234-4234-8234-123456789012";
+        let path = dir.path().join(format!("screenpipe-{grant}.AppImage"));
+        std::fs::write(&path, b"unchanged AppImage bytes").unwrap();
+        assert_eq!(linux_carrier_from(&path), Some(grant.into()));
+        let xattr_grant = "abcdefab-cdef-4abc-9def-abcdefabcdef";
+        set_linux_xattr(&path, xattr_grant.as_bytes());
+        assert_eq!(linux_carrier_from(&path), Some(xattr_grant.into()));
+        let renamed = dir.path().join("renamed.AppImage");
+        std::fs::rename(&path, &renamed).unwrap();
+        assert_eq!(linux_carrier_from(&renamed), Some(xattr_grant.into()));
+        for invalid in [
+            PLACEHOLDER.as_bytes(), &grant.as_bytes()[..35],
+            b"12345678-1234-4234-8234-123456789012\n",
+            b"12345678-1234-4234-7234-123456789012",
+            b"12345678-1234-4234-8234-12345678901X", &[0xff; 36],
+        ] {
+            set_linux_xattr(&renamed, invalid);
+            assert!(linux_carrier_from(&renamed).is_none());
+        }
+        // A broken attribute does not invalidate older personalized downloads.
+        std::fs::rename(&renamed, &path).unwrap();
+        assert_eq!(linux_carrier_from(&path), Some(grant.into()));
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged AppImage bytes");
+        let ordinary = dir.path().join("screenpipe.AppImage");
+        std::fs::write(&ordinary, b"ordinary download").unwrap();
+        assert!(linux_carrier_from(&ordinary).is_none());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn linux_xattr_failures_survive_support_collection_and_rotation_without_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-02.log");
+        let artifact = dir.path().join("private-person@example.com.AppImage");
+        std::fs::write(&artifact, b"AppImage fixture").unwrap();
+        let grant = "12345678-1234-4234-8234-123456789012";
+        let subscriber = tracing_subscriber::fmt().with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap()).finish();
+        tracing::subscriber::with_default(subscriber, || {
+            set_linux_xattr(&artifact, &grant.as_bytes()[..35]);
+            assert!(linux_carrier_from(&artifact).is_none());
+            set_linux_xattr(&artifact, format!("{grant}\n").as_bytes());
+            assert!(linux_carrier_from(&artifact).is_none());
+        });
+        std::fs::rename(&current, dir.path().join("screenpipe-app.2026-11-02.1.log")).unwrap();
+        std::fs::write(&current, b"after rotation\n").unwrap();
+        let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[dir.path().to_path_buf()], dir.path().to_path_buf()
+        ).await.unwrap();
+        for expected in ["Linux acquisition xattr invalid", "actual_bytes=35", "expected_bytes=36",
+                         "Linux acquisition xattr unreadable", "Some(37)", "trying filename attribution"] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains(grant));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
     #[test]
     fn portable_filenames_reject_placeholders_and_ambiguous_names() {
         let grant = "12345678-1234-4234-8234-123456789012";
