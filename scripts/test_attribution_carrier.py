@@ -3,6 +3,7 @@
 """Local attribution-carrier packaging regressions; never publish artifacts."""
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import sys
@@ -91,13 +92,20 @@ class CarrierTest(unittest.TestCase):
 
                 with mock.patch.object(carrier, 'package_windows_certificate', side_effect=certificate), \
                      mock.patch.object(carrier, 'package_filename', side_effect=legacy) as legacy_call, \
-                     mock.patch.object(carrier.Path, 'stat') as stat:
+                     mock.patch.object(carrier.Path, 'stat') as stat, \
+                     mock.patch.object(carrier.sys, 'stderr', new_callable=io.StringIO) as diagnostics:
                     stat.return_value.st_size = carrier.LEGACY_SCHEMA1_STREAMING_MAX + delta
                     produced = carrier.package_windows_release_carriers(
                         artifact, output, 'windows', '1.2.3')
                 self.assertEqual(legacy_call.called, expects_legacy)
                 self.assertTrue((output / 'screenpipe-attribution-windows.exe').is_file())
                 self.assertEqual(len(produced), 4 if expects_legacy else 2)
+                if expects_legacy:
+                    self.assertEqual(diagnostics.getvalue(), '')
+                else:
+                    self.assertIn(f'source size {carrier.LEGACY_SCHEMA1_STREAMING_MAX + delta} bytes', diagnostics.getvalue())
+                    self.assertIn(f'limit {carrier.LEGACY_SCHEMA1_STREAMING_MAX} bytes', diagnostics.getvalue())
+                    self.assertIn('schema 4 Windows certificate carrier prepared', diagnostics.getvalue())
 
     def test_linux_xattr_tar_preserves_appimage_and_exact_patch_location(self):
         with tempfile.TemporaryDirectory() as tmp:

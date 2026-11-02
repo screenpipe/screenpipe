@@ -408,10 +408,13 @@ def package_windows_release_carriers(artifact, output, platform, release):
     with tempfile.TemporaryDirectory(prefix='.screenpipe-windows-carriers-', dir=output.parent) as staging:
         staging = Path(staging)
         package_windows_certificate(artifact, staging, platform, release)
-        if artifact.stat().st_size <= LEGACY_SCHEMA1_STREAMING_MAX:
+        source_size = artifact.stat().st_size
+        if source_size <= LEGACY_SCHEMA1_STREAMING_MAX:
             package_filename(artifact, staging, platform, release)
         else:
-            print('legacy schema 1 filename carrier omitted: source exceeds Website signed 32-bit streaming limit',
+            print(f'legacy schema 1 filename carrier omitted: source size {source_size} bytes exceeds '
+                  f'Website schema 1 streaming limit {LEGACY_SCHEMA1_STREAMING_MAX} bytes; '
+                  'schema 4 Windows certificate carrier prepared',
                   file=sys.stderr)
         prepared = tuple(staging.iterdir())
         published = []
