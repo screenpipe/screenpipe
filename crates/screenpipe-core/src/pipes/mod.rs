@@ -1523,6 +1523,23 @@ pub struct SchedulerState {
     pub consecutive_failures: i32,
 }
 
+/// Admission metadata retained independently of execution content.
+#[derive(Debug)]
+pub struct PipeDispatchReceipt {
+    pub pipe_name: String,
+    pub request_hash: Option<String>,
+    pub execution_id: Option<i64>,
+    pub cancel_requested: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct PipeRunRequest<'a> {
+    pub id: &'a str,
+    pub hash: &'a str,
+    pub expected_model: Option<&'a str>,
+    pub expected_provider: Option<&'a str>,
+}
+
 /// Trait for persisting pipe execution data.
 /// Implemented in `screenpipe-engine` using SQLite.
 /// `PipeManager` works without a store (CLI mode) — all methods are guarded
@@ -1530,6 +1547,32 @@ pub struct SchedulerState {
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait PipeStore: Send + Sync {
+    /// Immutable admission metadata, retained independently of execution content.
+    async fn get_dispatch_receipt(&self, _request_id: &str) -> Result<Option<PipeDispatchReceipt>> {
+        anyhow::bail!("pipe_request_receipts_unavailable")
+    }
+
+    async fn cancel_request_execution(
+        &self,
+        _request_id: &str,
+        _pipe_name: &str,
+    ) -> Result<Option<i64>> {
+        anyhow::bail!("pipe_request_receipts_unavailable")
+    }
+
+    /// Returns (execution id, newly created). Stores without atomic admission
+    /// must fail closed instead of treating an idempotent request as a new run.
+    async fn create_request_execution(
+        &self,
+        _request_id: &str,
+        _request_hash: &str,
+        _pipe_name: &str,
+        _model: &str,
+        _provider: Option<&str>,
+    ) -> Result<(i64, bool)> {
+        anyhow::bail!("pipe_request_receipts_unavailable")
+    }
+
     /// Insert a new execution row with status='queued'. Returns the row id.
     async fn create_execution(
         &self,
@@ -4228,7 +4271,7 @@ impl PipeManager {
         trigger: &str,
         run_context: Option<&str>,
     ) -> Result<Option<i64>> {
-        self.start_pipe_background_inner(name, trigger, run_context, None)
+        self.start_pipe_background_inner(name, trigger, run_context, None, None)
             .await
     }
 
@@ -4255,8 +4298,55 @@ impl PipeManager {
                 key: event_key.to_string(),
                 data: event_data,
             }),
+            None,
         )
         .await
+    }
+
+    /// Resolve accepted identity before inspecting a possibly changed Pipe.
+    pub async fn get_pipe_request_execution(
+        &self,
+        name: &str,
+        request_id: &str,
+        request_hash: &str,
+    ) -> Result<Option<i64>> {
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| anyhow!("pipe_request_receipts_unavailable"))?;
+        match store.get_dispatch_receipt(request_id).await? {
+            Some(receipt) => {
+                if receipt.pipe_name != name
+                    || receipt
+                        .request_hash
+                        .as_deref()
+                        .is_some_and(|hash| hash != request_hash)
+                {
+                    anyhow::bail!("pipe_request_conflict");
+                }
+                if receipt.execution_id.is_none() && receipt.cancel_requested {
+                    anyhow::bail!("pipe_request_cancelled");
+                }
+                Ok(receipt.execution_id)
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn start_pipe_background_for_request(
+        &self,
+        name: &str,
+        request: PipeRunRequest<'_>,
+        run_context: Option<&str>,
+    ) -> Result<Option<i64>> {
+        if let Some(id) = self
+            .get_pipe_request_execution(name, request.id, request.hash)
+            .await?
+        {
+            return Ok(Some(id));
+        }
+        self.start_pipe_background_inner(name, "manual", run_context, None, Some(request))
+            .await
     }
 
     async fn start_pipe_background_inner(
@@ -4265,6 +4355,7 @@ impl PipeManager {
         trigger: &str,
         run_context: Option<&str>,
         event_context: Option<BackgroundEventContext>,
+        request: Option<PipeRunRequest<'_>>,
     ) -> Result<Option<i64>> {
         validate_pipe_identifier(name)?;
         let (config, body, _raw) = {
@@ -4410,6 +4501,19 @@ impl PipeManager {
             }
         };
 
+        if request.is_some_and(|request| {
+            request
+                .expected_model
+                .is_some_and(|model| model != run_model)
+                || request
+                    .expected_provider
+                    .is_some_and(|provider| Some(provider) != run_provider.as_deref())
+        }) {
+            remove_pid_file(&self.pipes_dir, name);
+            self.running.lock().await.remove(name);
+            anyhow::bail!("pipe_model_configuration_changed");
+        }
+
         let executor = match self.executors.get(&run_agent) {
             Some(executor) if executor.is_available() => executor.clone(),
             Some(_) => {
@@ -4445,8 +4549,30 @@ impl PipeManager {
 
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
-            let created = match event_context.as_ref() {
-                Some(event) => {
+            let created = match (request, event_context.as_ref()) {
+                (Some(request), _) => {
+                    match store
+                        .create_request_execution(
+                            request.id,
+                            request.hash,
+                            name,
+                            &run_model,
+                            run_provider.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok((id, false)) => {
+                            // Another accepted admission won. Release only this
+                            // unstarted handle; never launch the saved execution.
+                            remove_pid_file(&self.pipes_dir, name);
+                            self.running.lock().await.remove(name);
+                            return Ok(Some(id));
+                        }
+                        Ok((id, true)) => Ok(id),
+                        Err(error) => Err(error),
+                    }
+                }
+                (None, Some(event)) => {
                     store
                         .create_execution_with_trigger(
                             name,
@@ -4458,7 +4584,7 @@ impl PipeManager {
                         )
                         .await
                 }
-                None => {
+                (None, None) => {
                     store
                         .create_execution(name, trigger, &run_model, run_provider.as_deref())
                         .await
@@ -4590,6 +4716,7 @@ impl PipeManager {
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
         let mcp_session_access = self.mcp_session_access.clone();
         let stop_requested_for_result = stop_requested.clone();
+        let request_identity = request.map(|request| format!("request:{}", request.id));
 
         // Spawn the actual execution in a background task
         tokio::spawn(async move {
@@ -4645,7 +4772,7 @@ impl PipeManager {
                         .await;
                 }
             }
-            let execution_context = MastraExecutionContext::for_run(
+            let mut execution_context = MastraExecutionContext::for_run(
                 &run_agent,
                 event_context
                     .as_ref()
@@ -4654,6 +4781,9 @@ impl PipeManager {
                 &prompt,
                 &pipe_system_prompt,
             );
+            if let (Some(context), Some(request_id)) = (&mut execution_context, request_identity) {
+                context.id = request_id;
+            }
             let run_executor_config = pipe_executor_config(
                 &run_agent,
                 run_executor_config,
@@ -6302,8 +6432,46 @@ impl PipeManager {
 
     /// Stop a running pipe.
     pub async fn stop_pipe(&self, name: &str) -> Result<PipeStopStatus> {
+        self.stop_pipe_inner(name, None).await
+    }
+
+    /// Cancel the accepted execution, never a scheduled successor with the same name.
+    pub async fn stop_pipe_execution(
+        &self,
+        name: &str,
+        execution_id: i64,
+    ) -> Result<PipeStopStatus> {
+        self.stop_pipe_inner(name, Some(execution_id)).await
+    }
+
+    pub async fn stop_pipe_request(
+        &self,
+        name: &str,
+        request_id: &str,
+    ) -> Result<Option<(i64, PipeStopStatus)>> {
+        validate_pipe_identifier(name)?;
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| anyhow!("pipe_request_receipts_unavailable"))?;
+        match store.cancel_request_execution(request_id, name).await? {
+            Some(id) => Ok(Some((id, self.stop_pipe_execution(name, id).await?))),
+            None => Ok(None),
+        }
+    }
+
+    async fn stop_pipe_inner(
+        &self,
+        name: &str,
+        expected_execution_id: Option<i64>,
+    ) -> Result<PipeStopStatus> {
         let handle = {
             let running = self.running.lock().await;
+            if let Some(expected) = expected_execution_id {
+                if self.running_execution_ids.lock().await.get(name) != Some(&expected) {
+                    return Ok(PipeStopStatus::NotRunning);
+                }
+            }
             running.get(name).cloned()
         };
 

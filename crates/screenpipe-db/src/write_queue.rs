@@ -689,6 +689,19 @@ pub(crate) enum WriteOp {
         trigger_event: Option<String>,
         trigger_key: Option<String>,
     },
+    PipeCreateRequestExecution {
+        request_id: String,
+        request_hash: String,
+        pipe_name: String,
+        model: String,
+        provider: Option<String>,
+        accepted_at: String,
+    },
+    PipeCancelRequestExecution {
+        request_id: String,
+        pipe_name: String,
+        accepted_at: String,
+    },
     PipeUpdateExecution {
         sql: String,
         binds: Vec<PipeBindValue>,
@@ -875,6 +888,10 @@ pub enum SyncTable {
 /// of the original public method.
 #[derive(Debug)]
 pub(crate) enum WriteResult {
+    PipeRequestExecution {
+        execution_id: i64,
+        created: bool,
+    },
     /// An inserted row ID (i64). Used by most insert operations.
     Id(i64),
     /// For operations that return nothing meaningful.
@@ -2305,6 +2322,98 @@ async fn execute_single_write(
             .fetch_one(&mut **conn)
             .await?;
             Ok(WriteResult::Id(row))
+        }
+
+        WriteOp::PipeCreateRequestExecution {
+            request_id,
+            request_hash,
+            pipe_name,
+            model,
+            provider,
+            accepted_at,
+        } => {
+            // This queue owns the existing BEGIN IMMEDIATE transaction. The
+            // execution and its admission receipt commit together before a
+            // caller can launch the agent or observe success.
+            let previous = sqlx::query_as::<_, (String, Option<String>, Option<i64>, bool)>(
+                "SELECT pipe_name, request_hash, execution_id, cancel_requested FROM pipe_dispatch_receipts WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_optional(&mut **conn)
+            .await?;
+            if let Some((previous_pipe, previous_hash, execution_id, cancelled)) = previous {
+                if previous_pipe != *pipe_name
+                    || previous_hash
+                        .as_ref()
+                        .is_some_and(|hash| hash != request_hash)
+                {
+                    return Err(sqlx::Error::Protocol("pipe_request_conflict".into()));
+                }
+                let execution_id = execution_id.ok_or_else(|| {
+                    sqlx::Error::Protocol(
+                        if cancelled {
+                            "pipe_request_cancelled"
+                        } else {
+                            "pipe_request_receipt_invalid"
+                        }
+                        .into(),
+                    )
+                })?;
+                return Ok(WriteResult::PipeRequestExecution {
+                    execution_id,
+                    created: false,
+                });
+            }
+            sqlx::query("SAVEPOINT pipe_request_admission")
+                .execute(&mut **conn)
+                .await?;
+            let admitted = async {
+            let execution_id = sqlx::query_scalar::<_, i64>(
+                "INSERT INTO pipe_executions (pipe_name, status, trigger_type, model, provider, started_at) VALUES (?, 'queued', 'manual', ?, ?, ?) RETURNING id",
+            )
+            .bind(pipe_name)
+            .bind(model)
+            .bind(provider)
+            .bind(accepted_at)
+            .fetch_one(&mut **conn)
+            .await?;
+            sqlx::query("INSERT INTO pipe_dispatch_receipts (request_id, pipe_name, request_hash, execution_id, accepted_at) VALUES (?, ?, ?, ?, ?)")
+                .bind(request_id).bind(pipe_name).bind(request_hash).bind(execution_id).bind(accepted_at)
+                .execute(&mut **conn).await?;
+            Ok::<_, sqlx::Error>(WriteResult::PipeRequestExecution { execution_id, created: true })
+            }.await;
+            if admitted.is_err() {
+                sqlx::query("ROLLBACK TO pipe_request_admission")
+                    .execute(&mut **conn)
+                    .await?;
+            }
+            sqlx::query("RELEASE pipe_request_admission")
+                .execute(&mut **conn)
+                .await?;
+            admitted
+        }
+
+        WriteOp::PipeCancelRequestExecution {
+            request_id,
+            pipe_name,
+            accepted_at,
+        } => {
+            // Preserve cancellation before admission and after a lost HTTP reply.
+            // Late admission cannot turn this durable refusal into new work.
+            let previous = sqlx::query_as::<_, (String, Option<i64>)>(
+                "SELECT pipe_name, execution_id FROM pipe_dispatch_receipts WHERE request_id = ?",
+            )
+            .bind(request_id)
+            .fetch_optional(&mut **conn)
+            .await?;
+            if previous.as_ref().is_some_and(|(name, _)| name != pipe_name) {
+                return Err(sqlx::Error::Protocol("pipe_request_conflict".into()));
+            }
+            sqlx::query("INSERT INTO pipe_dispatch_receipts (request_id, pipe_name, cancel_requested, accepted_at) VALUES (?, ?, 1, ?) ON CONFLICT(request_id) DO UPDATE SET cancel_requested = 1")
+                .bind(request_id).bind(pipe_name).bind(accepted_at).execute(&mut **conn).await?;
+            Ok(WriteResult::Id(
+                previous.and_then(|(_, id)| id).unwrap_or(0),
+            ))
         }
 
         WriteOp::PipeClaimEventRun {

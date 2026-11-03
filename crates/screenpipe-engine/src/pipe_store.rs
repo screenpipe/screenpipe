@@ -6,7 +6,9 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use screenpipe_core::pipes::{PipeExecution, PipeExecutionActivity, PipeStore, SchedulerState};
+use screenpipe_core::pipes::{
+    PipeDispatchReceipt, PipeExecution, PipeExecutionActivity, PipeStore, SchedulerState,
+};
 use screenpipe_db::DatabaseManager;
 use std::sync::Arc;
 
@@ -26,6 +28,43 @@ impl SqlitePipeStore {
 
 #[async_trait::async_trait]
 impl PipeStore for SqlitePipeStore {
+    async fn get_dispatch_receipt(&self, request_id: &str) -> Result<Option<PipeDispatchReceipt>> {
+        Ok(sqlx::query_as::<_, (String, Option<String>, Option<i64>, bool)>(
+            "SELECT pipe_name, request_hash, execution_id, cancel_requested FROM pipe_dispatch_receipts WHERE request_id = ?",
+        ).bind(request_id).fetch_optional(&self.db.pool).await?.map(|(pipe_name, request_hash, execution_id, cancel_requested)| PipeDispatchReceipt { pipe_name, request_hash, execution_id, cancel_requested }))
+    }
+
+    async fn cancel_request_execution(
+        &self,
+        request_id: &str,
+        pipe_name: &str,
+    ) -> Result<Option<i64>> {
+        Ok(self
+            .db
+            .pipe_cancel_request_execution_queued(request_id, pipe_name)
+            .await?)
+    }
+
+    async fn create_request_execution(
+        &self,
+        request_id: &str,
+        request_hash: &str,
+        pipe_name: &str,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Result<(i64, bool)> {
+        Ok(self
+            .db
+            .pipe_create_request_execution_queued(
+                request_id,
+                request_hash,
+                pipe_name,
+                model,
+                provider,
+            )
+            .await?)
+    }
+
     async fn create_execution(
         &self,
         pipe_name: &str,
@@ -610,6 +649,157 @@ mod tests {
     use super::*;
     use screenpipe_core::pipes::PipeStore;
     use std::sync::Arc as StdArc;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_admission_is_atomic_and_survives_restart_and_result_cleanup() {
+        let (store, tmp) = setup_test_store().await;
+        let (first, second) = tokio::join!(
+            store.create_request_execution(
+                "accepted-request",
+                "accepted-input",
+                "demo",
+                "model",
+                None
+            ),
+            store.create_request_execution(
+                "accepted-request",
+                "accepted-input",
+                "demo",
+                "model",
+                None
+            ),
+        );
+        let (first_id, first_created) = first.unwrap();
+        let (second_id, second_created) = second.unwrap();
+        assert_eq!(first_id, second_id);
+        assert_ne!(first_created, second_created);
+        assert_eq!(
+            store
+                .cancel_request_execution("cancelled-before-admission", "demo")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store.get_executions("demo", 10, None).await.unwrap().len(),
+            1
+        );
+        assert!(store
+            .create_request_execution("accepted-request", "changed-input", "demo", "model", None)
+            .await
+            .is_err());
+        assert!(store
+            .create_request_execution("accepted-request", "accepted-input", "other", "model", None)
+            .await
+            .is_err());
+        store.db.close().await;
+        drop(store);
+        let reopened = SqlitePipeStore::new(StdArc::new(
+            DatabaseManager::new(
+                tmp.path().join("test.db").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap(),
+        ));
+        reopened.mark_orphaned_running().await.unwrap();
+        assert!(reopened
+            .create_request_execution(
+                "cancelled-before-admission",
+                "late-input",
+                "demo",
+                "model",
+                None
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("pipe_request_cancelled"));
+        assert_eq!(
+            reopened.get_executions("demo", 10, None).await.unwrap()[0]
+                .error_type
+                .as_deref(),
+            Some("interrupted")
+        );
+        assert_eq!(
+            reopened
+                .create_request_execution(
+                    "accepted-request",
+                    "accepted-input",
+                    "demo",
+                    "model",
+                    None
+                )
+                .await
+                .unwrap(),
+            (first_id, false)
+        );
+        // Content deletion cannot erase admission or authorize another effect.
+        reopened
+            .db
+            .pipe_execute_write_queued(
+                first_id,
+                "DELETE FROM pipe_executions WHERE id = ?",
+                vec![screenpipe_db::write_queue::PipeBindValue::Int(first_id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .create_request_execution(
+                    "accepted-request",
+                    "accepted-input",
+                    "demo",
+                    "model",
+                    None
+                )
+                .await
+                .unwrap(),
+            (first_id, false)
+        );
+        assert!(reopened
+            .get_executions("demo", 10, None)
+            .await
+            .unwrap()
+            .is_empty());
+        reopened.db.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_request_receipt_rolls_back_its_unstarted_execution() {
+        let (store, _tmp) = setup_test_store().await;
+        store.db.pipe_execute_write_queued(0, "CREATE TRIGGER reject_test_receipt BEFORE INSERT ON pipe_dispatch_receipts BEGIN SELECT RAISE(ABORT, 'test_receipt_storage_unavailable'); END", vec![]).await.unwrap();
+        let error = store
+            .create_request_execution("recoverable-request", "input", "demo", "model", None)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("test_receipt_storage_unavailable"));
+        assert!(store
+            .get_dispatch_receipt("recoverable-request")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_executions("demo", 10, None)
+            .await
+            .unwrap()
+            .is_empty());
+        store
+            .db
+            .pipe_execute_write_queued(0, "DROP TRIGGER reject_test_receipt", vec![])
+            .await
+            .unwrap();
+        assert!(
+            store
+                .create_request_execution("recoverable-request", "input", "demo", "model", None)
+                .await
+                .unwrap()
+                .1
+        );
+        store.db.close().await;
+    }
 
     async fn setup_test_store() -> (SqlitePipeStore, tempfile::TempDir) {
         // Use a real DatabaseManager with temp DB for proper write queue testing.

@@ -1347,7 +1347,12 @@ impl SCServer {
                 )
                 .route(
                     "/:id/run",
-                    axum::routing::post(crate::pipes_api::run_pipe_now),
+                    axum::routing::post(crate::pipes_api::run_pipe_now)
+                        .get(crate::pipes_api::pipe_request_execution_protocol),
+                )
+                .route(
+                    "/:id/requests/:request_id/stop",
+                    axum::routing::post(crate::pipes_api::stop_pipe_request),
                 )
                 .route(
                     "/:id/logs",
@@ -1368,6 +1373,10 @@ impl SCServer {
                 .route(
                     "/:id/executions/:exec_id",
                     axum::routing::get(crate::pipes_api::get_pipe_execution),
+                )
+                .route(
+                    "/:id/executions/:exec_id/stop",
+                    axum::routing::post(crate::pipes_api::stop_pipe_execution),
                 )
                 .route(
                     "/:id/history",
