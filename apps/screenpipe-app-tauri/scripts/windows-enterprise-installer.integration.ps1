@@ -16,7 +16,7 @@ versions. It does not build or exercise the Screenpipe engine.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)] [string] $ResultsDir,
-  [ValidateSet("current", "machine", "legacy-machine")] [string] $Matrix = "current",
+  [ValidateSet("current", "machine", "legacy-machine", "custom-missing-removal")] [string] $Matrix = "current",
   [switch] $CompileOnly,
   [switch] $InstallOnly
 )
@@ -158,6 +158,7 @@ $installDir = if ($Matrix -eq "current") {
 } else {
   Join-Path $env:ProgramData "Screenpipe fixture $Matrix ü space"
 }
+$userBinaryName = "sp-desktop.exe"
 $dataDir = Join-Path $userProfile ".screenpipe"
 $sentinel = Join-Path $dataDir "installer-acceptance-sentinel.txt"
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
@@ -168,7 +169,7 @@ function Invoke-Installer([string] $Path, [string[]] $Arguments) {
   if ($process.ExitCode) { throw "$Path exited $($process.ExitCode)" }
 }
 
-$firstInstaller = if ($Matrix -eq "legacy-machine") { $legacyInstallerA } else { $installerA }
+$firstInstaller = if ($Matrix -in @("legacy-machine", "custom-missing-removal")) { $legacyInstallerA } else { $installerA }
 $scopeArgs = if ($Matrix -eq "current") { @() } elseif ($Matrix -eq "machine") { @("/SPALLUSERS") } else { @() }
 Invoke-Installer $firstInstaller (@("/S") + $scopeArgs + @("/D=$installDir"))
 $registryRoot = if ($Matrix -eq "current") { "HKCU:" } else { "HKLM:" }
@@ -178,24 +179,44 @@ $registeredA = Get-ItemProperty $uninstallKey
 if ($registeredA.DisplayVersion -ne "91.0.0" -or $registeredA.InstallLocation.Trim('"') -ne $installDir) {
   throw "A registry scope/version/path mismatch"
 }
-$hashA = (Get-FileHash (Join-Path $installDir "screenpipe-app.exe") -Algorithm SHA256).Hash
+$initialBinaryName = if ($Matrix -eq "current") { $userBinaryName } else { "screenpipe-app.exe" }
+$hashA = (Get-FileHash (Join-Path $installDir $initialBinaryName) -Algorithm SHA256).Hash
 $machineVersion = $registeredA.DisplayVersion
 $machineLocation = $registeredA.InstallLocation
 $renamedUserShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Renamed Screenpipe fixture.lnk"
 $startupKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+if ($Matrix -eq "custom-missing-removal") {
+  # Synthetic pre-update fixture: a real legacy machine install remains
+  # protected while an old ordinary user copy claims a custom destination.
+  $customUserDir = Join-Path $localAppData "Screenpipe custom owner ü space"
+  New-Item -ItemType Directory -Force -Path $customUserDir | Out-Null
+  Copy-Item -LiteralPath (Join-Path $installDir "screenpipe-app.exe") -Destination (Join-Path $customUserDir "screenpipe-app.exe")
+  [IO.File]::WriteAllText((Join-Path $customUserDir "custom-data-sentinel.txt"), "preserve custom owner", [Text.UTF8Encoding]::new($false))
+  New-Item "HKCU:\Software\Mediar, Inc.\screenpipe enterprise" -Force | Out-Null
+  Set-Item "HKCU:\Software\Mediar, Inc.\screenpipe enterprise" -Value $customUserDir
+  $customUninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\screenpipe enterprise"
+  New-Item $customUninstallKey -Force | Out-Null
+  Set-ItemProperty $customUninstallKey -Name MainBinaryName -Value "screenpipe-app.exe"
+  Set-ItemProperty $customUninstallKey -Name InstallLocation -Value '"C:\deliberately-inconsistent-removal-path"'
+  Remove-ItemProperty $customUninstallKey -Name UninstallString -ErrorAction SilentlyContinue
+  $migratedInstallDir = $customUserDir
+}
 if ($Matrix -ne "current") {
+  $legacyEntrypointDir = if ($Matrix -eq "custom-missing-removal") { $customUserDir } else { $installDir }
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($renamedUserShortcut)
-  $shortcut.TargetPath = Join-Path $installDir "screenpipe-app.exe"
+  $shortcut.TargetPath = Join-Path $legacyEntrypointDir "screenpipe-app.exe"
   $shortcut.Save()
   New-Item $startupKey -Force | Out-Null
-  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $installDir "screenpipe-app.exe") + '" --autostart')
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $legacyEntrypointDir "screenpipe-app.exe") + '" --autostart')
 }
 
 # Matches Tauri's normal update mode; /D is final by NSIS contract.
 # Existing scope and destination must be detected without /D or /SPALLUSERS.
 Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
-$migratedInstallDir = if ($Matrix -ne "current") {
+$migratedInstallDir = if ($Matrix -eq "custom-missing-removal") {
+  $migratedInstallDir
+} elseif ($Matrix -ne "current") {
   Join-Path $localAppData "screenpipe enterprise"
 } else {
   $installDir
@@ -203,7 +224,7 @@ $migratedInstallDir = if ($Matrix -ne "current") {
 $registryRoot = if ($Matrix -ne "current") { "HKCU:" } else { $registryRoot }
 $uninstallKey = "$registryRoot\Software\Microsoft\Windows\CurrentVersion\Uninstall\screenpipe enterprise"
 $registeredB = Get-ItemProperty $uninstallKey
-$hashB = (Get-FileHash (Join-Path $migratedInstallDir "screenpipe-app.exe") -Algorithm SHA256).Hash
+$hashB = (Get-FileHash (Join-Path $migratedInstallDir $userBinaryName) -Algorithm SHA256).Hash
 if ($registeredB.DisplayVersion -ne "92.0.0" -or $hashA -eq $hashB) {
   throw "B did not replace A with distinct version and bytes"
 }
@@ -215,7 +236,16 @@ if ($Matrix -ne "current") {
       -not (Test-Path (Join-Path $installDir "screenpipe-app.exe"))) {
     throw "migration modified the legacy machine installation"
   }
-  $migratedExecutable = Join-Path $migratedInstallDir "screenpipe-app.exe"
+  $migratedExecutable = Join-Path $migratedInstallDir $userBinaryName
+  if ($registeredB.MainBinaryName -ne $userBinaryName -or
+      $registeredB.UninstallString.Trim('"') -ne (Join-Path $migratedInstallDir "uninstall.exe") -or
+      $registeredB.InstallLocation.Trim('"') -ne $migratedInstallDir) {
+    throw "ordinary update did not repair current-user install/removal metadata"
+  }
+  if ($Matrix -eq "custom-missing-removal" -and
+      -not (Test-Path -LiteralPath (Join-Path $migratedInstallDir "custom-data-sentinel.txt"))) {
+    throw "ordinary update removed the custom installation data sentinel"
+  }
   $shell = New-Object -ComObject WScript.Shell
   $shortcutTarget = $shell.CreateShortcut($renamedUserShortcut).TargetPath
   if ($shortcutTarget -ne $migratedExecutable) {
@@ -235,9 +265,9 @@ if ($Matrix -ne "current") {
   # user-owned entry points to prove every update repairs them without moving
   # the authoritative current-user installation or manufacturing enrollment.
   $shortcut = $shell.CreateShortcut($renamedUserShortcut)
-  $shortcut.TargetPath = Join-Path $installDir "screenpipe-app.exe"
+  $shortcut.TargetPath = Join-Path $legacyEntrypointDir "screenpipe-app.exe"
   $shortcut.Save()
-  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $installDir "screenpipe-app.exe").ToUpperInvariant() + '" --autostart --legacy-extra')
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $legacyEntrypointDir "screenpipe-app.exe").ToUpperInvariant() + '" --autostart --legacy-extra')
   Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
   $repeatedRegistration = Get-ItemProperty $uninstallKey
   if ($repeatedRegistration.InstallLocation.Trim('"') -ne $migratedInstallDir) {
@@ -248,7 +278,8 @@ if ($Matrix -ne "current") {
     throw "repeated update did not repair the stale user shortcut: $shortcutTarget"
   }
   $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
-  if ($actualStartup -ne $expectedStartup) {
+  $expectedRepeatedStartup = '"' + $migratedExecutable + '" --autostart --legacy-extra'
+  if ($actualStartup -ne $expectedRepeatedStartup) {
     throw "repeated update did not repair stale startup: $actualStartup"
   }
 

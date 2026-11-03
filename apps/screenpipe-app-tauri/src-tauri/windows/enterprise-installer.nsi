@@ -79,6 +79,7 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var InstalledMainBinaryName
 Var InstallScope
 Var ExistingScope
 Var ExistingInstallDir
@@ -431,7 +432,7 @@ Function PageLeaveReinstall
     ${IfThen} ${Errors} ${|} StrCpy $0 2 ${|} ; ExecWait failed, set fake exit code
 
     ${If} $0 <> 0
-    ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    ${OrIf} ${FileExists} "$INSTDIR\$InstalledMainBinaryName"
       ; User cancelled wix uninstaller? return to select un/reinstall page
       ${If} $WixMode = 1
       ${AndIf} $0 = 1602
@@ -490,7 +491,7 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_FINISH
 
 Function RunMainBinary
-  nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+  nsis_tauri_utils::RunAsUser "$INSTDIR\$InstalledMainBinaryName" ""
 FunctionEnd
 
 ; Uninstaller Pages
@@ -550,12 +551,14 @@ FunctionEnd
 !if "${INSTALLMODE}" == "both"
 Function SetCurrentUserScope
   StrCpy $InstallScope "current"
+  StrCpy $InstalledMainBinaryName "${SCREENPIPE_USER_MAIN_BINARY}"
   SetShellVarContext current
   StrCpy $CurrentUserDefaultDir "$LOCALAPPDATA\${PRODUCTNAME}"
 FunctionEnd
 
 Function SetAllUsersScope
   StrCpy $InstallScope "all"
+  StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
   SetShellVarContext all
   ${If} ${RunningX64}
     StrCpy $AllUsersDefaultDir "$PROGRAMFILES64\${PRODUCTNAME}"
@@ -569,32 +572,32 @@ Function DetectExistingInstall
   StrCpy $ExistingInstallDir ""
   ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
   ReadRegStr $1 HKLM "${MANUPRODUCTKEY}" ""
-  ReadRegStr $2 HKCU "${UNINSTKEY}" "UninstallString"
   ReadRegStr $3 HKLM "${UNINSTKEY}" "UninstallString"
-  ${If} $2 != ""
-  ${AndIf} $0 != ""
-  ${AndIf} ${FileExists} "$0\uninstall.exe"
+  ${If} $0 != ""
+    ; The installer-written current-user installation path is the ownership
+    ; authority. Removal metadata is repaired by an update, not consulted to
+    ; decide whether a machine registration can take ownership.
     StrCpy $ExistingScope "current"
     StrCpy $ExistingInstallDir $0
+    ${If} $UpdateMode = 1
+      StrCpy $LegacyEntrypointRepair 1
+      StrCpy $MachineInstallDir $0
+      System::Call 'shlwapi::PathUnquoteSpacesW(w r0)'
+      StrCpy $MachineInstallDir $0
+      ReadRegStr $MachineMainBinaryName HKCU "${UNINSTKEY}" "MainBinaryName"
+      ${If} $MachineMainBinaryName == ""
+      ${OrIf} $MachineMainBinaryName == "${SCREENPIPE_USER_MAIN_BINARY}"
+        ; A repeated update must continue repairing owned links left behind by
+        ; a classic per-user install even after metadata names the new binary.
+        StrCpy $MachineMainBinaryName "${MAINBINARYNAME}.exe"
+      ${EndIf}
+    ${EndIf}
   ${EndIf}
   ${If} $3 != ""
   ${AndIf} $1 != ""
   ${AndIf} ${FileExists} "$1\uninstall.exe"
     ${If} $ExistingInstallDir != ""
       ; The current-user installation owns updates and ordinary setup runs.
-      ; Keep its custom path, but repeatedly repair existing user-owned entry
-      ; points that still name the immutable legacy machine executable.
-      ${If} $UpdateMode = 1
-        StrCpy $LegacyEntrypointRepair 1
-        StrCpy $MachineInstallDir $1
-        StrCpy $4 $MachineInstallDir
-        System::Call 'shlwapi::PathUnquoteSpacesW(w r4)'
-        StrCpy $MachineInstallDir $4
-        ReadRegStr $MachineMainBinaryName HKLM "${UNINSTKEY}" "MainBinaryName"
-        ${If} $MachineMainBinaryName == ""
-          StrCpy $MachineMainBinaryName "${MAINBINARYNAME}.exe"
-        ${EndIf}
-      ${EndIf}
       Goto existing_install_detected
     ${EndIf}
     ${If} $UpdateMode = 1
@@ -771,13 +774,13 @@ Function ElevateMachineInstall
       StrCpy $R0 "$PROFILE\.screenpipe"
     ${EndIf}
     CreateDirectory "$R0"
-    ${If} ${FileExists} "$ExistingInstallDir\${MAINBINARYNAME}.exe"
+    ${If} ${FileExists} "$ExistingInstallDir\$InstalledMainBinaryName"
       ClearErrors
       ${GetOptions} $CMDLINE "/ARGS" $R2
       ${If} ${Errors}
         StrCpy $R2 ""
       ${EndIf}
-      nsis_tauri_utils::RunAsUser "$ExistingInstallDir\${MAINBINARYNAME}.exe" "$R2"
+      nsis_tauri_utils::RunAsUser "$ExistingInstallDir\$InstalledMainBinaryName" "$R2"
       Pop $R1
       ${If} $R1 == 0
         StrCpy $R1 "succeeded"
@@ -879,6 +882,7 @@ FunctionEnd
 !endif
 
 Function .onInit
+  StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
   StrCpy $IncomingInstallDir ""
   System::Call 'kernel32::GetCommandLineW() w.r0'
   StrCpy $RawCommandLine $0
@@ -1106,10 +1110,14 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$InstalledMainBinaryName" "${PRODUCTNAME}"
 
   ; Copy main executable
-  File "${MAINBINARYSRCPATH}"
+  ${If} $InstallScope == "current"
+    File /oname=${SCREENPIPE_USER_MAIN_BINARY} "${MAINBINARYSRCPATH}"
+  ${Else}
+    File "${MAINBINARYSRCPATH}"
+  ${EndIf}
 
   ; Copy resources
   {{#each resources_dirs}}
@@ -1129,7 +1137,7 @@ Section Install
   ; Create file associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
-       !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
+       !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\$InstalledMainBinaryName,0" "Open with ${PRODUCTNAME}" "$INSTDIR\$InstalledMainBinaryName $\"%1$\""
     {{/each}}
   {{/each}}
 
@@ -1137,8 +1145,8 @@ Section Install
   {{#each deep_link_protocols as |protocol| ~}}
     WriteRegStr SHCTX "Software\Classes\\{{protocol}}" "URL Protocol" ""
     WriteRegStr SHCTX "Software\Classes\\{{protocol}}" "" "URL:${BUNDLEID} protocol"
-    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\DefaultIcon" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0"
-    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\shell\open\command" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\DefaultIcon" "" "$\"$INSTDIR\$InstalledMainBinaryName$\",0"
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\shell\open\command" "" "$\"$INSTDIR\$InstalledMainBinaryName$\" $\"%1$\""
   {{/each}}
 
   ; Create uninstaller
@@ -1156,12 +1164,12 @@ Section Install
   ; Remove old main binary if it doesn't match new main binary name
   ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
   ${If} $OldMainBinaryName != ""
-  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
+  ${AndIf} $OldMainBinaryName != $InstalledMainBinaryName
     Delete "$INSTDIR\$OldMainBinaryName"
   ${EndIf}
 
   ; Save current MAINBINARYNAME for future updates
-  WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" "${MAINBINARYNAME}.exe"
+  WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" $InstalledMainBinaryName
 
   ${If} $LegacyEntrypointRepair = 1
     ; The autostart plugin considers an existing Run value enrolled even when
@@ -1190,7 +1198,14 @@ Section Install
             ${If} $9 > 0
             ${AndIf} $9 < ${NSIS_MAX_STRLEN}
             ${AndIf} $5 == $7
-              WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart"
+              ; Replace only argv[0]. Preserve every existing argument exactly.
+              StrLen $8 $4
+              StrCpy $9 $0 1
+              ${If} $9 == '$\"'
+                IntOp $8 $8 + 2
+              ${EndIf}
+              StrCpy $9 $0 "" $8
+              WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\$InstalledMainBinaryName$\"$9"
             ${EndIf}
           ${EndIf}
         ${EndIf}
@@ -1202,7 +1217,7 @@ Section Install
 
   ; Registry information for add/remove programs
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${PRODUCTNAME}"
-  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\$InstalledMainBinaryName$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
@@ -1251,7 +1266,7 @@ Function .onInstSuccess
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
-      nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
+      nsis_tauri_utils::RunAsUser "$INSTDIR\$InstalledMainBinaryName" "$R0"
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -1297,6 +1312,11 @@ Function un.onInit
     ${EndIf}
   !endif
 
+  ReadRegStr $InstalledMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
+  ${If} $InstalledMainBinaryName == ""
+    StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
+  ${EndIf}
+
   !insertmacro MUI_UNGETLANGUAGE
 
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -1316,11 +1336,11 @@ Section Uninstall
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$InstalledMainBinaryName" "${PRODUCTNAME}"
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
-  Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+  Delete "$INSTDIR\$InstalledMainBinaryName"
 
   ; Delete resources
   {{#each resources}}
@@ -1342,7 +1362,7 @@ Section Uninstall
   ; Delete deep links
   {{#each deep_link_protocols as |protocol| ~}}
     ReadRegStr $R7 SHCTX "Software\Classes\\{{protocol}}\shell\open\command" ""
-    ${If} $R7 == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
+    ${If} $R7 == "$\"$INSTDIR\$InstalledMainBinaryName$\" $\"%1$\""
       DeleteRegKey SHCTX "Software\Classes\\{{protocol}}"
     ${EndIf}
   {{/each}}
@@ -1362,14 +1382,14 @@ Section Uninstall
 
     ; Remove start menu shortcut
     !insertmacro MUI_STARTMENU_GETFOLDER Application $AppStartMenuFolder
-    !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
       Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
       RMDir "$SMPROGRAMS\$AppStartMenuFolder"
     ${EndIf}
-    !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk"
@@ -1377,7 +1397,7 @@ Section Uninstall
     ${EndIf}
 
     ; Remove desktop shortcuts
-    !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$DESKTOP\${PRODUCTNAME}.lnk"
@@ -1492,8 +1512,8 @@ Function CreateOrUpdateStartMenuShortcut
   ${If} $LegacyEntrypointRepair = 1
     ; Only repair links owned by the current user. Shared links can require
     ; elevation and intentionally remain outside ordinary update management.
-    !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+    !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
     Return
   ${EndIf}
 
@@ -1504,14 +1524,14 @@ Function CreateOrUpdateStartMenuShortcut
   !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     StrCpy $R0 1
   ${EndIf}
 
   !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     StrCpy $R0 1
   ${EndIf}
 
@@ -1529,10 +1549,10 @@ Function CreateOrUpdateStartMenuShortcut
 
   !if "${STARTMENUFOLDER}" != ""
     CreateDirectory "$SMPROGRAMS\$AppStartMenuFolder"
-    CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
   !else
-    CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
   !endif
 FunctionEnd
@@ -1545,7 +1565,7 @@ Function CreateOrUpdateDesktopShortcut
     FindFirst $R0 $R1 "$DESKTOP\*.lnk"
     migration_desktop_shortcut_loop:
       StrCmp $R1 "" migration_desktop_shortcut_done
-      !insertmacro RetargetMigrationShortcut "$DESKTOP\$R1" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\${MAINBINARYNAME}.exe"
+      !insertmacro RetargetMigrationShortcut "$DESKTOP\$R1" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
       FindNext $R0 $R1
       Goto migration_desktop_shortcut_loop
     migration_desktop_shortcut_done:
@@ -1558,7 +1578,7 @@ Function CreateOrUpdateDesktopShortcut
   !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
     Return
   ${EndIf}
 
@@ -1570,6 +1590,6 @@ Function CreateOrUpdateDesktopShortcut
     ${EndIf}
   ${EndIf}
 
-  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$InstalledMainBinaryName"
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd

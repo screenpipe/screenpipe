@@ -599,6 +599,25 @@ fn validate_e2e_command_inventory() {
 }
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let hooks = std::fs::read_to_string("windows/hooks.nsh").expect("read Windows hooks");
+        let prefix = "!define SCREENPIPE_USER_MAIN_BINARY \"";
+        let name = hooks
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix)?.strip_suffix('"'))
+            .expect("SCREENPIPE_USER_MAIN_BINARY must be defined in windows/hooks.nsh");
+        assert!(
+            !name.is_empty()
+                && name.len() <= "screenpipe-app.exe".len()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.')),
+            "SCREENPIPE_USER_MAIN_BINARY must be a short plain filename"
+        );
+        println!("cargo:rerun-if-changed=windows/hooks.nsh");
+        println!("cargo:rustc-env=SCREENPIPE_USER_MAIN_BINARY={name}");
+    }
+
     // The frontend pre-build finalizes one offline translation snapshot. Embed
     // that exact artifact in native code; no runtime file or network dependency.
     let generated = std::path::Path::new("../lib/i18n/generated.json");
