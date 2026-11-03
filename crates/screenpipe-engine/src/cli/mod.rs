@@ -658,6 +658,7 @@ pub struct RecordArgs {
     /// scope to one window of one app (e.g. `Slack::#hr`). `::title` matches
     /// any app whose focused window title contains `title`. `App::` blocks
     /// the entire app (equivalent to bare `App`).
+    /// Removes the same patterns from saved includes unless --included-windows is also supplied.
     #[arg(long)]
     pub ignored_windows: Vec<String>,
 
@@ -665,6 +666,7 @@ pub struct RecordArgs {
     /// (`App::Title`) create a per-app whitelist; other apps remain
     /// unaffected. Unscoped entries keep the legacy "must match app or
     /// title" global-include semantics.
+    /// Removes the same patterns from saved ignores unless --ignored-windows is also supplied.
     #[arg(long)]
     pub included_windows: Vec<String>,
 
@@ -1602,9 +1604,21 @@ impl RecordArgs {
         }
         if sources.ignored_windows {
             settings.ignored_windows = self.ignored_windows.clone();
+            if !sources.included_windows {
+                remove_explicit_window_patterns(
+                    &mut settings.included_windows,
+                    &self.ignored_windows,
+                );
+            }
         }
         if sources.included_windows {
             settings.included_windows = self.included_windows.clone();
+            if !sources.ignored_windows {
+                remove_explicit_window_patterns(
+                    &mut settings.ignored_windows,
+                    &self.included_windows,
+                );
+            }
         }
         if sources.ignored_urls || sources.url_block {
             settings.ignored_urls = self.combined_ignored_urls();
@@ -1680,6 +1694,18 @@ impl RecordArgs {
             }
         }
     }
+}
+
+/// An explicit CLI choice supersedes an equivalent saved opposite choice.
+/// Compare parsed patterns, not matching windows: broader privacy exclusions stay intact.
+fn remove_explicit_window_patterns(saved: &mut Vec<String>, explicit: &[String]) {
+    use screenpipe_core::window_pattern::WindowPattern;
+
+    let explicit = WindowPattern::parse_list(explicit);
+    saved.retain(|raw| match WindowPattern::parse(raw) {
+        Some(pattern) => !explicit.contains(&pattern),
+        None => true,
+    });
 }
 
 fn load_recording_settings_from_store(
@@ -2642,6 +2668,141 @@ mod tests {
     fn record_sources<const N: usize>(args: [&str; N]) -> RecordArgSources {
         let matches = Cli::command().try_get_matches_from(args).unwrap();
         RecordArgSources::from_cli_matches(&matches)
+    }
+
+    #[tokio::test]
+    async fn explicit_window_filter_replaces_saved_opposite_and_survives_restart() {
+        use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
+
+        for (flag, include) in [("--included-windows", true), ("--ignored-windows", false)] {
+            let root = tempfile::tempdir().unwrap();
+            let saved = screenpipe_config::RecordingSettings {
+                user_id: "window-filter-test".into(),
+                device_tier: Some("mid".into()),
+                ignored_windows: vec!["Cursor".into(), "Private".into()],
+                included_windows: vec!["Cursor".into(), "Editor".into()],
+                ..Default::default()
+            };
+            persist_recording_settings_to_store(root.path(), &saved, false).unwrap();
+            let argv = ["screenpipe", "record", "--api-auth=false", flag, "cursor"];
+            let config = record_args(argv)
+                .into_recording_config(root.path().into(), &record_sources(argv))
+                .await
+                .unwrap();
+            let (ignored, included) = if include {
+                (vec!["Private".to_string()], vec!["cursor".to_string()])
+            } else {
+                (vec!["cursor".to_string()], vec!["Editor".to_string()])
+            };
+            assert_eq!(config.ignored_windows, ignored);
+            assert_eq!(config.included_windows, included);
+            let filters =
+                WindowFilters::new(&config.ignored_windows, &config.included_windows, &[]);
+            assert_eq!(filters.is_valid("Cursor", "Project"), include);
+            assert!(!filters.is_valid("Private", "Secrets"));
+
+            let reloaded = load_recording_settings_from_store(root.path())
+                .unwrap()
+                .unwrap();
+            assert_eq!(reloaded.ignored_windows, ignored);
+            assert_eq!(reloaded.included_windows, included);
+            let argv = ["screenpipe", "record", "--api-auth=false"];
+            let restarted = record_args(argv)
+                .into_recording_config(root.path().into(), &record_sources(argv))
+                .await
+                .unwrap();
+            assert_eq!(restarted.ignored_windows, ignored);
+            assert_eq!(restarted.included_windows, included);
+        }
+    }
+
+    #[test]
+    fn explicit_window_filter_only_removes_equivalent_saved_patterns() {
+        let argv = [
+            "screenpipe",
+            "record",
+            "--included-windows",
+            " CURSOR :: Project ",
+            "--included-windows",
+            " ÉDITEUR ",
+        ];
+        let mut settings = screenpipe_config::RecordingSettings {
+            ignored_windows: vec![
+                "cursor::project".into(),
+                "Éditeur".into(),
+                "Cursor::Private".into(),
+                "Cursor".into(),
+                "Cur".into(),
+                "::Project".into(),
+                "Private".into(),
+            ],
+            ..Default::default()
+        };
+        record_args(argv).apply_explicit_overrides(&mut settings, &record_sources(argv));
+        assert_eq!(
+            settings.ignored_windows,
+            vec!["Cursor::Private", "Cursor", "Cur", "::Project", "Private",]
+        );
+    }
+
+    #[test]
+    fn explicit_window_filter_preserves_both_lists_when_both_are_supplied() {
+        use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
+
+        for argv in [
+            [
+                "screenpipe",
+                "record",
+                "--included-windows",
+                "Cursor",
+                "--ignored-windows",
+                "Cursor",
+            ],
+            [
+                "screenpipe",
+                "record",
+                "--ignored-windows",
+                "Cursor",
+                "--included-windows",
+                "Cursor",
+            ],
+        ] {
+            let args = record_args(argv);
+            let mut settings = screenpipe_config::RecordingSettings::default();
+            args.apply_explicit_overrides(&mut settings, &record_sources(argv));
+            assert_eq!(settings.ignored_windows, vec!["Cursor"]);
+            assert_eq!(settings.included_windows, vec!["Cursor"]);
+            let filters =
+                WindowFilters::new(&settings.ignored_windows, &settings.included_windows, &[]);
+            assert!(!filters.is_valid("Cursor", "Project"));
+        }
+    }
+
+    #[test]
+    fn absent_window_filter_flags_and_desktop_conversion_preserve_saved_policy() {
+        use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
+
+        let mut settings = screenpipe_config::RecordingSettings {
+            ignored_windows: vec!["Cursor".into(), "Private".into()],
+            included_windows: vec!["Cursor".into()],
+            ..Default::default()
+        };
+        let saved = serde_json::to_value(&settings).unwrap();
+        let argv = ["screenpipe", "record"];
+        record_args(argv).apply_explicit_overrides(&mut settings, &record_sources(argv));
+        assert_eq!(serde_json::to_value(&settings).unwrap(), saved);
+        let config = crate::recording_config::RecordingConfig::from_settings(
+            &settings,
+            PathBuf::from("/tmp/window-filter-desktop-test"),
+            None,
+        );
+        assert_eq!(config.ignored_windows, settings.ignored_windows);
+        assert_eq!(config.included_windows, settings.included_windows);
+        let ui = config.to_ui_recorder_config();
+        assert_eq!(ui.excluded_windows, settings.ignored_windows);
+        assert_eq!(ui.included_windows, settings.included_windows);
+        let filters = WindowFilters::new(&config.ignored_windows, &config.included_windows, &[]);
+        assert!(!filters.is_valid("Cursor", "Project"));
     }
 
     #[test]
