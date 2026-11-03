@@ -54,6 +54,7 @@ ${StrLoc}
 !define UNINSTALLERICON "{{uninstaller_icon}}"
 !define UNINSTALLERHEADERIMAGE "{{uninstaller_header_image}}"
 !define MAINBINARYNAME "{{main_binary_name}}"
+!define PREVIOUSINSTALLLOCATION "PreviousInstallLocation"
 !define MAINBINARYSRCPATH "{{main_binary_path}}"
 !define BUNDLEID "{{bundle_id}}"
 !define COPYRIGHT "{{copyright}}"
@@ -618,8 +619,10 @@ FunctionEnd
 Function DetectExistingInstall
   StrCpy $ExistingScope ""
   StrCpy $ExistingInstallDir ""
-  ; Query the primary ownership key directly so only true key absence permits
-  ; migration/default selection. NSIS ReadRegStr collapses every failure.
+  StrCpy $0 ""
+  ; Only a default path value claims an active installation. This same key
+  ; also holds UI preferences after a keep-data uninstall. Query status keeps
+  ; an absent path distinct from an unreadable or malformed active claim.
   System::Call 'advapi32::RegOpenKeyExW(p 0x80000001, w "${MANUPRODUCTKEY}", i 0, i 0x1, *p .r5) i.r9'
   ${If} $9 = 0
     System::Call 'advapi32::RegQueryValueExW(p r5, p 0, p 0, *i .r6, p 0, *i .r7) i.r9'
@@ -638,7 +641,7 @@ Function DetectExistingInstall
         System::Call 'advapi32::RegCloseKey(p r5)'
         Call RefuseCurrentUserOwnership
       ${EndIf}
-    ${Else}
+    ${ElseIf} $9 != 2
       StrCpy $R9 $9
       StrCpy $R8 "default_value_query_failed"
       System::Call 'advapi32::RegCloseKey(p r5)'
@@ -1036,6 +1039,12 @@ Function .onInit
     ${GetOptions} $CMDLINE "/SPALLUSERS" $MachineElevation
     ${IfNot} ${Errors}
       Call SetAllUsersScope
+    ${EndIf}
+    ${If} $MachineToUserMigration != 1
+    ${AndIf} $IncomingInstallDir == ""
+    ${AndIf} $ExistingInstallDir == ""
+    ${AndIf} $InstallScope == "current"
+      Call RestorePreviousInstallLocation
     ${EndIf}
   !endif
 
@@ -1540,6 +1549,13 @@ Section Uninstall
   ; We do this when not updating (to preserve the registry value on updates)
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+    ; An ordinary uninstall retires this installation's active ownership.
+    ; Keep its destination as a setup preference, never as an active claim.
+    ReadRegStr $R0 SHCTX "${MANUPRODUCTKEY}" ""
+    ${If} $R0 == $INSTDIR
+      WriteRegStr SHCTX "${MANUPRODUCTKEY}" "${PREVIOUSINSTALLLOCATION}" "$INSTDIR"
+      DeleteRegValue SHCTX "${MANUPRODUCTKEY}" ""
+    ${EndIf}
   ${EndIf}
 
   ; Delete app data if the checkbox is selected
@@ -1573,6 +1589,15 @@ SectionEnd
 
 Function RestorePreviousInstallLocation
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  ${If} $4 == ""
+    ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" "${PREVIOUSINSTALLLOCATION}"
+    Push $4
+    Call IsFullyQualifiedPath
+    Pop $5
+    ${If} $5 != 1
+      StrCpy $4 ""
+    ${EndIf}
+  ${EndIf}
   StrCmp $4 "" +2 0
     StrCpy $INSTDIR $4
 FunctionEnd

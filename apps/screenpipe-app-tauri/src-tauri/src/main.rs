@@ -562,11 +562,15 @@ async fn main() {
     }
 
     #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
-    let early_control_listener = match windows_enterprise_takeover::reserve_registered_user_control_listener(focus_port).await {
-        Ok(listener) => listener.map(|listener| listener.into_inner()),
-        Err(error) => {
-            eprintln!("screenpipe: early Enterprise ownership failed: {error}");
-            std::process::exit(1);
+    let early_control_listener = if arguments.iter().any(|argument| argument == "--cpu-smoke") {
+        None
+    } else {
+        match windows_enterprise_takeover::reserve_registered_user_control_listener(focus_port, api_port).await {
+            Ok(listener) => listener.map(|listener| listener.into_inner()),
+            Err(error) => {
+                eprintln!("screenpipe: early Enterprise ownership failed: {error}");
+                std::process::exit(1);
+            }
         }
     };
     #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]

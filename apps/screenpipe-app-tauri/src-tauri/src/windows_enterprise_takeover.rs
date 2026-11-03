@@ -100,9 +100,17 @@ fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
             ))
         }
     };
-    let install_location: String = install_key.get_value("").map_err(|error| {
-        format!("current-user Enterprise install location is unreadable: {error}")
-    })?;
+    // NSIS also stores language and previous-location preferences in this key.
+    // Only its default path value claims an active installation.
+    let install_location: String = match install_key.get_value("") {
+        Ok(location) => location,
+        Err(error) if registry_value_absent(&error) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "current-user Enterprise install location is unreadable: {error}"
+            ));
+        }
+    };
     let install_dir = PathBuf::from(install_location.trim_matches('"'));
     if !install_dir.is_absolute() {
         return Err(format!(
@@ -593,7 +601,22 @@ impl EarlyControlListener {
 }
 
 #[cfg(feature = "enterprise-build")]
-pub(crate) async fn reserve_registered_user_control_listener(port: u16) -> Result<Option<EarlyControlListener>, String> {
+pub(crate) async fn reserve_registered_user_control_listener(
+    port: u16,
+    api_port: u16,
+) -> Result<Option<EarlyControlListener>, String> {
+    let result = reserve_registered_user_control_listener_inner(port, api_port).await;
+    if let Err(cause) = &result {
+        record("user_startup_ownership_refused", cause, "enterprise_start_aborted");
+    }
+    result
+}
+
+#[cfg(feature = "enterprise-build")]
+async fn reserve_registered_user_control_listener_inner(
+    port: u16,
+    api_port: u16,
+) -> Result<Option<EarlyControlListener>, String> {
     let registered_exe = match registered_user_enterprise_executable()? {
         Some(executable) => executable,
         None => return Ok(None),
@@ -604,19 +627,40 @@ pub(crate) async fn reserve_registered_user_control_listener(port: u16) -> Resul
         return Ok(None);
     }
 
-    let listener = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
-        Ok(listener) => listener,
-        // Ready and already-starting owners stay on the established verified
-        // port-owner path, so a second preferred launch yields to the first.
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => return Ok(None),
-        Err(error) => return Err(format!("registered current-user Enterprise could not reserve control port {port}: {error}")),
+    let listener = loop {
+        match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+            Ok(listener) => break listener,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                match take_over_screenpipe_owner(port).await? {
+                    // Preserve the ready or starting preferred process. Main
+                    // performs the established duplicate focus/exit handoff.
+                    TakeoverOutcome::SameExecutable => return Ok(None),
+                    // A verified competing owner exited. Attempt to reserve
+                    // the socket before proceeding to Tauri or app state.
+                    TakeoverOutcome::ReplacedCompetingOwner => continue,
+                    TakeoverOutcome::NoOwner => {
+                        return Err(format!(
+                            "could not reserve control port {port}: {error}; no verified listener owns the occupied port"
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "registered current-user Enterprise could not reserve control port {port}: {error}"
+                ));
+            }
+        }
     };
     listener.set_nonblocking(true)
         .map_err(|error| format!("could not make reserved control listener nonblocking: {error}"))?;
-    if let Err(error) = quiesce_pre_ready_legacy_processes(&registered_exe).await {
+    quiesce_pre_ready_legacy_processes(&registered_exe).await?;
+    // The API can have a different owner while the control port is free.
+    // Never open another recording database just because this socket bound.
+    if take_over_screenpipe_owner(api_port).await? == TakeoverOutcome::SameExecutable {
         drop(listener);
-        record("pre_ready_takeover_refused", &error, "enterprise_start_aborted");
-        return Err(error);
+        record("preferred_api_owner_preserved", &format!("port={api_port}"), "duplicate_start_yielded");
+        return Ok(None);
     }
     record("control_listener_reserved", &format!("pid={} port={port}", std::process::id()), "registered_user_starting");
     Ok(Some(EarlyControlListener(listener)))
@@ -635,29 +679,58 @@ async fn quiesce_pre_ready_legacy_processes(registered_exe: &Path) -> Result<(),
     for (pid, exe, start_time) in observed {
         if pid == current_pid || !is_classic_binary(&exe) { continue; }
         let Some(candidate_dir) = exe.parent() else { continue; };
-        if !allowed_dirs.iter().any(|dir| same_path(dir, candidate_dir)) { continue; }
-        verify_current_session(pid)?;
-        if !executable_product_name(&exe)?.is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME)) {
-            return Err(format!("refused pre-ready takeover of pid={pid}: wrong ProductName ({})", exe.display()));
-        }
-        let handle = open_process_for_wait(pid)?;
+        let Some(allowed_dir) = allowed_dirs.iter().find(|dir| same_path(dir, candidate_dir)) else { continue; };
+        let handle = match open_process_for_wait(pid) {
+            Ok(handle) => handle,
+            Err(cause) => {
+                let mut resampled = System::new();
+                resampled.refresh_process(Pid::from_u32(pid));
+                if resampled.process(Pid::from_u32(pid)).is_none() {
+                    record("pre_ready_candidate_exited", &format!("pid={pid}; original cause: {cause}"), "ownership_verification_continues");
+                    continue;
+                }
+                return Err(cause);
+            }
+        };
+        let owner = Owner { pid, exe, process: handle };
+        if process_state(&owner)? == ProcessState::Exited { continue; }
         system.refresh_process(Pid::from_u32(pid));
-        let stable = system.process(Pid::from_u32(pid))
-            .ok_or_else(|| format!("pre-ready legacy candidate pid={pid} exited during verification"))?;
-        if stable.start_time() != start_time || !same_path(stable.exe(), &exe) {
+        let Some(stable) = system.process(Pid::from_u32(pid)) else {
+            if process_state(&owner)? == ProcessState::Exited { continue; }
+            return Err(format!("pre-ready legacy candidate pid={pid} could not be re-sampled while its process handle remained alive"));
+        };
+        if stable.start_time() != start_time || !same_path(stable.exe(), &owner.exe) {
             return Err(format!("pre-ready legacy candidate pid={pid} changed identity during verification"));
         }
-        candidates.push(Owner { pid, exe, process: handle });
+        let verification = reject_reparse_and_canonicalize(allowed_dir, "legacy installation directory")
+            .and_then(|_| verify_current_session(pid)).and_then(|()| {
+            if executable_product_name(&owner.exe)?.is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME)) {
+                Ok(())
+            } else {
+                Err(format!("refused pre-ready takeover of pid={pid}: wrong ProductName ({})", owner.exe.display()))
+            }
+        });
+        if let Err(cause) = verification {
+            if process_state(&owner)? == ProcessState::Exited {
+                record("pre_ready_candidate_exited", &format!("pid={pid}; original cause: {cause}"), "ownership_verification_continues");
+                continue;
+            }
+            return Err(cause);
+        }
+        candidates.push(owner);
     }
 
     for owner in candidates {
+        if process_state(&owner)? == ProcessState::Exited { continue; }
         record("verified_pre_ready_legacy", &format!("pid={} executable={}", owner.pid, owner.exe.display()), "termination_started");
         if let Err(cause) = run_taskkill(owner.pid, false).await {
             record("graceful_termination_failed", &format!("pid={} Windows cause: {cause}", owner.pid), "force_fallback_required");
         }
         if wait_for_process_owner_exit(&owner, Duration::from_secs(8)).await? { continue; }
-        run_taskkill(owner.pid, true).await
-            .map_err(|cause| format!("pre-ready pid={} forced termination failed: {cause}", owner.pid))?;
+        if let Err(cause) = run_taskkill(owner.pid, true).await {
+            if process_state(&owner)? == ProcessState::Exited { continue; }
+            return Err(format!("pre-ready pid={} forced termination failed: {cause}", owner.pid));
+        }
         if !wait_for_process_owner_exit(&owner, Duration::from_secs(8)).await? {
             return Err(format!("pre-ready pid={} remained alive after termination timeout", owner.pid));
         }
@@ -675,13 +748,20 @@ fn legacy_install_directories(registered_exe: &Path) -> Result<Vec<PathBuf>, Str
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     match hklm.open_subkey(ENTERPRISE_INSTALL_KEY) {
         Ok(key) => {
-            let location: String = key.get_value("")
-                .map_err(|error| format!("machine Enterprise install location is unreadable: {error}"))?;
+            let location: String = match key.get_value("") {
+                Ok(location) => location,
+                Err(error) if registry_value_absent(&error) => return Ok(directories),
+                Err(error) => return Err(format!("machine Enterprise install location is unreadable: {error}")),
+            };
             let directory = PathBuf::from(location.trim_matches('"'));
             if !directory.is_absolute() {
                 return Err(format!("machine Enterprise install location is not absolute: {}", directory.display()));
             }
-            directories.push(reject_reparse_and_canonicalize(&directory, "machine installation directory")?);
+            // An old uninstaller can leave this remembered directory after
+            // removing the machine copy. Validate it only when a running
+            // candidate actually claims that path; a stale empty directory
+            // must not prevent the registered user installation from starting.
+            directories.push(directory);
         }
         Err(error) if registry_value_absent(&error) => {}
         Err(error) => return Err(format!("machine Enterprise installation key is unreadable: {error}")),

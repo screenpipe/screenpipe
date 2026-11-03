@@ -169,6 +169,15 @@ function Invoke-Installer([string] $Path, [string[]] $Arguments) {
   if ($process.ExitCode) { throw "$Path exited $($process.ExitCode)" }
 }
 
+function Invoke-Uninstaller([string] $Path) {
+  $process = Start-Process -FilePath $Path -ArgumentList "/S" -Wait -PassThru
+  if ($process.ExitCode) { throw "uninstaller exited $($process.ExitCode)" }
+  # Preserve the existing fixture's wait for NSIS's temporary child process.
+  for ($i = 0; $i -lt 100 -and (Test-Path -LiteralPath $Path); $i++) { Start-Sleep -Milliseconds 100 }
+  if (Test-Path -LiteralPath $Path) { throw "spawned NSIS uninstaller child did not complete" }
+  if (-not (Test-Path -LiteralPath $sentinel)) { throw "uninstall removed actual app-data sentinel" }
+}
+
 if ($Matrix -ne "claim-failures") {
 $firstInstaller = if ($Matrix -in @("legacy-machine", "custom-missing-removal", "missing-main-binary-name")) { $legacyInstallerA } else { $installerA }
 $scopeArgs = if ($Matrix -eq "current") { @() } elseif ($Matrix -eq "machine") { @("/SPALLUSERS") } else { @() }
@@ -213,7 +222,6 @@ if ($Matrix -eq "claim-failures") {
   New-Item -ItemType Directory -Force -Path $workingDir | Out-Null
   Copy-Item $installerB (Join-Path $workingDir "screenpipe-app.exe") -Force
   $cases = @(
-    @{ Name = "missing-default"; Kind = "missing" },
     @{ Name = "empty-default"; Kind = "string"; Value = "" },
     @{ Name = "wrong-type-default"; Kind = "dword"; Value = 7 },
     @{ Name = "relative-default"; Kind = "string"; Value = "." }
@@ -258,10 +266,10 @@ if ($Matrix -eq "claim-failures") {
     Remove-Item $claimPath -Recurse -Force -ErrorAction SilentlyContinue
   }
   $log = Get-Content (Join-Path $dataDir "update-install.log") -Raw
-  foreach ($detail in @("default_value_query_failed", "default_value_empty", "default_value_wrong_type", "install_location_not_fully_qualified", "ownership_key_open_failed")) {
+  foreach ($detail in @("default_value_empty", "default_value_wrong_type", "install_location_not_fully_qualified", "ownership_key_open_failed")) {
     if ($log -notmatch $detail) { throw "ownership refusal log missing $detail" }
   }
-  [pscustomobject]@{ Matrix = $Matrix; Refusals = 5; MachineOwnership = $machineBefore } |
+  [pscustomobject]@{ Matrix = $Matrix; Refusals = 4; MachineOwnership = $machineBefore } |
     ConvertTo-Json | Set-Content (Join-Path $ResultsDir "claim-failures.json") -Encoding utf8NoBOM
   return
 }
@@ -404,14 +412,35 @@ if ($Matrix -ne "current") {
 }
 
 $uninstaller = Join-Path $migratedInstallDir "uninstall.exe"
+$keepDataSetupReplayed = $false
+if ($Matrix -eq "current") {
+  Set-ItemProperty "HKCU:\Software\Mediar, Inc.\screenpipe enterprise" -Name "Installer Language" -Value "1033"
+}
 if ($Matrix -eq "missing-main-binary-name") {
   Remove-ItemProperty $uninstallKey -Name MainBinaryName
 }
-$uninstall = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
-if ($uninstall.ExitCode) { throw "uninstaller exited $($uninstall.ExitCode)" }
-for ($i = 0; $i -lt 100 -and (Test-Path -LiteralPath $uninstaller); $i++) { Start-Sleep -Milliseconds 100 }
-if (Test-Path -LiteralPath $uninstaller) { throw "spawned NSIS uninstaller child did not complete" }
-if (-not (Test-Path -LiteralPath $sentinel)) { throw "uninstall removed actual app-data sentinel" }
+Invoke-Uninstaller $uninstaller
+if ($Matrix -eq "current") {
+  $primaryKey = "HKCU:\Software\Mediar, Inc.\screenpipe enterprise"
+  $preferences = Get-Item $primaryKey
+  if ($null -ne $preferences.GetValue("", $null)) { throw "keep-data uninstall retained an active owner path" }
+  if ($preferences.GetValue("PreviousInstallLocation") -ne $migratedInstallDir -or
+      $preferences.GetValue("Installer Language") -ne "1033") {
+    throw "keep-data uninstall lost location or language preferences"
+  }
+  # No registry cleanup or /D override: a UI-preference-only key must permit
+  # ordinary setup and restore the remembered custom destination.
+  Invoke-Installer $installerB @("/S", "/P")
+  $reinstalled = Get-ItemProperty $uninstallKey
+  if ($reinstalled.InstallLocation.Trim('"') -ne $migratedInstallDir -or
+      -not (Test-Path -LiteralPath (Join-Path $migratedInstallDir $userBinaryName)) -or
+      -not (Test-Path -LiteralPath $sentinel)) {
+    throw "ordinary setup after keep-data uninstall did not recover the same destination and retained data"
+  }
+  Invoke-Uninstaller $uninstaller
+  if ($null -ne (Get-Item $primaryKey).GetValue("", $null)) { throw "repeated keep-data uninstall retained active ownership" }
+  $keepDataSetupReplayed = $true
+}
 if ($Matrix -eq "missing-main-binary-name") {
   if (Test-Path -LiteralPath (Join-Path $migratedInstallDir $userBinaryName)) {
     throw "uninstall without MainBinaryName left the current-user main executable"
@@ -445,4 +474,5 @@ if ($Matrix -ne "current") {
   HashB = $hashB
   Sentinel = $sentinel
   Matrix = $Matrix
+  KeepDataSetupReplayed = $keepDataSetupReplayed
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $ResultsDir "$Matrix-native-result.json") -Encoding utf8
