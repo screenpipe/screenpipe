@@ -17,6 +17,7 @@ pub(crate) const LOG_NAME: &str = "enterprise-takeover.log";
 const MAX_LOG_BYTES: u64 = 32 * 1024;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const ENTERPRISE_PRODUCT_NAME: &str = "screenpipe enterprise";
+const RELAUNCH_PARENT_PID: &str = "SCREENPIPE_RELAUNCH_PARENT_PID";
 static LOG_WRITER: Mutex<()> = Mutex::new(());
 static ENTERPRISE_PRESENCE: OnceLock<OwnedHandle> = OnceLock::new();
 
@@ -87,6 +88,7 @@ pub(crate) async fn enterprise_is_present(
         }
     }
 
+    let relaunch_parent_pid = take_relaunch_parent_pid();
     for port in [control_port, api_port] {
         let Some(pid) = listening_pid(port).await.map_err(|error| {
             let cause = format!("could not inspect legacy Enterprise owner: {error}");
@@ -119,7 +121,7 @@ pub(crate) async fn enterprise_is_present(
             Ok(exe) => exe,
             Err(error) => {
                 let cause = format!("could not identify legacy Enterprise owner: {error}");
-                confirm_legacy_owner_released_port(port, pid, &cause).await?;
+                confirm_legacy_owner_released_port(port, pid, relaunch_parent_pid, &cause).await?;
                 continue;
             }
         };
@@ -147,11 +149,31 @@ pub(crate) async fn enterprise_is_present(
     Ok(false)
 }
 
+fn take_relaunch_parent_pid() -> Option<u32> {
+    let value = std::env::var(RELAUNCH_PARENT_PID).ok();
+    std::env::remove_var(RELAUNCH_PARENT_PID);
+    value.and_then(|value| value.parse().ok())
+}
+
 async fn confirm_legacy_owner_released_port(
     port: u16,
     observed_pid: u32,
+    relaunch_parent_pid: Option<u32>,
     cause: &str,
 ) -> Result<(), String> {
+    if relaunch_parent_pid == Some(observed_pid) {
+        wait_for_process_exit(observed_pid).await.map_err(|wait_error| {
+            let detail = format!(
+                "{cause}; verified relaunch parent pid={observed_pid} could not be awaited: {wait_error}"
+            );
+            record(
+                "legacy_presence_check_failed",
+                &detail,
+                "consumer_start_aborted",
+            );
+            detail
+        })?;
+    }
     match listening_pid(port).await {
         Ok(None) => {
             record(
@@ -184,6 +206,38 @@ async fn confirm_legacy_owner_released_port(
             Err(detail)
         }
     }
+}
+
+async fn wait_for_process_exit(pid: u32) -> Result<(), String> {
+    use windows::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }
+        .map_err(|error| format!("could not open pid={pid} for relaunch handoff: {error}"))?;
+    // SAFETY: OpenProcess returned an owned kernel handle, transferred once.
+    let process = unsafe { OwnedHandle::from_raw_handle(handle.0 as *mut _) };
+    tokio::task::spawn_blocking(move || {
+        let result = unsafe {
+            WaitForSingleObject(
+                windows::Win32::Foundation::HANDLE(process.as_raw_handle()),
+                INFINITE,
+            )
+        };
+        match result {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_FAILED => Err(format!(
+                "could not await relaunch parent pid={pid}: {}",
+                std::io::Error::last_os_error()
+            )),
+            other => Err(format!(
+                "unexpected Windows wait result {other:?} for relaunch parent pid={pid}"
+            )),
+        }
+    })
+    .await
+    .map_err(|error| format!("relaunch parent wait task failed: {error}"))?
 }
 
 fn process_executable(pid: u32) -> Result<PathBuf, String> {
@@ -819,6 +873,7 @@ mod tests {
         let refusal = confirm_legacy_owner_released_port(
             port,
             pid,
+            None,
             "simulated owner query failure: Access is denied. (0x80070005)",
         )
         .await
@@ -827,17 +882,17 @@ mod tests {
         assert!(refusal.contains(&format!("owned by pid={pid}")));
         assert!(owner.try_wait().unwrap().is_none());
 
+        let handoff = tokio::spawn(confirm_legacy_owner_released_port(
+            port,
+            pid,
+            Some(pid),
+            "simulated owner query failure: Access is denied. (0x80070005)",
+        ));
+        tokio::task::yield_now().await;
+        assert!(owner.try_wait().unwrap().is_none());
         owner.kill().unwrap();
         let _ = owner.wait().unwrap();
-        assert!(
-            confirm_legacy_owner_released_port(
-                port,
-                pid,
-                "simulated owner query failure: Access is denied. (0x80070005)",
-            )
-            .await
-            .is_ok()
-        );
+        assert!(handoff.await.unwrap().is_ok());
     }
 
     fn remove_version_resource(path: &Path) {

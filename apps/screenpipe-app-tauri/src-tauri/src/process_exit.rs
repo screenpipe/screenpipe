@@ -293,6 +293,8 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 }
 
 const RELAUNCH_HOME_VISIBLE: &str = "SCREENPIPE_RELAUNCH_HOME_VISIBLE";
+#[cfg(target_os = "windows")]
+const RELAUNCH_PARENT_PID: &str = "SCREENPIPE_RELAUNCH_PARENT_PID";
 
 pub(crate) fn home_window_visible(app: &AppHandle) -> Option<bool> {
     match app.get_webview_window("home") {
@@ -397,6 +399,8 @@ fn try_app_relaunch_with_home(
         // Startup repoints this variable at recordings. A replacement app must
         // reopen the original settings store before selecting recordings again.
         command.env("SCREENPIPE_DATA_DIR", crate::config::app_data_dir());
+        #[cfg(target_os = "windows")]
+        command.env(RELAUNCH_PARENT_PID, std::process::id().to_string());
         configure_relaunch_home(
             &mut command,
             home_visible,
