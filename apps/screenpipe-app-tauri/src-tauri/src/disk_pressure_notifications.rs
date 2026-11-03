@@ -246,7 +246,7 @@ pub(crate) async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) -> DiskPre
         return DiskPressureOutcome::CaptureAlreadyStopped;
     }
 
-    if let Err(error) = crate::recording::stop_capture(state, app.clone()).await {
+    if let Err(error) = crate::recording::stop_capture_with_reason(state, app.clone(), "disk_pressure").await {
         warn!("failed to stop capture after disk_space_low event: {error}");
         return DiskPressureOutcome::StopFailed;
     }

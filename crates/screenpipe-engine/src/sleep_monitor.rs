@@ -13,7 +13,7 @@
 //! Exposes lock and suspend flags so capture/background loops can stop work
 //! before the OS enters a low-power state.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -43,6 +43,29 @@ static SCREEN_IS_LOCKED: AtomicBool = AtomicBool::new(false);
 /// Modern Standby can remain in S0 low-power idle, so AC/battery polling alone
 /// cannot tell background workers to stop.
 static SYSTEM_IS_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+// Last OS-announced interval, sampled by the native reporter after resume.
+// A clock-gap fallback does not establish when suspend began or ended.
+static OS_SLEEP_START: AtomicI64 = AtomicI64::new(0);
+static OS_SLEEP_END: AtomicI64 = AtomicI64::new(0);
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+static OS_SLEEP_OPEN: AtomicBool = AtomicBool::new(false);
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn observe_os_sleep(suspended: bool) {
+    let now = chrono::Utc::now().timestamp_millis();
+    if suspended && !OS_SLEEP_OPEN.swap(true, Ordering::SeqCst) {
+        OS_SLEEP_END.store(0, Ordering::SeqCst);
+        OS_SLEEP_START.store(now, Ordering::SeqCst);
+    } else if !suspended && OS_SLEEP_OPEN.swap(false, Ordering::SeqCst) {
+        OS_SLEEP_END.store(now, Ordering::SeqCst);
+    }
+}
+/// Latest OS observation only; callers must not bridge earlier missing samples.
+pub fn observed_sleep() -> Option<(i64, i64)> {
+    let end = OS_SLEEP_END.load(Ordering::SeqCst);
+    let start = OS_SLEEP_START.load(Ordering::SeqCst);
+    (start > 0 && end == OS_SLEEP_END.load(Ordering::SeqCst)).then_some((start, end))
+}
 
 /// Fired by `CGDisplayRegisterReconfigurationCallback` when the display
 /// topology changes (connect, disconnect, resolution, mirror), and on wake or
@@ -163,11 +186,17 @@ unsafe extern "system" fn windows_suspend_resume_callback(
     };
 
     match event_type {
-        PBT_APMSUSPEND | PBT_APMSTANDBY => set_system_suspended(true),
+        PBT_APMSUSPEND | PBT_APMSTANDBY => {
+            observe_os_sleep(true);
+            set_system_suspended(true);
+        }
         PBT_APMRESUMEAUTOMATIC
         | PBT_APMRESUMECRITICAL
         | PBT_APMRESUMESTANDBY
-        | PBT_APMRESUMESUSPEND => set_system_suspended(false),
+        | PBT_APMRESUMESUSPEND => {
+            observe_os_sleep(false);
+            set_system_suspended(false);
+        }
         _ => {}
     }
 
@@ -549,6 +578,7 @@ pub fn start_sleep_monitor() {
 /// Called when system is about to sleep
 #[cfg(target_os = "macos")]
 fn on_will_sleep() {
+    observe_os_sleep(true);
     SCREEN_IS_LOCKED.store(true, Ordering::SeqCst);
     screenpipe_config::set_screen_locked(true);
 
@@ -569,6 +599,7 @@ fn on_will_sleep() {
 /// Called when system wakes from sleep
 #[cfg(target_os = "macos")]
 fn on_did_wake(handle: &tokio::runtime::Handle) {
+    observe_os_sleep(false);
     // Mark that we recently woke
     mark_recently_woke("macos");
 
@@ -803,6 +834,25 @@ mod tests {
     /// parallel test runner.
     static RECENTLY_WOKE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static SYSTEM_SUSPENDED_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn os_sleep_observations_do_not_invent_or_extend_suspend_intervals() {
+        OS_SLEEP_START.store(0, Ordering::SeqCst);
+        OS_SLEEP_END.store(0, Ordering::SeqCst);
+        OS_SLEEP_OPEN.store(false, Ordering::SeqCst);
+        observe_os_sleep(false);
+        assert!(observed_sleep().is_none());
+        OS_SLEEP_START.store(100, Ordering::SeqCst);
+        OS_SLEEP_OPEN.store(true, Ordering::SeqCst);
+        observe_os_sleep(true);
+        assert_eq!(observed_sleep(), Some((100, 0)));
+        OS_SLEEP_END.store(200, Ordering::SeqCst);
+        OS_SLEEP_OPEN.store(false, Ordering::SeqCst);
+        observe_os_sleep(false);
+        assert_eq!(observed_sleep(), Some((100, 200)));
+        OS_SLEEP_START.store(0, Ordering::SeqCst);
+        OS_SLEEP_END.store(0, Ordering::SeqCst);
+    }
 
     #[test]
     fn system_suspended_flag_round_trips() {

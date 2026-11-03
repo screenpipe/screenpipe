@@ -315,9 +315,9 @@ pub fn request_enter(app: AppHandle) {
             // Requests admitted before Quit may still be starting a device.
             // Finish those before stopping capture; later mutations are denied.
             screenpipe_engine::search_only::finish_in_flight_mutations().await;
-            crate::recording::stop_capture(
+            crate::recording::stop_capture_with_reason(
                 app_for_stop.state::<crate::recording::RecordingState>(),
-                app_for_stop.clone(),
+                app_for_stop.clone(), "user_quit",
             )
             .await?;
             saved?;

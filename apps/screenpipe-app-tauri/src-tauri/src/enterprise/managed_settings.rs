@@ -309,7 +309,7 @@ pub(crate) async fn apply(app: &tauri::AppHandle) -> Result<(), String> {
     let _lifecycle = state.server_lifecycle.lock().await;
     let result = async {
         if state.capture_intended() || state.server.lock().await.is_some() {
-            crate::recording::stop_screenpipe_inner(&state).await?;
+            crate::recording::stop_screenpipe_inner_with_reason(&state, "managed_settings_restart").await?;
             crate::recording::spawn_screenpipe_inner(&state, app.clone()).await?;
         }
         let _apply = APPLY_LOCK.lock().await;

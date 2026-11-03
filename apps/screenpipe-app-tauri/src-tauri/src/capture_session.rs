@@ -35,7 +35,7 @@ use crate::server_core::ServerCore;
 
 /// Handle for a running capture session.
 ///
-/// Dropping this without calling [`CaptureSession::stop`] will leak tasks.
+/// Dropping this without calling [`CaptureSession::stop_with_reason`] will leak tasks.
 /// Always use `stop()` for clean shutdown.
 ///
 /// Holds its own `Arc<AudioManager>` so `stop()` is self-contained —
@@ -328,9 +328,9 @@ impl CaptureSession {
 
         screenpipe_engine::meeting_watcher::set_capture_stopped(false);
         info!("Capture session started successfully");
-        #[cfg(feature = "enterprise-build")]
-        crate::enterprise::recording_events::record(
-            crate::enterprise::recording_events::State::Started,
+        #[cfg(feature = "enterprise-support")]
+        crate::enterprise::recording_events::record_reason(
+            crate::enterprise::recording_events::State::Started, "session_started",
         );
 
         Ok(Self {
@@ -362,14 +362,19 @@ impl CaptureSession {
     /// This is self-contained — no external references needed.
     /// Audio is stopped (not shutdown), keeping the `Arc<AudioManager>` valid
     /// for the next capture session or for HTTP API queries.
-    pub async fn stop(self) {
-        if let Err(error) = self.stop_checked().await {
+    pub async fn stop_with_reason(self, reason: &'static str) {
+        if let Err(error) = self.stop_checked_with_reason(reason).await {
             warn!("Capture shutdown incomplete: {error}");
         }
     }
 
     /// Quit-to-search must report failures before claiming capture is stopped.
-    pub async fn stop_checked(mut self) -> Result<(), String> {
+    pub async fn stop_checked_with_reason(mut self, reason: &'static str) -> Result<(), String> {
+        // Persist the trigger before teardown can fail, hang, or exit midway.
+        #[cfg(feature = "enterprise-support")]
+        crate::enterprise::recording_events::record_reason(
+            crate::enterprise::recording_events::State::Stopping, reason,
+        );
         info!("Stopping capture session");
         screenpipe_engine::meeting_watcher::set_capture_stopped(true);
         let mut failures = Vec::new();
@@ -435,16 +440,17 @@ impl CaptureSession {
 
         info!("Capture session stopped");
         if failures.is_empty() {
-            #[cfg(feature = "enterprise-build")]
-            crate::enterprise::recording_events::record(
-                crate::enterprise::recording_events::State::Paused,
+            #[cfg(feature = "enterprise-support")]
+            crate::enterprise::recording_events::record_reason(
+                crate::enterprise::recording_events::State::Stopped, reason,
             );
             Ok(())
         } else {
-            #[cfg(feature = "enterprise-build")]
-            crate::enterprise::recording_events::record(
-                crate::enterprise::recording_events::State::Unknown,
+            #[cfg(feature = "enterprise-support")]
+            crate::enterprise::recording_events::record_reason(
+                crate::enterprise::recording_events::State::Error, "stop_failed",
             );
+            record_stop_failure(&self.disk_pressure_data_dir, reason, &failures);
             Err(failures.join("; "))
         }
     }
@@ -578,4 +584,10 @@ async fn reconfigure_audio_manager(
         .map_err(|e| format!("Failed to apply audio options: {}", e))?;
 
     Ok(())
+}
+
+/// Keep the original stop failure in the normal rotated/redacted support path.
+pub(crate) fn record_stop_failure(root: &std::path::Path, reason: &str, failures: &[String]) {
+    crate::recording::recovery_log::append(root, "capture_stop_failed", &format!(
+        "trigger={reason}; cause={}; outcome=capture_shutdown_incomplete", failures.join("; ")));
 }
