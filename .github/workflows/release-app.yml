@@ -928,6 +928,8 @@ jobs:
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           NO_STRIP: true
         run: |
+          set -euo pipefail
+
           # Wrap ldd so linuxdeploy doesn't crash on the statically-linked bun sidecar.
           # bun is built with musl and ldd exits 1 on it, which kills linuxdeploy's GTK plugin.
           # Persistent runners may already have this wrapper from a prior job.
@@ -991,8 +993,8 @@ jobs:
           # Install appimagetool for repacking
           curl -fsSL -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x /tmp/appimagetool
-          find src-tauri/target/${{ matrix.target }}/release/bundle/appimage/ -name "*.AppImage" -exec bash -c '
-            APPIMAGE="$1"
+          for APPIMAGE in src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage; do
+            [ -f "$APPIMAGE" ] || continue
             echo "Patching $APPIMAGE to remove bundled GLib"
             chmod +x "$APPIMAGE"
             "$APPIMAGE" --appimage-extract
@@ -1008,6 +1010,7 @@ jobs:
                   squashfs-root/usr/lib/libavif.so*
             install -m 0755 src-tauri/bun-x86_64-unknown-linux-gnu squashfs-root/usr/bin/bun
             echo "Removed bundled GLib libs, repacking AppImage..."
+            chmod -R a+rX squashfs-root
             ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
             rm -rf squashfs-root
             echo "AppImage repacked successfully"
@@ -1020,10 +1023,9 @@ jobs:
             rm -f "$APPIMAGE.sig"
             bunx tauri signer sign "$APPIMAGE"
             echo "Updater signature regenerated for repacked AppImage"
-          ' _ {} \;
+          done
 
-          # find -exec does not propagate failures from the inner bash, so fail the
-          # build hard if any AppImage ends up without a signature newer than itself -
+          # Require a signature newer than the final repacked AppImage;
           # a stale (pre-repack) .sig bricks auto-update for every Linux user.
           for f in src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage; do
             [ -f "$f" ] || continue

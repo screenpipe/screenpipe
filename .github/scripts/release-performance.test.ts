@@ -32,6 +32,45 @@ function fixture() {
   return { root, env, write, stub, run, calls: () => readFileSync(env.CALLS, "utf8") };
 }
 
+for (const workflow of ["release-app.yml", "release-enterprise.yml"]) {
+  for (const failure of ["none", "repack", "sign"]) {
+    test(`${workflow}: Linux repack repairs private extraction modes and propagates ${failure} failure`, () => {
+      const f = fixture();
+      const config = Bun.YAML.parse(readFileSync(join(scripts, "../workflows", workflow), "utf8")) as any;
+      const job = config.jobs[workflow === "release-app.yml" ? "publish-tauri" : "release-enterprise-linux"];
+      const step = job.steps.find((item: any) => item.name === (workflow === "release-app.yml" ? "Build (Linux)" : "Build (enterprise, Linux x64)"));
+      expect(step.run.startsWith("set -euo pipefail\n")).toBe(true);
+      const block = step.run.slice(step.run.indexOf("for APPIMAGE in "))
+        .replaceAll("${{ matrix.target }}", "x86_64-unknown-linux-gnu")
+        .replaceAll("/tmp/appimagetool", join(f.root, "bin/appimagetool"));
+      const image = f.write("src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/screenpipe.AppImage", header + `
+mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib
+printf payload > squashfs-root/usr/lib/resource
+printf old-glib > squashfs-root/usr/lib/libglib-2.0.so.0
+printf launcher > squashfs-root/AppRun
+chmod 0700 squashfs-root squashfs-root/usr squashfs-root/usr/bin squashfs-root/usr/lib squashfs-root/AppRun
+chmod 0600 squashfs-root/usr/lib/resource
+`);
+      f.write("src-tauri/bun-x86_64-unknown-linux-gnu", "pristine bun");
+      const bundle = f.write(".github/scripts/linux/bundle-appimage-runtime-deps.sh", header + 'echo bundle >> "$CALLS"\n');
+      chmodSync(bundle, 0o755);
+      f.stub("appimagetool", `
+echo repack >> "$CALLS"
+python3 -c 'import pathlib,stat; root=pathlib.Path("squashfs-root"); assert all(p.stat().st_mode & 0o555 == 0o555 for p in [root,*[p for p in root.rglob("*") if p.is_dir()]]); assert (root/"AppRun").stat().st_mode & 0o555 == 0o555; assert (root/"usr/lib/resource").stat().st_mode & 0o111 == 0; assert (root/"usr/lib/resource").read_text() == "payload"; assert (root/"usr/bin/bun").read_text() == "pristine bun"; assert not (root/"usr/lib/libglib-2.0.so.0").exists()'
+${failure === "repack" ? "exit 42" : 'printf repacked > "$2"'}
+`);
+      f.stub("bunx", `echo sign >> "$CALLS"\n${failure === "sign" ? "exit 43" : 'printf signature > "$4.sig"'}\n`);
+      const result = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+        cwd: f.root, env: { ...f.env, GITHUB_WORKSPACE: f.root }, encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(failure === "repack" ? 42 : failure === "sign" ? 43 : 0);
+      expect(f.calls().trim().split("\n")).toEqual(failure === "repack" ? ["bundle", "repack"] : ["bundle", "repack", "sign"]);
+      expect(existsSync(`${image}.sig`)).toBe(failure === "none");
+      if (failure !== "repack") expect(readFileSync(image, "utf8")).toBe("repacked");
+    });
+  }
+}
+
 test("Mac health recovery measures CPU time and never signals a replaced PID or unrelated service", () => {
   const result = spawnSync("python3", ["-c", `
 import importlib.util, signal, sys

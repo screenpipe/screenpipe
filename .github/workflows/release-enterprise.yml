@@ -758,6 +758,8 @@ jobs:
           LINUXDEPLOY_OUTPUT_VERSION: "1"
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
+          set -euo pipefail
+
           # Wrap ldd so linuxdeploy does not fail on the statically-linked bun sidecar.
           # Persistent runners may already have this wrapper from a prior job.
           # Repair the one bad state created by the old unconditional move,
@@ -796,8 +798,8 @@ jobs:
           echo "Removing bundled system libraries to prevent ABI mismatch on newer distros..."
           curl -fsSL -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x /tmp/appimagetool
-          find src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/ -name "*.AppImage" -exec bash -c '
-            APPIMAGE="$1"
+          for APPIMAGE in src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage; do
+            [ -f "$APPIMAGE" ] || continue
             echo "Patching $APPIMAGE to remove bundled GLib"
             chmod +x "$APPIMAGE"
             "$APPIMAGE" --appimage-extract
@@ -813,6 +815,7 @@ jobs:
                   squashfs-root/usr/lib/libavif.so*
             install -m 0755 src-tauri/bun-x86_64-unknown-linux-gnu squashfs-root/usr/bin/bun
             echo "Removed bundled GLib libs, repacking AppImage..."
+            chmod -R a+rX squashfs-root
             ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
             rm -rf squashfs-root
             echo "AppImage repacked successfully"
@@ -820,7 +823,7 @@ jobs:
             rm -f "$APPIMAGE.sig"
             bunx tauri signer sign "$APPIMAGE"
             echo "Updater signature regenerated for repacked AppImage"
-          ' _ {} \;
+          done
 
           for f in src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage; do
             [ -f "$f" ] || continue
