@@ -106,6 +106,12 @@ fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
         format!("current-user Enterprise install location is unreadable: {error}")
     })?;
     let install_dir = PathBuf::from(install_location.trim_matches('"'));
+    if !install_dir.is_absolute() {
+        return Err(format!(
+            "current-user Enterprise install location is not absolute: {}",
+            install_dir.display()
+        ));
+    }
     let canonical_dir = reject_reparse_and_canonicalize(&install_dir, "installation directory")?;
     let metadata_name = match hkcu.open_subkey(ENTERPRISE_REGISTRATION_KEY) {
         Ok(key) => match key.get_value::<String, _>("MainBinaryName") {

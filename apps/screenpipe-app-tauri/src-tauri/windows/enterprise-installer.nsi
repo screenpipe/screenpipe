@@ -101,7 +101,55 @@ Var MachineToUserMigration
 Var LegacyEntrypointRepair
 Var MachineInstallDir
 Var MachineMainBinaryName
+Var UserLegacyInstallDir
+Var UserLegacyMainBinaryName
 Var MigrationError
+Var OriginalRunCommand
+
+; Returns 1 only for drive-absolute (C:\...) or UNC (\\server\share...)
+; paths. PathIsRelativeW also accepts drive-relative and root-relative paths,
+; which would make ownership depend on the installer's current directory.
+Function IsFullyQualifiedPath
+  Exch $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  Push $R9
+  StrCpy $R6 $R5 1 0
+  StrCpy $R7 $R5 1 1
+  StrCpy $R8 $R5 1 2
+  System::Call 'shlwapi::PathGetDriveNumberW(w rR5) i.rR9'
+  StrCpy $R5 0
+  ${If} $R6 == "\"
+  ${AndIf} $R7 == "\"
+    StrCpy $R5 1
+  ${ElseIf} $R7 == ":"
+  ${AndIf} $R8 == "\"
+    ${If} $R9 >= 0
+      StrCpy $R5 1
+    ${EndIf}
+  ${EndIf}
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Exch $R5
+FunctionEnd
+
+Function RefuseCurrentUserOwnership
+  ReadEnvStr $R0 "SCREENPIPE_DATA_DIR"
+  ${If} $R0 == ""
+    StrCpy $R0 "$PROFILE\.screenpipe"
+  ${EndIf}
+  CreateDirectory "$R0"
+  FileOpen $R1 "$R0\update-install.log" a
+  FileSeek $R1 0 END
+  FileWrite $R1 'installer_user_ownership_refused: win32=$R9 detail=$R8 outcome=update_aborted$\r$\n'
+  FileClose $R1
+  MessageBox MB_OK|MB_ICONSTOP "Setup could not verify the existing current-user Screenpipe ownership claim (Windows result $R9, $R8). No installation was changed." /SD IDOK
+  SetErrorLevel 2
+  Quit
+FunctionEnd
 
 ; Tauri's generic shortcut predicate intentionally compares SLGP_RAWPATH with
 ; exact string semantics. Legacy Shell links can resolve to the same executable
@@ -570,7 +618,38 @@ FunctionEnd
 Function DetectExistingInstall
   StrCpy $ExistingScope ""
   StrCpy $ExistingInstallDir ""
-  ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
+  ; Query the primary ownership key directly so only true key absence permits
+  ; migration/default selection. NSIS ReadRegStr collapses every failure.
+  System::Call 'advapi32::RegOpenKeyExW(p 0x80000001, w "${MANUPRODUCTKEY}", i 0, i 0x1, *p .r5) i.r9'
+  ${If} $9 = 0
+    System::Call 'advapi32::RegQueryValueExW(p r5, p 0, p 0, *i .r6, p 0, *i .r7) i.r9'
+    ${If} $9 = 0
+      ${If} $6 != 1
+      ${AndIf} $6 != 2
+        StrCpy $R9 $6
+        StrCpy $R8 "default_value_wrong_type"
+        System::Call 'advapi32::RegCloseKey(p r5)'
+        Call RefuseCurrentUserOwnership
+      ${EndIf}
+      ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
+      ${If} $0 == ""
+        StrCpy $R9 0
+        StrCpy $R8 "default_value_empty"
+        System::Call 'advapi32::RegCloseKey(p r5)'
+        Call RefuseCurrentUserOwnership
+      ${EndIf}
+    ${Else}
+      StrCpy $R9 $9
+      StrCpy $R8 "default_value_query_failed"
+      System::Call 'advapi32::RegCloseKey(p r5)'
+      Call RefuseCurrentUserOwnership
+    ${EndIf}
+    System::Call 'advapi32::RegCloseKey(p r5)'
+  ${ElseIf} $9 != 2
+    StrCpy $R9 $9
+    StrCpy $R8 "ownership_key_open_failed"
+    Call RefuseCurrentUserOwnership
+  ${EndIf}
   ReadRegStr $1 HKLM "${MANUPRODUCTKEY}" ""
   ReadRegStr $3 HKLM "${UNINSTKEY}" "UninstallString"
   ${If} $0 != ""
@@ -579,17 +658,25 @@ Function DetectExistingInstall
     ; decide whether a machine registration can take ownership.
     StrCpy $ExistingScope "current"
     StrCpy $ExistingInstallDir $0
+    StrCpy $4 $0
+    System::Call 'shlwapi::PathUnquoteSpacesW(w r4)'
+    Push $4
+    Call IsFullyQualifiedPath
+    Pop $5
+    ${If} $5 != 1
+      StrCpy $R9 0
+      StrCpy $R8 "install_location_not_fully_qualified"
+      Call RefuseCurrentUserOwnership
+    ${EndIf}
     ${If} $UpdateMode = 1
       StrCpy $LegacyEntrypointRepair 1
-      StrCpy $MachineInstallDir $0
-      System::Call 'shlwapi::PathUnquoteSpacesW(w r0)'
-      StrCpy $MachineInstallDir $0
-      ReadRegStr $MachineMainBinaryName HKCU "${UNINSTKEY}" "MainBinaryName"
-      ${If} $MachineMainBinaryName == ""
-      ${OrIf} $MachineMainBinaryName == "${SCREENPIPE_USER_MAIN_BINARY}"
+      StrCpy $UserLegacyInstallDir $4
+      ReadRegStr $UserLegacyMainBinaryName HKCU "${UNINSTKEY}" "MainBinaryName"
+      ${If} $UserLegacyMainBinaryName == ""
+      ${OrIf} $UserLegacyMainBinaryName == "${SCREENPIPE_USER_MAIN_BINARY}"
         ; A repeated update must continue repairing owned links left behind by
         ; a classic per-user install even after metadata names the new binary.
-        StrCpy $MachineMainBinaryName "${MAINBINARYNAME}.exe"
+        StrCpy $UserLegacyMainBinaryName "${MAINBINARYNAME}.exe"
       ${EndIf}
     ${EndIf}
   ${EndIf}
@@ -598,6 +685,15 @@ Function DetectExistingInstall
   ${AndIf} ${FileExists} "$1\uninstall.exe"
     ${If} $ExistingInstallDir != ""
       ; The current-user installation owns updates and ordinary setup runs.
+      ${If} $UpdateMode = 1
+        StrCpy $MachineInstallDir $1
+        System::Call 'shlwapi::PathUnquoteSpacesW(w r1)'
+        StrCpy $MachineInstallDir $1
+        ReadRegStr $MachineMainBinaryName HKLM "${UNINSTKEY}" "MainBinaryName"
+        ${If} $MachineMainBinaryName == ""
+          StrCpy $MachineMainBinaryName "${MAINBINARYNAME}.exe"
+        ${EndIf}
+      ${EndIf}
       Goto existing_install_detected
     ${EndIf}
     ${If} $UpdateMode = 1
@@ -815,8 +911,10 @@ Function ValidateInstallSelection
     SetErrors
     Return
   ${EndIf}
-  System::Call 'shlwapi::PathIsRelativeW(w "$INSTDIR") i.r0'
-  ${If} $0 != 0
+  Push "$INSTDIR"
+  Call IsFullyQualifiedPath
+  Pop $0
+  ${If} $0 != 1
     MessageBox MB_OK|MB_ICONSTOP "Enter a complete Windows path, such as C:\Apps\Screenpipe." /SD IDOK
     SetErrors
     Return
@@ -1177,6 +1275,7 @@ Section Install
     ; make an enrolled value launch the newly managed user copy.
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
     ${If} $0 != ""
+      StrCpy $OriginalRunCommand $0
       ; Parse argv[0] with Windows command-line rules, then compare normalized
       ; full paths. Never infer ownership from a substring or discard arguments
       ; belonging to an already-correct or unrelated command.
@@ -1188,8 +1287,10 @@ Section Install
         System::Call 'kernel32::LocalFree(p r2)'
         ; A relative Run command resolves at logon, not against the installer's
         ; current directory, so it cannot establish ownership of this entry.
-        System::Call 'shlwapi::PathIsRelativeW(w r4) i.r8'
-        ${If} $8 = 0
+        Push $4
+        Call IsFullyQualifiedPath
+        Pop $8
+        ${If} $8 = 1
           System::Call 'kernel32::GetFullPathNameW(w r4, i ${NSIS_MAX_STRLEN}, w .r5, p 0) i.r8'
           ${If} $8 > 0
           ${AndIf} $8 < ${NSIS_MAX_STRLEN}
@@ -1200,12 +1301,27 @@ Section Install
             ${AndIf} $5 == $7
               ; Replace only argv[0]. Preserve every existing argument exactly.
               StrLen $8 $4
-              StrCpy $9 $0 1
+              StrCpy $9 $OriginalRunCommand 1
               ${If} $9 == '$\"'
                 IntOp $8 $8 + 2
               ${EndIf}
-              StrCpy $9 $0 "" $8
+              StrCpy $9 $OriginalRunCommand "" $8
               WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\$InstalledMainBinaryName$\"$9"
+            ${EndIf}
+            ${If} $UserLegacyInstallDir != ""
+              StrCpy $6 "$UserLegacyInstallDir\$UserLegacyMainBinaryName"
+              System::Call 'kernel32::GetFullPathNameW(w r6, i ${NSIS_MAX_STRLEN}, w .r7, p 0) i.r9'
+              ${If} $9 > 0
+              ${AndIf} $9 < ${NSIS_MAX_STRLEN}
+              ${AndIf} $5 == $7
+                StrLen $8 $4
+                StrCpy $9 $OriginalRunCommand 1
+                ${If} $9 == '$\"'
+                  IntOp $8 $8 + 2
+                ${EndIf}
+                StrCpy $9 $OriginalRunCommand "" $8
+                WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\$InstalledMainBinaryName$\"$9"
+              ${EndIf}
             ${EndIf}
           ${EndIf}
         ${EndIf}
@@ -1514,6 +1630,10 @@ Function CreateOrUpdateStartMenuShortcut
     ; elevation and intentionally remain outside ordinary update management.
     !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
     !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+    ${If} $UserLegacyInstallDir != ""
+      !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$UserLegacyInstallDir\$UserLegacyMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+      !insertmacro RetargetMigrationShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$UserLegacyInstallDir\$UserLegacyMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+    ${EndIf}
     Return
   ${EndIf}
 
@@ -1566,6 +1686,9 @@ Function CreateOrUpdateDesktopShortcut
     migration_desktop_shortcut_loop:
       StrCmp $R1 "" migration_desktop_shortcut_done
       !insertmacro RetargetMigrationShortcut "$DESKTOP\$R1" "$MachineInstallDir\$MachineMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+      ${If} $UserLegacyInstallDir != ""
+        !insertmacro RetargetMigrationShortcut "$DESKTOP\$R1" "$UserLegacyInstallDir\$UserLegacyMainBinaryName" "$INSTDIR\$InstalledMainBinaryName"
+      ${EndIf}
       FindNext $R0 $R1
       Goto migration_desktop_shortcut_loop
     migration_desktop_shortcut_done:

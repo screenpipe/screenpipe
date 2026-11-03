@@ -16,7 +16,7 @@ versions. It does not build or exercise the Screenpipe engine.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)] [string] $ResultsDir,
-  [ValidateSet("current", "machine", "legacy-machine", "custom-missing-removal")] [string] $Matrix = "current",
+  [ValidateSet("current", "machine", "legacy-machine", "custom-missing-removal", "claim-failures")] [string] $Matrix = "current",
   [switch] $CompileOnly,
   [switch] $InstallOnly
 )
@@ -169,6 +169,7 @@ function Invoke-Installer([string] $Path, [string[]] $Arguments) {
   if ($process.ExitCode) { throw "$Path exited $($process.ExitCode)" }
 }
 
+if ($Matrix -ne "claim-failures") {
 $firstInstaller = if ($Matrix -in @("legacy-machine", "custom-missing-removal")) { $legacyInstallerA } else { $installerA }
 $scopeArgs = if ($Matrix -eq "current") { @() } elseif ($Matrix -eq "machine") { @("/SPALLUSERS") } else { @() }
 Invoke-Installer $firstInstaller (@("/S") + $scopeArgs + @("/D=$installDir"))
@@ -200,6 +201,69 @@ if ($Matrix -eq "custom-missing-removal") {
   Set-ItemProperty $customUninstallKey -Name InstallLocation -Value '"C:\deliberately-inconsistent-removal-path"'
   Remove-ItemProperty $customUninstallKey -Name UninstallString -ErrorAction SilentlyContinue
   $migratedInstallDir = $customUserDir
+}
+}
+
+if ($Matrix -eq "claim-failures") {
+  $claimPath = "HKCU:\Software\Mediar, Inc.\screenpipe enterprise"
+  $claimSubkey = "Software\Mediar, Inc.\screenpipe enterprise"
+  $machineKey = "HKLM:\Software\Mediar, Inc.\screenpipe enterprise"
+  $machineBefore = if (Test-Path $machineKey) { (Get-Item $machineKey).GetValue("") } else { $null }
+  $workingDir = Join-Path $ResultsDir "relative-claim-working-directory"
+  New-Item -ItemType Directory -Force -Path $workingDir | Out-Null
+  Copy-Item $installerB (Join-Path $workingDir "screenpipe-app.exe") -Force
+  $cases = @(
+    @{ Name = "missing-default"; Kind = "missing" },
+    @{ Name = "empty-default"; Kind = "string"; Value = "" },
+    @{ Name = "wrong-type-default"; Kind = "dword"; Value = 7 },
+    @{ Name = "relative-default"; Kind = "string"; Value = "." }
+  )
+  foreach ($case in $cases) {
+    Remove-Item $claimPath -Recurse -Force -ErrorAction SilentlyContinue
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($claimSubkey)
+    if ($case.Kind -eq "string") { $key.SetValue("", $case.Value, [Microsoft.Win32.RegistryValueKind]::String) }
+    if ($case.Kind -eq "dword") { $key.SetValue("", $case.Value, [Microsoft.Win32.RegistryValueKind]::DWord) }
+    $key.Dispose()
+    $process = Start-Process $installerB -ArgumentList @("/S", "/P", "/UPDATE") -WorkingDirectory $workingDir -Wait -PassThru
+    if ($process.ExitCode -eq 0) { throw "$($case.Name) ownership claim unexpectedly updated" }
+    $machineAfter = if (Test-Path $machineKey) { (Get-Item $machineKey).GetValue("") } else { $null }
+    if ($machineAfter -ne $machineBefore) {
+      throw "$($case.Name) ownership failure modified machine ownership"
+    }
+  }
+  Remove-Item $claimPath -Recurse -Force -ErrorAction SilentlyContinue
+  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($claimSubkey)
+  $key.SetValue("", $workingDir, [Microsoft.Win32.RegistryValueKind]::String)
+  $key.Dispose()
+  $acl = Get-Acl $claimPath
+  try {
+    $denied = New-Object Security.AccessControl.RegistryAccessRule(
+      [Security.Principal.WindowsIdentity]::GetCurrent().User,
+      [Security.AccessControl.RegistryRights]::QueryValues,
+      [Security.AccessControl.AccessControlType]::Deny)
+    $blockedAcl = Get-Acl $claimPath
+    $blockedAcl.AddAccessRule($denied)
+    Set-Acl $claimPath $blockedAcl
+    $process = Start-Process $installerB -ArgumentList @("/S", "/P", "/UPDATE") -WorkingDirectory $workingDir -Wait -PassThru
+    if ($process.ExitCode -eq 0) { throw "access-denied ownership claim unexpectedly updated" }
+  } finally {
+    $aclKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+      $claimSubkey,
+      [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+      [Security.AccessControl.RegistryRights]::ChangePermissions)
+    $restoredAcl = $aclKey.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+    [void]$restoredAcl.RemoveAccessRuleSpecific($denied)
+    $aclKey.SetAccessControl($restoredAcl)
+    $aclKey.Dispose()
+    Remove-Item $claimPath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $log = Get-Content (Join-Path $dataDir "update-install.log") -Raw
+  foreach ($detail in @("default_value_query_failed", "default_value_empty", "default_value_wrong_type", "install_location_not_fully_qualified", "ownership_key_open_failed")) {
+    if ($log -notmatch $detail) { throw "ownership refusal log missing $detail" }
+  }
+  [pscustomobject]@{ Matrix = $Matrix; Refusals = 5; MachineOwnership = $machineBefore } |
+    ConvertTo-Json | Set-Content (Join-Path $ResultsDir "claim-failures.json") -Encoding utf8NoBOM
+  return
 }
 if ($Matrix -ne "current") {
   $legacyEntrypointDir = if ($Matrix -eq "custom-missing-removal") { $customUserDir } else { $installDir }
@@ -304,6 +368,22 @@ if ($Matrix -ne "current") {
   $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
   if ($actualStartup -cne $relativeStartup) {
     throw "repeated update rewrote uncertain relative startup ownership: $actualStartup"
+  }
+
+  foreach ($partialStartup in @(
+      '"C:screenpipe-app.exe" --drive-relative-must-remain',
+      '"\screenpipe-app.exe" --root-relative-must-remain')) {
+    Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value $partialStartup
+    Push-Location $installDir
+    try {
+      Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
+    } finally {
+      Pop-Location
+    }
+    $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
+    if ($actualStartup -cne $partialStartup) {
+      throw "repeated update rewrote partially-qualified startup: $actualStartup"
+    }
   }
 
   Remove-ItemProperty $startupKey -Name "screenpipe enterprise"
