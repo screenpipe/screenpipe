@@ -115,15 +115,14 @@ pub(crate) async fn enterprise_is_present(
         if !same_session {
             continue;
         }
-        let exe = process_executable(pid).map_err(|error| {
-            let cause = format!("could not identify legacy Enterprise owner: {error}");
-            record(
-                "legacy_presence_check_failed",
-                &cause,
-                "consumer_start_aborted",
-            );
-            cause
-        })?;
+        let exe = match process_executable(pid) {
+            Ok(exe) => exe,
+            Err(error) => {
+                let cause = format!("could not identify legacy Enterprise owner: {error}");
+                confirm_legacy_owner_released_port(port, pid, &cause).await?;
+                continue;
+            }
+        };
         if !looks_like_screenpipe_exe(&exe) {
             continue;
         }
@@ -146,6 +145,45 @@ pub(crate) async fn enterprise_is_present(
         }
     }
     Ok(false)
+}
+
+async fn confirm_legacy_owner_released_port(
+    port: u16,
+    observed_pid: u32,
+    cause: &str,
+) -> Result<(), String> {
+    match listening_pid(port).await {
+        Ok(None) => {
+            record(
+                "legacy_owner_exited_during_query",
+                &format!("pid={observed_pid} released port={port}; original cause: {cause}"),
+                "consumer_start_allowed",
+            );
+            Ok(())
+        }
+        Ok(Some(current_pid)) => {
+            let detail = format!(
+                "{cause}; port={port} remains owned by pid={current_pid} after observed pid={observed_pid} query failure"
+            );
+            record(
+                "legacy_presence_check_failed",
+                &detail,
+                "consumer_start_aborted",
+            );
+            Err(detail)
+        }
+        Err(resample_error) => {
+            let detail = format!(
+                "{cause}; could not re-sample port={port} after observed pid={observed_pid} query failure: {resample_error}"
+            );
+            record(
+                "legacy_presence_check_failed",
+                &detail,
+                "consumer_start_aborted",
+            );
+            Err(detail)
+        }
+    }
 }
 
 fn process_executable(pid: u32) -> Result<PathBuf, String> {
@@ -765,6 +803,41 @@ mod tests {
         assert!(owner.try_wait().unwrap().is_none());
         owner.kill().unwrap();
         let _ = owner.wait().unwrap();
+    }
+
+    #[tokio::test]
+    async fn query_failure_allows_exited_verified_owner_but_protects_live_owner() {
+        let port = unused_port();
+        let temp = tempfile::tempdir().unwrap();
+        let fixture_exe = temp.path().join("screenpipe.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &fixture_exe).unwrap();
+        let mut owner = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let pid = owner.id();
+
+        assert!(same_path(&process_executable(pid).unwrap(), &fixture_exe));
+        let refusal = confirm_legacy_owner_released_port(
+            port,
+            pid,
+            "simulated owner query failure: Access is denied. (0x80070005)",
+        )
+        .await
+        .unwrap_err();
+        assert!(refusal.contains("Access is denied"));
+        assert!(refusal.contains(&format!("owned by pid={pid}")));
+        assert!(owner.try_wait().unwrap().is_none());
+
+        owner.kill().unwrap();
+        let _ = owner.wait().unwrap();
+        assert!(
+            confirm_legacy_owner_released_port(
+                port,
+                pid,
+                "simulated owner query failure: Access is denied. (0x80070005)",
+            )
+            .await
+            .is_ok()
+        );
     }
 
     fn remove_version_resource(path: &Path) {
