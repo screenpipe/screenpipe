@@ -71,6 +71,25 @@ ${failure === "repack" ? "exit 42" : 'printf repacked > "$2"'}
   }
 }
 
+test("artifact upload failures retain the filename, server cause and exit code without credentials", () => {
+  const f = fixture();
+  f.stub("curl", `
+if [[ "$*" == *DELETE* ]]; then printf '{}'; exit 0; fi
+printf '{"error":"invalid artifact filename"}'
+exit 22
+`);
+  const client = readFileSync(join(scripts, "upload-release-artifacts.sh"), "utf8")
+    .replaceAll("/opt/homebrew/opt/curl/bin/curl", join(f.root, "absent-curl"));
+  const artifact = f.write("screenpipe-attribution-windows.json", "{}");
+  const result = spawnSync("bash", ["-c", client, "upload", "consumer", "2.7.137", "x86_64-pc-windows-msvc", artifact], {
+    env: { ...f.env, RELEASE_UPLOAD_URL: "https://upload.example", RELEASE_UPLOAD_TOKEN: "private-fixture-token" }, encoding: "utf8",
+  });
+  expect(result.status).toBe(22);
+  expect(result.stdout).toContain("2.7.137/x86_64-pc-windows-msvc/screenpipe-attribution-windows.json");
+  expect(result.stderr).toContain('{"error":"invalid artifact filename"}');
+  expect(result.stdout + result.stderr).not.toContain("private-fixture-token");
+});
+
 test("Mac health recovery measures CPU time and never signals a replaced PID or unrelated service", () => {
   const result = spawnSync("python3", ["-c", `
 import importlib.util, signal, sys

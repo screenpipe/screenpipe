@@ -554,7 +554,7 @@ jobs:
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           TARGET="x86_64-pc-windows-msvc"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+          .release-workflow/.github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
             "${BUNDLE_DIR}"/nsis/*.sig \
@@ -843,7 +843,7 @@ jobs:
           TARGET="x86_64-unknown-linux-gnu"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+          .release-workflow/.github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.AppImage.sig \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
@@ -1408,7 +1408,7 @@ jobs:
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+          .release-workflow/.github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/dmg/*.dmg \
             "${BUNDLE_DIR}"/pkg/*.pkg \
             "${BUNDLE_DIR}"/pkg/*.pkg.sig \
