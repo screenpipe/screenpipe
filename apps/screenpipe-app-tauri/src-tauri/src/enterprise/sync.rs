@@ -82,7 +82,7 @@ const RETRY_WHILE_WAITING_FOR_ACCOUNT: Duration = Duration::from_secs(60);
 
 /// Admin-triggered log collection runs independently of telemetry work and
 /// its retry cycle, so a failing upload cannot hold up support diagnostics.
-const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
+pub(super) const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Default endpoint. Overridable via `SCREENPIPE_ENTERPRISE_INGEST_URL` for
 /// staging / on-prem.

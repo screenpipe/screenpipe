@@ -340,6 +340,19 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 }
 
 fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Option<bool>) -> ! {
+    if let Err(error) = try_app_relaunch_with_home(&app, home_visible) {
+        warn!("safe relaunch: {error}");
+    }
+    force_process_exit(status);
+}
+
+/// Spawn the replacement without terminating the current process on failure.
+/// Enterprise recovery uses this fallible boundary so its independent support
+/// path remains alive long enough to retain and report an originating error.
+fn try_app_relaunch_with_home(
+    app: &AppHandle,
+    home_visible: Option<bool>,
+) -> Result<(), String> {
     // Apply a staged update now, at the last moment before this process goes
     // away — installing any earlier orphans the running bundle and kills TCC
     // attribution (see staged_update.rs). Idempotent with the RunEvent::Exit
@@ -395,17 +408,23 @@ fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Optio
             command.process_group(0);
         }
         match command.spawn() {
-            Ok(child) if update_installed => info!(
-                "safe relaunch: spawned delayed updater helper for {} (pid {}, settle {}s)",
-                binary.display(),
-                child.id(),
-                MACOS_UPDATER_RELAUNCH_SETTLE.as_secs()
-            ),
-            Ok(child) => info!(
-                "safe relaunch: spawned replacement {} (pid {})",
-                binary.display(),
-                child.id()
-            ),
+            Ok(child) if update_installed => {
+                info!(
+                    "safe relaunch: spawned delayed updater helper for {} (pid {}, settle {}s)",
+                    binary.display(),
+                    child.id(),
+                    MACOS_UPDATER_RELAUNCH_SETTLE.as_secs()
+                );
+                return Ok(());
+            }
+            Ok(child) => {
+                info!(
+                    "safe relaunch: spawned replacement {} (pid {})",
+                    binary.display(),
+                    child.id()
+                );
+                return Ok(());
+            }
             Err(err) => {
                 if update_installed {
                     crate::update_diagnostics::record(
@@ -413,12 +432,23 @@ fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Optio
                         &format!("executable={} error={err}", binary.display()),
                     );
                 }
-                warn!("safe relaunch: failed to spawn {}: {err}", binary.display());
+                return Err(format!(
+                    "failed to spawn replacement {}: {err}",
+                    binary.display()
+                ));
             }
         }
     }
+    Err("failed to resolve the replacement application binary".into())
+}
 
-    force_process_exit(status);
+/// Recovery-only relaunch. Unlike the updater/quit primitive, a spawn failure
+/// leaves this process and its support poller alive. On success the old process
+/// exits immediately, without recorder teardown waits.
+pub(crate) fn try_recovery_relaunch(app: AppHandle) -> Result<(), String> {
+    let home_visible = home_window_visible(&app);
+    try_app_relaunch_with_home(&app, home_visible)?;
+    force_process_exit(0)
 }
 
 /// Request a relaunch from async/UI code while allowing IPC replies and logs to
