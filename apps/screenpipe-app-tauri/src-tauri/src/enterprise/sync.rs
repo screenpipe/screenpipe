@@ -48,9 +48,9 @@ mod backfill;
 mod diagnostics;
 #[path = "frame_context.rs"]
 pub(crate) mod frame_context;
+pub(crate) use enterprise_upload::EnterpriseUploadMode;
 use enterprise_upload::{
     upload_direct_readable_batch, upload_direct_write_only_batch, DirectUploadRecordCounts,
-    EnterpriseUploadMode,
 };
 
 /// How often we wake up and try to sync.
