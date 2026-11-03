@@ -346,10 +346,22 @@ jobs:
 
       - name: Set up Python for Windows packaging
         if: matrix.os_type == 'windows'
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          architecture: x64
+        shell: pwsh
+        run: |
+          # The packager uses only the standard library. An application-local
+          # runtime also works under the persistent runner's service account.
+          $pythonRoot = Join-Path $env:RUNNER_TEMP 'screenpipe-python'
+          $archive = Join-Path $env:RUNNER_TEMP 'screenpipe-python.zip'
+          Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embeddable-amd64.zip' -OutFile $archive
+          # SHA-256 from Python's windows-3.13.17.json release manifest.
+          $expected = '0ba1ee4bfcbdc3a559d27e2e9ce76d04a7839947a23f46375872c755c0d463b8'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Windows packaging Python archive SHA-256 mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $pythonRoot -Force
+          & "$pythonRoot\python.exe" -c "import argparse, hashlib, json, pathlib, plistlib, struct, subprocess, tarfile, tempfile, zipfile; import sys; print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packaging Python runtime verification failed' }
+          $pythonRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Setup Bun
         if: runner.environment != 'self-hosted' || (matrix.os_type != 'windows' && matrix.os_type != 'linux')
