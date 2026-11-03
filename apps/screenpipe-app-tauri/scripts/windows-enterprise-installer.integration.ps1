@@ -16,7 +16,7 @@ versions. It does not build or exercise the Screenpipe engine.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)] [string] $ResultsDir,
-  [ValidateSet("current", "machine", "legacy-machine", "custom-missing-removal", "claim-failures")] [string] $Matrix = "current",
+  [ValidateSet("current", "machine", "legacy-machine", "custom-missing-removal", "missing-main-binary-name", "claim-failures")] [string] $Matrix = "current",
   [switch] $CompileOnly,
   [switch] $InstallOnly
 )
@@ -170,7 +170,7 @@ function Invoke-Installer([string] $Path, [string[]] $Arguments) {
 }
 
 if ($Matrix -ne "claim-failures") {
-$firstInstaller = if ($Matrix -in @("legacy-machine", "custom-missing-removal")) { $legacyInstallerA } else { $installerA }
+$firstInstaller = if ($Matrix -in @("legacy-machine", "custom-missing-removal", "missing-main-binary-name")) { $legacyInstallerA } else { $installerA }
 $scopeArgs = if ($Matrix -eq "current") { @() } elseif ($Matrix -eq "machine") { @("/SPALLUSERS") } else { @() }
 Invoke-Installer $firstInstaller (@("/S") + $scopeArgs + @("/D=$installDir"))
 $registryRoot = if ($Matrix -eq "current") { "HKCU:" } else { "HKLM:" }
@@ -404,11 +404,31 @@ if ($Matrix -ne "current") {
 }
 
 $uninstaller = Join-Path $migratedInstallDir "uninstall.exe"
+if ($Matrix -eq "missing-main-binary-name") {
+  Remove-ItemProperty $uninstallKey -Name MainBinaryName
+}
 $uninstall = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
 if ($uninstall.ExitCode) { throw "uninstaller exited $($uninstall.ExitCode)" }
 for ($i = 0; $i -lt 100 -and (Test-Path -LiteralPath $uninstaller); $i++) { Start-Sleep -Milliseconds 100 }
 if (Test-Path -LiteralPath $uninstaller) { throw "spawned NSIS uninstaller child did not complete" }
 if (-not (Test-Path -LiteralPath $sentinel)) { throw "uninstall removed actual app-data sentinel" }
+if ($Matrix -eq "missing-main-binary-name") {
+  if (Test-Path -LiteralPath (Join-Path $migratedInstallDir $userBinaryName)) {
+    throw "uninstall without MainBinaryName left the current-user main executable"
+  }
+  foreach ($ownedLink in @(
+      (Join-Path ([Environment]::GetFolderPath("Desktop")) "screenpipe enterprise.lnk"),
+      (Join-Path ([Environment]::GetFolderPath("Programs")) "screenpipe enterprise.lnk"))) {
+    if (Test-Path -LiteralPath $ownedLink) {
+      throw "uninstall without MainBinaryName left canonical owned link $ownedLink"
+    }
+  }
+  $retainedMachine = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\screenpipe enterprise"
+  if ($retainedMachine.DisplayVersion -ne $machineVersion -or
+      -not (Test-Path -LiteralPath (Join-Path $installDir "screenpipe-app.exe"))) {
+    throw "current-user uninstall without MainBinaryName modified the machine installation"
+  }
+}
 
 if ($Matrix -ne "current") {
   $legacyUninstaller = Join-Path $installDir "uninstall.exe"

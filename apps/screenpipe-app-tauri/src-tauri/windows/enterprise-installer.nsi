@@ -1418,6 +1418,7 @@ Function un.onInit
     ReadRegStr $0 HKLM "${MANUPRODUCTKEY}" ""
     ${If} $0 == $INSTDIR
       SetShellVarContext all
+      StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
       System::Call 'shell32::IsUserAnAdmin()i.r1'
       ${If} $1 != 1
         ; /SPALLUSERS selects scope; it is never proof of privilege.
@@ -1425,12 +1426,15 @@ Function un.onInit
       ${EndIf}
     ${Else}
       SetShellVarContext current
+      StrCpy $InstalledMainBinaryName "${SCREENPIPE_USER_MAIN_BINARY}"
     ${EndIf}
+  !else
+    StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
   !endif
 
-  ReadRegStr $InstalledMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
-  ${If} $InstalledMainBinaryName == ""
-    StrCpy $InstalledMainBinaryName "${MAINBINARYNAME}.exe"
+  ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
+  ${If} $OldMainBinaryName != ""
+    StrCpy $InstalledMainBinaryName $OldMainBinaryName
   ${EndIf}
 
   !insertmacro MUI_UNGETLANGUAGE

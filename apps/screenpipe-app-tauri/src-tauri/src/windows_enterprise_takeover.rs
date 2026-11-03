@@ -18,8 +18,6 @@ pub(crate) const LOG_NAME: &str = "enterprise-takeover.log";
 const MAX_LOG_BYTES: u64 = 32 * 1024;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const ENTERPRISE_PRODUCT_NAME: &str = "screenpipe enterprise";
-const ENTERPRISE_REGISTRATION_KEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\screenpipe enterprise";
 const ENTERPRISE_INSTALL_KEY: &str = r"Software\Mediar, Inc.\screenpipe enterprise";
 const USER_MAIN_BINARY: &str = env!("SCREENPIPE_USER_MAIN_BINARY");
 const RELAUNCH_PARENT_PID: &str = "SCREENPIPE_RELAUNCH_PARENT_PID";
@@ -113,59 +111,22 @@ fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
         ));
     }
     let canonical_dir = reject_reparse_and_canonicalize(&install_dir, "installation directory")?;
-    let metadata_name = match hkcu.open_subkey(ENTERPRISE_REGISTRATION_KEY) {
-        Ok(key) => match key.get_value::<String, _>("MainBinaryName") {
-            Ok(name) => Some(name),
-            Err(error) if registry_value_absent(&error) => None,
-            Err(error) => {
-                return Err(format!(
-                    "current-user Enterprise MainBinaryName is unreadable: {error}"
-                ))
-            }
-        },
-        Err(error) if registry_value_absent(&error) => None,
-        Err(error) => {
-            return Err(format!(
-                "current-user Enterprise removal metadata is unreadable: {error}"
-            ))
-        }
-    };
-    let names: Vec<&str> = if let Some(name) = metadata_name.as_deref() {
-        if !allowed_user_binary_name(name) {
-            return Err("current-user Enterprise MainBinaryName is invalid".into());
-        }
-        vec![name]
-    } else {
-        vec![USER_MAIN_BINARY, "screenpipe-app.exe", "screenpipe.exe"]
-    };
-    let mut candidate_error = None;
-    let mut canonical_exe = None;
-    for name in names {
+    let mut candidate_errors = Vec::new();
+    for name in [USER_MAIN_BINARY, "screenpipe-app.exe", "screenpipe.exe"] {
         let executable = install_dir.join(name);
         match validate_registered_executable(&canonical_dir, &executable) {
-            Ok(path) => {
-                canonical_exe = Some(path);
-                break;
-            }
-            Err(error) => candidate_error = Some(error),
+            Ok(path) => return Ok(Some(path)),
+            Err(error) => candidate_errors.push(format!("{name}: {error}")),
         }
     }
-    let canonical_exe = canonical_exe.ok_or_else(|| {
-        candidate_error
-            .unwrap_or_else(|| "current-user Enterprise executable is unavailable".into())
-    })?;
-    Ok(Some(canonical_exe))
+    Err(format!(
+        "current-user Enterprise executable is unavailable: {}",
+        candidate_errors.join("; ")
+    ))
 }
 
 fn registry_value_absent(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(2 | 3))
-}
-
-fn allowed_user_binary_name(name: &str) -> bool {
-    Path::new(name).file_name() == Some(Path::new(name).as_os_str())
-        && [USER_MAIN_BINARY, "screenpipe-app.exe", "screenpipe.exe"]
-            .iter()
-            .any(|allowed| name.eq_ignore_ascii_case(allowed))
 }
 
 fn validate_registered_executable(
