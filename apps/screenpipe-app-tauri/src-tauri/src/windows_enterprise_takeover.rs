@@ -105,15 +105,14 @@ pub(crate) async fn enterprise_is_present(
         if pid == std::process::id() {
             continue;
         }
-        let same_session = is_current_session(pid).map_err(|error| {
-            let cause = format!("could not inspect legacy Enterprise owner session: {error}");
-            record(
-                "legacy_presence_check_failed",
-                &cause,
-                "consumer_start_aborted",
-            );
-            cause
-        })?;
+        let same_session = match is_current_session(pid) {
+            Ok(same_session) => same_session,
+            Err(error) => {
+                let cause = format!("could not inspect legacy Enterprise owner session: {error}");
+                confirm_legacy_owner_released_port(port, pid, relaunch_parent_pid, &cause).await?;
+                continue;
+            }
+        };
         if !same_session {
             continue;
         }
@@ -161,19 +160,28 @@ async fn confirm_legacy_owner_released_port(
     relaunch_parent_pid: Option<u32>,
     cause: &str,
 ) -> Result<(), String> {
-    if relaunch_parent_pid == Some(observed_pid) {
-        wait_for_process_exit(observed_pid).await.map_err(|wait_error| {
-            let detail = format!(
+    let wait_error = if relaunch_parent_pid == Some(observed_pid) {
+        wait_for_process_exit(observed_pid).await.err()
+    } else {
+        None
+    };
+    resample_legacy_owner_after_wait(port, observed_pid, cause, wait_error).await
+}
+
+async fn resample_legacy_owner_after_wait(
+    port: u16,
+    observed_pid: u32,
+    cause: &str,
+    wait_error: Option<String>,
+) -> Result<(), String> {
+    let cause = wait_error.map_or_else(
+        || cause.to_owned(),
+        |wait_error| {
+            format!(
                 "{cause}; verified relaunch parent pid={observed_pid} could not be awaited: {wait_error}"
-            );
-            record(
-                "legacy_presence_check_failed",
-                &detail,
-                "consumer_start_aborted",
-            );
-            detail
-        })?;
-    }
+            )
+        },
+    );
     match listening_pid(port).await {
         Ok(None) => {
             record(
@@ -860,7 +868,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_failure_allows_exited_verified_owner_but_protects_live_owner() {
+    async fn query_failure_resamples_after_parent_disappears_and_protects_current_owner() {
         let port = unused_port();
         let temp = tempfile::tempdir().unwrap();
         let fixture_exe = temp.path().join("screenpipe.exe");
@@ -893,6 +901,45 @@ mod tests {
         owner.kill().unwrap();
         let _ = owner.wait().unwrap();
         assert!(handoff.await.unwrap().is_ok());
+
+        let mut disappeared_owner = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let disappeared_pid = disappeared_owner.id();
+        assert_eq!(listening_pid(port).await.unwrap(), Some(disappeared_pid));
+        disappeared_owner.kill().unwrap();
+        let _ = disappeared_owner.wait().unwrap();
+        drop(disappeared_owner);
+        let wait_error = Some(format!(
+            "could not open pid={disappeared_pid} for relaunch handoff: simulated process disappearance"
+        ));
+
+        resample_legacy_owner_after_wait(
+            port,
+            disappeared_pid,
+            "could not inspect legacy Enterprise owner session: simulated owner session query failure",
+            wait_error.clone(),
+        )
+        .await
+        .unwrap();
+
+        let mut replacement = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let replacement_pid = replacement.id();
+        assert_ne!(replacement_pid, disappeared_pid);
+        let refusal = resample_legacy_owner_after_wait(
+            port,
+            disappeared_pid,
+            "could not inspect legacy Enterprise owner session: simulated owner session query failure",
+            wait_error,
+        )
+        .await
+        .unwrap_err();
+        assert!(refusal.contains("owner session query failure"));
+        assert!(refusal.contains("could not be awaited"));
+        assert!(refusal.contains(&format!("owned by pid={replacement_pid}")));
+        assert!(replacement.try_wait().unwrap().is_none());
+        replacement.kill().unwrap();
+        let _ = replacement.wait().unwrap();
     }
 
     fn remove_version_resource(path: &Path) {
