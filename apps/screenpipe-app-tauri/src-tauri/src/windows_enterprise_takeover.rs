@@ -17,6 +17,7 @@ pub(crate) const LOG_NAME: &str = "enterprise-takeover.log";
 const MAX_LOG_BYTES: u64 = 32 * 1024;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const ENTERPRISE_PRODUCT_NAME: &str = "screenpipe enterprise";
+const RELAUNCH_PARENT_PID: &str = "SCREENPIPE_RELAUNCH_PARENT_PID";
 static LOG_WRITER: Mutex<()> = Mutex::new(());
 static ENTERPRISE_PRESENCE: OnceLock<OwnedHandle> = OnceLock::new();
 
@@ -87,6 +88,7 @@ pub(crate) async fn enterprise_is_present(
         }
     }
 
+    let relaunch_parent_pid = take_relaunch_parent_pid();
     for port in [control_port, api_port] {
         let Some(pid) = listening_pid(port).await.map_err(|error| {
             let cause = format!("could not inspect legacy Enterprise owner: {error}");
@@ -103,27 +105,25 @@ pub(crate) async fn enterprise_is_present(
         if pid == std::process::id() {
             continue;
         }
-        let same_session = is_current_session(pid).map_err(|error| {
-            let cause = format!("could not inspect legacy Enterprise owner session: {error}");
-            record(
-                "legacy_presence_check_failed",
-                &cause,
-                "consumer_start_aborted",
-            );
-            cause
-        })?;
+        let same_session = match is_current_session(pid) {
+            Ok(same_session) => same_session,
+            Err(error) => {
+                let cause = format!("could not inspect legacy Enterprise owner session: {error}");
+                confirm_legacy_owner_released_port(port, pid, relaunch_parent_pid, &cause).await?;
+                continue;
+            }
+        };
         if !same_session {
             continue;
         }
-        let exe = process_executable(pid).map_err(|error| {
-            let cause = format!("could not identify legacy Enterprise owner: {error}");
-            record(
-                "legacy_presence_check_failed",
-                &cause,
-                "consumer_start_aborted",
-            );
-            cause
-        })?;
+        let exe = match process_executable(pid) {
+            Ok(exe) => exe,
+            Err(error) => {
+                let cause = format!("could not identify legacy Enterprise owner: {error}");
+                confirm_legacy_owner_released_port(port, pid, relaunch_parent_pid, &cause).await?;
+                continue;
+            }
+        };
         if !looks_like_screenpipe_exe(&exe) {
             continue;
         }
@@ -146,6 +146,106 @@ pub(crate) async fn enterprise_is_present(
         }
     }
     Ok(false)
+}
+
+fn take_relaunch_parent_pid() -> Option<u32> {
+    let value = std::env::var(RELAUNCH_PARENT_PID).ok();
+    std::env::remove_var(RELAUNCH_PARENT_PID);
+    value.and_then(|value| value.parse().ok())
+}
+
+async fn confirm_legacy_owner_released_port(
+    port: u16,
+    observed_pid: u32,
+    relaunch_parent_pid: Option<u32>,
+    cause: &str,
+) -> Result<(), String> {
+    let wait_error = if relaunch_parent_pid == Some(observed_pid) {
+        wait_for_process_exit(observed_pid).await.err()
+    } else {
+        None
+    };
+    resample_legacy_owner_after_wait(port, observed_pid, cause, wait_error).await
+}
+
+async fn resample_legacy_owner_after_wait(
+    port: u16,
+    observed_pid: u32,
+    cause: &str,
+    wait_error: Option<String>,
+) -> Result<(), String> {
+    let cause = wait_error.map_or_else(
+        || cause.to_owned(),
+        |wait_error| {
+            format!(
+                "{cause}; verified relaunch parent pid={observed_pid} could not be awaited: {wait_error}"
+            )
+        },
+    );
+    match listening_pid(port).await {
+        Ok(None) => {
+            record(
+                "legacy_owner_exited_during_query",
+                &format!("pid={observed_pid} released port={port}; original cause: {cause}"),
+                "consumer_start_allowed",
+            );
+            Ok(())
+        }
+        Ok(Some(current_pid)) => {
+            let detail = format!(
+                "{cause}; port={port} remains owned by pid={current_pid} after observed pid={observed_pid} query failure"
+            );
+            record(
+                "legacy_presence_check_failed",
+                &detail,
+                "consumer_start_aborted",
+            );
+            Err(detail)
+        }
+        Err(resample_error) => {
+            let detail = format!(
+                "{cause}; could not re-sample port={port} after observed pid={observed_pid} query failure: {resample_error}"
+            );
+            record(
+                "legacy_presence_check_failed",
+                &detail,
+                "consumer_start_aborted",
+            );
+            Err(detail)
+        }
+    }
+}
+
+async fn wait_for_process_exit(pid: u32) -> Result<(), String> {
+    use windows::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }
+        .map_err(|error| format!("could not open pid={pid} for relaunch handoff: {error}"))?;
+    // SAFETY: OpenProcess returned an owned kernel handle, transferred once.
+    let process = unsafe { OwnedHandle::from_raw_handle(handle.0 as *mut _) };
+    tokio::task::spawn_blocking(move || {
+        let result = unsafe {
+            WaitForSingleObject(
+                windows::Win32::Foundation::HANDLE(process.as_raw_handle()),
+                INFINITE,
+            )
+        };
+        match result {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_FAILED => Err(format!(
+                "could not await relaunch parent pid={pid}: {}",
+                std::io::Error::last_os_error()
+            )),
+            other => Err(format!(
+                "unexpected Windows wait result {other:?} for relaunch parent pid={pid}"
+            )),
+        }
+    })
+    .await
+    .map_err(|error| format!("relaunch parent wait task failed: {error}"))?
 }
 
 fn process_executable(pid: u32) -> Result<PathBuf, String> {
@@ -765,6 +865,81 @@ mod tests {
         assert!(owner.try_wait().unwrap().is_none());
         owner.kill().unwrap();
         let _ = owner.wait().unwrap();
+    }
+
+    #[tokio::test]
+    async fn query_failure_resamples_after_parent_disappears_and_protects_current_owner() {
+        let port = unused_port();
+        let temp = tempfile::tempdir().unwrap();
+        let fixture_exe = temp.path().join("screenpipe.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &fixture_exe).unwrap();
+        let mut owner = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let pid = owner.id();
+
+        assert!(same_path(&process_executable(pid).unwrap(), &fixture_exe));
+        let refusal = confirm_legacy_owner_released_port(
+            port,
+            pid,
+            None,
+            "simulated owner query failure: Access is denied. (0x80070005)",
+        )
+        .await
+        .unwrap_err();
+        assert!(refusal.contains("Access is denied"));
+        assert!(refusal.contains(&format!("owned by pid={pid}")));
+        assert!(owner.try_wait().unwrap().is_none());
+
+        let handoff = tokio::spawn(confirm_legacy_owner_released_port(
+            port,
+            pid,
+            Some(pid),
+            "simulated owner query failure: Access is denied. (0x80070005)",
+        ));
+        tokio::task::yield_now().await;
+        assert!(owner.try_wait().unwrap().is_none());
+        owner.kill().unwrap();
+        let _ = owner.wait().unwrap();
+        assert!(handoff.await.unwrap().is_ok());
+
+        let mut disappeared_owner = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let disappeared_pid = disappeared_owner.id();
+        assert_eq!(listening_pid(port).await.unwrap(), Some(disappeared_pid));
+        disappeared_owner.kill().unwrap();
+        let _ = disappeared_owner.wait().unwrap();
+        drop(disappeared_owner);
+        let wait_error = Some(format!(
+            "could not open pid={disappeared_pid} for relaunch handoff: simulated process disappearance"
+        ));
+
+        resample_legacy_owner_after_wait(
+            port,
+            disappeared_pid,
+            "could not inspect legacy Enterprise owner session: simulated owner session query failure",
+            wait_error.clone(),
+        )
+        .await
+        .unwrap();
+
+        let mut replacement = spawn_owner_fixture(port, Some(&fixture_exe));
+        wait_for_fixture(port).await;
+        let replacement_pid = replacement.id();
+        assert_ne!(replacement_pid, disappeared_pid);
+        let refusal = resample_legacy_owner_after_wait(
+            port,
+            disappeared_pid,
+            "could not inspect legacy Enterprise owner session: simulated owner session query failure",
+            wait_error,
+        )
+        .await
+        .unwrap_err();
+        assert!(refusal.contains("owner session query failure"));
+        assert!(refusal.contains("could not be awaited"));
+        assert!(refusal.contains(&format!("owned by pid={replacement_pid}")));
+        assert!(replacement.try_wait().unwrap().is_none());
+        replacement.kill().unwrap();
+        let _ = replacement.wait().unwrap();
     }
 
     fn remove_version_resource(path: &Path) {

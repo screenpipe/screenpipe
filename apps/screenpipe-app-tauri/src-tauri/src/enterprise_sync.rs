@@ -2477,6 +2477,7 @@ mod imp {
             // recovers rejected credentials before its first local data read.
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
+            let recovery_app = auth_gate_app.clone();
             let on_auth_rejected: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                 if let Err(error) =
                     crate::window::ShowRewindWindow::PermissionRecovery.show(&auth_gate_app)
@@ -2488,7 +2489,14 @@ mod imp {
                 }
             });
 
+            let recovery = tauri::async_runtime::spawn(crate::enterprise::recovery::run(
+                cfg.clone(),
+                ee_sync::enterprise_http_client_with_timeout(std::time::Duration::from_secs(60)),
+                recovery_app,
+                rx.clone(),
+            ));
             ee_sync::run(cfg, local, rx, Some(on_auth_rejected)).await;
+            recovery.abort();
         });
 
         Some(tx)

@@ -142,6 +142,12 @@ fn recording_access_policy(
     if authentication_status == crate::startup_auth::AuthenticationStatus::NotRequired {
         return true;
     }
+    // Debug builds may bypass consumer billing while developing locally, but
+    // managed recording policy remains authoritative in every build. Keep the
+    // local read server available; only capture admission is closed here.
+    if is_enterprise_build && !enterprise_authorized {
+        return false;
+    }
     server_access_policy(
         is_enterprise_build,
         dev_bypass,
@@ -2392,6 +2398,28 @@ mod recording_access_tests {
         assert!(recording_access_policy(
             true,
             false,
+            false,
+            true,
+            false,
+            false,
+            AuthenticationStatus::Authenticated,
+        ));
+    }
+
+    #[test]
+    fn managed_debug_build_cannot_bypass_recording_policy() {
+        assert!(!recording_access_policy(
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            AuthenticationStatus::Authenticated,
+        ));
+        assert!(recording_access_policy(
+            true,
+            true,
             false,
             true,
             false,

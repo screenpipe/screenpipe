@@ -10,6 +10,9 @@ pub mod policy;
 pub mod sync;
 
 #[cfg(feature = "enterprise-support")]
+pub(crate) mod recovery;
+
+#[cfg(feature = "enterprise-support")]
 pub mod device_config;
 
 #[cfg(feature = "enterprise-support")]

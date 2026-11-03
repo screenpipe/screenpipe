@@ -48,10 +48,19 @@ mod backfill;
 mod diagnostics;
 #[path = "frame_context.rs"]
 pub(crate) mod frame_context;
+pub(crate) use enterprise_upload::EnterpriseUploadMode;
 use enterprise_upload::{
     upload_direct_readable_batch, upload_direct_write_only_batch, DirectUploadRecordCounts,
-    EnterpriseUploadMode,
 };
+
+#[cfg(test)]
+pub(super) fn direct_write_only_for_test() -> EnterpriseUploadMode {
+    EnterpriseUploadMode::DirectWriteOnly(enterprise_upload::DirectUploadConfig {
+        ticket_url: "https://storage.example/ticket".into(),
+        complete_url: "https://storage.example/complete".into(),
+        pinned_hosts: vec![],
+    })
+}
 
 /// How often we wake up and try to sync.
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -82,7 +91,7 @@ const RETRY_WHILE_WAITING_FOR_ACCOUNT: Duration = Duration::from_secs(60);
 
 /// Admin-triggered log collection runs independently of telemetry work and
 /// its retry cycle, so a failing upload cannot hold up support diagnostics.
-const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
+pub(super) const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Default endpoint. Overridable via `SCREENPIPE_ENTERPRISE_INGEST_URL` for
 /// staging / on-prem.

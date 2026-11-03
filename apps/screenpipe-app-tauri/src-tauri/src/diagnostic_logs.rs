@@ -86,13 +86,22 @@ fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
         .filter(|file| is_screenpipe_owned_log_name(&file.name))
         .collect();
     // Keep the retained failure visible when newer rolling files fill the bundle.
-    files.sort_by_key(|file| file.name != "enterprise-sync-error.log");
+    files.sort_by_key(|file| {
+        if is_enterprise_recovery_log(&file.name) {
+            0
+        } else if file.name == "enterprise-sync-error.log" {
+            1
+        } else {
+            2
+        }
+    });
     files
 }
 
 fn is_screenpipe_owned_log_name(name: &str) -> bool {
     crate::log_files::is_panic_log(name)
         || name == crate::recording::recovery_log::LOG_NAME
+        || is_enterprise_recovery_log(name)
         || is_enterprise_takeover_log(name)
         || crate::update_diagnostics::is_update_log(name)
         || matches!(
@@ -106,6 +115,16 @@ fn is_screenpipe_owned_log_name(name: &str) -> bool {
         )
         || is_dated_rolling_log(name, "screenpipe.")
         || is_dated_rolling_log(name, "screenpipe-app.")
+}
+
+#[cfg(feature = "enterprise-support")]
+fn is_enterprise_recovery_log(name: &str) -> bool {
+    name == crate::enterprise::recovery::FAILURE_LOG_NAME
+}
+
+#[cfg(not(feature = "enterprise-support"))]
+fn is_enterprise_recovery_log(_name: &str) -> bool {
+    false
 }
 
 #[cfg(target_os = "windows")]
