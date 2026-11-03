@@ -379,9 +379,10 @@
     },
     {
       "id": "engine-local-api-search-integration",
-      "label": "Engine local API search route over indexed DB data",
+      "label": "Engine local search over indexed DB data",
       "crate": "screenpipe-engine",
       "files": [
+        "tests/cli_search_storage.rs",
         "tests/endpoint_test.rs"
       ],
       "platforms": [
@@ -399,7 +400,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "integration",
-      "notes": "Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination."
+      "notes": "Active /search route tests seed captured-screen-shaped OCR data into an in-memory DB and assert the HTTP response and pagination. CLI tests search sealed hybrid and legacy histories in text and JSON, and verify missing-history and descriptor diagnostics."
     },
     {
       "id": "engine-db-recovery-cli",
