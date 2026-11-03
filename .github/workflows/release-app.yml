@@ -344,6 +344,13 @@ jobs:
           cmd /c mklink /J $targetDir $shortDir
           Write-Host "Created junction: $targetDir -> $shortDir"
 
+      - name: Set up Python for Windows packaging
+        if: matrix.os_type == 'windows'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+
       - name: Setup Bun
         if: runner.environment != 'self-hosted' || (matrix.os_type != 'windows' && matrix.os_type != 'linux')
         uses: oven-sh/setup-bun@v2
