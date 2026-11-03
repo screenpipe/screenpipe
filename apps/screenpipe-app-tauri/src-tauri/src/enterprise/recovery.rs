@@ -7,7 +7,7 @@
 use super::sync::{control_plane_base, EnterpriseSyncConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{io::Write, path::Path, sync::OnceLock};
+use std::{collections::HashMap, io::Write, path::Path, sync::Mutex, sync::OnceLock};
 use tauri::AppHandle;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -50,6 +50,7 @@ struct WireRequest<'a> {
 struct WireResponse {
     ok: bool,
     license_id: Uuid,
+    #[serde(default)]
     request: Option<RecoveryRequest>,
 }
 
@@ -70,7 +71,7 @@ enum Stage {
     Reported,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Journal {
     scope: String,
     request_id: Uuid,
@@ -154,6 +155,22 @@ static FORCED_JOURNAL_FAILURES: OnceLock<
     std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
 > = OnceLock::new();
 
+static UNPERSISTED_FAILURES: OnceLock<Mutex<HashMap<String, Journal>>> = OnceLock::new();
+
+fn unpersisted_failures() -> &'static Mutex<HashMap<String, Journal>> {
+    UNPERSISTED_FAILURES.get_or_init(Default::default)
+}
+
+fn validate_poll_request(request: &RecoveryRequest) -> Result<(), String> {
+    if request.action != "restart_app"
+        || !matches!(request.status.as_str(), "pending" | "accepted")
+        || chrono::DateTime::parse_from_rfc3339(&request.requested_at).is_err()
+    {
+        return Err("unsupported or invalid Enterprise recovery request".into());
+    }
+    Ok(())
+}
+
 fn endpoint(cfg: &EnterpriseSyncConfig) -> Result<String, String> {
     Ok(format!(
         "{}/api/enterprise/recovery-requests",
@@ -200,7 +217,7 @@ async fn post(
     }
     let value: serde_json::Value = serde_json::from_str(&body)
         .map_err(|error| format!("recovery {action} response unsupported: {error}"))?;
-    if value.get("request").is_none() {
+    if action == "poll" && value.get("request").is_none() {
         return Err(format!(
             "recovery {action} response unsupported: missing request identity"
         ));
@@ -214,9 +231,10 @@ async fn post(
 }
 
 async fn retain_failure(cfg: &EnterpriseSyncConfig, error: &str) -> String {
-    let redacted = crate::feedback_redact::redact_diagnostics_locally(error.to_string())
-        .await
-        .unwrap_or_else(|_| "recovery failure (local redaction unavailable)".into());
+    let redacted =
+        crate::feedback_redact::redact_diagnostics_locally(redact_signed_query_tokens(error))
+            .await
+            .unwrap_or_else(|_| "recovery failure (local redaction unavailable)".into());
     let root = cfg.cursor_path.parent().unwrap_or_else(|| Path::new("."));
     let path = root.join(FAILURE_LOG_NAME);
     if let Err(error) = std::fs::create_dir_all(root)
@@ -258,6 +276,10 @@ async fn acknowledge_failure(
     http: &reqwest::Client,
     mut journal: Journal,
 ) -> Result<bool, String> {
+    let origin = journal
+        .error
+        .clone()
+        .unwrap_or_else(|| "unknown recovery failure".into());
     let response = post(
         cfg,
         http,
@@ -266,13 +288,18 @@ async fn acknowledge_failure(
         Some(journal.request_id),
         journal.error.as_deref(),
     )
-    .await?;
+    .await
+    .map_err(|delivery| format!("recovery failure origin={origin}; delivery={delivery}"))?;
     if scope(cfg, response.license_id)? != journal.scope {
-        return Err("recovery failure acknowledgment changed authenticated ownership".into());
+        return Err(format!(
+            "recovery failure origin={origin}; delivery=changed authenticated ownership"
+        ));
     }
     journal.stage = Stage::Reported;
     journal.error = None;
-    save_journal(cfg, &journal)?;
+    save_journal(cfg, &journal).map_err(|persist| {
+        format!("recovery failure origin={origin}; delivery=acknowledged; persistence={persist}")
+    })?;
     Ok(false)
 }
 
@@ -287,15 +314,11 @@ async fn mark_failed(
     journal.stage = Stage::Failed;
     journal.error = Some(redacted.clone());
     if let Err(persist) = save_journal(cfg, &journal) {
-        retain_failure(
-            cfg,
-            &format!(
-                "recovery journal persistence failed: {persist}; origin={redacted}"
-            ),
-        )
-        .await;
-        // Even without durable local storage, make the known request actionable.
-        let _ = post(
+        unpersisted_failures()
+            .lock()
+            .unwrap()
+            .insert(journal.scope.clone(), journal.clone());
+        let delivery = post(
             cfg,
             http,
             instance_id,
@@ -304,9 +327,73 @@ async fn mark_failed(
             Some(&redacted),
         )
         .await;
-        return Err(persist);
+        return match delivery {
+            Ok(response) if scope(cfg, response.license_id)? == journal.scope => {
+                unpersisted_failures().lock().unwrap().remove(&journal.scope);
+                let _ = retain_failure(
+                    cfg,
+                    &format!(
+                        "recovery failure origin={redacted}; persistence={persist}; delivery=acknowledged"
+                    ),
+                )
+                .await;
+                Ok(false)
+            }
+            Ok(_) => Err(format!(
+                "recovery failure origin={redacted}; persistence={persist}; delivery=changed authenticated ownership"
+            )),
+            Err(delivery) => Err(format!(
+                "recovery failure origin={redacted}; persistence={persist}; delivery={delivery}"
+            )),
+        };
     }
     acknowledge_failure(cfg, http, journal).await
+}
+
+async fn resume_unpersisted_failure(
+    cfg: &EnterpriseSyncConfig,
+    http: &reqwest::Client,
+    journal: Journal,
+) -> Result<bool, String> {
+    let origin = journal
+        .error
+        .clone()
+        .unwrap_or_else(|| "unknown recovery failure".into());
+    match save_journal(cfg, &journal) {
+        Ok(()) => {
+            unpersisted_failures()
+                .lock()
+                .unwrap()
+                .remove(&journal.scope);
+            acknowledge_failure(cfg, http, journal).await
+        }
+        Err(persist) => {
+            let response = post(
+                cfg,
+                http,
+                journal.accepting_instance_id,
+                "failed",
+                Some(journal.request_id),
+                journal.error.as_deref(),
+            )
+            .await
+            .map_err(|delivery| {
+                format!(
+                    "recovery failure origin={origin}; persistence={persist}; delivery={delivery}"
+                )
+            })?;
+            if scope(cfg, response.license_id)? != journal.scope {
+                return Err(format!(
+                    "recovery failure origin={origin}; persistence={persist}; delivery=changed authenticated ownership"
+                ));
+            }
+            unpersisted_failures()
+                .lock()
+                .unwrap()
+                .remove(&journal.scope);
+            Ok(false)
+        }
+    }
 }
 
 async fn complete_from_replacement(
@@ -392,15 +479,23 @@ async fn tick<H: RecoveryHost>(
     // Authenticate ownership before touching a journal from disk.
     let payload = post(cfg, http, instance_id, "poll", None, None).await?;
     let current_scope = scope(cfg, payload.license_id)?;
+    if let Some(request) = payload.request.as_ref() {
+        validate_poll_request(request)?;
+    }
+    let pending_failure = unpersisted_failures()
+        .lock()
+        .unwrap()
+        .get(&current_scope)
+        .cloned();
+    if let Some(journal) = pending_failure {
+        return resume_unpersisted_failure(cfg, http, journal).await;
+    }
     let mut reported_request = None;
     let loaded = match load_journal(cfg, &current_scope) {
         Ok(journal) => journal,
         Err(error) => {
-            let redacted = retain_failure(
-                cfg,
-                &format!("recovery journal load failed: {error}"),
-            )
-            .await;
+            let redacted =
+                retain_failure(cfg, &format!("recovery journal load failed: {error}")).await;
             if let Some(request) = payload.request.as_ref() {
                 let _ = post(
                     cfg,
@@ -437,7 +532,7 @@ async fn tick<H: RecoveryHost>(
                 ) {
                     return Ok(false);
                 }
-                return accept_and_execute(cfg, http, host, instance_id, journal).await
+                return accept_and_execute(cfg, http, host, instance_id, journal).await;
             }
             Stage::Committed => {
                 return complete_from_replacement(cfg, http, instance_id, journal).await
@@ -451,26 +546,6 @@ async fn tick<H: RecoveryHost>(
     };
     if reported_request == Some(request.id) {
         return Ok(false);
-    }
-    if request.action != "restart_app"
-        || !matches!(request.status.as_str(), "pending" | "accepted")
-        || chrono::DateTime::parse_from_rfc3339(&request.requested_at).is_err()
-    {
-        let journal = Journal {
-            scope: current_scope,
-            request_id: request.id,
-            accepting_instance_id: instance_id,
-            stage: Stage::Failed,
-            error: None,
-        };
-        return mark_failed(
-            cfg,
-            http,
-            instance_id,
-            journal,
-            "unsupported or invalid Enterprise recovery request",
-        )
-        .await;
     }
     let journal = Journal {
         scope: current_scope,
@@ -587,13 +662,33 @@ mod tests {
     fn request(id: Uuid, action: &str) -> serde_json::Value {
         serde_json::json!({"id": id, "action": action, "status": "pending", "requested_at": "2026-11-02T12:00:00Z"})
     }
-    fn response(license: Uuid, request: Option<serde_json::Value>) -> ResponseTemplate {
+    fn poll_response(license: Uuid, request: Option<serde_json::Value>) -> ResponseTemplate {
         let body = serde_json::json!({"ok": true, "license_id": license, "request": request});
         ResponseTemplate::new(200).set_body_json(body)
     }
+    fn ack_response(license: Uuid) -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": true, "license_id": license}))
+    }
+
+    #[derive(Clone)]
+    struct StaticResponder {
+        license: Uuid,
+        request: Option<serde_json::Value>,
+    }
+    impl Respond for StaticResponder {
+        fn respond(&self, incoming: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
+            if body["action"] == "poll" {
+                poll_response(self.license, self.request.clone())
+            } else {
+                ack_response(self.license)
+            }
+        }
+    }
     async fn mount(server: &MockServer, license: Uuid, request: Option<serde_json::Value>) {
         Mock::given(method("POST"))
-            .respond_with(response(license, request))
+            .respond_with(StaticResponder { license, request })
             .mount(server)
             .await;
     }
@@ -632,7 +727,11 @@ mod tests {
             {
                 return ResponseTemplate::new(503).set_body_string("tenant A lost acknowledgment");
             }
-            response(license, Some(request(request_id, "restart_app")))
+            if body["action"] == "poll" {
+                poll_response(license, Some(request(request_id, "restart_app")))
+            } else {
+                ack_response(license)
+            }
         }
     }
 
@@ -658,6 +757,7 @@ mod tests {
         failed_request: Uuid,
         later_request: Uuid,
         failed: Arc<std::sync::atomic::AtomicBool>,
+        failed_posts: Arc<AtomicUsize>,
     }
 
     #[cfg(windows)]
@@ -666,6 +766,10 @@ mod tests {
             let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
             let action = body["action"].as_str().unwrap();
             if action == "failed" {
+                if self.failed_posts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return ResponseTemplate::new(503)
+                        .set_body_string("synthetic failed receipt outage");
+                }
                 self.failed.store(true, Ordering::SeqCst);
             }
             let active = if self.failed.load(Ordering::SeqCst) {
@@ -673,7 +777,11 @@ mod tests {
             } else {
                 self.failed_request
             };
-            response(self.license, Some(request(active, "restart_app")))
+            if action == "poll" {
+                poll_response(self.license, Some(request(active, "restart_app")))
+            } else {
+                ack_response(self.license)
+            }
         }
     }
 
@@ -687,10 +795,7 @@ mod tests {
         fn respond(&self, incoming: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
             if body["action"] == "poll" {
-                response(
-                    self.license,
-                    Some(request(self.request_id, "restart_app")),
-                )
+                poll_response(self.license, Some(request(self.request_id, "restart_app")))
             } else {
                 self.rejection.clone()
             }
@@ -703,7 +808,7 @@ mod tests {
             let instance = Uuid::parse_str(body["instance_id"].as_str().unwrap()).unwrap();
             let mut state = self.state.lock().unwrap();
             match action {
-                "poll" => response(
+                "poll" => poll_response(
                     self.license,
                     Some(request(state.current_request, "restart_app")),
                 ),
@@ -715,10 +820,7 @@ mod tests {
                     } else {
                         state.accepted_instance = Some(instance);
                     }
-                    response(
-                        self.license,
-                        Some(request(state.current_request, "restart_app")),
-                    )
+                    ack_response(self.license)
                 }
                 "failed" => {
                     if state.accepted_instance != Some(instance) {
@@ -735,10 +837,7 @@ mod tests {
                     state.failed_committed = true;
                     state.current_request = state.later_request;
                     state.accepted_instance = None;
-                    response(
-                        self.license,
-                        Some(request(state.current_request, "restart_app")),
-                    )
+                    ack_response(self.license)
                 }
                 _ => ResponseTemplate::new(409),
             }
@@ -753,10 +852,14 @@ mod tests {
                 return ResponseTemplate::new(503)
                     .set_body_string("safe synthetic acceptance outage");
             }
-            response(
-                self.license,
-                Some(request(*self.request_id.lock().unwrap(), "restart_app")),
-            )
+            if body["action"] == "poll" {
+                poll_response(
+                    self.license,
+                    Some(request(*self.request_id.lock().unwrap(), "restart_app")),
+                )
+            } else {
+                ack_response(self.license)
+            }
         }
     }
 
@@ -801,7 +904,7 @@ mod tests {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"ok": false, "license_id": license})),
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
-            response(Uuid::new_v4(), None),
+            ack_response(Uuid::new_v4()),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -859,7 +962,8 @@ mod tests {
         retain_failure(&cfg, &error).await;
         for index in 0..8 {
             std::fs::write(
-                root.path().join(format!("screenpipe.2026-11-02.{index}.log")),
+                root.path()
+                    .join(format!("screenpipe.2026-11-02.{index}.log")),
                 "newer rolling lifecycle noise",
             )
             .unwrap();
@@ -1048,9 +1152,11 @@ mod tests {
                 .await
                 .is_err());
             let replacement = Uuid::new_v4();
-            assert!(!tick(&cfg, &reqwest::Client::new(), &Host::default(), replacement)
-                .await
-                .unwrap());
+            assert!(
+                !tick(&cfg, &reqwest::Client::new(), &Host::default(), replacement)
+                    .await
+                    .unwrap()
+            );
             let later = Host::default();
             assert!(tick(&cfg, &reqwest::Client::new(), &later, replacement)
                 .await
@@ -1137,6 +1243,79 @@ mod tests {
         assert_eq!(*host.restarted.lock().unwrap(), 1);
     }
 
+    #[tokio::test]
+    async fn enterprise_recovery_minimal_acks_complete_from_distinct_process() {
+        let server = MockServer::start().await;
+        let license = Uuid::new_v4();
+        let id = Uuid::new_v4();
+        mount(&server, license, Some(request(id, "restart_app"))).await;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), &server);
+        let original = Uuid::new_v4();
+        let replacement = Uuid::new_v4();
+        let host = Host::default();
+
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, original)
+            .await
+            .unwrap());
+        assert!(
+            !tick(&cfg, &reqwest::Client::new(), &Host::default(), replacement)
+                .await
+                .unwrap()
+        );
+        assert_eq!(*host.restarted.lock().unwrap(), 1);
+        let bodies: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert!(bodies.iter().any(|body| {
+            body["action"] == "accepted" && body["instance_id"] == original.to_string()
+        }));
+        assert!(bodies.iter().any(|body| {
+            body["action"] == "completed" && body["instance_id"] == replacement.to_string()
+        }));
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_invalid_poll_cannot_retire_durable_work() {
+        let server = MockServer::start().await;
+        let license = Uuid::new_v4();
+        let valid_id = Uuid::new_v4();
+        let malformed = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "action": "unknown_action",
+            "status": "invented",
+            "requested_at": "not-a-date"
+        });
+        mount(&server, license, Some(malformed)).await;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), &server);
+        let journal = Journal {
+            scope: scope(&cfg, license).unwrap(),
+            request_id: valid_id,
+            accepting_instance_id: Uuid::new_v4(),
+            stage: Stage::Committed,
+            error: None,
+        };
+        save_journal(&cfg, &journal).unwrap();
+        let host = Host::default();
+
+        let error = tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
+            .await
+            .unwrap_err();
+        retain_failure(&cfg, &error).await;
+        let retained = load_journal(&cfg, &journal.scope).unwrap().unwrap();
+        assert_eq!(retained.request_id, valid_id);
+        assert_eq!(retained.stage, Stage::Committed);
+        assert_eq!(*host.restarted.lock().unwrap(), 0);
+        assert!(std::fs::read_to_string(root.path().join(FAILURE_LOG_NAME))
+            .unwrap()
+            .contains("unsupported or invalid Enterprise recovery request"));
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn enterprise_recovery_retires_server_failed_locked_intent_then_executes_later_request() {
@@ -1148,16 +1327,16 @@ mod tests {
         }
         impl RecoveryHost for LockingFailureHost {
             fn prepare(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn restart(&self) -> Result<(), String> {
                 let file = std::fs::OpenOptions::new()
                     .read(true)
                     .share_mode(1) // FILE_SHARE_READ: readable, but atomic replacement is denied.
                     .open(&self.journal_path)
                     .map_err(|error| error.to_string())?;
                 *self.lock.lock().unwrap() = Some(file);
-                Err("originating synthetic preparation failure".into())
-            }
-            fn restart(&self) -> Result<(), String> {
-                panic!("failed operation must not restart")
+                Err("originating physical spawn failure https://storage.example/blob?sig=private-signed-token".into())
             }
         }
 
@@ -1166,12 +1345,14 @@ mod tests {
         let failed_request = Uuid::new_v4();
         let later_request = Uuid::new_v4();
         let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failed_posts = Arc::new(AtomicUsize::new(0));
         Mock::given(method("POST"))
             .respond_with(RetiredFailureResponder {
                 license,
                 failed_request,
                 later_request,
                 failed: failed.clone(),
+                failed_posts: failed_posts.clone(),
             })
             .mount(&server)
             .await;
@@ -1184,23 +1365,61 @@ mod tests {
             lock: lock.clone(),
         };
 
-        assert!(tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
+        std::fs::write(
+            root.path().join("enterprise-sync-error.log"),
+            "retained-upload-error-sentinel",
+        )
+        .unwrap();
+        let error = tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
             .await
-            .is_err());
-        assert!(failed.load(Ordering::SeqCst));
+            .unwrap_err();
+        // This is the same retention boundary used by the production run loop.
+        retain_failure(&cfg, &error).await;
+        assert!(!failed.load(Ordering::SeqCst));
+        assert_eq!(failed_posts.load(Ordering::SeqCst), 1);
         assert_eq!(
             load_journal(&cfg, &scope(&cfg, license).unwrap())
                 .unwrap()
                 .unwrap()
                 .stage,
-            Stage::Accepted
+            Stage::Committed
         );
+
+        for index in 0..8 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe.2026-11-02.{index}.log")),
+                "rolling restart noise",
+            )
+            .unwrap();
+        }
+        let restarted_cfg = config(root.path(), &server);
+        let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        assert!(report.contains("originating physical spawn failure"));
+        assert!(report.contains("recovery failed returned HTTP 503"));
+        assert!(report.contains("retained-upload-error-sentinel"));
+        assert!(!report.contains("private-signed-token"));
 
         lock.lock().unwrap().take();
         let later = Host::default();
-        assert!(tick(&cfg, &reqwest::Client::new(), &later, Uuid::new_v4())
-            .await
-            .unwrap());
+        let instance = Uuid::new_v4();
+        assert!(
+            !tick(&restarted_cfg, &reqwest::Client::new(), &later, instance)
+                .await
+                .unwrap()
+        );
+        assert!(failed.load(Ordering::SeqCst));
+        assert_eq!(failed_posts.load(Ordering::SeqCst), 2);
+        assert!(
+            tick(&restarted_cfg, &reqwest::Client::new(), &later, instance)
+                .await
+                .unwrap()
+        );
         assert_eq!(*later.restarted.lock().unwrap(), 1);
         assert_eq!(
             load_journal(&cfg, &scope(&cfg, license).unwrap())
@@ -1309,9 +1528,12 @@ mod tests {
             let mut cfg = config(root.path(), &server);
             cfg.upload_mode = mode;
             let host = Host::default();
-            assert!(!tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
-                .await
-                .unwrap());
+            let result = tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4()).await;
+            if action == "run_shell" {
+                assert!(result.is_err());
+            } else {
+                assert!(!result.unwrap());
+            }
             assert_eq!(*host.restarted.lock().unwrap(), 0);
         }
     }
