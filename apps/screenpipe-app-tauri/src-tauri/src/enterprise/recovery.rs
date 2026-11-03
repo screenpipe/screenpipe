@@ -12,12 +12,25 @@ use tauri::AppHandle;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-const JOURNAL_NAME: &str = "enterprise-recovery.json";
+const JOURNAL_PREFIX: &str = "enterprise-recovery";
 const PROTOCOL: u8 = 1;
 static PROCESS_INSTANCE_ID: OnceLock<Uuid> = OnceLock::new();
+static SIGNED_QUERY_SECRET: OnceLock<regex::Regex> = OnceLock::new();
 
 fn process_instance_id() -> Uuid {
     *PROCESS_INSTANCE_ID.get_or_init(Uuid::new_v4)
+}
+
+fn redact_signed_query_tokens(text: &str) -> String {
+    SIGNED_QUERY_SECRET
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)([?&](?:sig|signature|token|access_token|x-amz-signature)=)[^&\s]+",
+            )
+            .expect("static signed query regex")
+        })
+        .replace_all(text, "$1[REDACTED]")
+        .into_owned()
 }
 
 #[derive(Debug, Serialize)]
@@ -89,12 +102,13 @@ fn scope(cfg: &EnterpriseSyncConfig, license_id: Uuid) -> Result<String, String>
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn journal_path(cfg: &EnterpriseSyncConfig) -> std::path::PathBuf {
-    cfg.cursor_path.with_file_name(JOURNAL_NAME)
+fn journal_path(cfg: &EnterpriseSyncConfig, scope: &str) -> std::path::PathBuf {
+    cfg.cursor_path
+        .with_file_name(format!("{JOURNAL_PREFIX}-{scope}.json"))
 }
 
-fn load_journal(cfg: &EnterpriseSyncConfig) -> Result<Option<Journal>, String> {
-    let bytes = match std::fs::read(journal_path(cfg)) {
+fn load_journal(cfg: &EnterpriseSyncConfig, scope: &str) -> Result<Option<Journal>, String> {
+    let bytes = match std::fs::read(journal_path(cfg, scope)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.to_string()),
@@ -122,8 +136,23 @@ fn save_journal_at(path: &Path, journal: &Journal) -> Result<(), String> {
 }
 
 fn save_journal(cfg: &EnterpriseSyncConfig, journal: &Journal) -> Result<(), String> {
-    save_journal_at(&journal_path(cfg), journal)
+    let path = journal_path(cfg, &journal.scope);
+    #[cfg(test)]
+    if FORCED_JOURNAL_FAILURES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .contains(&path)
+    {
+        return Err("synthetic recovery journal persistence failure".into());
+    }
+    save_journal_at(&path, journal)
 }
+
+#[cfg(test)]
+static FORCED_JOURNAL_FAILURES: OnceLock<
+    std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+> = OnceLock::new();
 
 fn endpoint(cfg: &EnterpriseSyncConfig) -> Result<String, String> {
     Ok(format!(
@@ -166,7 +195,7 @@ async fn post(
     if !status.is_success() {
         return Err(format!(
             "recovery {action} returned HTTP {status}: {}",
-            body.chars().take(4096).collect::<String>()
+            redact_signed_query_tokens(&body)
         ));
     }
     let payload: WireResponse = serde_json::from_str(&body)
@@ -181,11 +210,20 @@ async fn retain_failure(cfg: &EnterpriseSyncConfig, error: &str) -> String {
     let redacted = crate::feedback_redact::redact_diagnostics_locally(error.to_string())
         .await
         .unwrap_or_else(|_| "recovery failure (local redaction unavailable)".into());
-    crate::recording::recovery_log::append(
-        cfg.cursor_path.parent().unwrap_or_else(|| Path::new(".")),
-        "enterprise_recovery_failed",
-        &redacted,
-    );
+    let root = cfg.cursor_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut remaining = redacted.as_str();
+    while !remaining.is_empty() {
+        let boundary = remaining
+            .char_indices()
+            .nth(1800)
+            .map_or(remaining.len(), |(index, _)| index);
+        crate::recording::recovery_log::append(
+            root,
+            "enterprise_recovery_failed",
+            &remaining[..boundary],
+        );
+        remaining = &remaining[boundary..];
+    }
     redacted
 }
 
@@ -208,13 +246,12 @@ impl RecoveryHost for AppRecoveryHost<'_> {
 async fn acknowledge_failure(
     cfg: &EnterpriseSyncConfig,
     http: &reqwest::Client,
-    instance_id: Uuid,
     mut journal: Journal,
 ) -> Result<bool, String> {
     let response = post(
         cfg,
         http,
-        instance_id,
+        journal.accepting_instance_id,
         "failed",
         Some(journal.request_id),
         journal.error.as_deref(),
@@ -240,11 +277,13 @@ async fn mark_failed(
     journal.stage = Stage::Failed;
     journal.error = Some(redacted.clone());
     if let Err(persist) = save_journal(cfg, &journal) {
-        crate::recording::recovery_log::append(
-            cfg.cursor_path.parent().unwrap_or_else(|| Path::new(".")),
-            "enterprise_recovery_journal_failed",
-            &format!("origin={redacted}; journal={persist}"),
-        );
+        retain_failure(
+            cfg,
+            &format!(
+                "recovery journal persistence failed: {persist}; origin={redacted}"
+            ),
+        )
+        .await;
         // Even without durable local storage, make the known request actionable.
         let _ = post(
             cfg,
@@ -257,7 +296,7 @@ async fn mark_failed(
         .await;
         return Err(persist);
     }
-    acknowledge_failure(cfg, http, instance_id, journal).await
+    acknowledge_failure(cfg, http, journal).await
 }
 
 async fn complete_from_replacement(
@@ -344,15 +383,44 @@ async fn tick<H: RecoveryHost>(
     let payload = post(cfg, http, instance_id, "poll", None, None).await?;
     let current_scope = scope(cfg, payload.license_id)?;
     let mut reported_request = None;
-    if let Some(journal) = load_journal(cfg)?.filter(|journal| journal.scope == current_scope) {
+    let loaded = match load_journal(cfg, &current_scope) {
+        Ok(journal) => journal,
+        Err(error) => {
+            let redacted = retain_failure(
+                cfg,
+                &format!("recovery journal load failed: {error}"),
+            )
+            .await;
+            if let Some(request) = payload.request.as_ref() {
+                let _ = post(
+                    cfg,
+                    http,
+                    instance_id,
+                    "failed",
+                    Some(request.id),
+                    Some(&redacted),
+                )
+                .await;
+            }
+            return Err(error);
+        }
+    };
+    if let Some(journal) = loaded.filter(|journal| journal.scope == current_scope) {
         match journal.stage {
             Stage::Accepted => {
+                if matches!(
+                    cfg.upload_mode,
+                    super::sync::EnterpriseUploadMode::DirectWriteOnly(_)
+                        | super::sync::EnterpriseUploadMode::Blocked(_)
+                ) {
+                    return Ok(false);
+                }
                 return accept_and_execute(cfg, http, host, instance_id, journal).await
             }
             Stage::Committed => {
                 return complete_from_replacement(cfg, http, instance_id, journal).await
             }
-            Stage::Failed => return acknowledge_failure(cfg, http, instance_id, journal).await,
+            Stage::Failed => return acknowledge_failure(cfg, http, journal).await,
             Stage::Reported => reported_request = Some(journal.request_id),
         }
     }
@@ -370,7 +438,11 @@ async fn tick<H: RecoveryHost>(
         error: None,
     };
     if let Err(error) = save_journal(cfg, &journal) {
-        let redacted = retain_failure(cfg, &error).await;
+        let redacted = retain_failure(
+            cfg,
+            &format!("recovery journal persistence failed: {error}"),
+        )
+        .await;
         let _ = post(
             cfg,
             http,
@@ -506,6 +578,120 @@ mod tests {
         request_id: Arc<Mutex<Uuid>>,
         reject_first_acceptance: Arc<AtomicUsize>,
     }
+
+    #[derive(Clone)]
+    struct TenantResponder {
+        tenant_a: Uuid,
+        tenant_b: Uuid,
+        request_a: Uuid,
+        request_b: Uuid,
+        reject_a_acceptances: Arc<AtomicUsize>,
+    }
+    impl Respond for TenantResponder {
+        fn respond(&self, incoming: &Request) -> ResponseTemplate {
+            let key = incoming
+                .headers
+                .get("x-license-key")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            let (license, request_id, is_a) = match key {
+                "tenant-b-key" => (self.tenant_b, self.request_b, false),
+                "rotatable-key" | "tenant-a-rotated" => (self.tenant_a, self.request_a, true),
+                _ => return ResponseTemplate::new(401),
+            };
+            let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
+            if is_a
+                && body["action"] == "accepted"
+                && self.reject_a_acceptances.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                return ResponseTemplate::new(503).set_body_string("tenant A lost acknowledgment");
+            }
+            response(license, Some(request(request_id, "restart_app")))
+        }
+    }
+
+    struct FailureContractState {
+        current_request: Uuid,
+        later_request: Uuid,
+        accepted_instance: Option<Uuid>,
+        failed_committed: bool,
+        rejected_once: bool,
+    }
+
+    #[derive(Clone)]
+    struct FailureContractResponder {
+        license: Uuid,
+        commit_before_lost_response: bool,
+        state: Arc<Mutex<FailureContractState>>,
+    }
+
+    #[derive(Clone)]
+    struct AcceptanceRejectionResponder {
+        license: Uuid,
+        request_id: Uuid,
+        rejection: ResponseTemplate,
+    }
+    impl Respond for AcceptanceRejectionResponder {
+        fn respond(&self, incoming: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
+            if body["action"] == "poll" {
+                response(
+                    self.license,
+                    Some(request(self.request_id, "restart_app")),
+                )
+            } else {
+                self.rejection.clone()
+            }
+        }
+    }
+    impl Respond for FailureContractResponder {
+        fn respond(&self, incoming: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
+            let action = body["action"].as_str().unwrap();
+            let instance = Uuid::parse_str(body["instance_id"].as_str().unwrap()).unwrap();
+            let mut state = self.state.lock().unwrap();
+            match action {
+                "poll" => response(
+                    self.license,
+                    Some(request(state.current_request, "restart_app")),
+                ),
+                "accepted" => {
+                    if let Some(accepted) = state.accepted_instance {
+                        if accepted != instance {
+                            return ResponseTemplate::new(409);
+                        }
+                    } else {
+                        state.accepted_instance = Some(instance);
+                    }
+                    response(
+                        self.license,
+                        Some(request(state.current_request, "restart_app")),
+                    )
+                }
+                "failed" => {
+                    if state.accepted_instance != Some(instance) {
+                        return ResponseTemplate::new(409);
+                    }
+                    if !state.rejected_once {
+                        state.rejected_once = true;
+                        if self.commit_before_lost_response {
+                            state.failed_committed = true;
+                        }
+                        return ResponseTemplate::new(503)
+                            .set_body_string("synthetic lost failed acknowledgment");
+                    }
+                    state.failed_committed = true;
+                    state.current_request = state.later_request;
+                    state.accepted_instance = None;
+                    response(
+                        self.license,
+                        Some(request(state.current_request, "restart_app")),
+                    )
+                }
+                _ => ResponseTemplate::new(409),
+            }
+        }
+    }
     impl Respond for RecoveryResponder {
         fn respond(&self, incoming: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
@@ -550,6 +736,74 @@ mod tests {
             .await
             .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_rejects_invalid_acceptance_after_valid_poll() {
+        let license = Uuid::new_v4();
+        for rejection in [
+            ResponseTemplate::new(404),
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "license_id": license})),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+            response(Uuid::new_v4(), None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(AcceptanceRejectionResponder {
+                    license,
+                    request_id: Uuid::new_v4(),
+                    rejection,
+                })
+                .mount(&server)
+                .await;
+            let root = tempfile::tempdir().unwrap();
+            let host = Host::default();
+            assert!(tick(
+                &config(root.path(), &server),
+                &reqwest::Client::new(),
+                &host,
+                Uuid::new_v4(),
+            )
+            .await
+            .is_err());
+            assert_eq!(*host.prepared.lock().unwrap(), 0);
+            assert_eq!(*host.restarted.lock().unwrap(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_retains_late_safe_http_cause_and_redacts_secrets() {
+        let server = MockServer::start().await;
+        let secret = "super-secret-license-value";
+        let signed = "signed-query-token-value";
+        let body = format!(
+            "{} https://storage.example/blob?sig={signed} safe-late-recovery-cause",
+            "x".repeat(5000)
+        );
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string(body))
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let mut cfg = config(root.path(), &server);
+        cfg.license_key = secret.into();
+        let error = tick(
+            &cfg,
+            &reqwest::Client::new(),
+            &Host::default(),
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap_err();
+        retain_failure(&cfg, &error).await;
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("safe-late-recovery-cause"));
+        assert!(!report.contains(secret));
+        assert!(!report.contains(signed));
     }
 
     #[tokio::test]
@@ -626,13 +880,30 @@ mod tests {
             .mount(&server)
             .await;
         let root = tempfile::tempdir().unwrap();
-        let cfg = config(root.path(), &server);
+        let mut cfg = config(root.path(), &server);
         let host = Host::default();
         let instance = Uuid::new_v4();
         assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
             .await
             .is_err());
-        assert_eq!(load_journal(&cfg).unwrap().unwrap().stage, Stage::Accepted);
+        assert_eq!(
+            load_journal(&cfg, &scope(&cfg, license).unwrap())
+                .unwrap()
+                .unwrap()
+                .stage,
+            Stage::Accepted
+        );
+        cfg.upload_mode = super::super::sync::EnterpriseUploadMode::Blocked("privacy".into());
+        assert!(!tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .unwrap());
+        cfg.upload_mode = super::super::sync::direct_write_only_for_test();
+        assert!(!tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .unwrap());
+        assert_eq!(*host.prepared.lock().unwrap(), 0);
+        assert_eq!(*host.restarted.lock().unwrap(), 0);
+        cfg.upload_mode = super::super::sync::EnterpriseUploadMode::HostedIngest;
         assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
             .await
             .unwrap());
@@ -658,12 +929,61 @@ mod tests {
         assert!(!tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
             .await
             .unwrap());
-        assert_eq!(load_journal(&cfg).unwrap().unwrap().stage, Stage::Reported);
+        assert_eq!(
+            load_journal(&cfg, &scope(&cfg, license).unwrap())
+                .unwrap()
+                .unwrap()
+                .stage,
+            Stage::Reported
+        );
         let report =
             crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
                 .await
                 .unwrap();
         assert!(report.contains("synthetic spawn failure"));
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_replays_failed_receipt_with_original_identity_after_restart() {
+        for commit_before_lost_response in [false, true] {
+            let server = MockServer::start().await;
+            let license = Uuid::new_v4();
+            let state = Arc::new(Mutex::new(FailureContractState {
+                current_request: Uuid::new_v4(),
+                later_request: Uuid::new_v4(),
+                accepted_instance: None,
+                failed_committed: false,
+                rejected_once: false,
+            }));
+            Mock::given(method("POST"))
+                .respond_with(FailureContractResponder {
+                    license,
+                    commit_before_lost_response,
+                    state: state.clone(),
+                })
+                .mount(&server)
+                .await;
+            let root = tempfile::tempdir().unwrap();
+            let cfg = config(root.path(), &server);
+            let original = Uuid::new_v4();
+            let failed = Host {
+                prepare_error: Some("synthetic prepare failure".into()),
+                ..Default::default()
+            };
+            assert!(tick(&cfg, &reqwest::Client::new(), &failed, original)
+                .await
+                .is_err());
+            let replacement = Uuid::new_v4();
+            assert!(!tick(&cfg, &reqwest::Client::new(), &Host::default(), replacement)
+                .await
+                .unwrap());
+            let later = Host::default();
+            assert!(tick(&cfg, &reqwest::Client::new(), &later, replacement)
+                .await
+                .unwrap());
+            assert_eq!(*later.restarted.lock().unwrap(), 1);
+            assert!(state.lock().unwrap().failed_committed);
+        }
     }
 
     #[tokio::test]
@@ -698,6 +1018,49 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(*recovered.restarted.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_journal_failure_never_executes_and_retries_after_repair() {
+        let server = MockServer::start().await;
+        let license = Uuid::new_v4();
+        mount(
+            &server,
+            license,
+            Some(request(Uuid::new_v4(), "restart_app")),
+        )
+        .await;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), &server);
+        let blocked_journal = journal_path(&cfg, &scope(&cfg, license).unwrap());
+        FORCED_JOURNAL_FAILURES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(blocked_journal.clone());
+        let host = Host::default();
+        let instance = Uuid::new_v4();
+
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .is_err());
+        assert_eq!(*host.prepared.lock().unwrap(), 0);
+        assert_eq!(*host.restarted.lock().unwrap(), 0);
+
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("recovery journal persistence failed"));
+        FORCED_JOURNAL_FAILURES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .remove(&blocked_journal);
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .unwrap());
+        assert_eq!(*host.restarted.lock().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -739,6 +1102,44 @@ mod tests {
         assert_ne!(scope(&cfg, Uuid::new_v4()).unwrap(), original);
         cfg.ingest_url = "https://other.example/api/enterprise/ingest".into();
         assert_ne!(scope(&cfg, license).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn enterprise_recovery_keeps_independent_authenticated_tenant_journals() {
+        let server = MockServer::start().await;
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let responder = TenantResponder {
+            tenant_a,
+            tenant_b,
+            request_a: Uuid::new_v4(),
+            request_b: Uuid::new_v4(),
+            reject_a_acceptances: Arc::new(AtomicUsize::new(0)),
+        };
+        Mock::given(method("POST"))
+            .respond_with(responder)
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let mut cfg = config(root.path(), &server);
+        let host = Host::default();
+        let instance = Uuid::new_v4();
+
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .is_err());
+        cfg.license_key = "tenant-b-key".into();
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .unwrap());
+        assert!(journal_path(&cfg, &scope(&cfg, tenant_a).unwrap()).exists());
+        assert!(journal_path(&cfg, &scope(&cfg, tenant_b).unwrap()).exists());
+
+        cfg.license_key = "tenant-a-rotated".into();
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, instance)
+            .await
+            .unwrap());
+        assert_eq!(*host.restarted.lock().unwrap(), 2);
     }
 
     #[tokio::test]

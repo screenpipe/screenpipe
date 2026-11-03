@@ -53,6 +53,15 @@ use enterprise_upload::{
     upload_direct_readable_batch, upload_direct_write_only_batch, DirectUploadRecordCounts,
 };
 
+#[cfg(test)]
+pub(super) fn direct_write_only_for_test() -> EnterpriseUploadMode {
+    EnterpriseUploadMode::DirectWriteOnly(enterprise_upload::DirectUploadConfig {
+        ticket_url: "https://storage.example/ticket".into(),
+        complete_url: "https://storage.example/complete".into(),
+        pinned_hosts: vec![],
+    })
+}
+
 /// How often we wake up and try to sync.
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
