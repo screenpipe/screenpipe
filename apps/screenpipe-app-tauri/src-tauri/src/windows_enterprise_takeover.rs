@@ -583,6 +583,123 @@ pub(crate) enum TakeoverOutcome {
     ReplacedCompetingOwner,
 }
 
+/// Control-port lease acquired by the registered private-name installation
+/// before Tauri's Windows single-instance window can discard this process.
+/// It is handed directly to axum without an unbound interval.
+pub(crate) struct EarlyControlListener(std::net::TcpListener);
+
+impl EarlyControlListener {
+    pub(crate) fn into_inner(self) -> std::net::TcpListener { self.0 }
+}
+
+#[cfg(feature = "enterprise-build")]
+pub(crate) async fn reserve_registered_user_control_listener(port: u16) -> Result<Option<EarlyControlListener>, String> {
+    let registered_exe = match registered_user_enterprise_executable()? {
+        Some(executable) => executable,
+        None => return Ok(None),
+    };
+    let current_exe = std::env::current_exe()
+        .map_err(|error| format!("could not resolve Enterprise executable: {error}"))?;
+    if !same_path(&current_exe, &registered_exe) || !is_preferred_user_binary(&current_exe) {
+        return Ok(None);
+    }
+
+    let listener = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+        Ok(listener) => listener,
+        // Ready and already-starting owners stay on the established verified
+        // port-owner path, so a second preferred launch yields to the first.
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => return Ok(None),
+        Err(error) => return Err(format!("registered current-user Enterprise could not reserve control port {port}: {error}")),
+    };
+    listener.set_nonblocking(true)
+        .map_err(|error| format!("could not make reserved control listener nonblocking: {error}"))?;
+    if let Err(error) = quiesce_pre_ready_legacy_processes(&registered_exe).await {
+        drop(listener);
+        record("pre_ready_takeover_refused", &error, "enterprise_start_aborted");
+        return Err(error);
+    }
+    record("control_listener_reserved", &format!("pid={} port={port}", std::process::id()), "registered_user_starting");
+    Ok(Some(EarlyControlListener(listener)))
+}
+
+#[cfg(feature = "enterprise-build")]
+async fn quiesce_pre_ready_legacy_processes(registered_exe: &Path) -> Result<(), String> {
+    let allowed_dirs = legacy_install_directories(registered_exe)?;
+    let mut system = System::new_all();
+    system.refresh_processes();
+    let current_pid = std::process::id();
+    let observed: Vec<_> = system.processes().values()
+        .map(|process| (process.pid().as_u32(), process.exe().to_path_buf(), process.start_time()))
+        .collect();
+    let mut candidates = Vec::new();
+    for (pid, exe, start_time) in observed {
+        if pid == current_pid || !is_classic_binary(&exe) { continue; }
+        let Some(candidate_dir) = exe.parent() else { continue; };
+        if !allowed_dirs.iter().any(|dir| same_path(dir, candidate_dir)) { continue; }
+        verify_current_session(pid)?;
+        if !executable_product_name(&exe)?.is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME)) {
+            return Err(format!("refused pre-ready takeover of pid={pid}: wrong ProductName ({})", exe.display()));
+        }
+        let handle = open_process_for_wait(pid)?;
+        system.refresh_process(Pid::from_u32(pid));
+        let stable = system.process(Pid::from_u32(pid))
+            .ok_or_else(|| format!("pre-ready legacy candidate pid={pid} exited during verification"))?;
+        if stable.start_time() != start_time || !same_path(stable.exe(), &exe) {
+            return Err(format!("pre-ready legacy candidate pid={pid} changed identity during verification"));
+        }
+        candidates.push(Owner { pid, exe, process: handle });
+    }
+
+    for owner in candidates {
+        record("verified_pre_ready_legacy", &format!("pid={} executable={}", owner.pid, owner.exe.display()), "termination_started");
+        if let Err(cause) = run_taskkill(owner.pid, false).await {
+            record("graceful_termination_failed", &format!("pid={} Windows cause: {cause}", owner.pid), "force_fallback_required");
+        }
+        if wait_for_process_owner_exit(&owner, Duration::from_secs(8)).await? { continue; }
+        run_taskkill(owner.pid, true).await
+            .map_err(|cause| format!("pre-ready pid={} forced termination failed: {cause}", owner.pid))?;
+        if !wait_for_process_owner_exit(&owner, Duration::from_secs(8)).await? {
+            return Err(format!("pre-ready pid={} remained alive after termination timeout", owner.pid));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "enterprise-build")]
+fn legacy_install_directories(registered_exe: &Path) -> Result<Vec<PathBuf>, String> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+    let mut directories = vec![registered_exe.parent()
+        .ok_or_else(|| "registered Enterprise executable has no parent directory".to_string())?
+        .to_path_buf()];
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    match hklm.open_subkey(ENTERPRISE_INSTALL_KEY) {
+        Ok(key) => {
+            let location: String = key.get_value("")
+                .map_err(|error| format!("machine Enterprise install location is unreadable: {error}"))?;
+            let directory = PathBuf::from(location.trim_matches('"'));
+            if !directory.is_absolute() {
+                return Err(format!("machine Enterprise install location is not absolute: {}", directory.display()));
+            }
+            directories.push(reject_reparse_and_canonicalize(&directory, "machine installation directory")?);
+        }
+        Err(error) if registry_value_absent(&error) => {}
+        Err(error) => return Err(format!("machine Enterprise installation key is unreadable: {error}")),
+    }
+    Ok(directories)
+}
+
+async fn wait_for_process_owner_exit(owner: &Owner, timeout: Duration) -> Result<bool, String> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        match process_state(owner)? {
+            ProcessState::Exited => return Ok(true),
+            ProcessState::Alive => tokio::time::sleep(Duration::from_millis(200)).await,
+        }
+    }
+    Ok(false)
+}
+
 pub(crate) async fn take_over_screenpipe_owners(
     control_port: u16,
     api_port: u16,

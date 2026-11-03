@@ -561,6 +561,17 @@ async fn main() {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
+    let early_control_listener = match windows_enterprise_takeover::reserve_registered_user_control_listener(focus_port).await {
+        Ok(listener) => listener.map(|listener| listener.into_inner()),
+        Err(error) => {
+            eprintln!("screenpipe: early Enterprise ownership failed: {error}");
+            std::process::exit(1);
+        }
+    };
+    #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]
+    let early_control_listener: Option<std::net::TcpListener> = None;
+
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -676,9 +687,9 @@ async fn main() {
 
         #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
         let enterprise_duplicate = {
-            match windows_enterprise_takeover::take_over_screenpipe_owners(focus_port, api_port)
-                .await
-            {
+            if early_control_listener.is_some() {
+                false
+            } else { match windows_enterprise_takeover::take_over_screenpipe_owners(focus_port, api_port).await {
                 Ok(windows_enterprise_takeover::TakeoverOutcome::SameExecutable) => true,
                 Ok(windows_enterprise_takeover::TakeoverOutcome::NoOwner)
                 | Ok(windows_enterprise_takeover::TakeoverOutcome::ReplacedCompetingOwner) => false,
@@ -686,10 +697,14 @@ async fn main() {
                     eprintln!("screenpipe: enterprise takeover failed: {error}");
                     std::process::exit(1);
                 }
-            }
+            }}
         };
 
-        let focus_response = reqwest::Client::new()
+        #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
+        let owns_early_control_listener = early_control_listener.is_some();
+        #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]
+        let owns_early_control_listener = false;
+        let focus_response = if owns_early_control_listener { None } else { Some(reqwest::Client::new()
             .post(format!("http://127.0.0.1:{}/focus", focus_port))
             .timeout(std::time::Duration::from_secs(2))
             .json(&serde_json::json!({
@@ -699,7 +714,7 @@ async fn main() {
                 "launchd_job_label": launchd_job_label,
             }))
             .send()
-            .await;
+            .await) };
 
         #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
         if enterprise_duplicate {
@@ -707,7 +722,7 @@ async fn main() {
             std::process::exit(0);
         }
 
-        if let Ok(resp) = focus_response {
+        if let Some(Ok(resp)) = focus_response {
             if resp.status().is_success() {
                 #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]
                 {
@@ -1888,7 +1903,7 @@ async fn main() {
             let app_handle = app.handle().clone();
 
             // Initialize server first (core service)
-            let server_shutdown_tx = spawn_server(app_handle.clone(), focus_port);
+            let server_shutdown_tx = spawn_server(app_handle.clone(), focus_port, early_control_listener);
             app.manage(server_shutdown_tx);
 
 
