@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const JOURNAL_PREFIX: &str = "enterprise-recovery";
+pub(crate) const FAILURE_LOG_NAME: &str = "enterprise-recovery-error.log";
 const PROTOCOL: u8 = 1;
 static PROCESS_INSTANCE_ID: OnceLock<Uuid> = OnceLock::new();
 static SIGNED_QUERY_SECRET: OnceLock<regex::Regex> = OnceLock::new();
@@ -49,7 +50,6 @@ struct WireRequest<'a> {
 struct WireResponse {
     ok: bool,
     license_id: Uuid,
-    #[serde(default)]
     request: Option<RecoveryRequest>,
 }
 
@@ -198,7 +198,14 @@ async fn post(
             redact_signed_query_tokens(&body)
         ));
     }
-    let payload: WireResponse = serde_json::from_str(&body)
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("recovery {action} response unsupported: {error}"))?;
+    if value.get("request").is_none() {
+        return Err(format!(
+            "recovery {action} response unsupported: missing request identity"
+        ));
+    }
+    let payload: WireResponse = serde_json::from_value(value)
         .map_err(|error| format!("recovery {action} response unsupported: {error}"))?;
     if !payload.ok {
         return Err(format!("recovery {action} was not acknowledged"));
@@ -211,18 +218,21 @@ async fn retain_failure(cfg: &EnterpriseSyncConfig, error: &str) -> String {
         .await
         .unwrap_or_else(|_| "recovery failure (local redaction unavailable)".into());
     let root = cfg.cursor_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut remaining = redacted.as_str();
-    while !remaining.is_empty() {
-        let boundary = remaining
-            .char_indices()
-            .nth(1800)
-            .map_or(remaining.len(), |(index, _)| index);
+    let path = root.join(FAILURE_LOG_NAME);
+    if let Err(error) = std::fs::create_dir_all(root)
+        .and_then(|_| crate::store::durable_write(&path, redacted.as_bytes()))
+    {
+        crate::recording::recovery_log::append(
+            root,
+            "enterprise_recovery_failure_retention_failed",
+            &error.to_string(),
+        );
+    } else {
         crate::recording::recovery_log::append(
             root,
             "enterprise_recovery_failed",
-            &remaining[..boundary],
+            &format!("details={FAILURE_LOG_NAME}"),
         );
-        remaining = &remaining[boundary..];
     }
     redacted
 }
@@ -405,7 +415,19 @@ async fn tick<H: RecoveryHost>(
             return Err(error);
         }
     };
-    if let Some(journal) = loaded.filter(|journal| journal.scope == current_scope) {
+    if let Some(mut journal) = loaded.filter(|journal| journal.scope == current_scope) {
+        let still_active = payload
+            .request
+            .as_ref()
+            .is_some_and(|request| request.id == journal.request_id);
+        if journal.stage != Stage::Reported && !still_active {
+            // A valid authenticated poll is authoritative: once the server has
+            // retired this operation, its old executable intent must not replay
+            // or block a later request after local persistence recovers.
+            journal.stage = Stage::Reported;
+            journal.error = None;
+            save_journal(cfg, &journal)?;
+        }
         match journal.stage {
             Stage::Accepted => {
                 if matches!(
@@ -430,6 +452,26 @@ async fn tick<H: RecoveryHost>(
     if reported_request == Some(request.id) {
         return Ok(false);
     }
+    if request.action != "restart_app"
+        || !matches!(request.status.as_str(), "pending" | "accepted")
+        || chrono::DateTime::parse_from_rfc3339(&request.requested_at).is_err()
+    {
+        let journal = Journal {
+            scope: current_scope,
+            request_id: request.id,
+            accepting_instance_id: instance_id,
+            stage: Stage::Failed,
+            error: None,
+        };
+        return mark_failed(
+            cfg,
+            http,
+            instance_id,
+            journal,
+            "unsupported or invalid Enterprise recovery request",
+        )
+        .await;
+    }
     let journal = Journal {
         scope: current_scope,
         request_id: request.id,
@@ -453,19 +495,6 @@ async fn tick<H: RecoveryHost>(
         )
         .await;
         return Err(error);
-    }
-    if request.action != "restart_app"
-        || !matches!(request.status.as_str(), "pending" | "accepted")
-        || chrono::DateTime::parse_from_rfc3339(&request.requested_at).is_err()
-    {
-        return mark_failed(
-            cfg,
-            http,
-            instance_id,
-            journal,
-            "unsupported or invalid Enterprise recovery request",
-        )
-        .await;
     }
     if matches!(
         cfg.upload_mode,
@@ -559,10 +588,7 @@ mod tests {
         serde_json::json!({"id": id, "action": action, "status": "pending", "requested_at": "2026-11-02T12:00:00Z"})
     }
     fn response(license: Uuid, request: Option<serde_json::Value>) -> ResponseTemplate {
-        let mut body = serde_json::json!({"ok": true, "license_id": license});
-        if let Some(request) = request {
-            body["request"] = request;
-        }
+        let body = serde_json::json!({"ok": true, "license_id": license, "request": request});
         ResponseTemplate::new(200).set_body_json(body)
     }
     async fn mount(server: &MockServer, license: Uuid, request: Option<serde_json::Value>) {
@@ -623,6 +649,32 @@ mod tests {
         license: Uuid,
         commit_before_lost_response: bool,
         state: Arc<Mutex<FailureContractState>>,
+    }
+
+    #[cfg(windows)]
+    #[derive(Clone)]
+    struct RetiredFailureResponder {
+        license: Uuid,
+        failed_request: Uuid,
+        later_request: Uuid,
+        failed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[cfg(windows)]
+    impl Respond for RetiredFailureResponder {
+        fn respond(&self, incoming: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&incoming.body).unwrap();
+            let action = body["action"].as_str().unwrap();
+            if action == "failed" {
+                self.failed.store(true, Ordering::SeqCst);
+            }
+            let active = if self.failed.load(Ordering::SeqCst) {
+                self.later_request
+            } else {
+                self.failed_request
+            };
+            response(self.license, Some(request(active, "restart_app")))
+        }
     }
 
     #[derive(Clone)]
@@ -715,11 +767,14 @@ mod tests {
 
     #[tokio::test]
     async fn enterprise_recovery_requires_ack_and_authenticated_ownership() {
+        let license = Uuid::new_v4();
         for template in [
             ResponseTemplate::new(404),
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"ok": false, "license_id": Uuid::new_v4()})),
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "license_id": license})),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -778,8 +833,8 @@ mod tests {
         let secret = "super-secret-license-value";
         let signed = "signed-query-token-value";
         let body = format!(
-            "{} https://storage.example/blob?sig={signed} safe-late-recovery-cause",
-            "x".repeat(5000)
+            "recovery-origin {} https://storage.example/blob?sig={signed} safe-late-recovery-cause",
+            "x".repeat(20 * 1024)
         );
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(500).set_body_string(body))
@@ -788,6 +843,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut cfg = config(root.path(), &server);
         cfg.license_key = secret.into();
+        std::fs::write(
+            root.path().join("enterprise-sync-error.log"),
+            "retained-upload-error-sentinel",
+        )
+        .unwrap();
         let error = tick(
             &cfg,
             &reqwest::Client::new(),
@@ -797,11 +857,25 @@ mod tests {
         .await
         .unwrap_err();
         retain_failure(&cfg, &error).await;
-        let report =
-            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
-                .await
-                .unwrap();
+        for index in 0..8 {
+            std::fs::write(
+                root.path().join(format!("screenpipe.2026-11-02.{index}.log")),
+                "newer rolling lifecycle noise",
+            )
+            .unwrap();
+        }
+        assert!(std::fs::read_to_string(root.path().join(FAILURE_LOG_NAME))
+            .unwrap()
+            .contains("safe-late-recovery-cause"));
+        let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        assert!(report.contains("recovery-origin"));
         assert!(report.contains("safe-late-recovery-cause"));
+        assert!(report.contains("retained-upload-error-sentinel"));
         assert!(!report.contains(secret));
         assert!(!report.contains(signed));
     }
@@ -1061,6 +1135,80 @@ mod tests {
             .await
             .unwrap());
         assert_eq!(*host.restarted.lock().unwrap(), 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn enterprise_recovery_retires_server_failed_locked_intent_then_executes_later_request() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        struct LockingFailureHost {
+            journal_path: std::path::PathBuf,
+            lock: Arc<Mutex<Option<std::fs::File>>>,
+        }
+        impl RecoveryHost for LockingFailureHost {
+            fn prepare(&self) -> Result<(), String> {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(1) // FILE_SHARE_READ: readable, but atomic replacement is denied.
+                    .open(&self.journal_path)
+                    .map_err(|error| error.to_string())?;
+                *self.lock.lock().unwrap() = Some(file);
+                Err("originating synthetic preparation failure".into())
+            }
+            fn restart(&self) -> Result<(), String> {
+                panic!("failed operation must not restart")
+            }
+        }
+
+        let server = MockServer::start().await;
+        let license = Uuid::new_v4();
+        let failed_request = Uuid::new_v4();
+        let later_request = Uuid::new_v4();
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        Mock::given(method("POST"))
+            .respond_with(RetiredFailureResponder {
+                license,
+                failed_request,
+                later_request,
+                failed: failed.clone(),
+            })
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), &server);
+        let path = journal_path(&cfg, &scope(&cfg, license).unwrap());
+        let lock = Arc::new(Mutex::new(None));
+        let host = LockingFailureHost {
+            journal_path: path,
+            lock: lock.clone(),
+        };
+
+        assert!(tick(&cfg, &reqwest::Client::new(), &host, Uuid::new_v4())
+            .await
+            .is_err());
+        assert!(failed.load(Ordering::SeqCst));
+        assert_eq!(
+            load_journal(&cfg, &scope(&cfg, license).unwrap())
+                .unwrap()
+                .unwrap()
+                .stage,
+            Stage::Accepted
+        );
+
+        lock.lock().unwrap().take();
+        let later = Host::default();
+        assert!(tick(&cfg, &reqwest::Client::new(), &later, Uuid::new_v4())
+            .await
+            .unwrap());
+        assert_eq!(*later.restarted.lock().unwrap(), 1);
+        assert_eq!(
+            load_journal(&cfg, &scope(&cfg, license).unwrap())
+                .unwrap()
+                .unwrap()
+                .request_id,
+            later_request
+        );
     }
 
     #[tokio::test]

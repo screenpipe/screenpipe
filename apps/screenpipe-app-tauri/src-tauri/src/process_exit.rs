@@ -446,6 +446,10 @@ fn try_app_relaunch_with_home(
 /// leaves this process and its support poller alive. On success the old process
 /// exits immediately, without recorder teardown waits.
 pub(crate) fn try_recovery_relaunch(app: AppHandle) -> Result<(), String> {
+    if crate::db_recovery_notifications::recovery_active() {
+        crate::db_recovery_notifications::notify_recovery_quit_blocked();
+        return Err("protected database repair is active; recovery relaunch deferred".into());
+    }
     let home_visible = home_window_visible(&app);
     try_app_relaunch_with_home(&app, home_visible)?;
     force_process_exit(0)
