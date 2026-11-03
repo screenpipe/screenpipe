@@ -5,11 +5,12 @@ use super::*;
 use anyhow::{anyhow, ensure};
 use cidre::{api, cv, ns, sc};
 use once_cell::sync::Lazy;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-// A native call may never return. Keep its permit in the worker, including
-// after timeout, so a hung WindowServer cannot accumulate blocking workers.
+// A synchronous native call may never return. Keep its permit in the worker
+// after the outer timeout so it cannot accumulate replacement blocking workers.
 static CAPTURE_SLOT: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(1)));
 const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -23,22 +24,46 @@ pub(crate) async fn capture_filtered(
         api::macos_available("14.0"),
         "window-filtered screenshots require macOS 14 or newer"
     );
-    let permit = tokio::time::timeout(Duration::from_secs(1), CAPTURE_SLOT.clone().acquire_owned())
-        .await
-        .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
     let id = monitor.id();
     let filters = filters.clone();
+    capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
+        capture(id, &filters, sources).await
+    })
+    .await
+}
+
+// Construct the future on its native worker: ScreenCaptureKit objects must stay
+// on that thread and inside its autorelease pool.
+async fn capture_on_worker<F, Fut>(
+    slot: Arc<Semaphore>,
+    deadline: Duration,
+    capture_job: F,
+) -> anyhow::Result<DynamicImage>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+{
+    let permit = tokio::time::timeout(Duration::from_secs(1), slot.acquire_owned())
+        .await
+        .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
     let runtime = tokio::runtime::Handle::current();
     let work = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         cidre::objc::ar_pool(|| {
             runtime
-                .block_on(capture(id, &filters, sources))
+                .block_on(async {
+                    // Timing out the JoinHandle alone detaches a still-running
+                    // worker. Bound the native completion future here so a lost
+                    // callback drops that future and releases the capture slot.
+                    tokio::time::timeout(deadline, capture_job())
+                        .await
+                        .map_err(|_| anyhow!("window-filtered capture timed out"))?
+                })
                 .map_err(|e| e.to_string())
         })
         .map_err(anyhow::Error::msg)
     });
-    tokio::time::timeout(DEADLINE, work)
+    tokio::time::timeout(deadline, work)
         .await
         .map_err(|_| anyhow!("window-filtered capture timed out"))??
 }
@@ -468,4 +493,116 @@ fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
     })();
     unsafe { buf.unlock_lock_base_addr(flags) };
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn stalled_completion_releases_slot_for_next_capture() {
+        let slot = Arc::new(Semaphore::new(1));
+        let (release, completion) = oneshot::channel::<()>();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        struct OnDrop(Arc<AtomicBool>);
+        impl Drop for OnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let first = capture_on_worker(
+            slot.clone(),
+            Duration::from_millis(50),
+            move || async move {
+                let _on_drop = OnDrop(worker_cancelled);
+                let _ = completion.await;
+                Ok(DynamicImage::new_rgba8(2, 2))
+            },
+        )
+        .await;
+        let second = capture_on_worker(slot.clone(), Duration::from_secs(1), || async {
+            Ok(DynamicImage::new_rgba8(3, 2))
+        })
+        .await;
+        let cancelled_before_late_completion = cancelled.load(Ordering::SeqCst);
+        // Always unblock the old implementation before asserting so a failing
+        // regression test cannot leave runtime shutdown waiting on its worker.
+        let _ = release.send(());
+        let _drained = tokio::time::timeout(Duration::from_secs(1), slot.acquire_owned())
+            .await
+            .expect("worker must drain after its completion is released")
+            .unwrap();
+
+        assert!(first.unwrap_err().to_string().contains("timed out"));
+        let image = second.expect("next screenshot must succeed after a missing completion");
+        assert_eq!((image.width(), image.height()), (3, 2));
+        assert!(
+            cancelled_before_late_completion,
+            "timed-out native future must be dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn privacy_failure_is_returned_and_does_not_poison_next_capture() {
+        let slot = Arc::new(Semaphore::new(1));
+        let result = capture_on_worker(slot.clone(), Duration::from_secs(1), || async {
+            Err(anyhow!("desktop scene changed during privacy capture"))
+        })
+        .await;
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "desktop scene changed during privacy capture"
+        );
+        let image = capture_on_worker(slot, Duration::from_secs(1), || async {
+            Ok(DynamicImage::new_rgba8(2, 2))
+        })
+        .await
+        .unwrap();
+        assert_eq!((image.width(), image.height()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn synchronous_native_stall_does_not_spawn_replacement_workers() {
+        let slot = Arc::new(Semaphore::new(1));
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let replacement_started = Arc::new(AtomicBool::new(false));
+        let started = replacement_started.clone();
+        let first = capture_on_worker(
+            slot.clone(),
+            Duration::from_millis(50),
+            move || async move {
+                // A synchronous native IPC cannot be cancelled by polling a timer.
+                let _ = blocked.recv();
+                Ok(DynamicImage::new_rgba8(2, 2))
+            },
+        )
+        .await;
+        let second = capture_on_worker(
+            slot.clone(),
+            Duration::from_millis(50),
+            move || async move {
+                started.store(true, Ordering::SeqCst);
+                Ok(DynamicImage::new_rgba8(2, 2))
+            },
+        )
+        .await;
+        // Unblock before asserting, including when the regression fails.
+        let _ = release.send(());
+        let third = capture_on_worker(slot, Duration::from_secs(1), || async {
+            Ok(DynamicImage::new_rgba8(2, 2))
+        })
+        .await;
+
+        assert!(first.unwrap_err().to_string().contains("timed out"));
+        assert!(second.unwrap_err().to_string().contains("still busy"));
+        assert!(!replacement_started.load(Ordering::SeqCst));
+        assert!(
+            third.is_ok(),
+            "native completion should release the worker slot"
+        );
+    }
 }
