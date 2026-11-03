@@ -533,6 +533,16 @@ async fn main() {
     if !arguments.iter().any(|argument| argument == "--cpu-smoke")
     {
         #[cfg(feature = "enterprise-build")]
+        match windows_enterprise_takeover::handoff_to_registered_user_install(&arguments) {
+            Ok(true) => std::process::exit(0),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("screenpipe: Enterprise installation ownership check failed: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        #[cfg(feature = "enterprise-build")]
         if let Err(error) =
             windows_enterprise_takeover::publish_enterprise_presence(focus_port, api_port)
         {
