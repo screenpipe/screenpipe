@@ -536,10 +536,7 @@ async fn main() {
         match windows_enterprise_takeover::handoff_to_registered_user_install(&arguments) {
             Ok(true) => std::process::exit(0),
             Ok(false) => {}
-            Err(error) => {
-                eprintln!("screenpipe: Enterprise installation ownership check failed: {error}");
-                std::process::exit(1);
-            }
+            Err(_) => std::process::exit(1),
         }
 
         #[cfg(feature = "enterprise-build")]

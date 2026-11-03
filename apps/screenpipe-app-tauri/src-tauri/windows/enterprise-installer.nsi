@@ -1169,7 +1169,24 @@ Section Install
     ; make an enrolled value launch the newly managed user copy.
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
     ${If} $0 != ""
-      WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart"
+      ; Parse argv[0] with Windows command-line rules, then compare normalized
+      ; full paths. Never infer ownership from a substring or discard arguments
+      ; belonging to an already-correct or unrelated command.
+      System::Call 'shell32::CommandLineToArgvW(w r0, *i .r1) p.r2'
+      ${If} $2 P<> 0
+      ${AndIf} $1 > 0
+        System::Call '*$2(p .r3)'
+        System::Call '*$3(&w${NSIS_MAX_STRLEN} .r4)'
+        System::Call 'kernel32::LocalFree(p r2)'
+        System::Call 'kernel32::GetFullPathNameW(w r4, i ${NSIS_MAX_STRLEN}, w .r5, p 0)'
+        StrCpy $6 "$MachineInstallDir\$MachineMainBinaryName"
+        System::Call 'kernel32::GetFullPathNameW(w r6, i ${NSIS_MAX_STRLEN}, w .r7, p 0)'
+        ${If} $5 == $7
+          WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart"
+        ${EndIf}
+      ${ElseIf} $2 P<> 0
+        System::Call 'kernel32::LocalFree(p r2)'
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 

@@ -29,6 +29,25 @@ static ENTERPRISE_PRESENCE: OnceLock<OwnedHandle> = OnceLock::new();
 /// installation before either process can publish presence or open app state.
 #[cfg(feature = "enterprise-build")]
 pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result<bool, String> {
+    let result = handoff_to_registered_user_install_inner(arguments);
+    if let Err(cause) = &result {
+        record(
+            "user_owner_handoff_refused",
+            cause,
+            "legacy_machine_start_aborted",
+        );
+    }
+    result
+}
+
+#[cfg(feature = "enterprise-build")]
+fn handoff_to_registered_user_install_inner(arguments: &[String]) -> Result<bool, String> {
+    // Persistent Enterprise is owned by its protected supervisor and managed
+    // updater. Its marker identifies this exact executable; an unrelated HKCU
+    // ordinary registration must never redirect it out of that ownership path.
+    if ordinary_handoff_is_blocked(crate::enterprise_persistence::installed()) {
+        return Ok(false);
+    }
     let registered_exe = match registered_user_enterprise_executable() {
         Ok(Some(executable)) => executable,
         Ok(None) => return Ok(false),
@@ -47,12 +66,10 @@ pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result
         return Ok(false);
     }
     if process_is_elevated()? {
-        let cause = format!(
+        return Err(format!(
             "refused current-user installation handoff from elevated process ({})",
             current_exe.display()
-        );
-        record("user_owner_handoff_refused", &cause, "legacy_machine_start_aborted");
-        return Err(cause);
+        ));
     }
 
     let mut command = std::process::Command::new(&registered_exe);
@@ -60,12 +77,10 @@ pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result
     use std::os::windows::process::CommandExt;
     command.creation_flags(CREATE_NO_WINDOW);
     command.spawn().map_err(|error| {
-        let cause = format!(
+        format!(
             "could not launch registered current-user Enterprise executable {}: {error}",
             registered_exe.display()
-        );
-        record("user_owner_handoff_failed", &cause, "legacy_machine_start_aborted");
-        cause
+        )
     })?;
     record(
         "user_owner_handoff",
@@ -77,6 +92,11 @@ pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result
         "legacy_machine_start_yielded",
     );
     Ok(true)
+}
+
+#[cfg(feature = "enterprise-build")]
+fn ordinary_handoff_is_blocked(persistent_package_owns_executable: bool) -> bool {
+    persistent_package_owns_executable
 }
 
 fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
@@ -1339,9 +1359,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         append_record_to(
             root.path(),
-            "termination_failed",
-            "pid=42 Windows cause: Access is denied. (os error 5) contact=private@example.com",
-            "enterprise_start_aborted",
+            "user_owner_handoff_refused",
+            "could not inspect launch token: Access is denied. (os error 5) contact=private@example.com",
+            "legacy_machine_start_aborted",
         )
         .unwrap();
         std::fs::rename(
@@ -1368,13 +1388,21 @@ mod tests {
             crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
                 .await
                 .unwrap();
-        assert!(report.contains("termination_failed"));
+        assert!(report.contains("user_owner_handoff_refused"));
+        assert!(report.contains("could not inspect launch token"));
         assert!(report.contains("Access is denied"));
         assert!(report.contains("os error 5"));
-        assert!(report.contains("enterprise_start_aborted"));
+        assert!(report.contains("legacy_machine_start_aborted"));
         assert!(report.contains("startup_after_restart"));
         assert!(report.contains("consumer_blocked"));
         assert!(report.contains("consumer_start_aborted"));
         assert!(!report.contains("private@example.com"));
+    }
+
+    #[cfg(feature = "enterprise-build")]
+    #[test]
+    fn protected_persistent_package_never_enters_ordinary_user_handoff() {
+        assert!(ordinary_handoff_is_blocked(true));
+        assert!(!ordinary_handoff_is_blocked(false));
     }
 }

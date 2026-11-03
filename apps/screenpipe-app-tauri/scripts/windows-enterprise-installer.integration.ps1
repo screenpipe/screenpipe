@@ -237,7 +237,7 @@ if ($Matrix -ne "current") {
   $shortcut = $shell.CreateShortcut($renamedUserShortcut)
   $shortcut.TargetPath = Join-Path $installDir "screenpipe-app.exe"
   $shortcut.Save()
-  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $installDir "screenpipe-app.exe") + '" --autostart')
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value ('"' + (Join-Path $installDir "screenpipe-app.exe").ToUpperInvariant() + '" --autostart --legacy-extra')
   Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
   $repeatedRegistration = Get-ItemProperty $uninstallKey
   if ($repeatedRegistration.InstallLocation.Trim('"') -ne $migratedInstallDir) {
@@ -250,6 +250,28 @@ if ($Matrix -ne "current") {
   $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
   if ($actualStartup -ne $expectedStartup) {
     throw "repeated update did not repair stale startup: $actualStartup"
+  }
+
+  $correctStartup = '"' + $migratedExecutable.ToUpperInvariant() + '" --autostart --preserve-correct-arguments'
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value $correctStartup
+  Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
+  $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
+  if ($actualStartup -cne $correctStartup) {
+    throw "repeated update clobbered correct user startup arguments: $actualStartup"
+  }
+
+  Remove-ItemProperty $startupKey -Name "screenpipe enterprise"
+  Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
+  if (Get-ItemPropertyValue $startupKey -Name "screenpipe enterprise" -ErrorAction SilentlyContinue) {
+    throw "repeated update manufactured absent startup enrollment"
+  }
+
+  $unrelatedStartup = '"C:\Windows\System32\notepad.exe" --deliberate-owner'
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value $unrelatedStartup
+  Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
+  $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
+  if ($actualStartup -cne $unrelatedStartup) {
+    throw "repeated update clobbered unrelated startup ownership: $actualStartup"
   }
 } elseif (Test-Path "$otherRegistryRoot\Software\Microsoft\Windows\CurrentVersion\Uninstall\screenpipe enterprise") {
   throw "$Matrix fixture created a duplicate registration in the other scope"
