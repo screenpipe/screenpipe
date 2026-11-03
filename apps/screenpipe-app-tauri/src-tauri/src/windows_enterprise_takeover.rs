@@ -45,7 +45,7 @@ fn handoff_to_registered_user_install_inner(arguments: &[String]) -> Result<bool
     // Persistent Enterprise is owned by its protected supervisor and managed
     // updater. Its marker identifies this exact executable; an unrelated HKCU
     // ordinary registration must never redirect it out of that ownership path.
-    if ordinary_handoff_is_blocked(crate::enterprise_persistence::installed()) {
+    if crate::enterprise_persistence::installed() {
         return Ok(false);
     }
     let registered_exe = match registered_user_enterprise_executable() {
@@ -94,11 +94,6 @@ fn handoff_to_registered_user_install_inner(arguments: &[String]) -> Result<bool
     Ok(true)
 }
 
-#[cfg(feature = "enterprise-build")]
-fn ordinary_handoff_is_blocked(persistent_package_owns_executable: bool) -> bool {
-    persistent_package_owns_executable
-}
-
 fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -113,12 +108,18 @@ fn registered_user_enterprise_executable() -> Result<Option<PathBuf>, String> {
     let install_location: String = install_key.get_value("").map_err(|error| {
         format!("current-user Enterprise install location is unreadable: {error}")
     })?;
-    let uninstall_location: String = uninstall_key.get_value("InstallLocation").map_err(|error| {
-        format!("current-user Enterprise uninstall location is unreadable: {error}")
-    })?;
-    let uninstall_command: String = uninstall_key.get_value("UninstallString").map_err(|error| {
-        format!("current-user Enterprise uninstall command is unreadable: {error}")
-    })?;
+    let uninstall_location: String =
+        uninstall_key
+            .get_value("InstallLocation")
+            .map_err(|error| {
+                format!("current-user Enterprise uninstall location is unreadable: {error}")
+            })?;
+    let uninstall_command: String =
+        uninstall_key
+            .get_value("UninstallString")
+            .map_err(|error| {
+                format!("current-user Enterprise uninstall command is unreadable: {error}")
+            })?;
     let install_dir = PathBuf::from(install_location.trim_matches('"'));
     let uninstall_dir = PathBuf::from(uninstall_location.trim_matches('"'));
     if !same_existing_path(&install_dir, &uninstall_dir)? {
@@ -158,7 +159,10 @@ fn reject_reparse_and_canonicalize(path: &Path, description: &str) -> Result<Pat
             continue;
         }
         let metadata = std::fs::symlink_metadata(component).map_err(|error| {
-            format!("{description} {} is unavailable: {error}", component.display())
+            format!(
+                "{description} {} is unavailable: {error}",
+                component.display()
+            )
         })?;
         if metadata.file_type().is_symlink() {
             return Err(format!(
@@ -167,22 +171,30 @@ fn reject_reparse_and_canonicalize(path: &Path, description: &str) -> Result<Pat
             ));
         }
     }
-    std::fs::canonicalize(path)
-        .map_err(|error| format!("could not canonicalize {description} {}: {error}", path.display()))
+    std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "could not canonicalize {description} {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn same_existing_path(left: &Path, right: &Path) -> Result<bool, String> {
-    Ok(reject_reparse_and_canonicalize(left, "registered installation")?
-        .to_string_lossy()
-        .eq_ignore_ascii_case(
-            &reject_reparse_and_canonicalize(right, "registered installation")?
-                .to_string_lossy(),
-        ))
+    Ok(
+        reject_reparse_and_canonicalize(left, "registered installation")?
+            .to_string_lossy()
+            .eq_ignore_ascii_case(
+                &reject_reparse_and_canonicalize(right, "registered installation")?
+                    .to_string_lossy(),
+            ),
+    )
 }
 
 fn process_is_elevated() -> Result<bool, String> {
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token = Default::default();
@@ -1397,12 +1409,5 @@ mod tests {
         assert!(report.contains("consumer_blocked"));
         assert!(report.contains("consumer_start_aborted"));
         assert!(!report.contains("private@example.com"));
-    }
-
-    #[cfg(feature = "enterprise-build")]
-    #[test]
-    fn protected_persistent_package_never_enters_ordinary_user_handoff() {
-        assert!(ordinary_handoff_is_blocked(true));
-        assert!(!ordinary_handoff_is_blocked(false));
     }
 }

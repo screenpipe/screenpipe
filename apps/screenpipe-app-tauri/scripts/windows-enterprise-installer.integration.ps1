@@ -260,9 +260,24 @@ if ($Matrix -ne "current") {
     throw "repeated update clobbered correct user startup arguments: $actualStartup"
   }
 
+  $machineExecutable = Join-Path $installDir "screenpipe-app.exe"
+  $relativeMachineExecutable = [IO.Path]::GetRelativePath($migratedInstallDir, $machineExecutable)
+  $relativeStartup = '"' + $relativeMachineExecutable + '" --relative-owner-must-remain'
+  Set-ItemProperty $startupKey -Name "screenpipe enterprise" -Value $relativeStartup
+  Push-Location $migratedInstallDir
+  try {
+    Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
+  } finally {
+    Pop-Location
+  }
+  $actualStartup = (Get-ItemProperty $startupKey).'screenpipe enterprise'
+  if ($actualStartup -cne $relativeStartup) {
+    throw "repeated update rewrote uncertain relative startup ownership: $actualStartup"
+  }
+
   Remove-ItemProperty $startupKey -Name "screenpipe enterprise"
   Invoke-Installer $installerB @("/S", "/P", "/UPDATE")
-  if (Get-ItemPropertyValue $startupKey -Name "screenpipe enterprise" -ErrorAction SilentlyContinue) {
+  if ((Get-Item $startupKey).GetValue("screenpipe enterprise", $null)) {
     throw "repeated update manufactured absent startup enrollment"
   }
 

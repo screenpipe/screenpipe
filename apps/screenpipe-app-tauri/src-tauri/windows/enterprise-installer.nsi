@@ -1178,11 +1178,21 @@ Section Install
         System::Call '*$2(p .r3)'
         System::Call '*$3(&w${NSIS_MAX_STRLEN} .r4)'
         System::Call 'kernel32::LocalFree(p r2)'
-        System::Call 'kernel32::GetFullPathNameW(w r4, i ${NSIS_MAX_STRLEN}, w .r5, p 0)'
-        StrCpy $6 "$MachineInstallDir\$MachineMainBinaryName"
-        System::Call 'kernel32::GetFullPathNameW(w r6, i ${NSIS_MAX_STRLEN}, w .r7, p 0)'
-        ${If} $5 == $7
-          WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart"
+        ; A relative Run command resolves at logon, not against the installer's
+        ; current directory, so it cannot establish ownership of this entry.
+        System::Call 'shlwapi::PathIsRelativeW(w r4) i.r8'
+        ${If} $8 = 0
+          System::Call 'kernel32::GetFullPathNameW(w r4, i ${NSIS_MAX_STRLEN}, w .r5, p 0) i.r8'
+          ${If} $8 > 0
+          ${AndIf} $8 < ${NSIS_MAX_STRLEN}
+            StrCpy $6 "$MachineInstallDir\$MachineMainBinaryName"
+            System::Call 'kernel32::GetFullPathNameW(w r6, i ${NSIS_MAX_STRLEN}, w .r7, p 0) i.r9'
+            ${If} $9 > 0
+            ${AndIf} $9 < ${NSIS_MAX_STRLEN}
+            ${AndIf} $5 == $7
+              WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart"
+            ${EndIf}
+          ${EndIf}
         ${EndIf}
       ${ElseIf} $2 P<> 0
         System::Call 'kernel32::LocalFree(p r2)'
