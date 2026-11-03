@@ -203,12 +203,12 @@ $($task.prompt)
 Execution contract:
 - Read and obey AGENTS.md and all applicable skills before editing.
 - Work only in $repository and make the smallest complete related change.
-- The durable target is a reusable Azure Windows dev image whose disposable VM owns agent execution, an interactive console desktop, native tests, video recording, evidence upload, branch push, and PR creation after a one-shot dispatch. It must continue if the dispatching computer disconnects or powers off.
+- The user request above defines the task scope and acceptance criteria. This disposable VM owns execution, native validation, recording, and delivery after dispatch; it must continue if the dispatching computer disconnects or powers off.
 - There must be no inbound RDP rule and no operator desktop session in the workflow.
 - Runtime OpenAI and GitHub App credentials come only from managed identity plus Key Vault; never print, persist in source, or include them in evidence.
-- Copy the proven runtime scripts from C:\screenpipe-worker into infra/windows-dev-image when they are not already present, then make the image provisioning, dispatcher, canonical skill, and reference agree with the autonomous invariant. Retire contradictory RDP/host-import wording rather than adding parallel rules.
+- Change image provisioning, dispatch tooling, skills, and references only when needed for the user request above.
 - Use the immutable image and exact task blob model; do not clone or modify the release builder.
-- Run the narrowest relevant checks, including shell syntax, PowerShell parsing, skill validation, and git diff --check. Do not run raw Cargo for src-tauri.
+- Run the narrowest checks that prove the requested behavior and git diff --check. Use repository-supported wrappers for src-tauri, never raw Cargo or Tauri.
 - Do not push or open the PR yourself; leave the intended changes committed and the worktree clean. The outer worker performs deterministic delivery after validation.
 - Finish with a concise summary and exact test results.
 "@
