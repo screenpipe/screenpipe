@@ -334,7 +334,7 @@ where
         .layer(axum::middleware::from_fn(control_server_origin_guard))
 }
 
-pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
+pub async fn run_server(app_handle: tauri::AppHandle, port: u16, reserved_listener: Option<std::net::TcpListener>) {
     let state = ServerState {
         app_handle: app_handle.clone(),
     };
@@ -403,14 +403,16 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    match crate::port_conflict::bind_control_port(
-        port,
-        crate::port_conflict::healthy_control_server_present(),
-        crate::config::app_data_dir(),
-        || axum::Server::try_bind(&addr),
-    )
-    .await
-    {
+    let builder = match reserved_listener {
+        Some(listener) => axum::Server::from_tcp(listener).map_err(anyhow::Error::new),
+        None => crate::port_conflict::bind_control_port(
+            port,
+            crate::port_conflict::healthy_control_server_present(),
+            crate::config::app_data_dir(),
+            || axum::Server::try_bind(&addr),
+        ).await,
+    };
+    match builder {
         Ok(builder) => {
             info!("Server listening on {}", addr);
             if let Err(e) = builder.serve(app.into_make_service()).await {
@@ -876,12 +878,12 @@ async fn set_window_size(
     }
 }
 
-pub fn spawn_server(app_handle: tauri::AppHandle, port: u16) -> mpsc::Sender<()> {
+pub fn spawn_server(app_handle: tauri::AppHandle, port: u16, reserved_listener: Option<std::net::TcpListener>) -> mpsc::Sender<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     tokio::spawn(async move {
         tokio::select! {
-            _ = run_server(app_handle, port) => {},
+            _ = run_server(app_handle, port, reserved_listener) => {},
             _ = rx.recv() => {
                 info!("Received shutdown signal for server");
             }
