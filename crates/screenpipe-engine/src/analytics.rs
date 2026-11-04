@@ -325,7 +325,10 @@ pub async fn capture_event(event: &str, properties: Value) {
         props["telemetry_sampling"] = json!("first_per_interval_per_surface_client_value_kind");
     }
     if !HOURLY_BUDGET.should_report(event, current_hour_window()) {
-        debug!("dropping telemetry event {} (hourly device budget exceeded)", event);
+        debug!(
+            "dropping telemetry event {} (hourly device budget exceeded)",
+            event
+        );
         return;
     }
     if let Some(obj) = props.as_object_mut() {
