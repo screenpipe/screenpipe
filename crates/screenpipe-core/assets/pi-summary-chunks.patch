@@ -12,12 +12,12 @@
 +    console.error(message);
 +    return new Error(message, { cause });
 +}
-+async function summarizeConversation(conversationText, suffix, model, options, streamFn, retry, callbacks, previousSummary) {
++async function summarizeConversation(conversationText, suffix, model, options, streamFn, retry, callbacks, previousSummary, updateSuffix = UPDATE_SUMMARIZATION_PROMPT) {
 +    const contextFor = (text, previous) => ({
 +        systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
 +        messages: [{ role: "user", content: [{ type: "text", text:
 +            `<conversation>\n${text}\n</conversation>\n\n` +
-+            (previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : "") + suffix }], timestamp: Date.now() }],
++            (previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : "") + (previous ? updateSuffix : suffix) }], timestamp: Date.now() }],
 +    });
 +    // UTF-8 bytes are a conservative text-token bound for the hosted byte-level
 +    // tokenizers. Counting the JSON envelope also leaves room for framing.
@@ -77,7 +77,7 @@
  /**
   * Context compaction for long sessions.
   *
-@@ -476,22 +541,8 @@
+@@ -476,22 +541,9 @@
      // Convert to LLM messages first (handles custom types like bashExecution, custom, etc.)
      const llmMessages = convertToLlm(currentMessages);
      const conversationText = serializeConversation(llmMessages);
@@ -98,7 +98,8 @@
 -    const response = await completeSummarization(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, completionOptions, streamFn, retry, callbacks);
 -    return checkedSummary(response);
 +    return summarizeConversation(conversationText, basePrompt, model,
-+        createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel), streamFn, retry, callbacks, previousSummary);
++        createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel), streamFn, retry, callbacks, previousSummary,
++        customInstructions ? `${UPDATE_SUMMARIZATION_PROMPT}\n\nAdditional focus: ${customInstructions}` : UPDATE_SUMMARIZATION_PROMPT);
  }
  export function prepareCompaction(pathEntries, settings) {
      if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {

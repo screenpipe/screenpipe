@@ -292,6 +292,7 @@ test("oversized summaries consume every record across context-sized requests", a
   expect(result.usage.totalTokens).toBe(probe.requests.length * 120);
   expect(probe.requests[0].context.messages[0].content[0].text).toContain("preserved-001");
   expect(probe.requests[1].context.messages[0].content[0].text).toContain("Checkpoint:");
+  expect(probe.requests[1].context.messages[0].content[0].text).toContain("NEW conversation messages to incorporate");
   expect(messages).toEqual(original);
 });
 
