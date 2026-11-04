@@ -648,6 +648,31 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
+    #[tokio::test]
+    async fn pi_summary_failure_survives_rotation_and_support_redaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-03.log");
+        // Same stderr envelope emitted by the pinned summarizer and retained by
+        // the existing Pi stderr reader. No conversation content is logged.
+        std::fs::write(&current, concat!(
+            "WARN Pi stderr: Summarization failed at record 1/1 (input 26215 bytes, output 6553 tokens, context 32768 tokens; original history retained): Summarization incomplete (error): provider rejected summary: context_length_exceeded\n",
+            "INFO contact=private-person@example.com\n"
+        )).unwrap();
+        std::fs::rename(&current, dir.path().join("screenpipe-app.2026-11-03.1.log")).unwrap();
+        std::fs::write(&current, "INFO recorder restarted\n").unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("Summarization failed at record 1/1"));
+        assert!(report.contains("input 26215 bytes"));
+        assert!(report.contains("output 6553 tokens"));
+        assert!(report.contains("context 32768 tokens"));
+        assert!(report.contains("original history retained"));
+        assert!(report.contains("context_length_exceeded"));
+        assert!(report.contains("recorder restarted"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
     #[cfg(feature = "enterprise-build")]
     #[tokio::test]
     async fn ingest_transport_cause_survives_rotation_and_support_redaction() {

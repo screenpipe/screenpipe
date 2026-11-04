@@ -22,6 +22,10 @@ const FAILURE_PATCH: &str = include_str!("../../assets/pi-compaction-failure.pat
 const FAILURE_MARKER: &str = "// screenpipe-compaction-failure-v1\n";
 const TRANSPORT_PATCH: &str = include_str!("../../assets/pi-transport-cause.patch");
 const TRANSPORT_MARKER: &str = "// screenpipe-transport-cause-v1\n";
+const CHUNKS_PATCH: &str = include_str!("../../assets/pi-summary-chunks.patch");
+const CHUNKS_MARKER: &str = "// screenpipe-summary-chunks-v1\n";
+const BUDGET_PATCH: &str = include_str!("../../assets/pi-summary-budget.patch");
+const BUDGET_MARKER: &str = "// screenpipe-summary-budget-v1\n";
 static PATCH_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn ensure_for_entrypoint(entrypoint: &Path) -> Result<()> {
@@ -63,7 +67,11 @@ pub fn ensure(install_dir: &Path) -> Result<()> {
     for (file, patches) in [
         (
             "agent-session.js",
-            &[(PATCH, MARKER), (FAILURE_PATCH, FAILURE_MARKER)][..],
+            &[
+                (PATCH, MARKER),
+                (FAILURE_PATCH, FAILURE_MARKER),
+                (BUDGET_PATCH, BUDGET_MARKER),
+            ][..],
         ),
         (
             "compaction/utils.js",
@@ -74,7 +82,10 @@ pub fn ensure(install_dir: &Path) -> Result<()> {
         ),
         (
             "compaction/compaction.js",
-            &[(VALIDATION_PATCH, VALIDATION_MARKER)][..],
+            &[
+                (VALIDATION_PATCH, VALIDATION_MARKER),
+                (CHUNKS_PATCH, CHUNKS_MARKER),
+            ][..],
         ),
         (
             "../../../pi-ai/dist/utils/error-body.js",
@@ -122,6 +133,8 @@ mod tests {
             CONTRACT_PATCH,
             FAILURE_PATCH,
             TRANSPORT_PATCH,
+            CHUNKS_PATCH,
+            BUDGET_PATCH,
         ] {
             let lf = asset.replace("\r\n", "\n");
             for patch in [&lf, &lf.replace('\n', "\r\n")] {

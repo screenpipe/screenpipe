@@ -125,19 +125,22 @@ test('real Worker serves retained features on the same model, labels both routes
 },30000);
 
 test('real Worker reports Experiential overflow for agent compaction in JSON and SSE',async()=>{
-  const prompt='The prompt is at least 901,705 tokens (7,213,642 bytes of text), but the largest context window on this model route is 400,000 tokens.';
+  let prompt='The prompt is at least 901,705 tokens (7,213,642 bytes of text), but the largest context window on this model route is 400,000 tokens.';
   const harness=await LocalGatewayHarness.start({experientialHybrid:true,cloudflareSpendRules:true,outboundResponse:async(request)=>{
     const path=new URL(request.url).pathname;
     if(!path.includes('/custom-experiential-fixture/')&&!path.includes('/openai/')&&!path.includes('/anthropic/'))return undefined;
     return retainingJSON({error:{message:prompt,type:'invalid_request_error'}},{status:400});
   }});
   try{
-    for(const stream of [false,true]){
+    for(const wording of [prompt,
+      'provider rejected the request: context_length_exceeded: Your input exceeds the context window of this model. Please adjust your input and try again.',
+      'Your input exceeds the context window of this model. Please adjust your input and try again.',
+    ]){prompt=wording; for(const stream of [false,true]){
       const response=await harness.fetch('/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'auto',stream,messages:[{role:'user',content:'Synthetic context.'}]})});
       expect(response.status).toBe(413);
       const text=await response.text();expect(text).toContain('context_length_exceeded');expect(text).toContain('prompt is too long');
       if(stream)expect(text).toContain('data: [DONE]');
-    }
+    }}
   }finally{await harness.dispose();}
 },30000);
 
