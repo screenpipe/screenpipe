@@ -628,7 +628,9 @@ fn main() {
     let enabled = std::env::var("SCREENPIPE_I18N_MODE")
         .map(|mode| mode != "off")
         .unwrap_or_else(|_| std::env::var("PROFILE").as_deref() == Ok("release"));
-    println!("cargo:rerun-if-changed={}", generated.display());
+    if enabled {
+        println!("cargo:rerun-if-changed={}", generated.display());
+    }
     println!("cargo:rerun-if-changed={}", fallback.display());
     let localization = std::fs::read(if enabled && generated.exists() {
         generated

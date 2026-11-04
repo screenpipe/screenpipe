@@ -12,6 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { lstat, lutimes, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 
@@ -161,6 +162,37 @@ function cargoTargetRoot(): string {
   return process.env.CARGO_TARGET_DIR
     ? resolve(process.env.CARGO_TARGET_DIR)
     : join(APP_ROOT, "src-tauri", "target");
+}
+
+export async function stabilizeWindowsOrtRuntimeLinks(targetRoot = cargoTargetRoot()): Promise<number> {
+  // ort-sys copy-dylibs recreates these symlinks in its build script and emits
+  // rerun-if-changed for them. Keep upstream's links and align only each link's
+  // own timestamp with its target so the link does not invalidate its creator.
+  let stabilized = 0;
+  for (const directory of ["", "deps", "examples"]) {
+    const destination = join(targetRoot, "debug-dev", directory, "DirectML.dll");
+    let linkStat;
+    try {
+      linkStat = await lstat(destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!linkStat.isSymbolicLink()) continue;
+
+    let targetStat;
+    try {
+      targetStat = await stat(destination);
+    } catch (error) {
+      // A stale dangling link belongs to ort-sys. Its next build-script run
+      // removes and recreates symlinks before applying the existence check.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    await lutimes(destination, targetStat.mtime, targetStat.mtime);
+    stabilized++;
+  }
+  return stabilized;
 }
 
 export function stagePersistenceResources(
@@ -425,6 +457,12 @@ async function perform(mode: BuildMode, args: string[]): Promise<number> {
     case "test": {
       const exitCode = await run(["bun", "scripts/pre_build.js"], env);
       if (exitCode !== 0) return exitCode;
+      if (process.platform === "win32") {
+        const stabilized = await stabilizeWindowsOrtRuntimeLinks();
+        if (stabilized > 0) {
+          console.log(`[native-build-queue] stabilized ${stabilized} watched ORT runtime link(s)`);
+        }
+      }
       return run(nativeTestCommand(args), env);
     }
     case "persistence-test":
