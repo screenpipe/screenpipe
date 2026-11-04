@@ -131,7 +131,8 @@ const USER_INPUT_TOO_LARGE_PATTERNS = [
   /maximum context length/i,
   // Experiential rejects these before inference; preserve overflow recovery.
   /prompt is at least[\s\S]*largest context window/i,
-  /context length.*exceeded/i,
+  /context[_ ]length.*exceeded/i,
+  /input exceeds the context window/i,
   /request payload size exceeds/i,
   /input tokens exceed the configured limit/i,
   /exceeds the available context size/i,
