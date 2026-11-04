@@ -31,6 +31,8 @@ pub(crate) enum AgentClient {
 }
 
 impl AgentClient {
+    pub(crate) const COUNT: usize = Self::Unknown as usize + 1;
+
     /// Accept only fixed app identifiers; never retain arbitrary header values.
     pub(crate) fn from_name(value: &str) -> Self {
         Self::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value))
