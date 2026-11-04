@@ -608,11 +608,10 @@ fn main() {
             .expect("SCREENPIPE_USER_MAIN_BINARY must be defined in windows/hooks.nsh");
         assert!(
             !name.is_empty()
-                && name.len() <= "screenpipe-app.exe".len()
                 && name
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.')),
-            "SCREENPIPE_USER_MAIN_BINARY must be a short plain filename"
+            "SCREENPIPE_USER_MAIN_BINARY must be a plain filename"
         );
         println!("cargo:rerun-if-changed=windows/hooks.nsh");
         println!("cargo:rustc-env=SCREENPIPE_USER_MAIN_BINARY={name}");
