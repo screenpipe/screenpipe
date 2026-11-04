@@ -12,8 +12,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { lstat, readlink, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { copyFileIfChanged } from "./content_copy.js";
 
 const APP_ROOT = resolve(import.meta.dir, "..");
 const REPO_ROOT = resolve(APP_ROOT, "../..");
@@ -161,6 +163,41 @@ function cargoTargetRoot(): string {
   return process.env.CARGO_TARGET_DIR
     ? resolve(process.env.CARGO_TARGET_DIR)
     : join(APP_ROOT, "src-tauri", "target");
+}
+
+export async function materializeWindowsOrtRuntimeLinks(targetRoot = cargoTargetRoot()): Promise<number> {
+  // ort-sys copy-dylibs recreates these symlinks in its build script and also
+  // emits rerun-if-changed for them. The new link mtime makes its own output
+  // stale on the next invocation. A regular file keeps the runtime bytes and
+  // makes the upstream exists check idempotent.
+  let materialized = 0;
+  for (const directory of ["", "deps", "examples"]) {
+    const destination = join(targetRoot, "debug-dev", directory, "DirectML.dll");
+    let stat;
+    try {
+      stat = await lstat(destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!stat.isSymbolicLink()) continue;
+
+    const linkTarget = await readlink(destination);
+    const source = resolve(dirname(destination), linkTarget);
+    const temporary = `${destination}.screenpipe-materialize-${process.pid}`;
+    try {
+      await copyFileIfChanged(source, temporary);
+      await unlink(destination);
+      await rename(temporary, destination);
+    } catch (error) {
+      await unlink(temporary).catch((cleanupError) => {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
+      });
+      throw error;
+    }
+    materialized++;
+  }
+  return materialized;
 }
 
 export function stagePersistenceResources(
@@ -425,6 +462,12 @@ async function perform(mode: BuildMode, args: string[]): Promise<number> {
     case "test": {
       const exitCode = await run(["bun", "scripts/pre_build.js"], env);
       if (exitCode !== 0) return exitCode;
+      if (process.platform === "win32") {
+        const materialized = await materializeWindowsOrtRuntimeLinks();
+        if (materialized > 0) {
+          console.log(`[native-build-queue] materialized ${materialized} watched ORT runtime link(s)`);
+        }
+      }
       return run(nativeTestCommand(args), env);
     }
     case "persistence-test":

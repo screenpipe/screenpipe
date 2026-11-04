@@ -11,6 +11,7 @@ import { setupOpenBlas } from './setup_openblas.js'
 import { stageMlxBundleResources } from './macos_bundle_sidecars.js'
 import { downloadFile, find7z } from './find_tools.js'
 import { ensureCachedDirectory, ensureCachedFile } from './native_dependency_cache.js'
+import { copyFileIfChanged } from './content_copy.js'
 
 if (process.env.SCREENPIPE_NATIVE_PREBUILD_COMPLETE === '1') {
 	console.log('native prebuild already completed by the system build queue')
@@ -253,15 +254,10 @@ async function copyBunBinary() {
 		return;
 	}
 
-	if (await fs.exists(bunDest1)) {
-		console.log('bun binary already exists for tauri.');
-		return;
-	}
-
 	try {
 		await fs.access(bunSrc);
-		await copyFile(bunSrc, bunDest1);
-		console.log(`bun binary copied successfully from ${bunSrc} to ${bunDest1}`);
+		const changed = await copyFile(bunSrc, bunDest1);
+		console.log(`bun binary ${changed ? 'copied' : 'already current'} at ${bunDest1}`);
 	} catch (error) {
 		console.error('failed to copy bun binary:', error);
 		console.error('source path:', bunSrc);
@@ -272,8 +268,7 @@ async function copyBunBinary() {
 
 // Helper function to copy file and set permissions
 async function copyFile(src, dest) {
-	await fs.copyFile(src, dest);
-	await fs.chmod(dest, 0o755); // ensure the binary is executable
+	return copyFileIfChanged(src, dest, { mode: 0o755 });
 }
 
 async function validateFileSize(filePath, minSize) {
@@ -837,10 +832,11 @@ async function copyVcredistDlls(arch = 'x64') {
 	const crtDir = await findVc143CrtDir(arch);
 
 	const dlls = ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+	let copied = 0;
 	for (const dll of dlls) {
-		await fs.copyFile(path.join(crtDir, dll), path.join(vcredistDir, dll));
+		if (await copyFileIfChanged(path.join(crtDir, dll), path.join(vcredistDir, dll))) copied++;
 	}
-	console.log('VC CRT DLLs copied to vcredist');
+	console.log(copied === 0 ? 'VC CRT DLLs already current in vcredist' : `VC CRT DLLs updated in vcredist (${copied})`);
 }
 
 async function moveDirectoryContents(source, destination) {
