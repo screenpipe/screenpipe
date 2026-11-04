@@ -534,6 +534,9 @@ impl ResourceTelemetryReporter {
         let Some(client) = &self.posthog_client else {
             return;
         };
+        if !crate::analytics::should_capture_event("resource_usage") {
+            return;
+        }
 
         // Avoid unnecessary cloning by using references
         let mut properties = Map::new();

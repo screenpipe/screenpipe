@@ -31,6 +31,7 @@ import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-fo
 import { BackgroundPipeAllowanceNotifier } from "@/components/background-pipe-allowance-notifier";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
+import { createPosthogBeforeSendLimiter } from "@/lib/analytics/rate-limit";
 import { resolveTelemetryDisabledByEnv } from "@/lib/telemetry-env";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
@@ -133,6 +134,7 @@ export const Providers = forwardRef<
         api_host: "https://us.i.posthog.com",
         person_profiles: "identified_only",
         capture_pageview: false,
+        before_send: createPosthogBeforeSendLimiter(),
         ...(cachedAnalyticsId
           ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: true } }
           : {}),

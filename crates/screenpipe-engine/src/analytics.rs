@@ -25,10 +25,14 @@ static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
 
 pub(crate) const SEARCH_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const HOUR_REPORT_INTERVAL: Duration = Duration::from_secs(3600);
+pub(crate) const MAX_EVENTS_PER_FAMILY_PER_HOUR: u16 = 60;
+pub(crate) const MAX_TOTAL_EVENTS_PER_HOUR: u16 = 300;
 
 static SEARCH_REPORT_START: Lazy<Instant> = Lazy::new(Instant::now);
 static SEARCH_REPORTS: SearchReportLimiter = SearchReportLimiter::new();
 static VALUE_REPORTS: ValueReportLimiter = ValueReportLimiter::new();
+static HOURLY_BUDGET: HourlyEventBudgetLimiter = HourlyEventBudgetLimiter::new();
 
 /// Each source/client/result kind gets its first report per minute. No request
 /// headers can bypass sampling or create unbounded limiter keys.
@@ -101,6 +105,103 @@ fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
             (window > last).then_some(window)
         })
         .is_ok()
+}
+
+/// Hard per-device hourly ceiling across all PostHog telemetry.
+/// Each event family gets up to `MAX_EVENTS_PER_FAMILY_PER_HOUR` events/hour,
+/// and the process as a whole is capped at `MAX_TOTAL_EVENTS_PER_HOUR` events/hour.
+/// Excess events are dropped locally before serialization or network I/O.
+pub(crate) struct HourlyEventBudgetLimiter {
+    families: [AtomicU64; Self::SLOT_COUNT],
+    total: AtomicU64,
+}
+
+impl HourlyEventBudgetLimiter {
+    const NAMED_SLOTS: usize = 12;
+    const HASH_SLOTS: usize = 16;
+    const SLOT_COUNT: usize = Self::NAMED_SLOTS + Self::HASH_SLOTS;
+
+    pub(crate) const fn new() -> Self {
+        Self {
+            families: [const { AtomicU64::new(0) }; Self::SLOT_COUNT],
+            total: AtomicU64::new(0),
+        }
+    }
+
+    fn slot_for_event(event: &str) -> usize {
+        match event {
+            "search_performed" => 0,
+            "qualified_value_event" => 1,
+            "vision_pipeline_health" => 2,
+            "audio_pipeline_health" => 3,
+            "resource_usage" => 4,
+            "api_usage_5min" => 5,
+            "semantic_capture_sample" => 6,
+            "semantic_parser_sample" => 7,
+            "pipe_scheduled_run" => 8,
+            "mcp_tool_call_completed" => 9,
+            "meeting_detection_decision" => 10,
+            "meeting_detection_feedback" => 11,
+            other => {
+                let mut hash: u64 = 0xcbf29ce484222325;
+                for &b in other.as_bytes() {
+                    hash ^= u64::from(b);
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+                Self::NAMED_SLOTS + (hash as usize % Self::HASH_SLOTS)
+            }
+        }
+    }
+
+    pub(crate) fn should_report(&self, event: &str, hour_window: u64) -> bool {
+        let slot = Self::slot_for_event(event);
+        if !claim_hourly_budget(
+            &self.families[slot],
+            hour_window,
+            MAX_EVENTS_PER_FAMILY_PER_HOUR,
+        ) {
+            return false;
+        }
+        claim_hourly_budget(&self.total, hour_window, MAX_TOTAL_EVENTS_PER_HOUR)
+    }
+}
+
+fn claim_hourly_budget(state: &AtomicU64, hour_window: u64, limit: u16) -> bool {
+    if limit == 0 {
+        return false;
+    }
+    let window_key = hour_window & 0x0000_FFFF_FFFF_FFFF;
+    state
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            let prev_window = current >> 16;
+            let prev_count = (current & 0xFFFF) as u16;
+            if window_key > prev_window {
+                Some((window_key << 16) | 1)
+            } else if window_key == prev_window && prev_count < limit {
+                Some((window_key << 16) | u64::from(prev_count + 1))
+            } else {
+                None
+            }
+        })
+        .is_ok()
+}
+
+fn hour_report_window(elapsed: Duration, utc_timestamp: i64) -> u64 {
+    let hour = elapsed.as_secs() / HOUR_REPORT_INTERVAL.as_secs();
+    let utc_day = (utc_timestamp.div_euclid(86_400).max(0) as u64 + 1) & 0xFFFF;
+    ((hour & 0xFFFF_FFFF) << 16) | utc_day
+}
+
+fn current_hour_window() -> u64 {
+    hour_report_window(
+        SEARCH_REPORT_START.elapsed(),
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+/// Shared per-device hourly budget check for callers that construct custom payloads.
+pub(crate) fn should_capture_event(event: &str) -> bool {
+    is_enabled() && HOURLY_BUDGET.should_report(event, current_hour_window())
 }
 
 /// Let the first request after UTC midnight report even when it shares the
@@ -222,6 +323,10 @@ pub async fn capture_event(event: &str, properties: Value) {
         }
         props["telemetry_sample_interval_seconds"] = json!(SEARCH_REPORT_INTERVAL.as_secs());
         props["telemetry_sampling"] = json!("first_per_interval_per_surface_client_value_kind");
+    }
+    if !HOURLY_BUDGET.should_report(event, current_hour_window()) {
+        debug!("dropping telemetry event {} (hourly device budget exceeded)", event);
+        return;
     }
     if let Some(obj) = props.as_object_mut() {
         obj.insert("distinct_id".to_string(), json!(ANALYTICS.distinct_id));
@@ -520,6 +625,41 @@ mod tests {
                 .sum::<usize>()
         });
         assert_eq!(emitted, 1);
+    }
+
+    #[test]
+    fn hourly_event_budget_caps_per_family_and_total_device_volume() {
+        let limiter = HourlyEventBudgetLimiter::new();
+        let w1 = hour_report_window(Duration::from_secs(0), 0);
+        let w2 = hour_report_window(Duration::from_secs(3600), 3600);
+
+        for _ in 0..MAX_EVENTS_PER_FAMILY_PER_HOUR {
+            assert!(limiter.should_report("search_performed", w1));
+        }
+        for _ in 0..10_000 {
+            assert!(!limiter.should_report("search_performed", w1));
+        }
+
+        // Other event families still have independent budget up to the global hourly cap.
+        for family in [
+            "qualified_value_event",
+            "vision_pipeline_health",
+            "audio_pipeline_health",
+            "resource_usage",
+        ] {
+            for _ in 0..MAX_EVENTS_PER_FAMILY_PER_HOUR {
+                assert!(limiter.should_report(family, w1));
+            }
+            assert!(!limiter.should_report(family, w1));
+        }
+
+        // 5 families * 60 = 300 (MAX_TOTAL_EVENTS_PER_HOUR); a 6th family is now dropped in w1.
+        assert!(!limiter.should_report("api_usage_5min", w1));
+        assert!(!limiter.should_report("custom_unbounded_event", w1));
+
+        // Next hour window resets both family and total budgets.
+        assert!(limiter.should_report("search_performed", w2));
+        assert!(limiter.should_report("api_usage_5min", w2));
     }
 
     // The three vars telemetry_disabled_by_env inspects. CI runners set
