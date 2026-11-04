@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { copyFileIfChanged } from './content_copy.js'
+import { copyFileIfChanged, filesEqual } from './content_copy.js'
 
 const temporaryDirectories = []
 
@@ -26,6 +26,49 @@ afterEach(async () => {
 })
 
 describe('copyFileIfChanged', () => {
+	test('an early EOF terminates comparison without a second read', async () => {
+		let reads = 0
+		const handle = {
+			stat: async () => ({ size: 8 }),
+			read: async () => {
+				reads++
+				if (reads > 2) throw new Error('read attempted after known EOF')
+				return { bytesRead: 0 }
+			},
+			close: async () => {},
+		}
+		const fileSystem = { open: async () => handle }
+
+		expect(await filesEqual('source', 'destination', fileSystem)).toBe(false)
+		expect(reads).toBe(2)
+	})
+
+	test('a read failure remains the cause when both closes also fail', async () => {
+		const readError = new Error('primary read failure')
+		const fileSystem = {
+			open: async () => ({
+				stat: async () => ({ size: 1 }),
+				read: async () => { throw readError },
+				close: async () => { throw new Error('cleanup failure') },
+			}),
+		}
+
+		await expect(filesEqual('source', 'destination', fileSystem)).rejects.toBe(readError)
+	})
+
+	test('a destination-open failure remains the cause when source close fails', async () => {
+		const openError = new Error('destination open failure')
+		let opens = 0
+		const fileSystem = {
+			open: async () => {
+				if (++opens === 2) throw openError
+				return { close: async () => { throw new Error('cleanup failure') } }
+			},
+		}
+
+		await expect(filesEqual('source', 'destination', fileSystem)).rejects.toBe(openError)
+	})
+
 	test('unchanged content retains the destination mtime', async () => {
 		const { source, destination } = await fixture()
 		await fs.writeFile(source, 'same bytes')

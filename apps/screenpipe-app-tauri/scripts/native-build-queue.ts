@@ -12,10 +12,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { lstat, readlink, rename, unlink } from "node:fs/promises";
+import { lstat, lutimes, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
-import { copyFileIfChanged } from "./content_copy.js";
+import { delimiter, join, resolve } from "node:path";
 
 const APP_ROOT = resolve(import.meta.dir, "..");
 const REPO_ROOT = resolve(APP_ROOT, "../..");
@@ -165,39 +164,35 @@ function cargoTargetRoot(): string {
     : join(APP_ROOT, "src-tauri", "target");
 }
 
-export async function materializeWindowsOrtRuntimeLinks(targetRoot = cargoTargetRoot()): Promise<number> {
-  // ort-sys copy-dylibs recreates these symlinks in its build script and also
-  // emits rerun-if-changed for them. The new link mtime makes its own output
-  // stale on the next invocation. A regular file keeps the runtime bytes and
-  // makes the upstream exists check idempotent.
-  let materialized = 0;
+export async function stabilizeWindowsOrtRuntimeLinks(targetRoot = cargoTargetRoot()): Promise<number> {
+  // ort-sys copy-dylibs recreates these symlinks in its build script and emits
+  // rerun-if-changed for them. Keep upstream's links and align only each link's
+  // own timestamp with its target so the link does not invalidate its creator.
+  let stabilized = 0;
   for (const directory of ["", "deps", "examples"]) {
     const destination = join(targetRoot, "debug-dev", directory, "DirectML.dll");
-    let stat;
+    let linkStat;
     try {
-      stat = await lstat(destination);
+      linkStat = await lstat(destination);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    if (!stat.isSymbolicLink()) continue;
+    if (!linkStat.isSymbolicLink()) continue;
 
-    const linkTarget = await readlink(destination);
-    const source = resolve(dirname(destination), linkTarget);
-    const temporary = `${destination}.screenpipe-materialize-${process.pid}`;
+    let targetStat;
     try {
-      await copyFileIfChanged(source, temporary);
-      await unlink(destination);
-      await rename(temporary, destination);
+      targetStat = await stat(destination);
     } catch (error) {
-      await unlink(temporary).catch((cleanupError) => {
-        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
-      });
+      // A stale dangling link belongs to ort-sys. Its next build-script run
+      // removes and recreates symlinks before applying the existence check.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    materialized++;
+    await lutimes(destination, targetStat.mtime, targetStat.mtime);
+    stabilized++;
   }
-  return materialized;
+  return stabilized;
 }
 
 export function stagePersistenceResources(
@@ -463,9 +458,9 @@ async function perform(mode: BuildMode, args: string[]): Promise<number> {
       const exitCode = await run(["bun", "scripts/pre_build.js"], env);
       if (exitCode !== 0) return exitCode;
       if (process.platform === "win32") {
-        const materialized = await materializeWindowsOrtRuntimeLinks();
-        if (materialized > 0) {
-          console.log(`[native-build-queue] materialized ${materialized} watched ORT runtime link(s)`);
+        const stabilized = await stabilizeWindowsOrtRuntimeLinks();
+        if (stabilized > 0) {
+          console.log(`[native-build-queue] stabilized ${stabilized} watched ORT runtime link(s)`);
         }
       }
       return run(nativeTestCommand(args), env);

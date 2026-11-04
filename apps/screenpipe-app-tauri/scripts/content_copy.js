@@ -6,12 +6,13 @@ import fs from 'fs/promises'
 
 const COMPARE_BUFFER_BYTES = 64 * 1024
 
-async function filesEqual(source, destination) {
-	const sourceHandle = await fs.open(source, 'r')
+export async function filesEqual(source, destination, fileSystem = fs) {
+	const sourceHandle = await fileSystem.open(source, 'r')
 	let destinationHandle
+	let operationError
 	try {
 		try {
-			destinationHandle = await fs.open(destination, 'r')
+			destinationHandle = await fileSystem.open(destination, 'r')
 		} catch (error) {
 			if (error?.code === 'ENOENT') return false
 			throw error
@@ -32,6 +33,7 @@ async function filesEqual(source, destination) {
 				sourceHandle.read(sourceBuffer, 0, length, position),
 				destinationHandle.read(destinationBuffer, 0, length, position),
 			])
+			if (sourceRead.bytesRead === 0 || destinationRead.bytesRead === 0) return false
 			if (
 				sourceRead.bytesRead !== destinationRead.bytesRead
 				|| !sourceBuffer.subarray(0, sourceRead.bytesRead)
@@ -40,9 +42,19 @@ async function filesEqual(source, destination) {
 			position += sourceRead.bytesRead
 		}
 		return true
+	} catch (error) {
+		operationError = error
+		throw error
 	} finally {
-		await destinationHandle?.close()
-		await sourceHandle.close()
+		let cleanupError
+		for (const handle of [destinationHandle, sourceHandle]) {
+			try {
+				await handle?.close()
+			} catch (error) {
+				cleanupError ??= error
+			}
+		}
+		if (!operationError && cleanupError) throw cleanupError
 	}
 }
 
