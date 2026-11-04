@@ -819,14 +819,6 @@ pub(crate) async fn take_over_screenpipe_owner(port: u16) -> Result<TakeoverOutc
         return Ok(TakeoverOutcome::SameExecutable);
     }
     if is_classic_binary(&current_exe) && is_preferred_user_binary(&owner.exe) {
-        if !executable_product_name(&owner.exe)?
-            .is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME))
-        {
-            return Err(format!(
-                "refused preferred-owner handoff to pid={}: wrong ProductName",
-                owner.pid
-            ));
-        }
         record(
             "preferred_user_owner_preserved",
             &format!("pid={} port={port}", owner.pid),
@@ -928,6 +920,19 @@ async fn resolve_verified_owner(port: u16) -> Result<Option<Owner>, String> {
     if process.start_time() != start_time || !same_path(process.exe(), &exe) {
         return Err(format!(
             "control owner pid={pid} changed identity while opening its wait handle"
+        ));
+    }
+
+    // The private installed name was introduced with Enterprise metadata;
+    // unlike legacy classic names, it has no metadata-less compatibility case.
+    // Verify its edition for every caller before treating it as Screenpipe.
+    if is_preferred_user_binary(&exe)
+        && !executable_product_name(&exe)?
+            .is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME))
+    {
+        return Err(format!(
+            "refused to terminate pid={pid}: private-name owner has wrong ProductName ({})",
+            exe.display()
         ));
     }
 
