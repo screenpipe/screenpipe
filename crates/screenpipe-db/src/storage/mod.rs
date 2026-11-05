@@ -359,22 +359,53 @@ pub(crate) fn sync_file(path: &Path) -> Result<(), sqlx::Error> {
     // completed file was written by SQLite or copied through another handle.
     #[cfg(windows)]
     options.write(true);
-    screenpipe_fs::sync_all(&options.open(path)?)?;
+    let file = options.open(path).map_err(|error| {
+        storage_error(format!(
+            "opening file {} for durability sync: {error}",
+            path.display()
+        ))
+    })?;
+    screenpipe_fs::sync_all(&file)
+        .map_err(|error| storage_error(format!("syncing file {}: {error}", path.display())))?;
     Ok(())
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<(), sqlx::Error> {
     #[cfg(unix)]
-    screenpipe_fs::sync_all(&std::fs::File::open(path)?)?;
+    screenpipe_fs::sync_all(&std::fs::File::open(path).map_err(|error| {
+        storage_error(format!(
+            "opening directory {} for sync: {error}",
+            path.display()
+        ))
+    })?)
+    .map_err(|error| storage_error(format!("syncing directory {}: {error}", path.display())))?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
+        let directory = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(0x02000000)
-            .open(path)?
-            .sync_all()?;
+            .open(path)
+            .map_err(|error| {
+                storage_error(format!(
+                    "opening directory {} for publication sync: {error}",
+                    path.display()
+                ))
+            })?;
+        if let Err(error) = screenpipe_fs::sync_all(&directory) {
+            // Some Windows filesystems, including SMB, reject
+            // FlushFileBuffers on directory handles with ERROR_INVALID_FUNCTION.
+            // The descriptor and database files were already flushed, and the
+            // atomic rename plus recovery journal preserve resumability, but the
+            // namespace update cannot be forced to stable storage on that volume.
+            if error.raw_os_error() != Some(1) {
+                return Err(storage_error(format!(
+                    "syncing directory {} for publication: {error}",
+                    path.display()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -487,5 +518,40 @@ impl HybridStorage {
             privacy_ready: std::sync::atomic::AtomicBool::new(false),
             bulk: bulk::Runtime::default(),
         }))
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_durability_tests {
+    use super::{sync_directory, sync_file};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn windows_publication_flushes_files_without_requiring_directory_flush() {
+        let root = tempfile::tempdir_in("C:\\").unwrap();
+        let relative = root.path().strip_prefix("C:\\").unwrap();
+        let published_root = PathBuf::from(r"\\localhost\c$").join(relative);
+        let file = published_root.join("descriptor.json");
+        std::fs::write(&file, b"{}\n").unwrap();
+
+        sync_file(&file).expect("ordinary file flush must succeed");
+        let directory = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(0x02000000)
+            .open(&published_root)
+            .unwrap();
+        let unsupported = directory.sync_all().unwrap_err();
+        eprintln!(
+            "native windows probe: file_flush=ok directory_flush_error={:?} raw_os_error={:?}",
+            unsupported.kind(),
+            unsupported.raw_os_error()
+        );
+
+        sync_directory(&published_root)
+            .expect("directory publication must use a supported operation");
+        assert!(sync_file(&published_root.join("missing.json")).is_err());
+        assert!(sync_directory(&published_root.join("missing-directory")).is_err());
     }
 }
