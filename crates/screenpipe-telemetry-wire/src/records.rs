@@ -135,6 +135,18 @@ pub struct UiEventRow {
     pub text_content: Option<String>,
 }
 
+impl UiEventRow {
+    /// Preserve sparse activity without syncing raw contextless input streams.
+    pub fn has_agent_context_or_activity(&self) -> bool {
+        !self.element_name.as_deref().unwrap_or("").is_empty()
+            || !self.text_content.as_deref().unwrap_or("").is_empty()
+            || (self.event_type == "move"
+                && self.app_name.as_deref().unwrap_or("").is_empty()
+                && self.window_title.as_deref().unwrap_or("").is_empty()
+                && self.browser_url.as_deref().unwrap_or("").is_empty())
+    }
+}
+
 /// A downsized screenshot thumbnail. JPEG @ Q60, 320×180 — small enough to
 /// embed inline as base64 in the JSONL stream (~30KB per record after
 /// base64).
@@ -788,5 +800,29 @@ mod tests {
             }
             other => panic!("expected feedback record, got {}", other.kind()),
         }
+    }
+}
+
+#[cfg(test)]
+mod day_start_tests {
+    use super::*;
+    #[test]
+    fn day_start_metadata_survives_sync_without_contextless_keylogging() {
+        let mut row: UiEventRow = serde_json::from_value(serde_json::json!({
+            "event_id":1,"timestamp":"2026-11-05T09:00:00Z","event_type":"move"
+        }))
+        .unwrap();
+        assert!(row.has_agent_context_or_activity());
+        let encoded = serde_json::to_string(&row).unwrap();
+        let decoded: UiEventRow = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.has_agent_context_or_activity());
+        row.event_type = "key".into();
+        assert!(!row.has_agent_context_or_activity());
+        row.element_name = Some("Send".into());
+        assert!(row.has_agent_context_or_activity());
+        row.event_type = "move".into();
+        row.element_name = None;
+        row.app_name = Some("App".into());
+        assert!(!row.has_agent_context_or_activity());
     }
 }

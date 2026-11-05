@@ -1473,12 +1473,69 @@ async fn search(
     Json(body).into_response()
 }
 
+async fn day_start_records(state: &ApiState, params: &HashMap<String, String>) -> Response {
+    use screenpipe_db::day_start::{validate_day_window, DayStartObservation};
+    let Some(device) = param(params, "device_id").filter(|d| !d.trim().is_empty()) else {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "device_id is required for day start",
+        );
+    };
+    let (Some(start), Some(end)) = (param(params, "since"), param(params, "until")) else {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "explicit since and until are required",
+        );
+    };
+    let (Ok(start), Ok(end)) = (
+        DateTime::parse_from_rfc3339(start),
+        DateTime::parse_from_rfc3339(end),
+    ) else {
+        return err_json(StatusCode::BAD_REQUEST, "since and until must be RFC3339");
+    };
+    let (start, end) = (start.with_timezone(&Utc), end.with_timezone(&Utc));
+    if let Err(error) = validate_day_window(start, end) {
+        return err_json(StatusCode::BAD_REQUEST, error);
+    }
+    let sources = sqlx::query_scalar::<_, String>(
+        "SELECT source_id FROM gateway_source_devices WHERE device_id=?1 OR source_id=?1",
+    )
+    .bind(device)
+    .fetch_all(&state.db.pool)
+    .await;
+    let Ok(sources) = sources else {
+        return err_json(StatusCode::INTERNAL_SERVER_ERROR, "device lookup failed");
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        state.db.first_input_for_day(start, end, Some(&sources)),
+    )
+    .await;
+    let observation = match result {
+        Ok(Ok(evidence)) => DayStartObservation::new(
+            if evidence.is_some() {
+                "observed"
+            } else {
+                "no_observation"
+            },
+            start,
+            end,
+            evidence,
+        ),
+        _ => DayStartObservation::new("unavailable", start, end, None),
+    };
+    Json(json!({"records":[], "device_id":device, "day_start":observation})).into_response()
+}
+
 // ─── GET /api/enterprise/v1/records ─────────────────────────────────────────
 
 async fn records(
     State(state): State<ApiState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
+    if param(&params, "include_day_start") == Some("true") {
+        return day_start_records(&state, &params).await;
+    }
     let keyset = param(&params, "pagination") == Some("keyset");
     let device_id = param(&params, "device_id");
     let kind_filter = param(&params, "kind")
@@ -2308,6 +2365,40 @@ mod tests {
                  would serve it unauthenticated"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn day_start_records_are_scoped_bounded_and_metadata_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (router, db) = seeded_router_and_db_with_policy(&dir, None).await;
+        let writer = db.coordinated_writer().lock().await.unwrap();
+        for (device, kind, ts) in [
+            ("dev-a", "app_switch", "2026-07-22T07:00:00Z"),
+            ("dev-a", "move", "2026-07-22T09:00:00Z"),
+            ("dev-b", "key", "2026-07-22T08:00:00Z"),
+        ] {
+            sqlx::query("INSERT INTO ui_events(timestamp,event_type,machine_id,text_content) VALUES(?,?,?,'secret')")
+                .bind(ts).bind(kind).bind(device).execute(writer.pool()).await.unwrap();
+        }
+        drop(writer);
+        let url="/api/enterprise/v1/records?include_day_start=true&device_id=dev-a&since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z";
+        let (code, body) = get_json(&router, url).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(
+            body["day_start"]["first_observed_input"]["machine_id"],
+            "dev-a"
+        );
+        assert_eq!(
+            body["day_start"]["first_observed_input"]["timestamp"],
+            "2026-07-22T09:00:00Z"
+        );
+        assert!(!body.to_string().contains("secret"));
+        let (_, empty) = get_json(&router, &url.replace("dev-a", "missing")).await;
+        assert_eq!(empty["day_start"]["status"], "no_observation");
+        let (code, _) = get_json(&router, &url.replace("2026-07-23", "2026-07-25")).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        let (code, _) = get_json(&router, &url.replace("device_id=dev-a&", "")).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
     }
 
     async fn seeded_router(dir: &tempfile::TempDir) -> Router {

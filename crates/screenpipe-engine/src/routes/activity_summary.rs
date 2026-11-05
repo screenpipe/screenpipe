@@ -91,6 +91,14 @@ pub struct ActivitySummaryQuery {
     /// Default: true.
     #[serde(default = "default_true")]
     pub include_guidance: bool,
+    /// Optional first observed human input in this exact requested window.
+    /// Requires a <=25h window. No additional history is read.
+    #[serde(default)]
+    pub include_day_start: bool,
+    /// Requested day boundary for optional day-start metadata. The read is
+    /// always clipped to the main requested range and marked partial if needed.
+    #[serde(default)]
+    pub day_start_time: Option<DateTime<Utc>>,
 
     /// Include the number of parsed semantic contexts in the requested range.
     /// Default: false. This is a cheap, content-free signal for callers that
@@ -245,6 +253,8 @@ pub struct ActivityGuidance {
 #[derive(Serialize, OaSchema)]
 pub struct ActivitySummaryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub day_start: Option<screenpipe_db::day_start::DayStartObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy: Option<super::search::SearchPrivacy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) starred_sessions: Option<Vec<super::starred::StarredSession>>,
@@ -334,6 +344,7 @@ pub(crate) async fn get_activity_summary(
             })),
         ));
     }
+    let original_start = query.start_time;
     if apply_activity_summary_history_access(&state.history_access, &mut query, Utc::now()) {
         return Ok(JsonResponse(empty_activity_summary_response(&query)));
     }
@@ -470,7 +481,16 @@ pub(crate) async fn get_activity_summary(
         None
     };
 
+    let day_start = summary_day_start(
+        &state.db,
+        &query,
+        original_start,
+        perms.as_ref().is_some_and(|p| p.has_data_restrictions()),
+    )
+    .await;
+
     Ok(JsonResponse(ActivitySummaryResponse {
+        day_start,
         privacy: super::search::search_privacy(state.db.protected_reads_enabled()),
         starred_sessions,
         starred_sessions_has_more,
@@ -491,6 +511,68 @@ pub(crate) async fn get_activity_summary(
         snippets: snippets_opt,
         guidance,
     }))
+}
+
+async fn summary_day_start(
+    db: &DatabaseManager,
+    query: &ActivitySummaryQuery,
+    original_start: DateTime<Utc>,
+    data_restricted: bool,
+) -> Option<screenpipe_db::day_start::DayStartObservation> {
+    if query.include_day_start {
+        use screenpipe_db::day_start::{validate_day_window, DayStartObservation};
+        let day_start = query.day_start_time.unwrap_or(original_start);
+        let requested_start = day_start.max(original_start);
+        let start = requested_start.max(query.start_time);
+        // A rolling-history clamp before the requested day boundary does not
+        // remove any day-start evidence (common for free 24h cloud context).
+        let restricted = start != requested_start;
+        let status = if restricted {
+            Some("history_restricted")
+        } else if query.app_name.is_some()
+            || query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
+            || data_restricted
+        {
+            Some("scope_restricted")
+        } else if validate_day_window(start, query.end_time).is_err() {
+            Some("invalid_window")
+        } else {
+            None
+        };
+        if let Some(status) = status {
+            Some(DayStartObservation::new(
+                status,
+                original_start,
+                query.end_time,
+                None,
+            ))
+        } else {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                db.first_input_for_day(start, query.end_time, None),
+            )
+            .await;
+            let mut observation = match result {
+                Ok(Ok(evidence)) => DayStartObservation::new(
+                    if evidence.is_some() {
+                        "observed"
+                    } else {
+                        "no_observation"
+                    },
+                    start,
+                    query.end_time,
+                    evidence,
+                ),
+                _ => DayStartObservation::new("unavailable", start, query.end_time, None),
+            };
+            if day_start < start {
+                observation.coverage = "partial_window".into();
+            }
+            Some(observation)
+        }
+    } else {
+        None
+    }
 }
 
 fn apply_activity_summary_history_access(
@@ -517,6 +599,14 @@ fn empty_activity_summary_response(query: &ActivitySummaryQuery) -> ActivitySumm
         "not_requested"
     };
     ActivitySummaryResponse {
+        day_start: query.include_day_start.then(|| {
+            screenpipe_db::day_start::DayStartObservation::new(
+                "history_restricted",
+                query.start_time,
+                query.end_time,
+                None,
+            )
+        }),
         privacy: None,
         starred_sessions: None,
         starred_sessions_has_more: None,
@@ -1843,12 +1933,110 @@ mod tests {
             include_memories: true,
             include_snippets: true,
             include_guidance: true,
+            include_day_start: false,
+            day_start_time: None,
             include_parsed_count: false,
             include_starred: true,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
         }
+    }
+
+    #[tokio::test]
+    async fn day_start_summary_preserves_scope_history_and_missing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            dir.path().join("summary.db").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let mut query = default_query();
+        let original = query.start_time;
+        assert!(summary_day_start(&db, &query, original, false)
+            .await
+            .is_none());
+        query.include_day_start = true;
+        let empty = summary_day_start(&db, &query, original, false)
+            .await
+            .unwrap();
+        assert_eq!(empty.status, "no_observation");
+        assert!(!empty.is_confirmed_work_start);
+        assert_eq!(
+            summary_day_start(&db, &query, original, true)
+                .await
+                .unwrap()
+                .status,
+            "scope_restricted"
+        );
+        query.app_name = Some("Private".into());
+        assert_eq!(
+            summary_day_start(&db, &query, original, false)
+                .await
+                .unwrap()
+                .status,
+            "scope_restricted"
+        );
+        query.app_name = None;
+        query.day_start_time = Some(original - chrono::Duration::hours(1));
+        assert_eq!(
+            summary_day_start(&db, &query, original, false)
+                .await
+                .unwrap()
+                .coverage,
+            "partial_window"
+        );
+        query.day_start_time = Some(original + chrono::Duration::minutes(10));
+        query.start_time = original + chrono::Duration::minutes(1);
+        assert_eq!(
+            summary_day_start(&db, &query, original, false)
+                .await
+                .unwrap()
+                .status,
+            "no_observation"
+        );
+        query.day_start_time = None;
+        query.start_time = original + chrono::Duration::minutes(1);
+        assert_eq!(
+            summary_day_start(&db, &query, original, false)
+                .await
+                .unwrap()
+                .status,
+            "history_restricted"
+        );
+        query.start_time = original;
+        query.end_time = original + chrono::Duration::hours(26);
+        assert_eq!(
+            summary_day_start(&db, &query, original, false)
+                .await
+                .unwrap()
+                .status,
+            "invalid_window"
+        );
+    }
+    #[tokio::test]
+    async fn day_start_pool_starvation_is_optional_unavailability() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            dir.path().join("starved.db").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let mut query = default_query();
+        query.include_day_start = true;
+        let mut connections = Vec::new();
+        for _ in 0..db.pool.options().get_max_connections() {
+            connections.push(db.pool.acquire().await.unwrap());
+        }
+        let start = std::time::Instant::now();
+        let result = summary_day_start(&db, &query, query.start_time, false)
+            .await
+            .unwrap();
+        assert_eq!(result.status, "unavailable");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        drop(connections);
     }
 
     fn fixed_now() -> DateTime<Utc> {
@@ -2082,6 +2270,8 @@ mod db_tests {
             include_memories: false,
             include_snippets: false,
             include_guidance: false,
+            include_day_start: false,
+            day_start_time: None,
             include_parsed_count: false,
             include_starred: true,
             max_snippets: 8,
@@ -3064,6 +3254,7 @@ mod include_flag_tests {
             timestamp: "2026-06-02T10:00:30Z".to_string(),
         }];
         ActivitySummaryResponse {
+            day_start: None,
             privacy: None,
             starred_sessions: None,
             starred_sessions_has_more: None,

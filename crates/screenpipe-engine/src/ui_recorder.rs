@@ -273,6 +273,7 @@ impl UiRecorderConfig {
         config.enabled = self.enabled;
         config.capture_clicks = self.capture_clicks;
         config.capture_mouse_move = self.capture_mouse_move;
+        config.capture_mouse_activity = self.record_input_events && self.record_click_events;
         config.capture_text = self.capture_text;
         config.capture_keystrokes = self.capture_keystrokes;
         // Clipboard detection is needed for trigger-only captures even when
@@ -837,6 +838,7 @@ pub async fn start_ui_recording(
     let record_keyboard_events = config.record_keyboard_events;
     let record_clipboard_events = config.record_clipboard_events;
     let record_click_events = config.record_click_events;
+    let sparse_mouse_activity = !config.capture_mouse_move;
     let trigger_gates = TriggerGates;
 
     // Start the recording
@@ -899,7 +901,7 @@ pub async fn start_ui_recording(
 
             match handle.recv_timeout(recv_timeout) {
                 Some(event) => {
-                    let db_event = event.to_db_insert(Some(session_id.clone()));
+                    let mut db_event = event.to_db_insert(Some(session_id.clone()));
                     cancel_scroll_on_focus_change(
                         &mut scroll_burst,
                         &db_event,
@@ -907,7 +909,12 @@ pub async fn start_ui_recording(
                         linker_tx.as_ref(),
                     );
                     let is_ignored = ui_event_is_ignored(&db_event, &ignored_patterns, &url_policy);
+                    let sparse_move_paused = sparse_mouse_activity
+                        && db_event.event_type == screenpipe_db::UiEventType::Move
+                        && (crate::schedule_monitor::schedule_paused()
+                            || crate::drm_detector::drm_content_paused());
                     let should_record_event = record_input_events
+                        && !sparse_move_paused
                         && !is_ignored
                         && should_record_input_event(
                             &db_event,
@@ -985,6 +992,11 @@ pub async fn start_ui_recording(
                     }
 
                     if should_record_event {
+                        if sparse_mouse_activity
+                            && db_event.event_type == screenpipe_db::UiEventType::Move
+                        {
+                            strip_mouse_activity_payload(&mut db_event);
+                        }
                         batch.push(db_event, correlation_id);
                     }
 
@@ -1105,6 +1117,30 @@ pub async fn start_ui_recording(
 // Tree walker is disabled — paired_capture.rs handles accessibility capture.
 // Keeping this comment as a tombstone for git blame.
 
+fn strip_mouse_activity_payload(event: &mut InsertUiEvent) {
+    event.x = None;
+    event.y = None;
+    event.delta_x = None;
+    event.delta_y = None;
+    event.button = None;
+    event.click_count = None;
+    event.key_code = None;
+    event.modifiers = None;
+    event.text_content = None;
+    event.app_name = None;
+    event.app_pid = None;
+    event.window_title = None;
+    event.browser_url = None;
+    event.element_role = None;
+    event.element_name = None;
+    event.element_value = None;
+    event.element_description = None;
+    event.element_automation_id = None;
+    event.element_bounds = None;
+    event.element_ancestors = None;
+    event.frame_id = None;
+}
+
 fn should_record_input_event(
     db_event: &InsertUiEvent,
     record_keyboard_events: bool,
@@ -1120,9 +1156,9 @@ fn should_record_input_event(
         // who turned off click recording has said "don't persist what I do
         // with the pointer" — scroll rows appearing anyway (now that
         // capture_scroll defaults on) would silently widen that surface.
-        screenpipe_db::UiEventType::Click | screenpipe_db::UiEventType::Scroll => {
-            record_click_events
-        }
+        screenpipe_db::UiEventType::Click
+        | screenpipe_db::UiEventType::Scroll
+        | screenpipe_db::UiEventType::Move => record_click_events,
         _ => true,
     }
 }
@@ -2059,6 +2095,28 @@ mod capture_trigger_kind_tests {
             result,
             Some(CaptureTrigger::Click { x: 123, y: 456 })
         ));
+    }
+
+    #[test]
+    fn sparse_moves_respect_pointer_settings_and_have_no_payload_or_capture() {
+        let mut event = evt(UiEventType::Move);
+        event.x = Some(500);
+        event.y = Some(600);
+        event.window_title = Some("private".into());
+        assert!(!should_record_input_event(&event, true, true, false));
+        assert!(capture_trigger_kind(&event, &[], gates(true, true)).is_none());
+        strip_mouse_activity_payload(&mut event);
+        assert!(event.x.is_none() && event.y.is_none());
+        assert!(
+            event.app_name.is_none() && event.window_title.is_none() && event.browser_url.is_none()
+        );
+        let mut config = UiRecorderConfig::default();
+        assert!(config.to_ui_config().capture_mouse_activity);
+        config.record_click_events = false;
+        assert!(!config.to_ui_config().capture_mouse_activity);
+        config.record_click_events = true;
+        config.record_input_events = false;
+        assert!(!config.to_ui_config().capture_mouse_activity);
     }
 
     #[test]

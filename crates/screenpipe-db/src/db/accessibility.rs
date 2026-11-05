@@ -373,10 +373,7 @@ impl DatabaseManager {
         let mut bind_values: Vec<String> = Vec::new();
 
         if context_only {
-            conditions.push(
-                "(COALESCE(element_name, '') != '' OR COALESCE(text_content, '') != '')"
-                    .to_string(),
-            );
+            conditions.push(INPUT_CONTEXT_OR_ACTIVITY.to_string());
         }
 
         if let Some(q) = query {

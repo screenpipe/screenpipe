@@ -6,7 +6,7 @@
 
 use super::cloud::CloudAgentConfig;
 use anyhow::{anyhow, Context, Result};
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{Duration as ChronoDuration, Local, SecondsFormat, TimeZone, Utc};
 use serde_json::Value;
 
 const MAX_CONTEXT_ITEMS: u32 = 200;
@@ -45,6 +45,13 @@ async fn fetch_activity_capsule(
     config: &CloudAgentConfig,
 ) -> Result<String> {
     let (start, end) = time_range(config);
+    let day_start = end
+        .with_timezone(&Local)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|midnight| Local.from_local_datetime(&midnight).earliest())
+        .map(|midnight| midnight.with_timezone(&Utc))
+        .unwrap_or(end);
     let body = local_get(
         client,
         api_port,
@@ -57,6 +64,8 @@ async fn fetch_activity_capsule(
             ),
             ("end_time", end.to_rfc3339_opts(SecondsFormat::Secs, true)),
             ("include_recording", "false".into()),
+            ("include_day_start", "true".into()),
+            ("day_start_time", day_start.to_rfc3339()),
             ("include_key_texts", "false".into()),
             ("include_memories", "true".into()),
             ("include_snippets", "true".into()),
@@ -184,9 +193,10 @@ mod tests {
             .and(path("/activity-summary"))
             .and(header("authorization", "Bearer local-key"))
             .and(query_param("include_recording", "false"))
+            .and(query_param("include_day_start", "true"))
             .and(query_param("include_memories", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                r#"{"apps":[{"name":"Code"}],"edited_files":[{"path":"/Users/me/private.rs"}]}"#,
+                r#"{"apps":[{"name":"Code"}],"day_start":{"status":"observed"},"edited_files":[{"path":"/Users/me/private.rs"}]}"#,
                 "application/json",
             ))
             .expect(1)
@@ -203,6 +213,17 @@ mod tests {
         .unwrap();
 
         assert!(context.contains("Code"));
+        assert!(context.contains("day_start"));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "day start must not add a second cloud-context request"
+        );
+        assert!(requests[0]
+            .url
+            .query_pairs()
+            .any(|(key, _)| key == "day_start_time"));
         assert!(!context.contains("edited_files"));
         assert!(!context.contains("private.rs"));
     }

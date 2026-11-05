@@ -53,6 +53,14 @@ pub struct UiCaptureConfig {
     /// Capture mouse movement (high volume - disabled by default)
     pub capture_mouse_move: bool,
 
+    /// Runtime-only, coordinate-free movement presence, at most once per elapsed
+    /// minute. Enabled by the engine only when pointer recording is authorized.
+    #[serde(skip)]
+    pub capture_mouse_activity: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub mouse_activity_minute: std::sync::Arc<std::sync::atomic::AtomicU64>,
+
     /// Capture full accessibility tree of focused window.
     ///
     /// Off by default: on Windows these walks are synchronous cross-process
@@ -218,7 +226,9 @@ impl Default for UiCaptureConfig {
             capture_clipboard_content: true,
             capture_context: true,
             capture_mouse_move: false, // High volume
-            capture_tree: false,       // Freezes foreground apps on Windows; snapshots unconsumed
+            capture_mouse_activity: false,
+            mouse_activity_minute: Default::default(),
+            capture_tree: false, // Freezes foreground apps on Windows; snapshots unconsumed
             tree_debounce_ms: 300,
             tree_max_elements: 10000,
             tree_capture_interval_ms: 0,
@@ -329,6 +339,25 @@ impl UiCaptureConfig {
         } else {
             std::borrow::Cow::Borrowed(&self.included_window_patterns)
         }
+    }
+
+    /// Share the sparse sampling gate with a platform callback.
+    pub fn mouse_activity_gate(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        self.mouse_activity_minute.clone()
+    }
+    pub fn mouse_activity_due(&self, elapsed_ms: i64) -> bool {
+        self.enabled
+            && self.capture_mouse_activity
+            && elapsed_ms >= 0
+            && elapsed_ms as u64 / 60_000 + 1
+                > self
+                    .mouse_activity_minute
+                    .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn take_mouse_activity(&self, elapsed_ms: i64) -> bool {
+        self.enabled
+            && self.capture_mouse_activity
+            && take_mouse_activity(&self.mouse_activity_minute, elapsed_ms)
     }
 
     /// Check if an app should be captured. Called before window title is known,
@@ -604,5 +633,52 @@ mod tests {
         assert!(config.is_password_field(None, Some("Enter Password")));
         assert!(config.is_password_field(None, Some("API Key")));
         assert!(!config.is_password_field(Some("AXTextField"), Some("Email")));
+    }
+}
+
+/// One non-blocking claim per elapsed minute, shared by platform input callbacks.
+/// Use recorder monotonic elapsed time: wall-clock/DST changes cannot wedge it.
+pub(crate) fn take_mouse_activity(gate: &std::sync::atomic::AtomicU64, elapsed_ms: i64) -> bool {
+    use std::sync::atomic::Ordering;
+    if elapsed_ms < 0 {
+        return false;
+    }
+    let minute = elapsed_ms as u64 / 60_000 + 1;
+    let previous = gate.load(Ordering::Relaxed);
+    minute > previous
+        && gate
+            .compare_exchange(previous, minute, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+}
+
+#[cfg(test)]
+mod mouse_activity_tests {
+    use super::*;
+    #[test]
+    fn sparse_activity_is_opt_in_bounded_and_shared_across_clones() {
+        let mut config = UiCaptureConfig::new();
+        assert!(!config.take_mouse_activity(1000));
+        config.capture_mouse_activity = true;
+        assert!(config.take_mouse_activity(1000));
+        assert!(!config.clone().take_mouse_activity(59999));
+        assert!(config.take_mouse_activity(60000));
+        assert!(!config.take_mouse_activity(1000)); // stale/out-of-order callback
+        assert!(!config.take_mouse_activity(-1));
+        config.enabled = false;
+        assert!(!config.take_mouse_activity(120000));
+    }
+    #[test]
+    fn mouse_activity_storm_is_one_marker_per_minute() {
+        let mut config = UiCaptureConfig::new();
+        config.capture_mouse_activity = true;
+        let start = std::time::Instant::now();
+        let count = (0..1_000_000)
+            .filter(|i| config.take_mouse_activity(*i))
+            .count();
+        assert_eq!(count, 17);
+        eprintln!(
+            "1,000,000 sparse gate calls: {:?}; 17 markers",
+            start.elapsed()
+        );
     }
 }

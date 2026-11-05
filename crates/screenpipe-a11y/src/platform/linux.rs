@@ -884,7 +884,16 @@ fn monitor_mice(
                                     feed.record(ActivityKind::MouseMove);
                                 }
 
-                                if config.capture_mouse_move {
+                                if config.capture_mouse_move || config.take_mouse_activity(t as i64)
+                                {
+                                    let app_name = current_app.lock().clone();
+                                    let window_title = current_window.lock().clone();
+                                    if !config.should_capture_target(
+                                        app_name.as_deref().unwrap_or_default(),
+                                        window_title.as_deref(),
+                                    ) {
+                                        continue;
+                                    }
                                     let event = UiEvent {
                                         id: None,
                                         timestamp: Utc::now(),
@@ -893,8 +902,8 @@ fn monitor_mice(
                                             x: last.0,
                                             y: last.1,
                                         },
-                                        app_name: current_app.lock().clone(),
-                                        window_title: current_window.lock().clone(),
+                                        app_name,
+                                        window_title,
                                         browser_url: None,
                                         element: None,
                                         frame_id: None,

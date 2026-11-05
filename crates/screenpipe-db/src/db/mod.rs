@@ -37,6 +37,10 @@ use crate::{
     MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
+/// Keep the existing context-only sync stream useful without widening it to
+/// raw pointer paths or contextless keystrokes. Sparse movement has no payload.
+pub(crate) const INPUT_CONTEXT_OR_ACTIVITY: &str = "(COALESCE(element_name, '') != '' OR COALESCE(text_content, '') != '' OR (event_type = 'move' AND x IS NULL AND y IS NULL AND COALESCE(app_name, '') = '' AND COALESCE(window_title, '') = '' AND COALESCE(browser_url, '') = ''))";
+
 /// Time window (in seconds) to check for similar transcriptions across devices.
 /// Transcriptions within this window are checked for cross-device duplicates.
 const DEDUP_TIME_WINDOW_SECS: i64 = 45;

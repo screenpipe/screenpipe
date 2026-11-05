@@ -975,7 +975,7 @@ fn run_event_tap(
         | cg::EventType::KEY_UP.mask()
         | cg::EventType::SCROLL_WHEEL.mask();
 
-    if config.capture_mouse_move || activity_feed.is_some() {
+    if config.capture_mouse_move || config.capture_mouse_activity || activity_feed.is_some() {
         mask |= cg::EventType::MOUSE_MOVED.mask()
             | cg::EventType::LEFT_MOUSE_DRAGGED.mask()
             | cg::EventType::RIGHT_MOUSE_DRAGGED.mask();
@@ -1185,6 +1185,17 @@ extern "C" fn tap_callback(
     }
 
     let t = state.start.elapsed().as_millis() as u64;
+    let is_move = matches!(
+        event_type,
+        cg::EventType::MOUSE_MOVED
+            | cg::EventType::LEFT_MOUSE_DRAGGED
+            | cg::EventType::RIGHT_MOUSE_DRAGGED
+    );
+    let sparse_move = is_move && !state.config.capture_mouse_move;
+    let activity_due = sparse_move && state.config.mouse_activity_due(t as i64);
+    if sparse_move && !activity_due && state.activity_feed.is_none() {
+        return Some(event);
+    }
     let timestamp = Utc::now();
     let loc = event.location();
     let flags = event.flags().0;
@@ -1192,6 +1203,9 @@ extern "C" fn tap_callback(
 
     // Lock-free reads — no mutex contention in the input event path
     let focus = state.current_focus.load();
+    if sparse_move && !focus.allowed {
+        return Some(event);
+    }
     let app_name = focus.app_name.clone();
     let window_title = focus.window_title.clone();
     let event_target_pid =
@@ -1251,7 +1265,7 @@ extern "C" fn tap_callback(
 
                 *last = (loc.x, loc.y);
 
-                if state.config.capture_mouse_move {
+                if state.config.capture_mouse_move || state.config.take_mouse_activity(t as i64) {
                     let ui_event = UiEvent {
                         id: None,
                         timestamp,

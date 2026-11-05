@@ -627,3 +627,37 @@ Each stage can also return `inputSearch` arguments for `search-content` with
 `content_type="input"`. Input results preserve recorded x/y, keys/modifiers,
 element role/name and linked frame IDs. Treat the bounded time window as
 candidate events to verify, not as automatic proof of the workflow's actions.
+
+### Observed start of day
+
+Use `activity-summary` with `include_day_start=true` and explicit local-day bounds
+(`start_time=2026-11-05T00:00:00-08:00`, `end_time=2026-11-06T00:00:00-08:00`).
+There is no separate local endpoint or tool. `day_start_time` can request a day
+boundary within a broader summary; reads never extend beyond the requested
+history. Cloud-agent sharing uses the same summary request, requests local
+midnight, and marks a clipped lookback as `coverage=partial_window`.
+
+The optional metadata query has a 250ms deadline. Disabled requests add no query.
+App/keyword/pipe restrictions, history clipping, invalid windows, timeouts and
+missing observations are explicit; they do not discard the main summary.
+
+`team-day-start` uses the existing enterprise `records` API with
+`include_day_start=true`, explicit `since`/`until`, a `device_id` from
+`team-devices`, and the existing `read:records` token. Both the gateway and hosted
+API must include this change; older servers fail explicitly rather than guessing.
+The hosted implementation bounds archive reads to 2 MiB, 64 objects and two
+seconds, cancels stalled reads, and reports incomplete/unavailable scans.
+
+Existing authorized mouse hooks emit at most one movement metadata sample per
+elapsed-minute bucket per recorder instance, even with detailed mouse movement capture off.
+No pointer path, window title or URL is stored for these samples. No capture polling timer,
+writer, input permission prompt or screenshot is introduced. The existing input
+and pointer-recording switches, exclusions, work schedule and DRM pauses still
+apply. Full input recording remains off when those switches are disabled.
+
+The result contains an event ID, timestamp, input type, device and exact query
+window. `coverage=recorded_only` and `is_confirmed_work_start=false` are deliberate:
+late startup, missing permissions, gaps, sleep, restarts, retention and incomplete
+sync cannot establish a shift start or absence. Night work after midnight counts
+as observed input, not a new work session. The minute sampler is an activity
+heuristic, not a stopwatch; no employee schedule is changed.
