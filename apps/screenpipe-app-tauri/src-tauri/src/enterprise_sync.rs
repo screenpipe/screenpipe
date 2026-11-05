@@ -52,6 +52,7 @@ mod imp {
         // customer's storage backend.
         app: tauri::AppHandle,
         http: reqwest::Client,
+        screenshot_work: tokio::sync::Notify,
     }
 
     impl ScreenpipeLocalClient {
@@ -59,6 +60,7 @@ mod imp {
             Self {
                 api_url_base,
                 app,
+                screenshot_work: tokio::sync::Notify::new(),
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
@@ -459,6 +461,13 @@ mod imp {
 
     #[async_trait::async_trait]
     impl LocalApiClient for ScreenpipeLocalClient {
+        fn screenshot_work_accepted(&self) {
+            self.screenshot_work.notify_one();
+        }
+        async fn wait_for_screenshot_work(&self) {
+            self.screenshot_work.notified().await;
+        }
+
         async fn release_replay_pending(
             &self,
             request_id: &str,
