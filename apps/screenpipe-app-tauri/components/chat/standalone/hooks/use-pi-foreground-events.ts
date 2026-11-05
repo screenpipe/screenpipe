@@ -132,6 +132,9 @@ export function usePiForegroundEvents({
 }: PiForegroundEventsOptions) {
   const ui = useGT();
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
+  // A newly selected preset can wait until the current response finishes.
+  // Classify auth against the provider that is still running that response.
+  const getAuthProvider = () => piRunningConfigRef.current?.provider ?? getActivePreset()?.provider;
   // Error classification names the agent rather than saying "the agent", so a
   // refusal from the agent's own service reads as that agent's answer.
   const presetWithAgentName = () => {
@@ -1049,7 +1052,7 @@ export function usePiForegroundEvents({
           logLlmError("[Pi] LLM error via", data.type, ":", errMsg);
           piLastErrorRef.current = errMsg;
           emitSessionActivity({ status: "error", lastError: errMsg });
-          const authTokenInvalidated = isInvalidatedAuthTokenError(errMsg);
+          const authTokenInvalidated = isInvalidatedAuthTokenError(errMsg, getAuthProvider());
           if (authTokenInvalidated) {
             void handleInvalidatedAuthToken();
           }
@@ -1209,7 +1212,7 @@ export function usePiForegroundEvents({
             if (agentEndError) {
               const errStr = agentEndError;
               const quotaErrorType = classifyQuotaError(errStr);
-              if (isInvalidatedAuthTokenError(errStr)) {
+              if (isInvalidatedAuthTokenError(errStr, getAuthProvider())) {
                 void handleInvalidatedAuthToken();
                 content = buildInvalidatedAuthTokenMessage();
               } else if (quotaErrorType === "daily") {

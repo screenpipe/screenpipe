@@ -45,6 +45,7 @@ function useErrorHarness(activePreset?: AIPreset) {
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const handler = useRef<((event: unknown) => void) | null>(null);
+  const handleInvalidatedAuthToken = useRef(vi.fn()).current;
   usePiForegroundEvents({
     ...pi,
     activePreset,
@@ -58,7 +59,7 @@ function useErrorHarness(activePreset?: AIPreset) {
     handleAgentEventDataRef: handler,
     handleAgentActionEvent: () => false,
     clearAgentActionsForSession: vi.fn(),
-    handleInvalidatedAuthToken: vi.fn(),
+    handleInvalidatedAuthToken,
     lastUserMessageRef: useRef("Explain this repo"),
     markTurnIntentConsumed: vi.fn(),
     messages, messagesRef, setMessages,
@@ -76,7 +77,7 @@ function useErrorHarness(activePreset?: AIPreset) {
     turnIntentTextValuesMatch: () => false,
     noteTurnLivenessEvent: vi.fn(),
   });
-  return { pi, messages, setMessages, handler };
+  return { pi, messages, setMessages, handler, handleInvalidatedAuthToken };
 }
 
 describe("Pi terminal provider errors", () => {
@@ -85,6 +86,62 @@ describe("Pi terminal provider errors", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
+
+  it.each([
+    { provider: "screenpipe-cloud", runningProvider: undefined },
+    { provider: "openai-chatgpt", runningProvider: undefined },
+    { provider: "acp", runningProvider: undefined },
+    { provider: "screenpipe-cloud", runningProvider: "openai-chatgpt" },
+    { provider: "openai-chatgpt", runningProvider: "screenpipe-cloud" },
+  ].flatMap((providers) =>
+    ["message_start", "message_end", "agent_end"].map((eventType) => ({ ...providers, eventType })),
+  ))("scopes authentication on $eventType (selected: $provider, running: $runningProvider)", ({ provider, runningProvider, eventType }) => {
+    const preset: AIPreset = {
+      id: provider, provider, model: "auto", prompt: "",
+      defaultPreset: true, apiKey: null, maxContextChars: 100000,
+      // Even an ACP agent routing model calls through Screenpipe can return
+      // authentication errors from the agent's own account.
+      ...(provider === "acp" ? { acpAgent: { id: "claude-acp", useScreenpipeCloud: true } } : {}),
+    };
+    const { result } = renderHook(() => useErrorHarness(preset));
+    const raw = "Your authentication token has expired. Please try refreshing it.";
+    const errorMessage = { role: "assistant", stopReason: "error", errorMessage: raw, content: [] };
+    const rawLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      act(() => {
+        result.current.pi.piMessageIdRef.current = initial.id;
+        if (runningProvider) {
+          result.current.pi.piRunningConfigRef.current = {
+            provider: runningProvider, model: "auto", url: "", apiKey: null,
+            maxTokens: 4096, maxContextChars: null, systemPrompt: null, token: "screenpipe-token",
+          };
+        }
+        if (eventType !== "agent_end") {
+          result.current.handler.current!({ type: eventType, message: errorMessage });
+        }
+        result.current.handler.current!({ type: "agent_end", messages: [errorMessage] });
+      });
+
+      if ((runningProvider ?? provider) === "screenpipe-cloud") {
+        expect(result.current.handleInvalidatedAuthToken).toHaveBeenCalled();
+        expect(result.current.messages[0].content).toContain("Your screenpipe session expired");
+      } else {
+        expect(result.current.handleInvalidatedAuthToken).not.toHaveBeenCalled();
+        expect(result.current.messages[0].content).toBe(`Error: ${raw}`);
+        expect(result.current.messages[0].content).not.toContain("screenpipe session expired");
+      }
+      const saved = storeMessages.mock.calls.at(-1)?.[1]?.[0];
+      expect(saved).toEqual(result.current.messages[0]);
+      render(<MessageContent message={JSON.parse(JSON.stringify(saved))} />);
+      expect(screen.getByText(saved.content.replace(/^Error: /, ""))).toBeInTheDocument();
+      if (eventType !== "agent_end") {
+        expect(rawLog).toHaveBeenCalledWith("[Pi] LLM error via", eventType, ":", raw);
+      }
+    } finally {
+      rawLog.mockRestore();
+    }
+  });
+
   it.each([false, true])("retains an error after tool progress (earlier error events: %s)", (emitEarlierError) => {
     const { result } = renderHook(useErrorHarness);
     const errorMessage = { role: "assistant", stopReason: "error", errorMessage: overflow, content: [] };
