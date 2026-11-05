@@ -1114,6 +1114,83 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    async fn pi_bun_repair_failure_and_recovery_survive_support_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        let config = root.path().join("pi-config");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        let current = logs.join("screenpipe-app.2026-11-05.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        let settings_path = config.join("settings.json");
+        let stale_bun = config.join("stale-install").join("bun.exe");
+        let replacement_bun = config.join("current-install").join("bun.exe");
+        std::fs::create_dir_all(replacement_bun.parent().unwrap()).unwrap();
+        std::fs::write(&replacement_bun, b"").unwrap();
+        let stale_settings = serde_json::to_vec(&serde_json::json!({
+            "npmCommand": [stale_bun],
+            "unrelated": {"keep": true}
+        }))
+        .unwrap();
+        std::fs::write(&settings_path, &stale_settings).unwrap();
+
+        let mut permissions = std::fs::metadata(&settings_path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&settings_path, permissions).unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                privacy_sentinel = "pi-bun-private-person@example.com",
+                "Pi repair privacy sentinel"
+            );
+            let error = screenpipe_core::agents::pi::ensure_pi_package_manager_settings(
+                &config,
+                replacement_bun.to_str().unwrap(),
+            )
+            .expect_err("Windows must refuse to replace a read-only settings file");
+            assert!(error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(|error| error.raw_os_error())
+                    == Some(5)
+            }));
+            assert_eq!(std::fs::read(&settings_path).unwrap(), stale_settings);
+
+            let mut permissions = std::fs::metadata(&settings_path).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&settings_path, permissions).unwrap();
+            screenpipe_core::agents::pi::ensure_pi_package_manager_settings(
+                &config,
+                replacement_bun.to_str().unwrap(),
+            )
+            .unwrap();
+            let repaired: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+            assert_eq!(repaired["npmCommand"], serde_json::json!([replacement_bun]));
+            assert_eq!(repaired["unrelated"], serde_json::json!({"keep": true}));
+        });
+        std::fs::rename(&current, logs.join("screenpipe-app.2026-11-05.1.log")).unwrap();
+        std::fs::write(&current, "screenpipe restarted after Pi settings repair\n").unwrap();
+
+        let report = collect_redacted_from_dirs(&[logs]).await.unwrap();
+        assert!(report.contains("failed to repair Pi package-manager command"));
+        assert!(report.contains("repaired Pi package-manager command"));
+        assert!(report.contains("stale_path="));
+        assert!(report.contains("stale-install"));
+        assert!(report.contains("replacement_path="));
+        assert!(report.contains("current-install"));
+        assert!(report.contains("outcome=\"failed\""));
+        assert!(report.contains("outcome=\"repaired\""));
+        assert!(report.contains("managed Bun executable is missing"));
+        assert!(report.contains("Access is denied") || report.contains("os error 5"));
+        assert!(report.contains("screenpipe restarted after Pi settings repair"));
+        assert!(!report.contains("pi-bun-private-person@example.com"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
     async fn settings_access_recovery_survives_rotation_and_redaction_without_private_data() {
         use std::os::windows::fs::OpenOptionsExt;
         let root = tempfile::tempdir().unwrap();
