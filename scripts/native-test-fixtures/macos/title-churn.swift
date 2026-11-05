@@ -23,26 +23,31 @@ for screen in NSScreen.screens {
     let blocked = window(NSRect(x: origin.x + 30, y: origin.y + 50, width: 300, height: 250),
                          "WhatsApp private 0", .magenta)
     let allowed = window(NSRect(x: origin.x + 400, y: origin.y + 50, width: 300, height: 250),
-                         "Public document 0", .cyan)
+                         "PrivacyAllowed Public document 0", .cyan)
     windows.append((allowed, blocked))
 }
 app.activate(ignoringOtherApps: true)
 var sequence = 0
+var appliedMode = ""
 let timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
     sequence += 1
     let mode = (try? String(contentsOfFile: control, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "static"
     for (allowed, blocked) in windows {
         switch mode {
         case "allowed":
-            allowed.title = "Public document \(sequence)"
+            allowed.title = "PrivacyAllowed Public document \(sequence)"
         case "excluded":
             blocked.title = "WhatsApp private \(sequence)"
         case "blocked":
             allowed.title = "Zee5 private \(sequence)"
         default:
-            allowed.title = "Public document stable"
+            allowed.title = "PrivacyAllowed Public document stable"
             blocked.title = "WhatsApp private stable"
         }
+    }
+    if mode != appliedMode {
+        try? mode.write(toFile: control + ".applied", atomically: true, encoding: .utf8)
+        appliedMode = mode
     }
 }
 print("ready screens=\(windows.count)")
