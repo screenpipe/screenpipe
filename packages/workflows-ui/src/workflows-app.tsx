@@ -1029,7 +1029,8 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
 
   useEffect(() => {
     if (!active) return;
-    setCatalogReady(!platform.loadCapturedWork);
+    // Keep a confirmed catalog ready during background refreshes so an open
+    // editor is never replaced by the read-only document (or loses its draft).
     setCatalogLoading(Boolean(platform.loadCapturedWork));
     setCatalogLoadError(false);
     setCatalogReconnecting(false);
@@ -1314,7 +1315,8 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
   }
 
   const catalogView = view !== "profile" && view !== "library";
-  if (catalogView && !knownWorkflows.length && (catalogLoading || catalogLoadError)) {
+  const detailAwaitingCatalog = view === "workflow" && !catalogReady;
+  if (catalogView && (!knownWorkflows.length || detailAwaitingCatalog) && (catalogLoading || catalogLoadError)) {
     content = catalogLoading ? <CatalogPlaceholder detail={view === "workflow"} reconnecting={catalogReconnecting} retry={refreshRuntime} /> : <>
       <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>Your workflows</h1></div>
       <section className={styles.catalogLoadError} role="alert"><AlertTriangle size={20} /><h2>Couldn’t load your workflows</h2><p>Your saved workflows haven’t been changed. Try loading them again.</p><button className={styles.primaryButton} onClick={refreshRuntime}><RefreshCw size={14} />Retry loading</button></section>

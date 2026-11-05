@@ -7,13 +7,58 @@ import { WorkflowsApp } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 
 beforeEach(() => { vi.useFakeTimers(); window.history.replaceState(null, "", "/home?mode=workflows"); });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.useRealTimers(); });
 const mount = async (platform: ReturnType<typeof createFixtureWorkflowsPlatform>, cached = false) => {
   await act(async () => { render(<WorkflowsApp platform={platform} storageKey={null} initialAnalysis={cached ? fixtureWorkflowAnalysis : null} />); });
 };
 const exhaustRetries = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(3000); }); };
 
 describe("workflow catalog loading", () => {
+  it("waits for the current catalog before opening a cached workflow document", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    let resolve!: (value: typeof fixtureWorkflowAnalysis) => void;
+    platform.loadCapturedWork = () => new Promise(done => { resolve = done; });
+    await mount(platform, true);
+    fireEvent.click(screen.getByRole("button", { name: /Research synthesis/ }));
+    expect(screen.queryByRole("region", { name: "Workflow document" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export workflow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Loading workflows" })).toBeVisible();
+    await act(async () => resolve(fixtureWorkflowAnalysis));
+    expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+    expect(screen.queryByRole("region", { name: "Loading workflows" })).not.toBeInTheDocument();
+  });
+  it("keeps an open editor and its draft when Workflows resumes during a refresh", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    const load = vi.fn().mockResolvedValue(fixtureWorkflowAnalysis);
+    platform.loadCapturedWork = load;
+    const view = render(<WorkflowsApp platform={platform} storageKey={null} active />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Research synthesis/ }));
+    const title = screen.getByRole("textbox", { name: "Workflow title" });
+    fireEvent.change(title, { target: { value: "My unsaved title" } });
+    view.rerender(<WorkflowsApp platform={platform} storageKey={null} active={false} />);
+    let finish!: (value: typeof fixtureWorkflowAnalysis) => void;
+    load.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await act(async () => view.rerender(<WorkflowsApp platform={platform} storageKey={null} active />));
+    expect(screen.getByRole("textbox", { name: "Workflow title" })).toBe(title);
+    expect(title).toHaveValue("My unsaved title");
+    expect(screen.queryByRole("region", { name: "Loading workflows" })).not.toBeInTheDocument();
+    await act(async () => finish(fixtureWorkflowAnalysis));
+    expect(screen.getByRole("textbox", { name: "Workflow title" })).toBe(title);
+    expect(title).toHaveValue("My unsaved title");
+  });
+  it("offers retry instead of a temporary read-only document after a cached detail fails to load", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    const load = vi.fn().mockRejectedValue(Object.assign(new Error("Access denied"), { status: 403 }));
+    platform.loadCapturedWork = load;
+    await mount(platform, true);
+    fireEvent.click(screen.getByRole("button", { name: /Research synthesis/ }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn’t load your workflows");
+    expect(screen.queryByRole("region", { name: "Workflow document" })).not.toBeInTheDocument();
+    load.mockResolvedValue(fixtureWorkflowAnalysis);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry loading" })));
+    expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+  });
   it("shows a skeleton until the catalog arrives, never onboarding during the read", async () => {
     const platform = createFixtureWorkflowsPlatform();
     let resolve!: (value: typeof fixtureWorkflowAnalysis) => void;
