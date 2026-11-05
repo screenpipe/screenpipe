@@ -5,6 +5,14 @@ use screenpipe_db::storage::{migrate, MigrationOptions, PrivacyPolicy, Projectio
 use screenpipe_db::{ContentType, DatabaseManager};
 use sqlx::Connection;
 
+#[cfg(windows)]
+fn smb_scratch_root() -> (tempfile::TempDir, std::path::PathBuf) {
+    let local = tempfile::tempdir_in("C:\\").unwrap();
+    let relative = local.path().strip_prefix("C:\\").unwrap();
+    let root = std::path::PathBuf::from(r"\\localhost\c$").join(relative);
+    (local, root)
+}
+
 async fn seed(db: &DatabaseManager, id: i64, text: Option<&str>, accessibility: Option<&str>) {
     let mut tx = db.begin_immediate_with_retry().await.unwrap();
     sqlx::query("INSERT INTO frames(id,timestamp,full_text,accessibility_text,text_json,accessibility_tree_json,app_name,window_name,device_name) VALUES(?,'2026-09-11T12:00:00Z',?,?,'[{\"text\":\"hello\",\"left\":0.5}]','{\"text\":\"hello\"}','Editor','notes','display')")
@@ -96,6 +104,39 @@ async fn staged_sealed_reopened_search_and_full_payloads_match() {
         "{}",
         String::from_utf8_lossy(&relative.stderr)
     );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
+async fn windows_smb_fresh_hybrid_init_reopens_same_generation() {
+    let (_local, root) = smb_scratch_root();
+    let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
+        .await
+        .unwrap();
+    let expected = screenpipe_db::storage::StorageDescriptor::read(&root)
+        .unwrap()
+        .unwrap();
+    seed(&db, 1, Some("windows publication survives reopen"), None).await;
+    db.close().await;
+
+    let reopened =
+        DatabaseManager::new(root.join("db.sqlite").to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+    let active = screenpipe_db::storage::StorageDescriptor::read(&root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.generation, expected.generation);
+    assert_eq!(
+        reopened
+            .frame_payloads(&[1], Projection::Search)
+            .await
+            .unwrap()[&1]
+            .text(),
+        "windows publication survives reopen"
+    );
+    reopened.close().await;
 }
 
 #[tokio::test]
@@ -762,6 +803,57 @@ async fn interrupted_initialization_resumes_its_recorded_generation() {
         seed(&db, 1, Some("ready after interruption"), None).await;
         db.close().await;
     }
+}
+
+#[cfg(all(windows, feature = "storage-fault-injection"))]
+#[tokio::test]
+#[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
+async fn windows_smb_interrupted_init_resumes_same_generation_and_history() {
+    let (_local, root) = smb_scratch_root();
+    let killed = std::process::Command::new(env!("CARGO_BIN_EXE_screenpipe-storage"))
+        .arg("init")
+        .arg(&root)
+        .env("SCREENPIPE_STORAGE_CRASH_AT", "initialization_ready")
+        .output()
+        .unwrap();
+    assert_eq!(
+        killed.status.code(),
+        Some(86),
+        "{}",
+        String::from_utf8_lossy(&killed.stderr)
+    );
+    let expected: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("storage-init.json")).unwrap()).unwrap();
+
+    let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
+        .await
+        .unwrap();
+    let active = screenpipe_db::storage::StorageDescriptor::read(&root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.generation, expected["generation"].as_str().unwrap());
+    seed(
+        &db,
+        1,
+        Some("history retained after interrupted init"),
+        None,
+    )
+    .await;
+    db.close().await;
+
+    let reopened =
+        DatabaseManager::new(root.join("db.sqlite").to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+    assert_eq!(
+        reopened
+            .frame_payloads(&[1], Projection::Search)
+            .await
+            .unwrap()[&1]
+            .text(),
+        "history retained after interrupted init"
+    );
+    reopened.close().await;
 }
 
 #[cfg(feature = "storage-fault-injection")]
