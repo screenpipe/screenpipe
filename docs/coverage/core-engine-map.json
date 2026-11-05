@@ -696,6 +696,7 @@
         "src/storage/bulk/elements/lifecycle.rs",
         "src/storage/diagnostics.rs",
         "src/storage/lifecycle.rs",
+        "src/storage/mod.rs",
         "src/storage/parity.rs",
         "src/storage/reclaim.rs",
         "src/storage/schema.rs",

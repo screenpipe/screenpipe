@@ -369,14 +369,26 @@ pub(crate) fn sync_directory(path: &Path) -> Result<(), sqlx::Error> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
+        let directory = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(0x02000000)
-            .open(path)?
-            .sync_all()?;
+            .open(path)?;
+        tolerate_windows_directory_sync(screenpipe_fs::sync_all(&directory))?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn tolerate_windows_directory_sync(result: std::io::Result<()>) -> Result<(), sqlx::Error> {
+    match result {
+        Ok(()) => Ok(()),
+        // Some Windows filesystems, including SMB, reject FlushFileBuffers on
+        // directory handles with ERROR_INVALID_FUNCTION. Files were already
+        // flushed, while the recovery journal preserves resumability.
+        Err(error) if error.raw_os_error() == Some(1) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(crate) fn durable_json<T: Serialize>(path: &Path, value: &T) -> Result<(), sqlx::Error> {
@@ -487,5 +499,87 @@ impl HybridStorage {
             privacy_ready: std::sync::atomic::AtomicBool::new(false),
             bulk: bulk::Runtime::default(),
         }))
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_durability_tests {
+    use super::{sync_directory, sync_file, tolerate_windows_directory_sync};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn windows_durability_failures_retain_typed_io_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let missing_file = root.path().join("missing.json");
+        let missing_directory = root.path().join("missing-directory");
+
+        for error in [
+            sync_file(&missing_file).unwrap_err(),
+            sync_directory(&missing_directory).unwrap_err(),
+        ] {
+            match error {
+                sqlx::Error::Io(io) => assert!(
+                    io.raw_os_error().is_some(),
+                    "native I/O failure must retain its OS code: {io}"
+                ),
+                other => panic!("expected a typed I/O error, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn windows_directory_sync_retains_non_compatibility_io_errors() {
+        let error =
+            tolerate_windows_directory_sync(Err(std::io::Error::from_raw_os_error(5))).unwrap_err();
+        match error {
+            sqlx::Error::Io(io) => assert_eq!(io.raw_os_error(), Some(5)),
+            other => panic!("expected a typed I/O error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
+    fn windows_publication_flushes_files_without_requiring_directory_flush() {
+        let root = tempfile::tempdir_in("C:\\").unwrap();
+        let relative = root.path().strip_prefix("C:\\").unwrap();
+        let published_root = PathBuf::from(r"\\localhost\c$").join(relative);
+        let file = published_root.join("descriptor.json");
+        std::fs::write(&file, b"{}\n").unwrap();
+
+        sync_file(&file).expect("ordinary file flush must succeed");
+        let directory = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(0x02000000)
+            .open(&published_root)
+            .unwrap();
+        match directory.sync_all() {
+            Ok(()) => eprintln!("native windows probe: file_flush=ok directory_flush=ok"),
+            Err(error) => {
+                assert_eq!(
+                    error.raw_os_error(),
+                    Some(1),
+                    "unexpected directory flush error"
+                );
+                eprintln!(
+                    "native windows probe: file_flush=ok directory_flush_error={:?} raw_os_error={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                );
+            }
+        }
+
+        sync_directory(&published_root)
+            .expect("directory publication must use a supported operation");
+        for error in [
+            sync_file(&published_root.join("missing.json")).unwrap_err(),
+            sync_directory(&published_root.join("missing-directory")).unwrap_err(),
+        ] {
+            assert!(
+                matches!(error, sqlx::Error::Io(_)),
+                "expected I/O error: {error:?}"
+            );
+        }
     }
 }
