@@ -54,6 +54,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
 criterion = { workspace = true }
 strsim = { workspace = true }
 memory-stats = "1.2.0"

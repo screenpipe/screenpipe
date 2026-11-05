@@ -415,6 +415,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filtered_screenshot_failure_survives_rotation_and_support_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        let emitted = include_str!(
+            "../../../../crates/screenpipe-screen/tests/fixtures/filtered-capture-diagnostic.txt"
+        );
+        tokio::fs::write(
+            root.path().join("screenpipe.2026-11-05.1.log"),
+            format!("{emitted}\npassword=hunter2\n"),
+        ).await.unwrap();
+        tokio::fs::write(root.path().join("screenpipe.2026-11-05.log"), "INFO recorder restarted\n")
+            .await.unwrap();
+        let report = collect_redacted_from_dirs(&[root.path().to_path_buf()]).await.unwrap();
+        assert!(report.contains("window-filtered screenshot withheld"));
+        assert!(report.contains("window privacy policy changed during capture"));
+        assert!(report.contains("monitor_id=2"));
+        assert!(report.contains("screenshot_outcome=\"withheld\""));
+        assert!(report.contains("accessibility_outcome=\"independent\""));
+        assert!(report.contains("recorder restarted"));
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
     async fn enterprise_retention_failure_survives_support_redaction() {
         let root = tempfile::tempdir().unwrap();
         let emitted = include_str!(
