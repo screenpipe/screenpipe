@@ -12,7 +12,8 @@ const root = await mkdtemp(join(tmpdir(), "screenpipe-pi-extensions-"));
 const config = join(root, "pi-config");
 const runtime = join(root, "pi-agent");
 const project = join(root, "project");
-const source = await readFile(resolve(import.meta.dir, "../../../crates/screenpipe-core/src/agents/pi.rs"), "utf8");
+const repo = resolve(import.meta.dir, "../../..");
+const source = await readFile(join(repo, "crates/screenpipe-core/src/agents/pi.rs"), "utf8");
 const packageSource = source.match(/REQUIRED_PI_EXTENSION_PACKAGE: &str = "([^"]+)"/)![1];
 const extensionVersion = packageSource.split("@").at(-1)!;
 const brokenVersion = "0.78.0"; // Uses toToolDeclaration, absent from Pi 0.84.1.
@@ -73,7 +74,23 @@ try {
     const install = await run([process.execPath, "install", "--ignore-scripts"], dir);
     assert.equal(install.code, 0, install.stderr);
   }
-  await writeFile(join(config, "settings.json"), JSON.stringify({ packages: [configuredPackage], npmCommand: [process.execPath], retry: { enabled: false } }));
+  const staleBun = join(root, "old-screenpipe-install", process.platform === "win32" ? "bun.exe" : "bun");
+  await writeFile(join(config, "settings.json"), JSON.stringify({
+    packages: [configuredPackage],
+    npmCommand: [staleBun],
+    retry: { enabled: false },
+    compaction: { enabled: false },
+  }));
+  const migration = await run([
+    "cargo", "run", "--quiet", "-p", "screenpipe-core", "--example", "pi-settings-migrate", "--",
+    config, process.execPath,
+  ], repo);
+  assert.equal(migration.code, 0, migration.stderr);
+  const migrated = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
+  assert.deepEqual(migrated.npmCommand, [process.execPath]);
+  assert.deepEqual(migrated.packages, [packageSource]);
+  assert.deepEqual(migrated.compaction, { enabled: false, keepRecentTokens: 8192 });
+  console.log(`PASS migration: missing managed Bun repaired to current runnable Bun; unrelated settings preserved`);
   await writeFile(join(config, "models.json"), JSON.stringify({ providers: { eval: {
     baseUrl: `http://127.0.0.1:${server.port}/v1`, api: "openai-completions", apiKey: "fictional-eval-key",
     models: [{ id: "eval", name: "Eval", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 256,

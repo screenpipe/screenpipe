@@ -5512,24 +5512,6 @@ fn pi_package_source_looks_installed(source: &str) -> bool {
     true
 }
 
-fn ensure_pi_package_manager_settings(bun: &str) -> Result<(), String> {
-    let mut settings = read_pi_settings()?;
-    if !settings.is_object() {
-        settings = json!({});
-    }
-
-    let obj = settings
-        .as_object_mut()
-        .ok_or_else(|| "Pi settings must be a JSON object".to_string())?;
-
-    if !obj.contains_key("npmCommand") {
-        obj.insert("npmCommand".to_string(), json!([bun]));
-        write_pi_settings(&settings)?;
-    }
-
-    Ok(())
-}
-
 fn package_command_failure(action: &str, output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -5585,7 +5567,11 @@ fn prepend_to_command_path(cmd: &mut Command, path: &Path) {
 
 fn run_pi_package_command_blocking(args: Vec<String>) -> Result<(), String> {
     let (bun, pi_path) = ensure_pi_cli_for_package_command()?;
-    ensure_pi_package_manager_settings(&bun)?;
+    screenpipe_core::agents::pi::ensure_pi_package_manager_settings(
+        &get_pi_config_dir()?,
+        &bun,
+    )
+    .map_err(|error| format!("Failed to update Pi package-manager settings: {error}"))?;
 
     let project_dir = screenpipe_core::paths::default_screenpipe_data_dir().join("pi-chat");
     std::fs::create_dir_all(&project_dir)

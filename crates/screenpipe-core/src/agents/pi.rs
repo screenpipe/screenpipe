@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 static USER_SKILL_SYNC_LOCK: Mutex<()> = Mutex::new(());
+static PI_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
 struct PiPromptInput {
     user_prompt: std::fs::File,
@@ -2727,9 +2728,100 @@ pub fn pi_config_dir() -> Result<PathBuf> {
 /// skill instructions and a summary on 32k models. Use its standard setting for
 /// both chat and Pipes. Explicit user settings (including disabled compaction)
 /// remain authoritative; no model selection or summarization logic lives here.
+fn managed_bun_command_to_repair(settings: &serde_json::Value) -> Option<&str> {
+    let command = settings.get("npmCommand")?.as_array()?;
+    if command.len() != 1 {
+        return None;
+    }
+    let executable = command.first()?.as_str()?;
+    let path = Path::new(executable);
+    let is_bun = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("bun") || name.eq_ignore_ascii_case("bun.exe")
+        });
+    (path.is_absolute() && is_bun && !path.exists()).then_some(executable)
+}
+
+fn apply_pi_package_manager_settings(
+    settings: &mut serde_json::Value,
+    bun: &str,
+) -> Option<String> {
+    if settings.get("npmCommand").is_none() {
+        settings["npmCommand"] = json!([bun]);
+        return Some(String::new());
+    }
+    let stale = managed_bun_command_to_repair(settings)?.to_string();
+    settings["npmCommand"] = json!([bun]);
+    Some(stale)
+}
+
+fn write_pi_settings_atomic(config_dir: &Path, settings: &serde_json::Value) -> Result<()> {
+    std::fs::create_dir_all(config_dir)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(config_dir)?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), settings)?;
+    temporary.persist(config_dir.join("settings.json"))?;
+    Ok(())
+}
+
+/// Persist Screenpipe's resolved Bun for fresh profiles and repair a stale
+/// Screenpipe-managed Bun path. Explicit custom package managers and commands
+/// with arguments remain authoritative.
+pub fn ensure_pi_package_manager_settings(config_dir: &Path, bun: &str) -> Result<()> {
+    let _guard = PI_SETTINGS_LOCK
+        .lock()
+        .map_err(|_| anyhow!("pi package-manager settings lock poisoned"))?;
+    let path = config_dir.join("settings.json");
+    let mut settings: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => return Err(error.into()),
+    };
+    if !settings.is_object() {
+        return Ok(());
+    }
+    let Some(previous) = apply_pi_package_manager_settings(&mut settings, bun) else {
+        return Ok(());
+    };
+    if let Err(error) = write_pi_settings_atomic(config_dir, &settings) {
+        if !previous.is_empty() {
+            warn!(
+                stale_path = %previous,
+                replacement_path = %bun,
+                reason = "managed Bun executable is missing",
+                outcome = "failed",
+                error = %error,
+                "failed to repair Pi package-manager command"
+            );
+        }
+        return Err(error);
+    }
+    if !previous.is_empty() {
+        info!(
+            stale_path = %previous,
+            replacement_path = %bun,
+            reason = "managed Bun executable is missing",
+            outcome = "repaired",
+            "repaired Pi package-manager command"
+        );
+    }
+    Ok(())
+}
+
 fn ensure_pi_settings_defaults(config_dir: &Path) -> Result<()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = LOCK
+    let bun = find_bun_executable();
+    ensure_pi_startup_settings_inner(config_dir, bun.as_deref())
+}
+
+/// Apply the settings migration used before scheduled/chat Pi startup with an
+/// already resolved runnable Bun. This is public for the isolated runtime eval.
+pub fn ensure_pi_startup_settings(config_dir: &Path, bun: &str) -> Result<()> {
+    ensure_pi_startup_settings_inner(config_dir, Some(bun))
+}
+
+fn ensure_pi_startup_settings_inner(config_dir: &Path, bun: Option<&str>) -> Result<()> {
+    let _guard = PI_SETTINGS_LOCK
         .lock()
         .map_err(|_| anyhow!("pi settings lock poisoned"))?;
     let path = config_dir.join("settings.json");
@@ -2746,6 +2838,7 @@ fn ensure_pi_settings_defaults(config_dir: &Path) -> Result<()> {
         return Ok(());
     };
     let mut changed = false;
+    let mut repaired_bun = None;
     let compaction = object.entry("compaction").or_insert_with(|| json!({}));
     if let Some(compaction) = compaction.as_object_mut() {
         if !compaction.contains_key("keepRecentTokens") {
@@ -2766,20 +2859,40 @@ fn ensure_pi_settings_defaults(config_dir: &Path) -> Result<()> {
         })
     {
         changed |= normalize_required_pi_extension_setting(&mut settings)?;
-        if settings.get("npmCommand").is_none() {
-            if let Some(bun) = find_bun_executable() {
-                settings["npmCommand"] = json!([bun]);
+        if let Some(bun) = bun {
+            if let Some(previous) = apply_pi_package_manager_settings(&mut settings, bun) {
                 changed = true;
+                if !previous.is_empty() {
+                    repaired_bun = Some((previous, bun.to_string()));
+                }
             }
         }
     }
     if !changed {
         return Ok(());
     }
-    std::fs::create_dir_all(config_dir)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(config_dir)?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), &settings)?;
-    temporary.persist(path)?;
+    if let Err(error) = write_pi_settings_atomic(config_dir, &settings) {
+        if let Some((previous, bun)) = repaired_bun.as_ref() {
+            warn!(
+                stale_path = %previous,
+                replacement_path = %bun,
+                reason = "managed Bun executable is missing",
+                outcome = "failed",
+                error = %error,
+                "failed to repair Pi package-manager command"
+            );
+        }
+        return Err(error);
+    }
+    if let Some((previous, bun)) = repaired_bun {
+        info!(
+            stale_path = %previous,
+            replacement_path = %bun,
+            reason = "managed Bun executable is missing",
+            outcome = "repaired",
+            "repaired Pi package-manager command"
+        );
+    }
     Ok(())
 }
 
@@ -5773,6 +5886,89 @@ mod tests {
         );
         assert_eq!(settings["theme"], "dark");
         assert!(!normalize_required_pi_extension_setting(&mut settings).unwrap());
+    }
+
+    #[test]
+    fn pi_package_manager_repairs_only_missing_managed_bun() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let current_bun = dir
+            .path()
+            .join(if cfg!(windows) { "bun.exe" } else { "bun" });
+        std::fs::write(&current_bun, b"").unwrap();
+        let stale_bun =
+            dir.path()
+                .join("old-install")
+                .join(if cfg!(windows) { "bun.exe" } else { "bun" });
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "theme": "dark",
+                "packages": ["npm:other-extension", REQUIRED_PI_EXTENSION_PACKAGE],
+                "compaction": {"enabled": false},
+                "npmCommand": [stale_bun]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        ensure_pi_package_manager_settings(dir.path(), current_bun.to_str().unwrap()).unwrap();
+        let repaired: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(repaired["npmCommand"], json!([current_bun]));
+        assert_eq!(repaired["theme"], "dark");
+        assert_eq!(repaired["packages"][0], "npm:other-extension");
+        assert_eq!(repaired["compaction"], json!({"enabled": false}));
+
+        let persisted = std::fs::read(&path).unwrap();
+        ensure_pi_package_manager_settings(dir.path(), current_bun.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), persisted);
+    }
+
+    #[test]
+    fn pi_package_manager_preserves_custom_and_argument_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let current_bun = dir
+            .path()
+            .join(if cfg!(windows) { "bun.exe" } else { "bun" });
+        std::fs::write(&current_bun, b"").unwrap();
+        let missing_bun =
+            dir.path()
+                .join("missing")
+                .join(if cfg!(windows) { "bun.exe" } else { "bun" });
+        for command in [
+            json!(["npm"]),
+            json!(["pnpm"]),
+            json!([dir.path().join("package-wrapper.exe")]),
+            json!([missing_bun, "--registry", "https://registry.example"]),
+        ] {
+            let original = json!({"npmCommand": command, "unrelated": {"keep": true}});
+            std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            ensure_pi_package_manager_settings(dir.path(), current_bun.to_str().unwrap()).unwrap();
+            let preserved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(preserved, original);
+        }
+    }
+
+    #[test]
+    fn pi_package_manager_initializes_fresh_config_and_persists_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let current_bun = dir
+            .path()
+            .join(if cfg!(windows) { "bun.exe" } else { "bun" });
+        std::fs::write(&current_bun, b"").unwrap();
+
+        ensure_pi_package_manager_settings(dir.path(), current_bun.to_str().unwrap()).unwrap();
+        let first = std::fs::read(&path).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&first).unwrap()["npmCommand"],
+            json!([current_bun])
+        );
+        ensure_pi_package_manager_settings(dir.path(), current_bun.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), first);
     }
 
     #[test]
