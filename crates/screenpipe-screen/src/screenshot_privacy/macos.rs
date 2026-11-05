@@ -82,6 +82,29 @@ struct Surface {
     layer: i64,
 }
 
+fn same_composition(before: &[Surface], after: &[Surface]) -> bool {
+    before.len() == after.len()
+        && before.iter().zip(after).all(|(before, after)| {
+            before.id == after.id
+                && before.pid == after.pid
+                && before.app == after.app
+                && before.x == after.x
+                && before.y == after.y
+                && before.width == after.width
+                && before.height == after.height
+                && before.alpha == after.alpha
+                && before.layer == after.layer
+        })
+}
+
+fn same_dock_coverage(before: Option<&[Surface]>, after: Option<&[Surface]>) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => same_composition(before, after),
+        _ => false,
+    }
+}
+
 /// Composition depends on identity, geometry and stacking order. A title
 /// change matters only when it changes the policy used to select the pixels.
 /// Compare with the verdict recorded before capture, not a second evaluation
@@ -94,22 +117,10 @@ fn validate_scene(
     detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
 ) -> anyhow::Result<()> {
     ensure!(
-        before.len() == after.len() && before.len() == allowed.len(),
-        "desktop scene changed during privacy capture (surface count)"
+        before.len() == allowed.len() && same_composition(before, after),
+        "desktop scene changed during privacy capture (identity, geometry or stacking)"
     );
     for ((before, allowed), after) in before.iter().zip(allowed).zip(after) {
-        ensure!(
-            before.id == after.id
-                && before.pid == after.pid
-                && before.app == after.app
-                && before.x == after.x
-                && before.y == after.y
-                && before.width == after.width
-                && before.height == after.height
-                && before.alpha == after.alpha
-                && before.layer == after.layer,
-            "desktop scene changed during privacy capture (identity, geometry or stacking)"
-        );
         if before.title != after.title {
             ensure!(
                 *allowed == window_allowed(filters, detector, &after.app, &after.title, after.pid),
@@ -464,7 +475,10 @@ async fn capture(
         }
     }
     ensure!(
-        dock_masks(dock_pid, frame, filters, detector.as_deref()) == dock_before,
+        same_dock_coverage(
+            dock_before.as_deref(),
+            dock_masks(dock_pid, frame, filters, detector.as_deref()).as_deref(),
+        ),
         "Dock thumbnail policy changed during capture"
     );
     validate_scene(
@@ -565,6 +579,20 @@ mod tests {
             let after = [surface(app, "Notes B")];
             validate_scene(&before, &[allowed], &after, &filters, None).unwrap();
         }
+    }
+
+    #[test]
+    fn dock_title_changes_preserve_masks_but_coverage_and_verification_changes_reject() {
+        let before = [surface("Dock", "Private A")];
+        let renamed = [surface("Dock", "Private B")];
+        assert!(same_dock_coverage(Some(&before), Some(&renamed)));
+        let mut moved = renamed.clone();
+        moved[0].x += 1.0;
+        assert!(!same_dock_coverage(Some(&before), Some(&moved)));
+        assert!(!same_dock_coverage(Some(&before), Some(&[])));
+        assert!(!same_dock_coverage(Some(&before), None));
+        assert!(!same_dock_coverage(None, Some(&renamed)));
+        assert!(same_dock_coverage(None, None));
     }
 
     #[test]
