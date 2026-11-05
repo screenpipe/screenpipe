@@ -10,7 +10,14 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let control = CommandLine.arguments[1]
 var windows: [(NSWindow, NSWindow)] = []
+var backgrounds: [NSWindow] = []
 for screen in NSScreen.screens {
+    let background = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    background.title = "PrivacyAllowed Background"
+    background.backgroundColor = .gray
+    background.isReleasedWhenClosed = false
+    background.orderFrontRegardless()
+    backgrounds.append(background)
     func window(_ rect: NSRect, _ title: String, _ color: NSColor) -> NSWindow {
         let w = NSWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
         w.title = title
