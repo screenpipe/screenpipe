@@ -6,19 +6,17 @@
 //!
 //! All routes expect [`AppState`] to contain a `pipe_manager` field.
 
-use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use screenpipe_connect::{connections, mcp_servers};
 use screenpipe_core::pipes::{
     describe_schedule_config, install_bundled_pipe as install_bundled_pipe_asset, next_occurrences,
-    PipeManager, PipeRunRequest, ScheduleConfig,
+    PipeManager, ScheduleConfig,
 };
 use screenpipe_secrets::SecretStore;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -153,7 +151,7 @@ pub async fn list_pipes(
                 obj
             })
             .collect();
-        Json(json!({ "data": data, "total": total, "agent_executors": mgr.available_executors() }))
+        Json(json!({ "data": data, "total": total }))
     } else {
         let pipes = mgr.list_pipes().await;
         let total = pipes.len();
@@ -174,13 +172,9 @@ pub async fn list_pipes(
                     obj
                 })
                 .collect();
-            Json(
-                json!({ "data": data, "total": total, "agent_executors": mgr.available_executors() }),
-            )
+            Json(json!({ "data": data, "total": total }))
         } else {
-            Json(
-                json!({ "data": pipes, "total": total, "agent_executors": mgr.available_executors() }),
-            )
+            Json(json!({ "data": pipes, "total": total }))
         }
     }
 }
@@ -251,18 +245,8 @@ pub async fn enable_pipe(
 }
 
 /// Optional body for `POST /pipes/:id/run`.
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Default)]
 pub struct RunPipeBody {
-    /// Stable admission identity. Retries return the original execution.
-    #[serde(default)]
-    pub request_id: Option<String>,
-    /// Optional immutable Pipe definition selected when accepting this request.
-    #[serde(default)]
-    pub expected_definition_sha256: Option<String>,
-    #[serde(default)]
-    pub expected_model: Option<String>,
-    #[serde(default)]
-    pub expected_provider: Option<String>,
     /// Canonical request-scoped context injected only into this Pipe run.
     #[serde(default)]
     pub run_context: Option<Value>,
@@ -279,7 +263,7 @@ pub struct RunPipeBody {
     pub meeting_summary: Option<MeetingSummaryRunRequest>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub struct MeetingSummaryRunRequest {
     pub meeting_id: i64,
     pub meeting_end: String,
@@ -317,19 +301,8 @@ pub async fn run_pipe_now(
     State(pm): State<SharedPipeManager>,
     secret_store: Option<axum::Extension<Arc<SecretStore>>>,
     Path(id): Path<String>,
-    body: Bytes,
+    body: Option<Json<RunPipeBody>>,
 ) -> Json<Value> {
-    // A malformed supplied body must never become a fresh body-less manual run.
-    let body: Option<Json<RunPipeBody>> = if body.is_empty() {
-        None
-    } else {
-        match serde_json::from_slice(&body) {
-            Ok(value) => Some(Json(value)),
-            Err(error) => {
-                return Json(json!({ "error": error.to_string(), "code": "pipe_request_invalid" }))
-            }
-        }
-    };
     let mut mgr = pm.lock().await;
 
     if !mgr.has_execution_store() {
@@ -338,80 +311,9 @@ pub async fn run_pipe_now(
         }));
     }
 
-    let accepted_request = body
-        .as_ref()
-        .and_then(|Json(body)| body.request_id.as_deref());
-    if accepted_request.is_none()
-        && body.as_ref().is_some_and(|Json(body)| {
-            body.expected_model.is_some() || body.expected_provider.is_some()
-        })
-    {
-        return Json(
-            json!({ "error": "Expected model configuration requires request_id", "code": "pipe_request_invalid" }),
-        );
-    }
-    let request_hash = format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&json!([id, body.as_ref().map(|Json(body)| body)])).unwrap()
-        )
-    );
-    if let Some(request_id) = accepted_request {
-        if request_id.is_empty()
-            || body
-                .as_ref()
-                .is_some_and(|Json(body)| body.meeting_summary.is_some())
-        {
-            return Json(
-                json!({ "error": "request_id must be nonempty and cannot replace meeting event identity", "code": "pipe_request_invalid" }),
-            );
-        }
-        match mgr
-            .get_pipe_request_execution(&id, request_id, &request_hash)
-            .await
-        {
-            Ok(Some(execution_id)) => {
-                return Json(
-                    json!({ "success": true, "execution_id": execution_id, "duplicate": true }),
-                )
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return Json(
-                    json!({ "error": error.to_string(), "code": "pipe_request_admission_failed" }),
-                )
-            }
-        }
-    }
-
     // Re-scan disk so newly installed pipes are discovered before lookup
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
-    }
-
-    if let Some(expected) = body
-        .as_ref()
-        .and_then(|Json(body)| body.expected_definition_sha256.as_deref())
-    {
-        if accepted_request.is_none()
-            || expected.len() != 64
-            || !expected.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Json(
-                json!({ "error": "expected_definition_sha256 requires request_id and a SHA-256 digest", "code": "pipe_request_invalid" }),
-            );
-        }
-        let actual = mgr
-            .list_pipes()
-            .await
-            .into_iter()
-            .find(|pipe| pipe.config.name == id)
-            .map(|pipe| format!("{:x}", Sha256::digest(pipe.raw_content.as_bytes())));
-        if actual.as_deref() != Some(expected) {
-            return Json(
-                json!({ "error": "Pipe definition changed since this request was accepted", "code": "pipe_definition_changed", "expected_definition_sha256": expected, "actual_definition_sha256": actual }),
-            );
-        }
     }
 
     let meeting_summary = body
@@ -457,20 +359,7 @@ pub async fn run_pipe_now(
     ]);
     mgr.set_connections_context(conn_ctx);
 
-    let result = if let Some(request_id) = accepted_request {
-        let request_body = body.as_ref().map(|Json(body)| body).unwrap();
-        mgr.start_pipe_background_for_request(
-            &id,
-            PipeRunRequest {
-                id: request_id,
-                hash: &request_hash,
-                expected_model: request_body.expected_model.as_deref(),
-                expected_provider: request_body.expected_provider.as_deref(),
-            },
-            run_context.as_deref(),
-        )
-        .await
-    } else if let Some(summary) = meeting_summary {
+    let result = if let Some(summary) = meeting_summary {
         mgr.start_pipe_background_for_event(
             &id,
             "meeting_ended",
@@ -528,79 +417,6 @@ pub async fn stop_pipe(State(pm): State<SharedPipeManager>, Path(id): Path<Strin
             "status": status,
         })),
         Err(e) => Json(json!({ "error": e.to_string() })),
-    }
-}
-
-/// Cancel one exact execution. A delayed cancellation cannot stop its successor.
-pub async fn pipe_request_execution_protocol() -> Json<Value> {
-    Json(
-        json!({ "protocol_version": 1, "request_receipts": true, "request_cancellation": true, "definition_sha256": true, "configured_model": true }),
-    )
-}
-
-/// Cancellation can precede admission when an HTTP response was lost. A durable
-/// refusal prevents that delayed request from starting after cancellation.
-pub async fn stop_pipe_request(
-    State(pm): State<SharedPipeManager>,
-    Path((id, request_id)): Path<(String, String)>,
-) -> (StatusCode, Json<Value>) {
-    if request_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "request_id is required" })),
-        );
-    }
-    match pm.lock().await.stop_pipe_request(&id, &request_id).await {
-        Ok(Some((execution_id, status))) => (
-            StatusCode::OK,
-            Json(
-                json!({ "request_id": request_id, "execution_id": execution_id, "cancel_requested": true, "status": status }),
-            ),
-        ),
-        Ok(None) => (
-            StatusCode::OK,
-            Json(
-                json!({ "request_id": request_id, "execution_id": null, "cancel_requested": true, "status": "cancelled_before_admission" }),
-            ),
-        ),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        ),
-    }
-}
-
-/// Stop an execution without substituting a later run of the same Pipe.
-pub async fn stop_pipe_execution(
-    State(pm): State<SharedPipeManager>,
-    Path((id, execution_id)): Path<(String, i64)>,
-) -> (StatusCode, Json<Value>) {
-    let mgr = pm.lock().await;
-    match mgr.get_execution(&id, execution_id).await {
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "execution not found" })),
-            )
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-        }
-        Ok(Some(_)) => {}
-    }
-    match mgr.stop_pipe_execution(&id, execution_id).await {
-        Ok(status) => (
-            StatusCode::OK,
-            Json(json!({ "execution_id": execution_id, "status": status,
-            "success": matches!(status, screenpipe_core::pipes::PipeStopStatus::Stopping | screenpipe_core::pipes::PipeStopStatus::StopPending) })),
-        ),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        ),
     }
 }
 
@@ -851,14 +667,12 @@ mod tests {
             notification_context: None,
             trigger_type: Some("onboarding".to_string()),
             meeting_summary: None,
-            ..Default::default()
         };
         let untrusted = RunPipeBody {
             run_context: None,
             notification_context: None,
             trigger_type: Some("scheduled".to_string()),
             meeting_summary: None,
-            ..Default::default()
         };
 
         assert_eq!(run_trigger_type(Some(&onboarding)), "onboarding");
@@ -1108,7 +922,6 @@ mod tests {
     }
 
     struct FakeExecutor {
-        run_calls: std::sync::Arc<AtomicUsize>,
         mode: FakePublishMode,
         pid: u32,
         started: std::sync::Arc<Notify>,
@@ -1122,7 +935,6 @@ mod tests {
     impl FakeExecutor {
         fn new(mode: FakePublishMode, pid: u32) -> Self {
             Self {
-                run_calls: std::sync::Arc::new(AtomicUsize::new(0)),
                 mode,
                 pid,
                 started: std::sync::Arc::new(Notify::new()),
@@ -1153,7 +965,6 @@ mod tests {
         }
 
         async fn run_impl(&self, shared_pid: Option<SharedPid>) -> anyhow::Result<AgentOutput> {
-            self.run_calls.fetch_add(1, Ordering::SeqCst);
             self.started.notify_one();
 
             match self.mode {
@@ -1258,19 +1069,8 @@ mod tests {
 
     fn tracked_run_router(pm: SharedPipeManager) -> Router {
         Router::new()
-            .route(
-                "/pipes/:id/run",
-                post(run_pipe_now).get(pipe_request_execution_protocol),
-            )
-            .route(
-                "/pipes/:id/requests/:request_id/stop",
-                post(stop_pipe_request),
-            )
+            .route("/pipes/:id/run", post(run_pipe_now))
             .route("/pipes/:id/executions/:exec_id", get(get_pipe_execution))
-            .route(
-                "/pipes/:id/executions/:exec_id/stop",
-                post(stop_pipe_execution),
-            )
             .with_state(pm)
     }
 
@@ -1287,161 +1087,6 @@ mod tests {
             .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
-    }
-
-    async fn post_json(app: Router, path: &str, body: Value) -> Value {
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(path)
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn request_retry_reuses_execution_and_stale_cancel_preserves_current_run() {
-        let dir = TempDir::new().unwrap();
-        write_test_pipe(&dir, "demo");
-        let definition = std::fs::read(dir.path().join("demo/pipe.md")).unwrap();
-        let definition_hash = format!("{:x}", Sha256::digest(&definition));
-        let db = Arc::new(
-            screenpipe_db::DatabaseManager::new(
-                dir.path().join("test.db").to_str().unwrap(),
-                Default::default(),
-            )
-            .await
-            .unwrap(),
-        );
-        let store = Arc::new(SqlitePipeStore::new(db.clone()));
-        let stale_id = store
-            .create_execution("demo", "manual", "fake", None)
-            .await
-            .unwrap();
-        store
-            .finish_execution(
-                stale_id,
-                "completed",
-                "saved output",
-                "",
-                Some(0),
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let executor = Arc::new(FakeExecutor::new(FakePublishMode::Deferred, 4242));
-        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
-        executors.insert("fake".to_owned(), executor.clone());
-        let mgr = PipeManager::new(
-            dir.path().to_path_buf(),
-            executors,
-            Some(store.clone()),
-            3030,
-        );
-        let app = tracked_run_router(Arc::new(Mutex::new(mgr)));
-        let input = json!({ "request_id": "studio-native-request", "expected_definition_sha256": definition_hash,
-            "run_context": { "input": "accepted case" } });
-        assert_eq!(
-            post_json(app.clone(), "/pipes/demo/run", json!({ "request_id": 42 })).await["code"],
-            "pipe_request_invalid"
-        );
-        let before = post_json(
-            app.clone(),
-            "/pipes/demo/requests/cancelled-before-admission/stop",
-            json!({}),
-        )
-        .await;
-        assert_eq!(before["cancel_requested"], true);
-        assert_eq!(before["execution_id"], Value::Null);
-        let mut late = input.clone();
-        late["request_id"] = json!("cancelled-before-admission");
-        assert!(
-            post_json(app.clone(), "/pipes/demo/run", late).await["error"]
-                .as_str()
-                .unwrap()
-                .contains("pipe_request_cancelled")
-        );
-        assert_eq!(executor.run_calls.load(Ordering::SeqCst), 0);
-        let mut wrong_model = input.clone();
-        wrong_model["request_id"] = json!("different-preset-model");
-        wrong_model["expected_model"] = json!("unconfigured-fixture-model");
-        assert!(
-            post_json(app.clone(), "/pipes/demo/run", wrong_model).await["error"]
-                .as_str()
-                .unwrap()
-                .contains("pipe_model_configuration_changed")
-        );
-        assert_eq!(executor.run_calls.load(Ordering::SeqCst), 0);
-        let first = post_json(app.clone(), "/pipes/demo/run", input.clone()).await;
-        assert_eq!(first["success"], true, "{first}");
-        let execution_id = first["execution_id"].as_i64().unwrap();
-        executor.started.notified().await;
-        // Simulate a lost admission response followed by reconnect.
-        let replay = post_json(app.clone(), "/pipes/demo/run", input.clone()).await;
-        assert_eq!(replay["execution_id"], execution_id);
-        assert_eq!(replay["duplicate"], true);
-        assert_eq!(executor.run_calls.load(Ordering::SeqCst), 1);
-        let stale_cancel = post_json(
-            app.clone(),
-            &format!("/pipes/demo/executions/{stale_id}/stop"),
-            json!({}),
-        )
-        .await;
-        assert_eq!(stale_cancel["success"], false);
-        assert_eq!(executor.kill_calls.load(Ordering::SeqCst), 0);
-        let mut changed = input.clone();
-        changed["run_context"] = json!({ "input": "different case" });
-        assert!(
-            post_json(app.clone(), "/pipes/demo/run", changed).await["error"]
-                .as_str()
-                .unwrap()
-                .contains("pipe_request_conflict")
-        );
-        // Accepted identity remains readable even after its definition changes.
-        std::fs::write(
-            dir.path().join("demo/pipe.md"),
-            [definition.as_slice(), b"\nchanged"].concat(),
-        )
-        .unwrap();
-        assert_eq!(
-            post_json(app.clone(), "/pipes/demo/run", input.clone()).await["execution_id"],
-            execution_id
-        );
-        let mut new_request = input.clone();
-        new_request["request_id"] = json!("new-request");
-        new_request["expected_definition_sha256"] = json!("b".repeat(64));
-        assert_eq!(
-            post_json(app.clone(), "/pipes/demo/run", new_request).await["code"],
-            "pipe_definition_changed"
-        );
-        let cancelled = post_json(
-            app.clone(),
-            &format!("/pipes/demo/executions/{execution_id}/stop"),
-            json!({}),
-        )
-        .await;
-        assert_eq!(cancelled["success"], true);
-        assert_eq!(cancelled["status"], "stop_pending");
-        let cancellation = post_json(
-            app.clone(),
-            "/pipes/demo/requests/studio-native-request/stop",
-            json!({}),
-        )
-        .await;
-        assert_eq!(cancellation["execution_id"], execution_id);
-        assert_eq!(cancellation["cancel_requested"], true);
-        executor.allow_pid_publish.notify_one();
-        executor.wait_for_pid_published().await;
-        executor.allow_finish.notify_one();
-        assert_eq!(executor.run_calls.load(Ordering::SeqCst), 1);
-        db.close().await;
     }
 
     async fn start_test_pipe(

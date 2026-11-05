@@ -455,6 +455,10 @@ pub struct ExportArgs {
 
 #[derive(Parser, Clone)]
 pub struct RecordArgs {
+    /// Run recording and data APIs without Pipe scheduling or agent executors.
+    #[arg(long, default_value_t = false)]
+    pub disable_pipes: bool,
+
     /// Audio chunk duration in seconds
     #[arg(short = 'd', long, default_value_t = 30)]
     pub audio_chunk_duration: u64,
@@ -3594,6 +3598,12 @@ mod tests {
             Command::Record(args) => args,
             _ => panic!("expected Record command"),
         }
+    }
+
+    #[test]
+    fn recording_data_service_omits_pipes_only_when_explicitly_requested() {
+        assert!(!record_args(["screenpipe", "record"]).disable_pipes);
+        assert!(record_args(["screenpipe", "record", "--disable-pipes"]).disable_pipes);
     }
 
     #[test]
