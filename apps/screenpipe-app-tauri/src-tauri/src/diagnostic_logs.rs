@@ -89,7 +89,10 @@ fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
     files.sort_by_key(|file| {
         if is_enterprise_recovery_log(&file.name) {
             0
-        } else if file.name == "enterprise-sync-error.log" {
+        } else if matches!(
+            file.name.as_str(),
+            "enterprise-sync-error.log" | "enterprise-screenshot-delivery.log"
+        ) {
             1
         } else {
             2
@@ -108,6 +111,7 @@ fn is_screenpipe_owned_log_name(name: &str) -> bool {
             name,
             "screenpipe.log"
                 | "enterprise-sync-error.log"
+                | "enterprise-screenshot-delivery.log"
                 | "screenpipe-app.log"
                 | "recover.import.log"
                 | "recover.stderr.log"
@@ -905,6 +909,19 @@ mod tests {
         assert!(report.contains("database disk image is malformed"));
         assert!(report.contains("pending work retained, retrying in 300s"));
         assert!(!report.contains("backing off 3600s"));
+    }
+
+    #[cfg(feature = "enterprise-build")]
+    #[tokio::test]
+    async fn screenshot_worker_origin_survives_collected_support_upload_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let report =
+            crate::enterprise::sync::screenshot_delivery::check_collected_failure(dir.path()).await;
+        assert!(report.contains("screenshot_fetch_failed"));
+        assert!(report.contains("PermissionDenied"));
+        assert!(report.contains("retry_pending"));
+        assert!(!report.contains("hunter2"));
+        assert!(!report.contains("private-person@example.com"));
     }
 
     #[cfg(feature = "enterprise-build")]
