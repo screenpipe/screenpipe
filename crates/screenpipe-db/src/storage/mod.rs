@@ -359,26 +359,13 @@ pub(crate) fn sync_file(path: &Path) -> Result<(), sqlx::Error> {
     // completed file was written by SQLite or copied through another handle.
     #[cfg(windows)]
     options.write(true);
-    let file = options.open(path).map_err(|error| {
-        storage_error(format!(
-            "opening file {} for durability sync: {error}",
-            path.display()
-        ))
-    })?;
-    screenpipe_fs::sync_all(&file)
-        .map_err(|error| storage_error(format!("syncing file {}: {error}", path.display())))?;
+    screenpipe_fs::sync_all(&options.open(path)?)?;
     Ok(())
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<(), sqlx::Error> {
     #[cfg(unix)]
-    screenpipe_fs::sync_all(&std::fs::File::open(path).map_err(|error| {
-        storage_error(format!(
-            "opening directory {} for sync: {error}",
-            path.display()
-        ))
-    })?)
-    .map_err(|error| storage_error(format!("syncing directory {}: {error}", path.display())))?;
+    screenpipe_fs::sync_all(&std::fs::File::open(path)?)?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -386,28 +373,22 @@ pub(crate) fn sync_directory(path: &Path) -> Result<(), sqlx::Error> {
             .read(true)
             .write(true)
             .custom_flags(0x02000000)
-            .open(path)
-            .map_err(|error| {
-                storage_error(format!(
-                    "opening directory {} for publication sync: {error}",
-                    path.display()
-                ))
-            })?;
-        if let Err(error) = screenpipe_fs::sync_all(&directory) {
-            // Some Windows filesystems, including SMB, reject
-            // FlushFileBuffers on directory handles with ERROR_INVALID_FUNCTION.
-            // The descriptor and database files were already flushed, and the
-            // atomic rename plus recovery journal preserve resumability, but the
-            // namespace update cannot be forced to stable storage on that volume.
-            if error.raw_os_error() != Some(1) {
-                return Err(storage_error(format!(
-                    "syncing directory {} for publication: {error}",
-                    path.display()
-                )));
-            }
-        }
+            .open(path)?;
+        tolerate_windows_directory_sync(screenpipe_fs::sync_all(&directory))?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn tolerate_windows_directory_sync(result: std::io::Result<()>) -> Result<(), sqlx::Error> {
+    match result {
+        Ok(()) => Ok(()),
+        // Some Windows filesystems, including SMB, reject FlushFileBuffers on
+        // directory handles with ERROR_INVALID_FUNCTION. Files were already
+        // flushed, while the recovery journal preserves resumability.
+        Err(error) if error.raw_os_error() == Some(1) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(crate) fn durable_json<T: Serialize>(path: &Path, value: &T) -> Result<(), sqlx::Error> {
@@ -523,11 +504,42 @@ impl HybridStorage {
 
 #[cfg(all(test, windows))]
 mod windows_durability_tests {
-    use super::{sync_directory, sync_file};
+    use super::{sync_directory, sync_file, tolerate_windows_directory_sync};
     use std::os::windows::fs::OpenOptionsExt;
     use std::path::PathBuf;
 
     #[test]
+    fn windows_durability_failures_retain_typed_io_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let missing_file = root.path().join("missing.json");
+        let missing_directory = root.path().join("missing-directory");
+
+        for error in [
+            sync_file(&missing_file).unwrap_err(),
+            sync_directory(&missing_directory).unwrap_err(),
+        ] {
+            match error {
+                sqlx::Error::Io(io) => assert!(
+                    io.raw_os_error().is_some(),
+                    "native I/O failure must retain its OS code: {io}"
+                ),
+                other => panic!("expected a typed I/O error, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn windows_directory_sync_retains_non_compatibility_io_errors() {
+        let error =
+            tolerate_windows_directory_sync(Err(std::io::Error::from_raw_os_error(5))).unwrap_err();
+        match error {
+            sqlx::Error::Io(io) => assert_eq!(io.raw_os_error(), Some(5)),
+            other => panic!("expected a typed I/O error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
     fn windows_publication_flushes_files_without_requiring_directory_flush() {
         let root = tempfile::tempdir_in("C:\\").unwrap();
         let relative = root.path().strip_prefix("C:\\").unwrap();
@@ -542,16 +554,32 @@ mod windows_durability_tests {
             .custom_flags(0x02000000)
             .open(&published_root)
             .unwrap();
-        let unsupported = directory.sync_all().unwrap_err();
-        eprintln!(
-            "native windows probe: file_flush=ok directory_flush_error={:?} raw_os_error={:?}",
-            unsupported.kind(),
-            unsupported.raw_os_error()
-        );
+        match directory.sync_all() {
+            Ok(()) => eprintln!("native windows probe: file_flush=ok directory_flush=ok"),
+            Err(error) => {
+                assert_eq!(
+                    error.raw_os_error(),
+                    Some(1),
+                    "unexpected directory flush error"
+                );
+                eprintln!(
+                    "native windows probe: file_flush=ok directory_flush_error={:?} raw_os_error={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                );
+            }
+        }
 
         sync_directory(&published_root)
             .expect("directory publication must use a supported operation");
-        assert!(sync_file(&published_root.join("missing.json")).is_err());
-        assert!(sync_directory(&published_root.join("missing-directory")).is_err());
+        for error in [
+            sync_file(&published_root.join("missing.json")).unwrap_err(),
+            sync_directory(&published_root.join("missing-directory")).unwrap_err(),
+        ] {
+            assert!(
+                matches!(error, sqlx::Error::Io(_)),
+                "expected I/O error: {error:?}"
+            );
+        }
     }
 }

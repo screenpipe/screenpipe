@@ -108,6 +108,7 @@ async fn staged_sealed_reopened_search_and_full_payloads_match() {
 
 #[cfg(windows)]
 #[tokio::test]
+#[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
 async fn windows_smb_fresh_hybrid_init_reopens_same_generation() {
     let (_local, root) = smb_scratch_root();
     let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
@@ -806,6 +807,7 @@ async fn interrupted_initialization_resumes_its_recorded_generation() {
 
 #[cfg(all(windows, feature = "storage-fault-injection"))]
 #[tokio::test]
+#[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
 async fn windows_smb_interrupted_init_resumes_same_generation_and_history() {
     let (_local, root) = smb_scratch_root();
     let killed = std::process::Command::new(env!("CARGO_BIN_EXE_screenpipe-storage"))
