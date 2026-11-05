@@ -123,6 +123,10 @@ fn validate_scene(
     for ((before, allowed), after) in before.iter().zip(allowed).zip(after) {
         if before.title != after.title {
             ensure!(
+                !before.title.is_empty() && !after.title.is_empty(),
+                "window title availability changed during privacy capture"
+            );
+            ensure!(
                 *allowed == window_allowed(filters, detector, &after.app, &after.title, after.pid),
                 "window privacy policy changed during capture"
             );
@@ -635,6 +639,10 @@ mod tests {
         // Native selection may have failed even though a title passes policy.
         // Do not turn that original rejection into permission after a rename.
         assert!(validate_scene(&before, &[false], &after, &filters, None).is_err());
+        let unnamed = [surface("Browser", "")];
+        assert!(validate_scene(&before, &[true], &unnamed, &filters, None).is_err());
+        assert!(validate_scene(&unnamed, &[true], &after, &filters, None).is_err());
+        validate_scene(&unnamed, &[true], &unnamed, &filters, None).unwrap();
     }
 
     #[test]
