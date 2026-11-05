@@ -62,9 +62,12 @@ describe("workflow elapsed timing", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
   it("keeps catalog metrics separate from measured timing in the workflow", async () => {
+    sessionStorage.clear();
     window.history.replaceState(null, "", "/home?mode=workflows");
     const openLink = vi.fn().mockResolvedValue(undefined);
     const platform = createFixtureWorkflowsPlatform();
+    // Timing assertions do not need the browser fixture’s canvas rasterization.
+    platform.loadCapturedWork = async () => structuredClone(fixtureWorkflowAnalysis);
     platform.assistant!.openLink = openLink;
     await act(async () => { render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />); });
     const card = screen.getByRole("heading", { name: "Research synthesis" }).closest("article")!;
