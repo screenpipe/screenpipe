@@ -45,6 +45,13 @@ async fn fetch_activity_capsule(
     config: &CloudAgentConfig,
 ) -> Result<String> {
     let (start, end) = time_range(config);
+    let day_start = end
+        .with_timezone(&Local)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|midnight| Local.from_local_datetime(&midnight).earliest())
+        .map(|midnight| midnight.with_timezone(&Utc))
+        .unwrap_or(end);
     let body = local_get(
         client,
         api_port,
@@ -57,6 +64,8 @@ async fn fetch_activity_capsule(
             ),
             ("end_time", end.to_rfc3339_opts(SecondsFormat::Secs, true)),
             ("include_recording", "false".into()),
+            ("include_day_start", "true".into()),
+            ("day_start_time", day_start.to_rfc3339()),
             ("include_key_texts", "false".into()),
             ("include_memories", "true".into()),
             ("include_snippets", "true".into()),
@@ -68,40 +77,7 @@ async fn fetch_activity_capsule(
         "activity capsule",
     )
     .await?;
-    let mut capsule: Value = serde_json::from_str(&sanitize_activity_capsule(&body)?)?;
-    // Include metadata only through the same explicitly enabled context-sharing
-    // path. Never reach earlier than the configured lookback to find day start.
-    let midnight = Local::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .and_then(|date| Local.from_local_datetime(&date).single())
-        .map(|date| date.with_timezone(&Utc));
-    let day_start = if let Some(midnight) = midnight.filter(|midnight| *midnight >= start) {
-        match local_get(
-            client,
-            api_port,
-            api_auth_key,
-            "day-start",
-            &[
-                ("start_time", midnight.to_rfc3339()),
-                ("end_time", end.to_rfc3339()),
-            ],
-            "day start",
-        )
-        .await
-        {
-            Ok(body) => serde_json::from_str::<Value>(&body)
-                .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"})),
-            Err(_) => serde_json::json!({"status":"unavailable"}),
-        }
-    } else {
-        serde_json::json!({"status":"outside_context_window"})
-    };
-    capsule
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("activity capsule must be an object"))?
-        .insert("day_start".into(), day_start);
-    Ok(truncate(serde_json::to_string(&capsule)?))
+    Ok(truncate(sanitize_activity_capsule(&body)?))
 }
 
 async fn fetch_search_snapshot(
@@ -217,9 +193,10 @@ mod tests {
             .and(path("/activity-summary"))
             .and(header("authorization", "Bearer local-key"))
             .and(query_param("include_recording", "false"))
+            .and(query_param("include_day_start", "true"))
             .and(query_param("include_memories", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                r#"{"apps":[{"name":"Code"}],"edited_files":[{"path":"/Users/me/private.rs"}]}"#,
+                r#"{"apps":[{"name":"Code"}],"day_start":{"status":"observed"},"edited_files":[{"path":"/Users/me/private.rs"}]}"#,
                 "application/json",
             ))
             .expect(1)
@@ -236,41 +213,19 @@ mod tests {
         .unwrap();
 
         assert!(context.contains("Code"));
+        assert!(context.contains("day_start"));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "day start must not add a second cloud-context request"
+        );
+        assert!(requests[0]
+            .url
+            .query_pairs()
+            .any(|(key, _)| key == "day_start_time"));
         assert!(!context.contains("edited_files"));
         assert!(!context.contains("private.rs"));
-    }
-
-    #[tokio::test]
-    async fn shared_cloud_context_includes_day_start_metadata() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/activity-summary"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apps":[]})))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/day-start"))
-            .and(header("authorization", "Bearer local-key"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status":"observed", "first_observed_input":{"event_type":"click"},
-                "is_confirmed_work_start":false
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let mut settings = config();
-        settings.context_lookback_hours = Some(24);
-        let context = fetch(
-            &reqwest::Client::new(),
-            server.address().port(),
-            Some("local-key"),
-            &settings,
-        )
-        .await
-        .unwrap();
-        let body: Value = serde_json::from_str(&context).unwrap();
-        assert_eq!(body["day_start"]["status"], "observed");
-        assert_eq!(body["day_start"]["is_confirmed_work_start"], false);
     }
 
     #[tokio::test]

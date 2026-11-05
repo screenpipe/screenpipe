@@ -1098,7 +1098,6 @@ impl SCServer {
             .get("/workflows", crate::routes::workflows::list_workflows)
             .get("/workflows/:id", crate::routes::workflows::get_workflow)
             .get("/activity-summary", get_activity_summary)
-            .get("/day-start", crate::routes::day_start::get_day_start)
             .get("/activity-ledger", get_activity_ledger)
             .get(
                 "/cloud-agents/status",

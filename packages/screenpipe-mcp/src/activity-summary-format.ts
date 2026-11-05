@@ -7,6 +7,7 @@ import * as os from "os";
 export type ActivitySummaryPayload = {
   starred_sessions?: Array<{ id: string; start: string; end: string; has_audio: boolean }>;
   starred_sessions_has_more?: boolean;
+  day_start?: { coverage?: string; status?: string; window_start?: string; window_end?: string; first_observed_input?: { timestamp?: string; event_type?: string }; is_confirmed_work_start?: boolean };
   time_range?: { start?: string; end?: string };
   data_status?: string;
   query_status?: string;
@@ -206,6 +207,7 @@ export function formatActivitySummary(
           ];
 
   return [
+    ...(data.day_start ? [`Observed input candidate (${data.day_start.window_start} → ${data.day_start.window_end}): ${data.day_start.status}; coverage=${data.day_start.coverage ?? "unknown"}; first=${data.day_start.first_observed_input?.timestamp ?? "unknown"}. Not a confirmed work start.`] : []),
     `Activity Summary (${data.time_range?.start || "?"} → ${data.time_range?.end || "?"})`,
     `Data status: ${data.data_status || "unknown"}`,
     `Query status: ${data.query_status || "unknown"}`,

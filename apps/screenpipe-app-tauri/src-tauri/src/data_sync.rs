@@ -341,24 +341,7 @@ mod imp {
                 .await?
                 .into_iter()
                 .filter_map(|item| match item {
-                    LocalSearchItem::Input(row) => {
-                        if row.element_name.as_deref().unwrap_or("").is_empty()
-                            && row.text_content.as_deref().unwrap_or("").is_empty()
-                        {
-                            return None;
-                        }
-                        Some(UiEventRow {
-                            event_id: row.id,
-                            timestamp: row.timestamp.to_rfc3339(),
-                            event_type: row.event_type,
-                            app_name: row.app_name.and_then(nonempty),
-                            window_title: row.window_title.and_then(nonempty),
-                            browser_url: row.browser_url.and_then(nonempty),
-                            element_name: row.element_name.and_then(nonempty),
-                            element_role: row.element_role.and_then(nonempty),
-                            text_content: row.text_content.map(truncate_text),
-                        })
-                    }
+                    LocalSearchItem::Input(row) => sync_ui_event(row),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -828,9 +811,40 @@ mod imp {
         });
     }
 
+    fn sync_ui_event(row: LocalInput) -> Option<UiEventRow> {
+        Some(UiEventRow {
+            event_id: row.id,
+            timestamp: row.timestamp.to_rfc3339(),
+            event_type: row.event_type,
+            app_name: row.app_name.and_then(nonempty),
+            window_title: row.window_title.and_then(nonempty),
+            browser_url: row.browser_url.and_then(nonempty),
+            element_name: row.element_name.and_then(nonempty),
+            element_role: row.element_role.and_then(nonempty),
+            text_content: row.text_content.map(truncate_text),
+        })
+        .filter(UiEventRow::has_agent_context_or_activity)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn day_start_activity_survives_personal_sync_adapter() {
+            let input = |kind: &str| {
+                serde_json::from_value(serde_json::json!({
+                    "id": 1,
+                    "timestamp": "2026-11-05T09:00:00Z",
+                    "event_type": kind,
+                }))
+                .unwrap()
+            };
+            let row = sync_ui_event(input("move")).unwrap();
+            assert_eq!(row.event_type, "move");
+            assert!(row.app_name.is_none() && row.text_content.is_none());
+            assert!(sync_ui_event(input("key")).is_none());
+        }
 
         #[test]
         fn disabled_server_status_has_no_upload_boundary() {

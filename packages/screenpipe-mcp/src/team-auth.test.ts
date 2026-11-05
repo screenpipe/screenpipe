@@ -42,7 +42,7 @@ function saveConfig(home: string, token: string, apiBase: string): void {
   }));
 }
 
-async function teamApi(validToken: string) {
+async function teamApi(validToken: string, supportsDayStart = true) {
   const requests: { url: string; authorization: string | undefined }[] = [];
   const server = createServer((req, res) => {
     requests.push({ url: req.url || "", authorization: req.headers.authorization });
@@ -51,7 +51,8 @@ async function teamApi(validToken: string) {
       res.writeHead(401);
       res.end(JSON.stringify({ error: "token expired" }));
     } else {
-      res.end(JSON.stringify({ devices: [{ device_id: "test-device" }] }));
+      res.end(JSON.stringify({ devices: [{ device_id: "test-device" }],
+        ...(supportsDayStart && req.url?.includes("include_day_start=true") ? {day_start:{status:"no_observation",is_confirmed_work_start:false}} : {}) }));
     }
   });
   servers.push(server);
@@ -128,21 +129,32 @@ describe("running MCP team credentials", () => {
     saveConfig(home, "sk_ent_current", api.apiBase);
     const client = await startMcp(home, { SCREENPIPE_API_URL: api.apiBase.replace("/api/enterprise/v1", "") });
     const tools = (await client.listTools()).tools.map(tool => tool.name);
-    expect(tools).toContain("day-start");
+    expect(tools).not.toContain("day-start");
     expect(tools).toContain("team-day-start");
     const bounds = { start_time: "2026-11-05T00:00:00-08:00", end_time: "2026-11-06T00:00:00-08:00" };
     expect((await client.callTool({ name: "team-day-start", arguments: { device_id: "dev-a", ...bounds } })).isError).not.toBe(true);
     const request = api.requests[0];
     const parsed = new URL(request.url, api.apiBase);
-    expect(parsed.pathname).toBe("/api/enterprise/v1/day-start");
-    expect(parsed.searchParams.get("start_time")).toBe(bounds.start_time);
+    expect(parsed.pathname).toBe("/api/enterprise/v1/records");
+    expect(parsed.searchParams.get("since")).toBe(bounds.start_time);
+    expect(parsed.searchParams.get("include_day_start")).toBe("true");
     expect(parsed.searchParams.get("device_id")).toBe("dev-a");
     expect(request.authorization).toBe("Bearer sk_ent_current");
-    await client.callTool({ name: "day-start", arguments: bounds });
-    expect(new URL(api.requests[1].url, api.apiBase).pathname).toBe("/day-start");
-    expect(api.requests[1].authorization).toBe("Bearer sp-test-local-key");
     saveConfig(home, "", api.apiBase);
     expect((await client.listTools()).tools.some(tool => tool.name === "team-day-start")).toBe(false);
+  });
+
+  it("fails explicitly on older servers without inferring a start time", async () => {
+    const home = newHome();
+    const api = await teamApi("sk_ent_current", false);
+    saveConfig(home, "sk_ent_current", api.apiBase);
+    const client = await startMcp(home);
+    const result = await client.callTool({ name: "team-day-start", arguments: {
+      device_id: "dev-a", start_time: "2026-11-05T00:00:00Z", end_time: "2026-11-06T00:00:00Z"
+    }});
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("does not support day-start");
+    expect(api.requests).toHaveLength(1);
   });
 
   it("preserves an explicit expired token and explains how to remove the stale override", async () => {

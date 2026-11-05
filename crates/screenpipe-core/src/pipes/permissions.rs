@@ -126,7 +126,6 @@ pub const DEFAULT_ALLOWED_ENDPOINTS: &[&str] = &[
     "GET /search",
     "GET /starred-sessions",
     "GET /activity-summary",
-    "GET /day-start",
     "GET /workflows",
     "GET /workflows/*",
     "GET /elements",

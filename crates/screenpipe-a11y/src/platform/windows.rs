@@ -470,6 +470,8 @@ struct CallbackState {
     last_input_at_ms: Arc<AtomicU64>,
     // Capture gates copied out of UiCaptureConfig (plain bool reads).
     enqueue_moves: bool,
+    capture_full_moves: bool,
+    mouse_activity_gate: Option<Arc<AtomicU64>>,
     enqueue_scroll: bool,
     enqueue_clicks: bool,
     enqueue_keys: bool,
@@ -547,7 +549,11 @@ fn run_native_hooks(
             last_mouse_pos: (0, 0),
             activity_feed,
             last_input_at_ms: last_input_at_ms.clone(),
-            enqueue_moves: config.capture_mouse_move,
+            enqueue_moves: config.capture_mouse_move || config.capture_mouse_activity,
+            capture_full_moves: config.capture_mouse_move,
+            mouse_activity_gate: config
+                .capture_mouse_activity
+                .then(|| config.mouse_activity_gate()),
             enqueue_scroll: config.capture_scroll,
             enqueue_clicks: config.capture_clicks,
             enqueue_keys: config.capture_text
@@ -825,8 +831,8 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
             if let Some(ref mut s) = *guard {
                 // Latest-input timestamp for all mouse messages (move/click/
                 // wheel): UIA-defer signal + watchdog liveness. One atomic store.
-                s.last_input_at_ms
-                    .store(s.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                let elapsed_ms = s.start.elapsed().as_millis() as u64;
+                s.last_input_at_ms.store(elapsed_ms, Ordering::Relaxed);
 
                 match msg {
                     WM_MOUSEMOVE => {
@@ -838,7 +844,12 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             }
                             s.last_mouse_pos = (x, y);
 
-                            if s.enqueue_moves {
+                            if s.enqueue_moves
+                                && (s.capture_full_moves
+                                    || s.mouse_activity_gate.as_ref().is_some_and(|gate| {
+                                        crate::config::take_mouse_activity(gate, elapsed_ms as i64)
+                                    }))
+                            {
                                 enqueue_raw(
                                     s,
                                     RawInput::Move {
@@ -1203,7 +1214,7 @@ impl InputWorker {
                 timestamp,
                 relative_ms,
             } => {
-                if !self.config.capture_mouse_move {
+                if !self.config.capture_mouse_move && !self.config.capture_mouse_activity {
                     return;
                 }
                 let (app_name, window_title) = self.resolve_app_window();
@@ -2814,6 +2825,8 @@ mod tests {
             activity_feed: None,
             last_input_at_ms: Arc::new(AtomicU64::new(0)),
             enqueue_moves: true,
+            capture_full_moves: true,
+            mouse_activity_gate: None,
             enqueue_scroll: true,
             enqueue_clicks: true,
             enqueue_keys: true,

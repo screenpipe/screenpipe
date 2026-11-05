@@ -374,7 +374,7 @@ impl DatabaseManager {
 
         if context_only {
             conditions.push(
-                "(COALESCE(element_name, '') != '' OR COALESCE(text_content, '') != '')"
+                INPUT_CONTEXT_OR_ACTIVITY
                     .to_string(),
             );
         }

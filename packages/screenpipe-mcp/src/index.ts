@@ -447,22 +447,6 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "day-start",
-    description: "First recorded human input on this device for an explicit local-day window. " +
-      "Use offset-bearing ISO bounds from local midnight to the next midnight (23-25 hours on DST days). " +
-      "A recording-based heuristic, not a confirmed shift start. Missing input is unknown, never absence. " +
-      "Mouse movement is used only if movement capture is already enabled; clicks, scrolling and keyboard input also qualify.",
-    annotations: { title: "Day Start", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        start_time: { type: "string", description: "ISO 8601 local midnight with UTC offset" },
-        end_time: { type: "string", description: "ISO 8601 next local midnight with UTC offset, exclusive" },
-      },
-      required: ["start_time", "end_time"],
-    },
-  },
-  {
     name: "activity-summary",
     description:
       "Includes up to ten recent starred intervals for this time range, even without captured content. Stars indicate user intent, not duration or completion. " +
@@ -477,6 +461,8 @@ const TOOLS: Tool[] = [
       properties: {
         start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        day_start_time: { type: "string", description: "Optional explicit RFC3339 local-day boundary. Reads stay inside start_time/end_time; a clipped day is marked partial." },
+        include_day_start: { type: "boolean", description: "Include first observed human input in the exact requested window (max 25h). No earlier data is read; this is not a confirmed work start.", default: false },
         include_starred: { type: "boolean", description: "Include bounded starred-session context (default true; omitted for app/data-restricted reads)." },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
         include_parsed_context: {
@@ -980,10 +966,10 @@ const TOOLS: Tool[] = [
 const TEAM_TOOLS: Tool[] = [
   {
     name: "team-day-start",
-    description: "First recorded human input for an enterprise device through the organization's query gateway. " +
-      "Requires a configured gateway API base and a read:records enterprise token. " +
+    description: "First observed human input in an explicit day window using the existing enterprise records API. " +
+      "Requires a read:records enterprise token and a server supporting include_day_start. " +
       "Use explicit offset-bearing local-day bounds. Returns metadata only; partial sync and missing input do not prove a shift start or absence. " +
-      "Hosted storage without this gateway endpoint is unsupported and returns an error.",
+      "The signal is a candidate within the requested window, never a confirmed work start.",
     annotations: { title: "Team Day Start", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -1775,12 +1761,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         };
       }
 
-      case "day-start": {
-        const params = new URLSearchParams({ start_time: String(args.start_time), end_time: String(args.end_time) });
-        const response = await callAPI(`/day-start?${params}`);
-        return { content: [{ type: "text", text: JSON.stringify(response) }] };
-      }
-
       case "activity-summary": {
         const result = await buildActivitySummaryResult(args, callAPI);
         if (result.hasArtifact) {
@@ -2417,7 +2397,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         const subpath =
           name === "team-search" ? "/search"
           : name === "team-devices" ? "/devices"
-          : name === "team-day-start" ? "/day-start"
+          : name === "team-day-start" ? "/records"
           : name === "team-records" && SYNTHESIZED_KINDS.has(kindArg) ? "/workflows/generated"
           : "/records";
         // Forward every primitive arg as a query param. The server validates;
@@ -2428,6 +2408,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
             params.append(k, String(v));
           }
         }
+        if (name === "team-day-start") {
+          params.delete("start_time"); params.delete("end_time");
+          params.set("since", String(args.start_time)); params.set("until", String(args.end_time));
+          params.set("include_day_start", "true");
+        }
         const query = params.toString();
         const response = await fetchTeam(`${subpath}${query ? `?${query}` : ""}`, teamConfig);
         const body = await response.text();
@@ -2435,6 +2420,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           throw new Error(
             `${name} failed: HTTP ${response.status} ${response.statusText} — ${body.slice(0, 300)}`
           );
+        }
+        if (name === "team-day-start" && !JSON.parse(body).day_start) {
+          throw new Error("This enterprise server does not support day-start metadata yet; update the server. No start time was inferred.");
         }
         return { content: [{ type: "text", text: body }] };
       }

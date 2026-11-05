@@ -15,7 +15,6 @@ pub mod connect_broker;
 pub mod content;
 pub mod data;
 pub mod data_sync_proxy;
-pub mod day_start;
 pub mod elements;
 pub mod frames;
 pub mod health;

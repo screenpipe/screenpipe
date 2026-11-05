@@ -999,9 +999,8 @@ mod imp {
             // `ui_events` table — clicks, keystrokes, focus changes,
             // clipboard. (The DB enum is `Input`, not `UI` — `UiContent`
             // is a separate deprecated content type for AX text snapshots.)
-            // Only sync events that have an element_name (real AX-resolved
-            // targets) — keystroke noise without element context isn't
-            // useful for SOP synthesis and bloats the corpus.
+            // Context-only includes coordinate-free sparse movement metadata;
+            // raw pointer paths and contextless keystrokes remain excluded.
             let mut url = format!(
                 "{}/search?content_type=input&limit={}&offset={}&order=ascending&input_context_only=true",
                 self.api_url_base, limit, boundary_offset
@@ -1024,36 +1023,9 @@ mod imp {
             let mut out = Vec::with_capacity(body.data.len());
             for item in body.data {
                 if let LocalSearchItem::Input(i) = item {
-                    // Skip events without element context — they're noise.
-                    if i.element_name.as_deref().unwrap_or("").is_empty()
-                        && i.text_content.as_deref().unwrap_or("").is_empty()
-                    {
-                        continue;
+                    if let Some(row) = sync_ui_event(i) {
+                        out.push(row);
                     }
-                    // Truncate text_content aggressively — full keylog
-                    // streams blow the token budget. ~200 bytes is enough
-                    // for "what was typed" without leaking essays. Round the
-                    // cut to a UTF-8 char boundary — a raw `&t[..200]` panics
-                    // when byte 200 lands inside a multi-byte char (e.g. Polish
-                    // `ł`), which crashed the sync worker for non-ASCII users.
-                    let text_content = i.text_content.map(|t| {
-                        if t.len() > 200 {
-                            format!("{}…", ee_sync::truncate_on_char_boundary(&t, 200))
-                        } else {
-                            t
-                        }
-                    });
-                    out.push(UiEventRow {
-                        event_id: i.id,
-                        timestamp: i.timestamp.to_rfc3339(),
-                        event_type: i.event_type,
-                        app_name: i.app_name.filter(|s| !s.is_empty()),
-                        window_title: i.window_title.filter(|s| !s.is_empty()),
-                        browser_url: i.browser_url.filter(|s| !s.is_empty()),
-                        element_name: i.element_name.filter(|s| !s.is_empty()),
-                        element_role: i.element_role.filter(|s| !s.is_empty()),
-                        text_content,
-                    });
                 }
             }
             out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
@@ -2560,6 +2532,34 @@ mod imp {
         id
     }
 
+    fn sync_ui_event(i: LocalInput) -> Option<UiEventRow> {
+        // Truncate text_content aggressively — full keylog
+        // streams blow the token budget. ~200 bytes is enough
+        // for "what was typed" without leaking essays. Round the
+        // cut to a UTF-8 char boundary — a raw `&t[..200]` panics
+        // when byte 200 lands inside a multi-byte char (e.g. Polish
+        // `ł`), which crashed the sync worker for non-ASCII users.
+        let text_content = i.text_content.map(|t| {
+            if t.len() > 200 {
+                format!("{}…", ee_sync::truncate_on_char_boundary(&t, 200))
+            } else {
+                t
+            }
+        });
+        let row = UiEventRow {
+            event_id: i.id,
+            timestamp: i.timestamp.to_rfc3339(),
+            event_type: i.event_type,
+            app_name: i.app_name.filter(|s| !s.is_empty()),
+            window_title: i.window_title.filter(|s| !s.is_empty()),
+            browser_url: i.browser_url.filter(|s| !s.is_empty()),
+            element_name: i.element_name.filter(|s| !s.is_empty()),
+            element_role: i.element_role.filter(|s| !s.is_empty()),
+            text_content,
+        };
+        row.has_agent_context_or_activity().then_some(row)
+    }
+
     #[cfg(test)]
     pub(crate) mod device_id_tests {
         use super::{
@@ -2572,6 +2572,22 @@ mod imp {
             NATIVE_POLICY_STARTUP_DELAY, RECORDING_DISABLED_BY_ADMIN_CODE,
         };
         use std::collections::HashMap;
+
+        #[test]
+        fn day_start_activity_survives_enterprise_sync_adapter() {
+            let input = |kind: &str| {
+                serde_json::from_value(serde_json::json!({
+                    "id": 1,
+                    "timestamp": "2026-11-05T09:00:00Z",
+                    "event_type": kind,
+                }))
+                .unwrap()
+            };
+            let row = super::sync_ui_event(input("move")).unwrap();
+            assert_eq!(row.event_type, "move");
+            assert!(row.app_name.is_none() && row.text_content.is_none());
+            assert!(super::sync_ui_event(input("key")).is_none());
+        }
 
         async fn native_health_fixture(
             status: axum::http::StatusCode,

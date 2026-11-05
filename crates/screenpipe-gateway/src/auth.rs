@@ -392,7 +392,7 @@ pub fn required_scope(path: &str) -> Option<&'static str> {
     Some(match rest.split('/').next().unwrap_or("") {
         "devices" => "read:devices",
         "search" => "read:search",
-        "records" | "rollups" | "frames" | "day-start" => "read:records",
+        "records" | "rollups" | "frames" => "read:records",
         "files" => {
             if rest.len() > "files".len() {
                 // /files/[...key] — raw object bytes need the stronger scope.
