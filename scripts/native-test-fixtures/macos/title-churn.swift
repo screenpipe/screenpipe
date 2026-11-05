@@ -16,6 +16,7 @@ for screen in NSScreen.screens {
     background.title = "PrivacyAllowed Background"
     background.backgroundColor = .gray
     background.isReleasedWhenClosed = false
+    background.setFrame(screen.frame, display: true)
     background.orderFrontRegardless()
     backgrounds.append(background)
     func window(_ rect: NSRect, _ title: String, _ color: NSColor) -> NSWindow {
@@ -23,6 +24,9 @@ for screen in NSScreen.screens {
         w.title = title
         w.backgroundColor = color
         w.isReleasedWhenClosed = false
+        // NSWindow initialization can constrain a rectangle to the main
+        // display. Move explicitly in global coordinates before showing it.
+        w.setFrame(rect, display: true)
         w.orderFrontRegardless()
         return w
     }
