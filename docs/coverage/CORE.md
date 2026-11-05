@@ -8,11 +8,11 @@ confidence, and criticality.
 - Manifest: `docs/coverage/core-engine-map.json`
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y, screenpipe-fs
 - Mapped suites: 37
-- Mapped Rust files: 410
-- Active test blocks: 3981
-- Ignored/manual test blocks: 192
-- Declared test blocks: 4173
-- Weighted coverage points: 3280.8
+- Mapped Rust files: 409
+- Active test blocks: 3979
+- Ignored/manual test blocks: 189
+- Declared test blocks: 4168
+- Weighted coverage points: 3278.8
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,16 +23,16 @@ are explicitly enabled in a runtime lane.
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 33 | 3818 | 174 | 3207.8 | 21 | 11 | 100% |
-| macos | 32 | 3861 | 153 | 3203.1 | 22 | 11 | 100% |
-| linux | 29 | 3396 | 149 | 2826.1 | 20 | 11 | 100% |
+| windows | 33 | 3816 | 171 | 3205.8 | 21 | 11 | 100% |
+| macos | 32 | 3859 | 150 | 3201.1 | 22 | 11 | 100% |
+| linux | 29 | 3394 | 146 | 2824.1 | 20 | 11 | 100% |
 
 ## Crate Summary
 
 | Crate | Suites | Integration files | Source unit files | Active tests | Ignored tests | Weighted points | Flows |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | screenpipe-engine | 12 | 23 | 133 | 1906 | 53 | 1466.7 | 10 |
-| screenpipe-db | 5 | 69 | 30 | 642 | 35 | 611.2 | 9 |
+| screenpipe-db | 5 | 69 | 29 | 640 | 32 | 609.2 | 9 |
 | screenpipe-sqlite-coordinator | 1 | 0 | 3 | 27 | 0 | 27.0 | 2 |
 | screenpipe-audio | 8 | 29 | 54 | 706 | 56 | 617.0 | 5 |
 | screenpipe-screen | 6 | 9 | 23 | 296 | 10 | 264.4 | 4 |
@@ -73,14 +73,14 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | meeting | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 4 suites / 1416 active / 28 ignored / 1116.0 pts |
 | ocr | 4 suites / 141 active / 7 ignored / 130.8 pts | 4 suites / 134 active / 7 ignored / 128.6 pts | 3 suites / 125 active / 6 ignored / 119.6 pts |
 | os-integration | 1 suites / 6 active / 0 ignored / 1.7 pts | 1 suites / 6 active / 0 ignored / 1.7 pts | - |
-| performance | 13 suites / 1750 active / 90 ignored / 1544.4 pts | 14 suites / 1875 active / 98 ignored / 1594.4 pts | 13 suites / 1750 active / 90 ignored / 1544.4 pts |
+| performance | 13 suites / 1748 active / 87 ignored / 1542.4 pts | 14 suites / 1873 active / 95 ignored / 1592.4 pts | 13 suites / 1748 active / 87 ignored / 1542.4 pts |
 | pipes | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
 | privacy | 5 suites / 1039 active / 43 ignored / 840.4 pts | 5 suites / 1095 active / 22 ignored / 842.1 pts | 5 suites / 997 active / 15 ignored / 805.3 pts |
 | real-app | - | 1 suites / 125 active / 8 ignored / 50.0 pts | - |
 | speaker | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts |
-| storage | 4 suites / 712 active / 44 ignored / 593.5 pts | 4 suites / 712 active / 44 ignored / 593.5 pts | 4 suites / 712 active / 44 ignored / 593.5 pts |
+| storage | 4 suites / 710 active / 41 ignored / 591.5 pts | 4 suites / 710 active / 41 ignored / 591.5 pts | 4 suites / 710 active / 41 ignored / 591.5 pts |
 | sync | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
-| timeline | 4 suites / 1281 active / 52 ignored / 1055.1 pts | 4 suites / 1281 active / 52 ignored / 1055.1 pts | 4 suites / 1281 active / 52 ignored / 1055.1 pts |
+| timeline | 4 suites / 1279 active / 49 ignored / 1053.1 pts | 4 suites / 1279 active / 49 ignored / 1053.1 pts | 4 suites / 1279 active / 49 ignored / 1053.1 pts |
 | transcription | 7 suites / 904 active / 53 ignored / 706.4 pts | 6 suites / 898 active / 53 ignored / 702.2 pts | 6 suites / 898 active / 53 ignored / 702.2 pts |
 | ui-events | 4 suites / 836 active / 34 ignored / 633.3 pts | 3 suites / 767 active / 5 ignored / 585.0 pts | 3 suites / 767 active / 5 ignored / 585.0 pts |
 | vision-capture | 6 suites / 602 active / 33 ignored / 476.8 pts | 6 suites / 595 active / 33 ignored / 474.6 pts | 5 suites / 586 active / 32 ignored / 465.6 pts |
