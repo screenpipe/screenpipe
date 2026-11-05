@@ -373,10 +373,7 @@ impl DatabaseManager {
         let mut bind_values: Vec<String> = Vec::new();
 
         if context_only {
-            conditions.push(
-                INPUT_CONTEXT_OR_ACTIVITY
-                    .to_string(),
-            );
+            conditions.push(INPUT_CONTEXT_OR_ACTIVITY.to_string());
         }
 
         if let Some(q) = query {
