@@ -1594,6 +1594,36 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     // /pipes routes. The default recording startup remains unchanged.
     let server = if record_args.disable_pipes {
         info!("Pipe execution disabled; recording and data APIs only");
+        if let Some(path) = &record_args.agent_permissions_file {
+            let permissions: Vec<screenpipe_core::pipes::permissions::PipePermissions> =
+                serde_json::from_slice(
+                    &std::fs::read(path).context("read external agent API permissions")?,
+                )
+                .context("parse external agent API permissions")?;
+            for permissions in permissions {
+                let token = permissions
+                    .pipe_token
+                    .as_deref()
+                    .filter(|token| {
+                        token
+                            .strip_prefix("sp_pipe_")
+                            .is_some_and(|suffix| !suffix.is_empty())
+                    })
+                    .context("external agent permission requires a scoped API token")?
+                    .to_owned();
+                anyhow::ensure!(
+                    !permissions.pipe_name.trim().is_empty(),
+                    "external agent identity is required"
+                );
+                anyhow::ensure!(
+                    !server.pipe_permissions.contains_key(&token),
+                    "duplicate external agent API token"
+                );
+                server
+                    .pipe_permissions
+                    .insert(token, std::sync::Arc::new(permissions));
+            }
+        }
         server.with_high_fps_controller(high_fps_controller.clone())
     } else {
         // Initialize pipe manager

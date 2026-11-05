@@ -459,6 +459,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_pipes: bool,
 
+    /// Trusted scoped API permissions supplied by an external agent runtime.
+    #[arg(long, requires = "disable_pipes")]
+    pub agent_permissions_file: Option<PathBuf>,
+
     /// Audio chunk duration in seconds
     #[arg(short = 'd', long, default_value_t = 30)]
     pub audio_chunk_duration: u64,
@@ -3604,6 +3608,24 @@ mod tests {
     fn recording_data_service_omits_pipes_only_when_explicitly_requested() {
         assert!(!record_args(["screenpipe", "record"]).disable_pipes);
         assert!(record_args(["screenpipe", "record", "--disable-pipes"]).disable_pipes);
+        assert!(Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--agent-permissions-file",
+            "native-agents.json"
+        ])
+        .is_err());
+        assert_eq!(
+            record_args([
+                "screenpipe",
+                "record",
+                "--disable-pipes",
+                "--agent-permissions-file",
+                "native-agents.json"
+            ])
+            .agent_permissions_file,
+            Some(PathBuf::from("native-agents.json"))
+        );
     }
 
     #[test]
