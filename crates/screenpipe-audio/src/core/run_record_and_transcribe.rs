@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
+use screenpipe_core::display_topology::{input_is_disabled_by_lid, is_clamshell_mode};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
@@ -156,6 +157,37 @@ fn should_reconnect_after_silent_input(
     }
 
     zero_fill_reconnect_enabled_for_platform()
+}
+
+/// Whether a silent input buffer means the stream must be rebuilt.
+///
+/// A rebuild can't bring back a mic the lid cut off, and each one restarts
+/// VoiceProcessingIO, interrupting other apps' audio. So for that mic the
+/// stream stays open and the silence timer restarts, which checks again after
+/// another timeout in case the lid has opened by then. The lid is only read
+/// once the timer has expired.
+fn silent_input_needs_reconnect(
+    device_type: &DeviceType,
+    device_name: &str,
+    stream_elapsed: Duration,
+    last_non_zero_at: &mut Option<Instant>,
+    clamshell_mode: impl FnOnce() -> bool,
+) -> bool {
+    let Some(last_seen) = *last_non_zero_at else {
+        return false;
+    };
+    if !should_reconnect_after_silent_input(device_type, stream_elapsed, last_seen.elapsed()) {
+        return false;
+    }
+    if input_is_disabled_by_lid(device_name, clamshell_mode()) {
+        debug!(
+            "{} is cut off by the closed lid, not reconnecting",
+            device_name
+        );
+        *last_non_zero_at = Some(Instant::now());
+        return false;
+    }
+    true
 }
 
 fn last_non_zero_seed_after_restart(device_name: &str, restarted_at: Instant) -> Option<Instant> {
@@ -664,23 +696,23 @@ async fn recv_audio_chunk(
             // confirmed real audio earlier — i.e. the stream WAS healthy
             // and went silent. Input devices only; output devices
             // legitimately go silent when nothing is playing.
-            if let Some(last_seen) = *last_non_zero_at {
-                if should_reconnect_after_silent_input(
-                    &audio_stream.device.device_type,
-                    stream_start.elapsed(),
-                    last_seen.elapsed(),
-                ) {
-                    warn!(
-                        "no usable audio from {} for {}s — only zero-fill buffers \
-                         (likely OS device hijack by another app), triggering reconnect",
-                        device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
-                    );
-                    metrics.record_stream_timeout(device_name);
-                    return Err(anyhow!(StreamDeath::ZeroFill {
-                        device: device_name.to_string(),
-                        secs: INPUT_SILENT_BUFFER_TIMEOUT_SECS,
-                    }));
-                }
+            if silent_input_needs_reconnect(
+                &audio_stream.device.device_type,
+                device_name,
+                stream_start.elapsed(),
+                last_non_zero_at,
+                is_clamshell_mode,
+            ) {
+                warn!(
+                    "no usable audio from {} for {}s — only zero-fill buffers \
+                     (likely OS device hijack by another app), triggering reconnect",
+                    device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                );
+                metrics.record_stream_timeout(device_name);
+                return Err(anyhow!(StreamDeath::ZeroFill {
+                    device: device_name.to_string(),
+                    secs: INPUT_SILENT_BUFFER_TIMEOUT_SECS,
+                }));
             }
 
             // Pass the silent buffer through; downstream VAD will drop it.
@@ -1502,6 +1534,83 @@ mod tests {
             Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
             Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
         ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    mod closed_lid_watchdog {
+        use super::*;
+
+        const BUILT_IN_MIC: &str = "MacBook Air Microphone (input)";
+
+        fn silence_timer_expired() -> Option<Instant> {
+            Some(Instant::now() - Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1))
+        }
+
+        fn needs_reconnect(
+            device_name: &str,
+            last_non_zero_at: &mut Option<Instant>,
+            clamshell_mode: impl FnOnce() -> bool,
+        ) -> bool {
+            silent_input_needs_reconnect(
+                &DeviceType::Input,
+                device_name,
+                Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
+                last_non_zero_at,
+                clamshell_mode,
+            )
+        }
+
+        #[test]
+        fn keeps_built_in_mic_open_and_restarts_the_silence_timer() {
+            let expired = silence_timer_expired();
+            let mut last_non_zero_at = expired;
+
+            assert!(!needs_reconnect(
+                BUILT_IN_MIC,
+                &mut last_non_zero_at,
+                || true
+            ));
+            assert!(last_non_zero_at > expired);
+        }
+
+        #[test]
+        fn reconnects_built_in_mic_once_the_lid_opens() {
+            let mut last_non_zero_at = silence_timer_expired();
+            assert!(!needs_reconnect(
+                BUILT_IN_MIC,
+                &mut last_non_zero_at,
+                || true
+            ));
+
+            let mut last_non_zero_at = silence_timer_expired();
+            assert!(needs_reconnect(BUILT_IN_MIC, &mut last_non_zero_at, || {
+                false
+            }));
+        }
+
+        #[test]
+        fn still_reconnects_external_mic() {
+            let expired = silence_timer_expired();
+            let mut last_non_zero_at = expired;
+
+            assert!(needs_reconnect(
+                "USB Microphone (input)",
+                &mut last_non_zero_at,
+                || true
+            ));
+            assert_eq!(last_non_zero_at, expired);
+        }
+
+        #[test]
+        fn reads_the_lid_only_after_the_silence_timer_expires() {
+            let mut last_non_zero_at = Some(Instant::now());
+
+            assert!(!needs_reconnect(
+                BUILT_IN_MIC,
+                &mut last_non_zero_at,
+                || { panic!("lid read before the silence timer expired") }
+            ));
+        }
     }
 
     #[cfg(target_os = "windows")]

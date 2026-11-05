@@ -246,9 +246,48 @@ pub fn is_clamshell_mode() -> bool {
     false
 }
 
+/// Whether `device_name` is a laptop's built-in microphone cut off by a closed
+/// lid.
+///
+/// macOS keeps listing that microphone after the lid closes, but it can only
+/// deliver zero-filled buffers, so its silence is not a capture failure and a
+/// stream rebuild cannot bring it back. External microphones stay real inputs
+/// whatever the lid state.
+pub fn input_is_disabled_by_lid(device_name: &str, clamshell_mode: bool) -> bool {
+    if !clamshell_mode {
+        return false;
+    }
+
+    let lower = device_name.to_ascii_lowercase();
+    (lower.contains("macbook") && lower.contains("microphone"))
+        || lower.contains("built-in microphone")
+        || lower.contains("internal microphone")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_lid_disables_only_the_builtin_laptop_microphone() {
+        for builtin in [
+            "MacBook Pro Microphone (input)",
+            "MacBook Air Microphone (input)",
+            "Built-in Microphone (input)",
+            "Internal Microphone (input)",
+        ] {
+            assert!(input_is_disabled_by_lid(builtin, true), "{builtin}");
+            assert!(!input_is_disabled_by_lid(builtin, false), "{builtin}");
+        }
+        for other in [
+            "USB Microphone (input)",
+            "AirPods Pro (input)",
+            "MacBook Pro Speakers (output)",
+            "System Audio (output)",
+        ] {
+            assert!(!input_is_disabled_by_lid(other, true), "{other}");
+        }
+    }
 
     /// The distinction the vision stale-grant detection depends on: a sleeping
     /// EXTERNAL display stays "usable" (audio watchdog semantics) but is NOT

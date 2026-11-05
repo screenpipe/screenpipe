@@ -508,18 +508,9 @@ fn meetings_only_audio_idle_state(
 /// purposes that device is unavailable in clamshell mode. External microphones
 /// remain real inputs and must still surface capture failures normally.
 fn input_device_is_available(device_name: &str, clamshell_mode: bool) -> bool {
-    if !device_name.contains("(input)") {
-        return false;
-    }
-    if !clamshell_mode {
-        return true;
-    }
+    use screenpipe_core::display_topology::input_is_disabled_by_lid;
 
-    let lower = device_name.to_ascii_lowercase();
-    let built_in_laptop_mic = (lower.contains("macbook") && lower.contains("microphone"))
-        || lower.contains("built-in microphone")
-        || lower.contains("internal microphone");
-    !built_in_laptop_mic
+    device_name.contains("(input)") && !input_is_disabled_by_lid(device_name, clamshell_mode)
 }
 
 /// Classify the raw audio capture status from health signals. Pure so it can be
