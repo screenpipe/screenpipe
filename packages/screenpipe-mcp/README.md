@@ -627,3 +627,30 @@ Each stage can also return `inputSearch` arguments for `search-content` with
 `content_type="input"`. Input results preserve recorded x/y, keys/modifiers,
 element role/name and linked frame IDs. Treat the bounded time window as
 candidate events to verify, not as automatic proof of the workflow's actions.
+
+### Observed start of day
+
+`day-start` reads the first recorded human input on the local device. Pass
+`start_time` and `end_time` as offset-bearing ISO timestamps bounding the user's
+local calendar day, for example `2026-11-05T00:00:00-08:00` and
+`2026-11-06T00:00:00-08:00`. The end is exclusive; windows longer than 25 hours
+are rejected. Clicks, scrolling, keyboard input and already-enabled mouse
+movement qualify. Passive app/window changes and background recording do not.
+No extra mouse tracking is enabled.
+
+`team-day-start` additionally requires a `device_id` from `team-devices`, an
+enterprise token with `read:records`, and an organization query gateway configured
+through the existing `SCREENPIPE_TEAM_API_URL`/gateway settings. It uses
+`GET /api/enterprise/v1/day-start` over already authorized UI-event telemetry.
+Hosted storage without this gateway endpoint is unsupported. This change does
+not enable enterprise uploads or grant cloud access to a local recorder.
+
+Both return metadata only: input event ID, timestamp, event type and device.
+`observed` means first **recorded** input, never confirmed work or shift start.
+`no_observation` can mean disabled input capture, missing permission, paused
+recording, late startup or incomplete sync. Do not infer absence or automatically
+change employee schedules from it. The local endpoint returns
+`history_restricted` when the full window is outside the permitted history.
+Configured cloud-agent context sharing also includes today's signal, but only
+inside the existing lookback and explicit sharing authorization. No scheduler,
+shift policy, data upload or account setting is changed.

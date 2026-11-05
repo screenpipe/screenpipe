@@ -4,6 +4,7 @@
 
 pub mod activity_ledger;
 pub mod activity_summary;
+pub mod day_start;
 pub mod ai_feedback;
 pub mod artifacts;
 pub mod audio;

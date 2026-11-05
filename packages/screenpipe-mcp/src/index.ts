@@ -447,6 +447,22 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "day-start",
+    description: "First recorded human input on this device for an explicit local-day window. " +
+      "Use offset-bearing ISO bounds from local midnight to the next midnight (23-25 hours on DST days). " +
+      "A recording-based heuristic, not a confirmed shift start. Missing input is unknown, never absence. " +
+      "Mouse movement is used only if movement capture is already enabled; clicks, scrolling and keyboard input also qualify.",
+    annotations: { title: "Day Start", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        start_time: { type: "string", description: "ISO 8601 local midnight with UTC offset" },
+        end_time: { type: "string", description: "ISO 8601 next local midnight with UTC offset, exclusive" },
+      },
+      required: ["start_time", "end_time"],
+    },
+  },
+  {
     name: "activity-summary",
     description:
       "Includes up to ten recent starred intervals for this time range, even without captured content. Stars indicate user intent, not duration or completion. " +
@@ -962,6 +978,23 @@ const TOOLS: Tool[] = [
 // which scope (just-me vs the-whole-org) any given call is hitting.
 // ---------------------------------------------------------------------------
 const TEAM_TOOLS: Tool[] = [
+  {
+    name: "team-day-start",
+    description: "First recorded human input for an enterprise device through the organization's query gateway. " +
+      "Requires a configured gateway API base and a read:records enterprise token. " +
+      "Use explicit offset-bearing local-day bounds. Returns metadata only; partial sync and missing input do not prove a shift start or absence. " +
+      "Hosted storage without this gateway endpoint is unsupported and returns an error.",
+    annotations: { title: "Team Day Start", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Device ID returned by team-devices" },
+        start_time: { type: "string", description: "ISO 8601 local midnight with UTC offset" },
+        end_time: { type: "string", description: "ISO 8601 next local midnight with UTC offset, exclusive" },
+      },
+      required: ["device_id", "start_time", "end_time"],
+    },
+  },
   {
     name: "team-search",
     description:
@@ -1742,6 +1775,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         };
       }
 
+      case "day-start": {
+        const params = new URLSearchParams({ start_time: String(args.start_time), end_time: String(args.end_time) });
+        const response = await callAPI(`/day-start?${params}`);
+        return { content: [{ type: "text", text: JSON.stringify(response) }] };
+      }
+
       case "activity-summary": {
         const result = await buildActivitySummaryResult(args, callAPI);
         if (result.hasArtifact) {
@@ -2339,6 +2378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
       case "team-search":
       case "team-devices":
       case "team-records":
+      case "team-day-start":
       case "team-frame": {
         const teamConfig = discoverTeamConfig(teamApiOverride);
         if (!teamConfig.token) {
@@ -2377,6 +2417,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         const subpath =
           name === "team-search" ? "/search"
           : name === "team-devices" ? "/devices"
+          : name === "team-day-start" ? "/day-start"
           : name === "team-records" && SYNTHESIZED_KINDS.has(kindArg) ? "/workflows/generated"
           : "/records";
         // Forward every primitive arg as a query param. The server validates;

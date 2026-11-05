@@ -6,7 +6,7 @@
 
 use super::cloud::CloudAgentConfig;
 use anyhow::{anyhow, Context, Result};
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{Duration as ChronoDuration, Local, SecondsFormat, TimeZone, Utc};
 use serde_json::Value;
 
 const MAX_CONTEXT_ITEMS: u32 = 200;
@@ -68,7 +68,40 @@ async fn fetch_activity_capsule(
         "activity capsule",
     )
     .await?;
-    Ok(truncate(sanitize_activity_capsule(&body)?))
+    let mut capsule: Value = serde_json::from_str(&sanitize_activity_capsule(&body)?)?;
+    // Include metadata only through the same explicitly enabled context-sharing
+    // path. Never reach earlier than the configured lookback to find day start.
+    let midnight = Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|date| Local.from_local_datetime(&date).single())
+        .map(|date| date.with_timezone(&Utc));
+    let day_start = if let Some(midnight) = midnight.filter(|midnight| *midnight >= start) {
+        match local_get(
+            client,
+            api_port,
+            api_auth_key,
+            "day-start",
+            &[
+                ("start_time", midnight.to_rfc3339()),
+                ("end_time", end.to_rfc3339()),
+            ],
+            "day start",
+        )
+        .await
+        {
+            Ok(body) => serde_json::from_str::<Value>(&body)
+                .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"})),
+            Err(_) => serde_json::json!({"status":"unavailable"}),
+        }
+    } else {
+        serde_json::json!({"status":"outside_context_window"})
+    };
+    capsule
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("activity capsule must be an object"))?
+        .insert("day_start".into(), day_start);
+    Ok(truncate(serde_json::to_string(&capsule)?))
 }
 
 async fn fetch_search_snapshot(
@@ -205,6 +238,39 @@ mod tests {
         assert!(context.contains("Code"));
         assert!(!context.contains("edited_files"));
         assert!(!context.contains("private.rs"));
+    }
+
+    #[tokio::test]
+    async fn shared_cloud_context_includes_day_start_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/activity-summary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apps":[]})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/day-start"))
+            .and(header("authorization", "Bearer local-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status":"observed", "first_observed_input":{"event_type":"click"},
+                "is_confirmed_work_start":false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut settings = config();
+        settings.context_lookback_hours = Some(24);
+        let context = fetch(
+            &reqwest::Client::new(),
+            server.address().port(),
+            Some("local-key"),
+            &settings,
+        )
+        .await
+        .unwrap();
+        let body: Value = serde_json::from_str(&context).unwrap();
+        assert_eq!(body["day_start"]["status"], "observed");
+        assert_eq!(body["day_start"]["is_confirmed_work_start"], false);
     }
 
     #[tokio::test]

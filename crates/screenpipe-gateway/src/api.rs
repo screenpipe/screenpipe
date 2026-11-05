@@ -109,6 +109,7 @@ fn routes() -> Vec<(&'static str, MethodRouter<ApiState>)> {
             get(frame_image),
         ),
         ("/api/enterprise/v1/rollups", get(rollups)),
+        ("/api/enterprise/v1/day-start", get(day_start)),
         // Hosted-only surfaces, registered so they answer a typed 501 instead
         // of a posture-dependent 403-or-empty-404 (SCR-288 ruling d). `any` so
         // POST /pipes gets the diagnosis too rather than a bare 405 — the
@@ -965,6 +966,41 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
             },
         )
         .collect())
+}
+
+/// Explicit device and day bounds keep this signal usable by cloud agents
+/// without exposing screen text, keystrokes, or another organization's data.
+#[derive(Deserialize)]
+struct DayStartQuery {
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    device_id: String,
+}
+
+async fn day_start(
+    State(state): State<ApiState>,
+    Query(query): Query<DayStartQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    screenpipe_db::day_start::validate_day_window(query.start_time, query.end_time)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error":e}))))?;
+    if query.device_id.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error":"device_id is required"}))));
+    }
+    let mut sources: Vec<String> = sqlx::query_scalar(
+        "SELECT source_id FROM gateway_source_devices WHERE device_id = ?1"
+    ).bind(&query.device_id).fetch_all(&state.db.pool).await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"device lookup failed"}))))?;
+    sources.push(query.device_id.clone());
+    let evidence = state.db.first_input_for_day(query.start_time, query.end_time, Some(&sources))
+        .await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"day start query failed"}))))?;
+    Ok(Json(json!({
+        "status":if evidence.is_some() {"observed"} else {"no_observation"},
+        "heuristic":"first_recorded_human_input",
+        "device_id":query.device_id,
+        "start_time":query.start_time, "end_time":query.end_time,
+        "first_observed_input":evidence,
+        "is_confirmed_work_start":false
+    })))
 }
 
 async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>, sqlx::Error> {
@@ -2308,6 +2344,34 @@ mod tests {
                  would serve it unauthenticated"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn day_start_is_device_scoped_metadata_and_requires_day_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (router, db) = seeded_router_and_db_with_policy(&dir, None).await;
+        let writer = db.coordinated_writer().lock().await.unwrap();
+        for (machine, kind, ts) in [
+            ("dev-a", "app_switch", "2026-07-22T00:00:00Z"),
+            ("dev-a", "click", "2026-07-22T10:00:00Z"),
+            ("dev-b", "key", "2026-07-22T09:00:00Z"),
+        ] {
+            sqlx::query("INSERT INTO ui_events(timestamp,event_type,machine_id,text_content) VALUES(?,?,?,'secret typed content')")
+                .bind(ts).bind(kind).bind(machine).execute(writer.pool()).await.unwrap();
+        }
+        drop(writer);
+        let suffix = "start_time=2026-07-22T00:00:00Z&end_time=2026-07-23T00:00:00Z";
+        let (status, body) = get_json(&router, &format!("/api/enterprise/v1/day-start?device_id=dev-a&{suffix}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["first_observed_input"]["machine_id"], "dev-a");
+        assert_eq!(body["first_observed_input"]["timestamp"], "2026-07-22T10:00:00Z");
+        assert_eq!(body["is_confirmed_work_start"], false);
+        assert!(!body.to_string().contains("secret typed content"));
+        let (_, empty) = get_json(&router, &format!("/api/enterprise/v1/day-start?device_id=missing&{suffix}")).await;
+        assert_eq!(empty["status"], "no_observation");
+        let (status, _) = get_json(&router, "/api/enterprise/v1/day-start?device_id=dev-a&start_time=2026-07-22T00:00:00Z&end_time=2026-07-25T00:00:00Z").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(crate::auth::required_scope("/api/enterprise/v1/day-start"), Some("read:records"));
     }
 
     async fn seeded_router(dir: &tempfile::TempDir) -> Router {

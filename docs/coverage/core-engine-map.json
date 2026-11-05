@@ -683,6 +683,7 @@
       "label": "Database frames, timeline, and storage joins",
       "crate": "screenpipe-db",
       "files": [
+        "src/day_start.rs",
         "src/db/activity_ledger.rs",
         "src/db/feedback.rs",
         "src/db/maintenance.rs",
@@ -743,7 +744,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
-      "notes": "Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives (src/db.rs split into src/db/ modules), feedback record upserts, media eviction anti-join regressions, SAF output registry, semantic storage, and timeline performance."
+      "notes": "Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives (src/db.rs split into src/db/ modules), feedback record upserts, media eviction anti-join regressions, SAF output registry, semantic storage, and timeline performance. Observed day-start input filtering, device isolation, exclusive bounds, offset ordering, and DST window validation."
     },
     {
       "id": "db-runtime-reliability",
