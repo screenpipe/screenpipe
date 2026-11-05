@@ -27,7 +27,14 @@ const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: config, PI
 delete env.JITI_TRY_NATIVE;
 if (!process.argv.includes("--baseline") && nativeImport !== undefined) env.JITI_TRY_NATIVE = nativeImport;
 
-async function run(args: string[], cwd: string, stopOnSettled = false) {
+// Registry downloads and a cold Rust build must finish before Pi's turn
+// watchdog starts. Keep setup output visible when a toolchain/install fails.
+async function setup(args: string[], cwd: string) {
+  const child = Bun.spawn(args, { cwd, env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+  assert.equal(await child.exited, 0, `setup command failed: ${args[0]}`);
+}
+
+async function runPi(args: string[], cwd: string, stopOnSettled = false) {
   const child = Bun.spawn(args, { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const timeout = setTimeout(() => child.kill(), 60_000);
   const stderr = new Response(child.stderr).text();
@@ -71,8 +78,7 @@ try {
     [join(config, "npm"), { "pi-subagents": brokenVersion }],
   ] as const) {
     await writeFile(join(dir, "package.json"), JSON.stringify({ type: "module", dependencies }));
-    const install = await run([process.execPath, "install", "--ignore-scripts"], dir);
-    assert.equal(install.code, 0, install.stderr);
+    await setup([process.execPath, "install", "--ignore-scripts"], dir);
   }
   const staleBun = join(root, "old-screenpipe-install", process.platform === "win32" ? "bun.exe" : "bun");
   await writeFile(join(config, "settings.json"), JSON.stringify({
@@ -81,11 +87,10 @@ try {
     retry: { enabled: false },
     compaction: { enabled: false },
   }));
-  const migration = await run([
+  await setup([
     "cargo", "run", "--quiet", "-p", "screenpipe-core", "--example", "pi-settings-migrate", "--",
     config, process.execPath,
   ], repo);
-  assert.equal(migration.code, 0, migration.stderr);
   const migrated = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
   assert.deepEqual(migrated.npmCommand, [process.execPath]);
   assert.deepEqual(migrated.packages, [packageSource]);
@@ -100,7 +105,7 @@ try {
   const args = [process.execPath, cli, "--provider", "eval", "--model", "eval", "--no-session", "--no-skills", "--no-prompt-templates", "--no-context-files"];
   // A scheduled run must recover before anyone opens interactive chat.
   for (const mode of ["json", "rpc"]) {
-    const result = await run([...args, "--mode", mode, ...(mode === "json" ? ["--print", "Say extension startup works."] : [])], project, mode === "rpc");
+    const result = await runPi([...args, "--mode", mode, ...(mode === "json" ? ["--print", "Say extension startup works."] : [])], project, mode === "rpc");
     assert.doesNotMatch(result.stderr, /Failed to load extension/, `${mode}: ${result.stderr}`);
     const events = result.stdout.split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line));
     assert(events.some(event => event.type === "message_end" && event.message.role === "assistant"
@@ -115,8 +120,8 @@ try {
   }
   // A real extension error must still report its originating cause.
   const broken = join(project, "broken.ts");
-  await writeFile(broken, 'export default function () { throw new Error("eval extension startup failure"); }');
-  const failed = await run([...args, "--mode", "json", "--no-extensions", "--extension", broken, "--print", "Hello"], project);
+  await writeFile(broken, '// screenpipe — AI that knows everything you\'ve seen, said, or heard\n// https://screenpipe.com\nexport default function () { throw new Error("eval extension startup failure"); }');
+  const failed = await runPi([...args, "--mode", "json", "--no-extensions", "--extension", broken, "--print", "Hello"], project);
   assert.notEqual(failed.code, 0);
   assert(failed.stderr.includes(broken));
   assert.match(failed.stderr, /Failed to load extension.*eval extension startup failure/s);
