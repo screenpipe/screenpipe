@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
         "shell-exclude" => WindowFilters::new(&["Windows Explorer".into()], &[], &[]),
         "empty" => WindowFilters::new(&[], &["::NoSuchWindow".into()], &[]),
         "nomatch" => WindowFilters::new(&["::NeverPresentWindow".into()], &[], &[]),
+        "title-churn" => WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]),
         _ => anyhow::bail!("unknown mode: {mode}"),
     };
     let writer =
@@ -117,7 +118,10 @@ async fn main() -> anyhow::Result<()> {
     );
     anyhow::ensure!(saved > 0, "no screenshots stored");
     anyhow::ensure!(
-        !matches!(mode, "exclude" | "include" | "empty" | "blank") || leaked == 0,
+        !matches!(
+            mode,
+            "exclude" | "include" | "empty" | "blank" | "title-churn"
+        ) || leaked == 0,
         "excluded marker persisted in {leaked} frames"
     );
     Ok(())

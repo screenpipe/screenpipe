@@ -37,12 +37,31 @@ pub async fn capture_monitor_image_filtered(
     }
     let start = Instant::now();
     #[cfg(target_os = "macos")]
-    let image = macos::capture_filtered(monitor, filters, sources, fresh).await?;
+    let image = macos::capture_filtered(monitor, filters, sources, fresh).await;
     #[cfg(target_os = "linux")]
-    let image = linux::capture_filtered(monitor, filters, sources, fresh).await?;
+    let image = linux::capture_filtered(monitor, filters, sources, fresh).await;
     #[cfg(target_os = "windows")]
-    let image = windows::capture_filtered(monitor, filters, sources, fresh).await?;
+    let image = windows::capture_filtered(monitor, filters, sources, fresh).await;
+    let image = report_filtered_capture(monitor.id(), image)?;
     Ok((image, start.elapsed()))
+}
+
+fn report_filtered_capture(
+    monitor_id: u32,
+    result: anyhow::Result<DynamicImage>,
+) -> anyhow::Result<DynamicImage> {
+    if let Err(error) = &result {
+        // Normal support bundles include INFO/WARN, not DEBUG. Keep the native
+        // cause and pixel outcome without logging window names or titles.
+        tracing::warn!(
+            monitor_id,
+            error = %error,
+            screenshot_outcome = "withheld",
+            accessibility_outcome = "independent",
+            "window-filtered screenshot withheld"
+        );
+    }
+    result
 }
 
 pub(super) fn window_allowed(
@@ -61,6 +80,34 @@ pub(super) fn window_allowed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn withheld_screenshot_cause_is_visible_at_normal_support_log_level() {
+        let logs = tempfile::tempdir().unwrap();
+        let path = logs.path().join("screenpipe.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(std::sync::Mutex::new(std::fs::File::create(&path).unwrap()))
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let cause = "window privacy policy changed during capture";
+        let error = report_filtered_capture(2, Err(anyhow::anyhow!(cause))).unwrap_err();
+        assert_eq!(error.to_string(), cause);
+        // A rejected frame must not prevent the next independently verified one.
+        report_filtered_capture(2, Ok(DynamicImage::new_rgba8(2, 2))).unwrap();
+        drop(guard);
+        let emitted = std::fs::read_to_string(path).unwrap();
+        assert!(emitted.contains(cause));
+        assert!(emitted.contains("monitor_id=2"));
+        assert!(emitted.contains("screenshot_outcome=\"withheld\""));
+        assert!(emitted.contains("accessibility_outcome=\"independent\""));
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/filtered-capture-diagnostic.txt");
+        std::fs::write(fixture, format!("// screenpipe — AI that knows everything you\'ve seen, said, or heard\n// https://screenpipe.com\n\n{emitted}")).unwrap();
+    }
 
     #[test]
     fn include_scopes_pixels_to_the_matching_window() {

@@ -82,6 +82,44 @@ struct Surface {
     layer: i64,
 }
 
+/// Composition depends on identity, geometry and stacking order. A title
+/// change matters only when it changes the policy used to select the pixels.
+/// Compare with the verdict recorded before capture, not a second evaluation
+/// of the old title against potentially changed native privacy state.
+fn validate_scene(
+    before: &[Surface],
+    allowed: &[bool],
+    after: &[Surface],
+    filters: &WindowFilters,
+    detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
+) -> anyhow::Result<()> {
+    ensure!(
+        before.len() == after.len() && before.len() == allowed.len(),
+        "desktop scene changed during privacy capture (surface count)"
+    );
+    for ((before, allowed), after) in before.iter().zip(allowed).zip(after) {
+        ensure!(
+            before.id == after.id
+                && before.pid == after.pid
+                && before.app == after.app
+                && before.x == after.x
+                && before.y == after.y
+                && before.width == after.width
+                && before.height == after.height
+                && before.alpha == after.alpha
+                && before.layer == after.layer,
+            "desktop scene changed during privacy capture (identity, geometry or stacking)"
+        );
+        if before.title != after.title {
+            ensure!(
+                *allowed == window_allowed(filters, detector, &after.app, &after.title, after.pid),
+                "window privacy policy changed during capture"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// WindowServer order is authoritative; SCShareableContent does not promise
 /// stacking order. Include desktop and shell surfaces, not just layer-zero apps.
 fn snapshot(display: cidre::cg::Rect) -> anyhow::Result<Vec<Surface>> {
@@ -429,10 +467,13 @@ async fn capture(
         dock_masks(dock_pid, frame, filters, detector.as_deref()) == dock_before,
         "Dock thumbnail policy changed during capture"
     );
-    ensure!(
-        snapshot(frame)? == before,
-        "desktop scene changed during privacy capture"
-    );
+    validate_scene(
+        &before,
+        &allowed,
+        &snapshot(frame)?,
+        filters,
+        detector.as_deref(),
+    )?;
     let after = sc::ShareableContent::current()
         .await
         .map_err(|e| anyhow!("window revalidation: {e:?}"))?;
@@ -500,6 +541,112 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::oneshot;
+
+    fn surface(app: &str, title: &str) -> Surface {
+        Surface {
+            id: 42,
+            pid: 123,
+            app: app.into(),
+            title: title.into(),
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+            alpha: 1.0,
+            layer: 0,
+        }
+    }
+
+    #[test]
+    fn title_changes_preserve_screenshots_when_selection_is_unchanged() {
+        let filters = WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]);
+        for (app, allowed) in [("TextEdit", true), ("WhatsApp", false)] {
+            let before = [surface(app, "Notes A")];
+            let after = [surface(app, "Notes B")];
+            validate_scene(&before, &[allowed], &after, &filters, None).unwrap();
+        }
+    }
+
+    #[test]
+    fn title_policy_transitions_are_withheld_and_next_safe_scene_recovers() {
+        let policies = [
+            WindowFilters::new(&["::Private".into()], &[], &[]),
+            WindowFilters::new(&[], &["TextEdit::Public".into()], &[]),
+            WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]),
+            WindowFilters::new(&["::Unrelated".into()], &[], &["private.example".into()]),
+        ];
+        for (filters, blocked_title) in
+            policies
+                .iter()
+                .zip(["Private", "Private", "WhatsApp", "private.example"])
+        {
+            let public = [surface("TextEdit", "Public A")];
+            let private = [surface("TextEdit", blocked_title)];
+            for (before, allowed, after) in [(&public, true, &private), (&private, false, &public)]
+            {
+                let error = validate_scene(before, &[allowed], after, filters, None).unwrap_err();
+                assert!(error.to_string().contains("privacy policy changed"));
+            }
+            let next = [surface("TextEdit", "Public B")];
+            validate_scene(&public, &[true], &next, filters, None).unwrap();
+        }
+    }
+
+    #[test]
+    fn title_revalidation_uses_original_verdict_and_current_incognito_state() {
+        struct Detector;
+        impl screenpipe_a11y::incognito::IncognitoDetector for Detector {
+            fn is_incognito(&self, _: &str, _: i32, _: &str) -> bool {
+                true
+            }
+        }
+        let filters = WindowFilters::new(&["::Unrelated".into()], &[], &[]);
+        let before = [surface("Browser", "Page A")];
+        let after = [surface("Browser", "Page B")];
+        assert!(validate_scene(&before, &[true], &after, &filters, Some(&Detector)).is_err());
+        // Native selection may have failed even though a title passes policy.
+        // Do not turn that original rejection into permission after a rename.
+        assert!(validate_scene(&before, &[false], &after, &filters, None).is_err());
+    }
+
+    #[test]
+    fn composition_changes_still_withhold_screenshots() {
+        let filters = WindowFilters::new(&["::Private".into()], &[], &[]);
+        let original = surface("TextEdit", "Public");
+        let mut changes = Vec::new();
+        macro_rules! changed {
+            ($field:ident, $value:expr) => {{
+                let mut changed = original.clone();
+                changed.$field = $value;
+                changes.push(changed);
+            }};
+        }
+        changed!(id, 43);
+        changed!(pid, 124);
+        changed!(app, "Other".into());
+        changed!(x, -1.0);
+        changed!(y, 1.0);
+        changed!(width, 801.0);
+        changed!(height, 601.0);
+        changed!(alpha, 0.5);
+        changed!(layer, 1);
+        for changed in changes {
+            assert!(
+                validate_scene(&[original.clone()], &[true], &[changed], &filters, None).is_err()
+            );
+        }
+        assert!(validate_scene(&[original.clone()], &[true], &[], &filters, None).is_err());
+        let mut other = original.clone();
+        other.id = 43;
+        assert!(validate_scene(
+            &[original.clone(), other.clone()],
+            &[true, true],
+            &[other, original],
+            &filters,
+            None,
+        )
+        .is_err());
+    }
 
     #[tokio::test]
     async fn stalled_completion_releases_slot_for_next_capture() {
