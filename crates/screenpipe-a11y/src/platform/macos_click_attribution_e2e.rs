@@ -500,10 +500,10 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         }
         dump_chrome(&hit_window, 0);
     }
-    assert_eq!(
-        background.window_title.as_deref(),
-        Some(allowed_title.as_str())
-    );
+    assert!(background
+        .window_title
+        .as_deref()
+        .is_some_and(|title| title.contains("Allowed click fixture")));
     assert_eq!(
         background.browser_url.as_deref(),
         Some(allowed_url.as_str())

@@ -1956,12 +1956,23 @@ fn capture_click_at_position(
         return None;
     }
     let app_name = app_name?;
+    let is_browser = crate::url_filter::is_known_browser(&app_name);
 
     // Serialize accessibility queries to prevent concurrent calls that corrupt
     // AppKit's internal accessibility caches. This runs on the click worker,
     // never the event-tap callback, so waiting for the current bounded AX read
     // preserves the click instead of racing and dropping its attribution.
     let _guard = AX_QUERY_LOCK.lock();
+
+    if is_browser {
+        // Firefox starts its full accessibility provider when AXRole is read
+        // on the application (Mozilla bug 1845364). Without this handshake,
+        // the window may expose only native chrome and no page/address URL.
+        // This is a read, avoiding explicit screen-reader flag changes.
+        let app = ax::UiElement::with_app_pid(request.app_pid);
+        let _ = app.set_messaging_timeout_secs(0.1);
+        let _ = app.role();
+    }
 
     let sys = ax::UiElement::sys_wide();
     let elem = sys
@@ -1996,7 +2007,7 @@ fn capture_click_at_position(
     let window = match resolve_clicked_window(&elem, request.app_pid) {
         Ok(window) => window,
         Err(cause) => {
-            if crate::url_filter::is_known_browser(&app_name) {
+            if is_browser {
                 crate::capture_diagnostics::report_browser_click_failure(
                     "clicked_window",
                     &cause,
@@ -2032,7 +2043,7 @@ fn capture_click_at_position(
     let mut event = attributed_click_event(request, app_name, window_title, element)
         .map_err(|reason| debug!(?reason, "dropping click with invalid event coordinates"))
         .ok()?;
-    if crate::url_filter::is_known_browser(event.app_name.as_deref().unwrap_or_default()) {
+    if is_browser {
         let started = Instant::now();
         let url = crate::tree::clicked_window_browser_url(&window);
         let current_title = get_string_attr(&window, ax::attr::title())
