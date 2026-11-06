@@ -162,7 +162,8 @@ if ($FailureCase) {
     $supportLog = Join-Path $dataRoot "update-install.log"
     $failureReported = Test-Path -LiteralPath $supportLog
     if (-not $failureReported -or
-        (Get-Content -LiteralPath $supportLog -Raw) -notmatch "uninstaller_app_data_cleanup_failed:.*outcome=data_retained") {
+        (Get-Content -LiteralPath $supportLog -Raw) -notmatch
+          "uninstaller_app_data_cleanup_failed: operation=remove_directory path=current_profile_screenpipe_data windows_result=145 outcome=data_retained") {
       throw "locked cleanup failure did not retain support evidence"
     }
     [IO.File]::WriteAllText(

@@ -1001,25 +1001,22 @@
   ${If} $DeleteAppDataCheckboxState = 1
   ${AndIf} $UpdateMode <> 1
     SetShellVarContext current
-    ClearErrors
     RMDir /r "$PROFILE\.screenpipe"
-    ${If} ${Errors}
-      StrCpy $2 1
-    ${Else}
-      StrCpy $2 0
-    ${EndIf}
-    System::Call 'kernel32::GetLastError() i.r0'
-    ${If} $2 = 1
-    ${OrIf} ${FileExists} "$PROFILE\.screenpipe\*.*"
+    ${If} ${FileExists} "$PROFILE\.screenpipe\*.*"
+      ; RMDir reports only an NSIS error flag, not the Windows failure that
+      ; caused a recursive removal to stop. Probe the retained root with a
+      ; named operation and capture its error before any other instruction.
+      System::Call 'kernel32::RemoveDirectoryW(w "$PROFILE\.screenpipe") i.r2 ?e'
+      Pop $0
       ; The retained root is part of normal, consented support collection.
-      ; Keep the requested path, Windows cause, and actual outcome together.
+      ; Keep the failed operation, Windows cause, and actual outcome together.
       CreateDirectory "$PROFILE\.screenpipe"
       FileOpen $1 "$PROFILE\.screenpipe\update-install.log" a
       FileSeek $1 0 END
-      FileWrite $1 'uninstaller_app_data_cleanup_failed: path=$PROFILE\.screenpipe windows_result=$0 outcome=data_retained$\r$\n'
+      FileWrite $1 'uninstaller_app_data_cleanup_failed: operation=remove_directory path=current_profile_screenpipe_data windows_result=$0 outcome=data_retained$\r$\n'
       FileClose $1
-      DetailPrint "Screenpipe app data could not be fully deleted: $PROFILE\.screenpipe (Windows result $0)"
-      MessageBox MB_OK|MB_ICONEXCLAMATION "Screenpipe was uninstalled, but some app data could not be deleted from $PROFILE\.screenpipe (Windows result $0). The remaining folder contains support details." /SD IDOK
+      DetailPrint "Screenpipe app data could not be fully deleted: remove_directory failed for $PROFILE\.screenpipe (Windows result $0); data was retained"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Screenpipe was uninstalled, but remove_directory failed for $PROFILE\.screenpipe (Windows result $0), so some app data was retained. The remaining folder contains support details." /SD IDOK
     ${EndIf}
   ${EndIf}
 
