@@ -1975,9 +1975,29 @@ fn capture_click_at_position(
     }
 
     let sys = ax::UiElement::sys_wide();
-    let elem = sys
-        .element_at_pos(request.x as f32, request.y as f32)
-        .ok()?;
+    let elem = match sys.element_at_pos(request.x as f32, request.y as f32) {
+        Ok(element) => element,
+        Err(system_error) if is_browser => {
+            // Some browser AX providers do not implement the system-wide hit
+            // test. Query the immutable mouse-down receiver, never the focused
+            // app; the returned element still has to pass the PID check below.
+            let receiver = ax::UiElement::with_app_pid(request.app_pid);
+            let _ = receiver.set_messaging_timeout_secs(0.1);
+            match receiver.element_at_pos(request.x as f32, request.y as f32) {
+                Ok(element) => element,
+                Err(receiver_error) => {
+                    crate::capture_diagnostics::report_browser_click_failure(
+                        "clicked_element",
+                        &format!("system-wide AX hit-test failed: {system_error:?}; event receiver AX hit-test failed: {receiver_error:?}"),
+                        request.captured_at.elapsed(),
+                        "withheld_unattributable",
+                    );
+                    return None;
+                }
+            }
+        }
+        Err(_) => return None,
+    };
 
     // Cross-check the hit-test against the immutable CGEvent receiver. A focus
     // transition can change the system-wide AX answer after mouse-down; mixing

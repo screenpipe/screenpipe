@@ -436,6 +436,12 @@ mod tests {
                 Duration::from_millis(19),
                 "withheld_unattributable",
             );
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_element",
+                "system-wide AX hit-test failed: Error(-25208); event receiver AX hit-test failed: Error(-25208)",
+                Duration::from_millis(23),
+                "withheld_unattributable",
+            );
         });
         std::fs::rename(&current, dir.path().join("screenpipe.2026-11-06.1.log")).unwrap();
         std::fs::write(&current, "recorder restarted\npassword=hunter2\n").unwrap();
@@ -456,6 +462,10 @@ mod tests {
             "clicked AXParent read failed",
             "-25202",
             "withheld_unattributable",
+            "clicked_element",
+            "system-wide AX hit-test failed",
+            "event receiver AX hit-test failed",
+            "-25208",
         ] {
             assert!(
                 report.contains(evidence),

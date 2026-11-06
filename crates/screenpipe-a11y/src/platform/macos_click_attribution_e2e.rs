@@ -474,6 +474,16 @@ fn exercise_live_browser_click_urls(
     )
     .unwrap();
     wait_for_focus(browser.0, Duration::from_secs(10)).unwrap();
+    wait_for_window_snapshot(browser.0, Duration::from_secs(10)).unwrap();
+    if let Some(executable) = new_window_executable {
+        // Open the fixture after startup tabs have been created. Brave may
+        // select its startup tab after the initial LaunchServices URL event.
+        assert!(Command::new(executable)
+            .args(["--new-window", &allowed_url])
+            .status()
+            .unwrap()
+            .success());
+    }
     let wait_title = |marker: &str| {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -569,6 +579,9 @@ fn exercise_live_browser_click_urls(
     );
     let hit = ax::UiElement::sys_wide()
         .element_at_pos(point.x as f32, point.y as f32)
+        .or_else(|_| {
+            ax::UiElement::with_app_pid(browser.0).element_at_pos(point.x as f32, point.y as f32)
+        })
         .expect("background browser point must be AX-accessible");
     assert_eq!(
         hit.pid().ok(),
