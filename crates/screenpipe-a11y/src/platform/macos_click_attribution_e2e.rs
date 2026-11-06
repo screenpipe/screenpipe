@@ -667,16 +667,26 @@ fn exercise_live_browser_click_urls(
             with_context.element.is_none(),
             "a window is not a hit-tested page element"
         );
-        for window_id in [None, Some(u32::MAX)] {
-            let mut unverified =
-                snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0)
-                    .unwrap();
-            unverified.window_id = window_id;
-            assert!(
-                capture_click_at_position(&unverified, &config).is_none(),
-                "missing/stale receiver windows must not use a foreground URL"
-            );
-        }
+    }
+    // Exercise receiver-window resolution even if the earlier lookup woke
+    // the provider and it now supports element hit testing.
+    let receiver_window = super::clicked_window_for_receiver(&request).unwrap();
+    assert_eq!(
+        string_attr(&receiver_window, ax::attr::title()).as_deref(),
+        Some(allowed_title.as_str())
+    );
+    assert_fixture_url(
+        Some(&crate::tree::clicked_window_browser_url(&receiver_window).unwrap()),
+        &allowed_url,
+    );
+    for window_id in [None, Some(u32::MAX)] {
+        let mut unverified =
+            snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
+        unverified.window_id = window_id;
+        assert!(
+            super::clicked_window_for_receiver(&unverified).is_err(),
+            "missing/stale receiver windows must not use a foreground URL"
+        );
     }
     assert_eq!(
         background.to_db_insert(None).browser_url.as_deref(),
