@@ -475,6 +475,31 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         "background Firefox click URL lookup took {:?}",
         started.elapsed()
     );
+    if background.browser_url.is_none() {
+        eprintln!(
+            "clicked-window URL result: {:?}",
+            crate::tree::clicked_window_browser_url(&hit_window)
+        );
+        fn dump_chrome(node: &ax::UiElement, depth: usize) {
+            let _ = node.set_messaging_timeout_secs(0.1);
+            let role = string_attr(node, ax::attr::role()).unwrap_or_default();
+            eprintln!(
+                "AX fixture depth={depth} role={role} id={:?} value={:?} document={:?} url={:?}",
+                node.attr_value(ax::attr::id()),
+                node.attr_value(ax::attr::value()),
+                node.attr_value(ax::attr::document()),
+                node.attr_value(ax::attr::url())
+            );
+            if role != "AXWebArea" {
+                if let Ok(children) = node.children() {
+                    for child in children.iter() {
+                        dump_chrome(child, depth + 1);
+                    }
+                }
+            }
+        }
+        dump_chrome(&hit_window, 0);
+    }
     assert_eq!(
         background.window_title.as_deref(),
         Some(allowed_title.as_str())
