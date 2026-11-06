@@ -1993,7 +1993,7 @@ fn capture_click_at_position(
 
     // Firefox page elements can omit AXWindow. Resolve the clicked ancestry,
     // never AXFocusedWindow (which can describe another window at mouse-down).
-    let window = match resolve_clicked_window(&elem, request) {
+    let window = match resolve_clicked_window(&elem, request.app_pid) {
         Ok(window) => window,
         Err(cause) => {
             if crate::url_filter::is_known_browser(&app_name) {
@@ -2057,29 +2057,29 @@ fn capture_click_at_position(
 
 fn resolve_clicked_window(
     elem: &ax::UiElement,
-    request: &ContextCaptureRequest,
+    target_pid: i32,
 ) -> Result<Retained<ax::UiElement>, String> {
     let window_error = match elem.window() {
         Ok(window) => {
-            validate_click_element_pid(
-                request.app_pid,
-                window.pid().ok(),
-                std::process::id() as i32,
-            )
-            .map_err(|reason| format!("clicked AXWindow identity rejected: {reason:?}"))?;
+            validate_click_element_pid(target_pid, window.pid().ok(), std::process::id() as i32)
+                .map_err(|reason| format!("clicked AXWindow identity rejected: {reason:?}"))?;
             return Ok(window);
         }
         Err(error) => error,
     };
     let mut current = elem.retained();
+    let mut seen: Vec<Retained<ax::UiElement>> = Vec::new();
     loop {
-        // Reuse the mouse-down freshness requirement; delayed ancestry cannot
-        // safely describe a window that may have moved since the click.
-        validate_click_request_age(request.captured_at, Instant::now()).map_err(|reason| {
-            format!("AXWindow read failed: {window_error:?}; clicked ancestry {reason:?}")
-        })?;
+        // Follow the retained hit-test element to its natural window root.
+        // Detect provider cycles without imposing a new ancestry depth limit.
+        if seen.iter().any(|ancestor| ancestor.equal(&current)) {
+            return Err(format!(
+                "AXWindow read failed: {window_error:?}; cyclic clicked AXParent chain"
+            ));
+        }
+        seen.push(current.retained());
         let _ = current.set_messaging_timeout_secs(0.1);
-        validate_click_element_pid(request.app_pid, current.pid().ok(), std::process::id() as i32)
+        validate_click_element_pid(target_pid, current.pid().ok(), std::process::id() as i32)
             .map_err(|reason| format!("AXWindow read failed: {window_error:?}; clicked ancestor identity rejected: {reason:?}"))?;
         if role_string(&current).as_deref() == Some("AXWindow") {
             return Ok(current);
