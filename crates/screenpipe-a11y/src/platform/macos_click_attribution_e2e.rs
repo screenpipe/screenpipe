@@ -10,7 +10,7 @@
 
 use super::{
     capture_click_at_position, snapshot_click_request, EventData, UiCaptureConfig, UiRecorder,
-    CG_EVENT_TARGET_UNIX_PROCESS_ID,
+    CG_EVENT_RECEIVER_WINDOW_ID, CG_EVENT_TARGET_UNIX_PROCESS_ID,
 };
 use chrono::Utc;
 use cidre::{ax, cf, cg, ns};
@@ -419,6 +419,7 @@ fn exercise_live_browser_click_urls(
     new_window_executable: Option<&str>,
 ) {
     let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_env_filter("screenpipe_a11y=debug,screenpipe_db=warn,sqlx=warn")
         .with_test_writer()
         .try_init();
@@ -507,6 +508,14 @@ fn exercise_live_browser_click_urls(
     wait_title("Allowed click fixture");
     set_window_frame(browser.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
     let (allowed_title, bounds) = wait_title("Allowed click fixture");
+    let focused_window_id = || {
+        let app = ax::UiElement::with_app_pid(browser.0);
+        let value = app.attr_value(ax::attr::focused_window()).unwrap();
+        assert_eq!(value.get_type_id(), ax::UiElement::type_id());
+        let window: &ax::UiElement = unsafe { std::mem::transmute(&*value) };
+        super::native_window_id(window).unwrap()
+    };
+    let allowed_window_id = focused_window_id();
     if let Some(executable) = new_window_executable {
         assert!(Command::new(executable)
             .args(["--new-window", &blocked_url])
@@ -543,6 +552,8 @@ fn exercise_live_browser_click_urls(
     wait_title("Blocked click fixture");
     set_window_frame(browser.0, cg::Rect::new(520.0, 80.0, 460.0, 600.0)).unwrap();
     let (_, blocked_bounds) = wait_title("Blocked click fixture");
+    let blocked_window_id = focused_window_id();
+    assert_ne!(allowed_window_id, blocked_window_id);
 
     let config = UiCaptureConfig {
         capture_context: false,
@@ -564,6 +575,7 @@ fn exercise_live_browser_click_urls(
     )
     .unwrap();
     mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
+    mouse.set_field_i64(CG_EVENT_RECEIVER_WINDOW_ID, i64::from(allowed_window_id));
     mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
     mouse.set_flags(cg::EventFlags(0));
     let request =
@@ -581,12 +593,9 @@ fn exercise_live_browser_click_urls(
         "{app_name} background click URL lookup took {:?}",
         started.elapsed()
     );
-    let hit = ax::UiElement::sys_wide()
-        .element_at_pos(point.x as f32, point.y as f32)
-        .or_else(|_| {
-            ax::UiElement::with_app_pid(browser.0).element_at_pos(point.x as f32, point.y as f32)
-        })
-        .expect("background browser point must be AX-accessible");
+    let native_hit = ax::UiElement::sys_wide().element_at_pos(point.x as f32, point.y as f32);
+    let supports_hit_test = native_hit.is_ok();
+    let hit = native_hit.unwrap_or_else(|_| super::clicked_window_for_receiver(&request).unwrap());
     assert_eq!(
         hit.pid().ok(),
         Some(browser.0),
@@ -635,6 +644,24 @@ fn exercise_live_browser_click_urls(
         background.browser_url.as_deref(),
         Some(allowed_url.as_str())
     );
+    if !supports_hit_test {
+        let with_context = capture_click_at_position(
+            &request,
+            &UiCaptureConfig {
+                capture_context: true,
+                ..config.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            with_context.browser_url.as_deref(),
+            Some(allowed_url.as_str())
+        );
+        assert!(
+            with_context.element.is_none(),
+            "a window is not a hit-tested page element"
+        );
+    }
     assert_eq!(
         background.to_db_insert(None).browser_url.as_deref(),
         Some(allowed_url.as_str())
@@ -675,9 +702,9 @@ fn exercise_live_browser_click_urls(
         1,
         "real event tap must have Input Monitoring permission"
     );
-    for (bounds, expected, admitted) in [
-        (bounds, &allowed_url, true),
-        (blocked_bounds, &blocked_url, false),
+    for (bounds, window_id, expected, admitted) in [
+        (bounds, allowed_window_id, &allowed_url, true),
+        (blocked_bounds, blocked_window_id, &blocked_url, false),
     ] {
         let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
         for kind in [cg::EventType::LEFT_MOUSE_DOWN, cg::EventType::LEFT_MOUSE_UP] {
@@ -687,6 +714,7 @@ fn exercise_live_browser_click_urls(
             // Synthetic mouse events do not acquire the kernel receiver field
             // before this session tap. Preserve the production PID check.
             mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
+            mouse.set_field_i64(CG_EVENT_RECEIVER_WINDOW_ID, i64::from(window_id));
             mouse.post(cg::EventTapLocation::Hid);
         }
         let deadline = Instant::now() + Duration::from_secs(5);

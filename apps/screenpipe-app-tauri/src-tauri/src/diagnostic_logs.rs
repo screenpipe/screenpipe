@@ -438,7 +438,7 @@ mod tests {
             );
             screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
                 "clicked_element",
-                "system-wide AX hit-test failed: Error(-25208); event receiver AX hit-test failed: Error(-25208)",
+                "system-wide AX hit-test failed: Error(-25208); receiver window resolution failed: CGEvent receiver window ID missing",
                 Duration::from_millis(23),
                 "withheld_unattributable",
             );
@@ -464,7 +464,8 @@ mod tests {
             "withheld_unattributable",
             "clicked_element",
             "system-wide AX hit-test failed",
-            "event receiver AX hit-test failed",
+            "receiver window resolution failed",
+            "CGEvent receiver window ID missing",
             "-25208",
         ] {
             assert!(

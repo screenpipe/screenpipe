@@ -208,6 +208,8 @@ const KEY_X: u16 = 7;
 const KEY_V: u16 = 9;
 // cidre 0.13.1 does not expose kCGEventTargetUnixProcessID yet.
 const CG_EVENT_TARGET_UNIX_PROCESS_ID: cg::EventField = cg::EventField(40);
+// kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent (CGEventTypes.h).
+const CG_EVENT_RECEIVER_WINDOW_ID: cg::EventField = cg::EventField(92);
 
 #[repr(C)]
 struct UCKeyboardLayout {
@@ -738,6 +740,7 @@ struct ContextCaptureRequest {
     x: f64,
     y: f64,
     app_pid: i32,
+    window_id: Option<u32>,
     captured_at: Instant,
     timestamp: chrono::DateTime<Utc>,
     relative_ms: u64,
@@ -1975,20 +1978,18 @@ fn capture_click_at_position(
     }
 
     let sys = ax::UiElement::sys_wide();
-    let elem = match sys.element_at_pos(request.x as f32, request.y as f32) {
-        Ok(element) => element,
+    let (elem, element_hit) = match sys.element_at_pos(request.x as f32, request.y as f32) {
+        Ok(element) => (element, true),
         Err(system_error) if is_browser => {
-            // Some browser AX providers do not implement the system-wide hit
-            // test. Query the immutable mouse-down receiver, never the focused
-            // app; the returned element still has to pass the PID check below.
-            let receiver = ax::UiElement::with_app_pid(request.app_pid);
-            let _ = receiver.set_messaging_timeout_secs(0.1);
-            match receiver.element_at_pos(request.x as f32, request.y as f32) {
-                Ok(element) => element,
-                Err(receiver_error) => {
+            // Safari can expose its windows and URLs while reporting hit
+            // testing as unimplemented. Use the WindowServer receiver ID
+            // snapshotted from this mouse-down, never the foreground window.
+            match clicked_window_for_receiver(request) {
+                Ok(window) => (window, false),
+                Err(cause) => {
                     crate::capture_diagnostics::report_browser_click_failure(
                         "clicked_element",
-                        &format!("system-wide AX hit-test failed: {system_error:?}; event receiver AX hit-test failed: {receiver_error:?}"),
+                        &format!("system-wide AX hit-test failed: {system_error:?}; receiver window resolution failed: {cause}"),
                         request.captured_at.elapsed(),
                         "withheld_unattributable",
                     );
@@ -2055,10 +2056,11 @@ fn capture_click_at_position(
             }
         };
 
-    let element = config
-        .capture_context
-        .then(|| build_click_element_context(&elem, request.x, request.y, config))
-        .flatten();
+    let element = if config.capture_context && element_hit {
+        build_click_element_context(&elem, request.x, request.y, config)
+    } else {
+        None
+    };
 
     let mut event = attributed_click_event(request, app_name, window_title, element)
         .map_err(|reason| debug!(?reason, "dropping click with invalid event coordinates"))
@@ -2084,6 +2086,60 @@ fn capture_click_at_position(
         }
     }
     Some(event)
+}
+
+/// AX's native window-ID bridge lets a receiver window remain identifiable
+/// even when a browser does not implement element-at-position queries.
+fn native_window_id(window: &ax::UiElement) -> Result<u32, String> {
+    unsafe extern "C" {
+        fn _AXUIElementGetWindow(element: *const ax::UiElement, window: *mut u32) -> i32;
+    }
+    let mut id = 0;
+    let status = unsafe { _AXUIElementGetWindow(window, &mut id) };
+    if status == 0 && id != 0 {
+        Ok(id)
+    } else {
+        Err(format!(
+            "AX window ID read failed: status={status}, window_id={id}"
+        ))
+    }
+}
+
+fn clicked_window_for_receiver(
+    request: &ContextCaptureRequest,
+) -> Result<Retained<ax::UiElement>, String> {
+    let wanted = request
+        .window_id
+        .ok_or("CGEvent receiver window ID missing")?;
+    let app = ax::UiElement::with_app_pid(request.app_pid);
+    let _ = app.set_messaging_timeout_secs(0.1);
+    let value = app
+        .attr_value(ax::attr::windows())
+        .map_err(|error| format!("receiver AXWindows read failed: {error:?}"))?;
+    if value.get_type_id() != cf::Array::type_id() {
+        return Err("receiver AXWindows was not an array".into());
+    }
+    let windows: &cf::ArrayOf<ax::UiElement> = unsafe { std::mem::transmute(&*value) };
+    let mut last_error = "receiver window is no longer present".to_string();
+    for window in windows.iter() {
+        let _ = window.set_messaging_timeout_secs(0.1);
+        match native_window_id(window) {
+            Ok(id) if id == wanted => {
+                validate_click_element_pid(
+                    request.app_pid,
+                    window.pid().ok(),
+                    std::process::id() as i32,
+                )
+                .map_err(|reason| format!("receiver AXWindow identity rejected: {reason:?}"))?;
+                return Ok(window.retained());
+            }
+            Err(error) => last_error = error,
+            _ => {}
+        }
+    }
+    Err(format!(
+        "no AXWindow matches CGEvent receiver window ID; {last_error}"
+    ))
 }
 
 fn resolve_clicked_window(
@@ -2147,6 +2203,9 @@ fn snapshot_click_request(
         x: location.x,
         y: location.y,
         app_pid,
+        window_id: u32::try_from(event.field_i64(CG_EVENT_RECEIVER_WINDOW_ID))
+            .ok()
+            .filter(|id| *id != 0),
         captured_at: Instant::now(),
         timestamp,
         relative_ms,
@@ -3325,12 +3384,39 @@ mod tests {
     }
 
     #[test]
+    fn macos_click_attribution_snapshots_receiver_window_id() {
+        let mut event = cg::Event::mouse(
+            None,
+            cg::EventType::LEFT_MOUSE_DOWN,
+            cg::Point::new(100.0, 100.0),
+            cg::MouseButton::Left,
+        )
+        .unwrap();
+        event.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, 42);
+        event.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+        for (raw, expected) in [
+            (-1, None),
+            (0, None),
+            (123, Some(123)),
+            (i64::from(u32::MAX), Some(u32::MAX)),
+            (i64::from(u32::MAX) + 1, None),
+        ] {
+            event.set_field_i64(CG_EVENT_RECEIVER_WINDOW_ID, raw);
+            let request =
+                snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &event, Utc::now(), 1)
+                    .unwrap();
+            assert_eq!(request.window_id, expected);
+        }
+    }
+
+    #[test]
     fn attributed_click_preserves_original_mouse_down_facts() {
         let timestamp = Utc::now();
         let request = ContextCaptureRequest {
             x: 321.75,
             y: 654.25,
             app_pid: 42,
+            window_id: None,
             captured_at: Instant::now(),
             timestamp,
             relative_ms: 987,
