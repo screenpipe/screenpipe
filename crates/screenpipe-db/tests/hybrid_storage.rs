@@ -1681,3 +1681,26 @@ async fn pending_sqlx_migration_rolls_back_and_retries_on_compressed_storage() {
     );
     db.close().await;
 }
+
+#[tokio::test]
+async fn hybrid_index_is_opened_by_a_plain_path() {
+    // SQLite 3.51 treats every path starting with `\` as a network share,
+    // including the `\?\C:\` form `canonicalize` returns on Windows. It then
+    // shares one -shm lock handle across connections, which can leak a WAL
+    // read lock and stop checkpoints for the life of the process.
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    let file: String =
+        sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name='main'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    db.close().await;
+    assert!(file.ends_with("index.sqlite"), "{file}");
+    assert!(
+        !file.starts_with(r"\\"),
+        "SQLite would use UNC locking for {file}"
+    );
+}
