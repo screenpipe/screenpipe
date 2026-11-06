@@ -107,7 +107,10 @@ const easeOutCubic = (x: number): number => {
 	return 1 - Math.pow(1 - x, 3);
 };
 
-export default function Timeline({ embedded = false }: { embedded?: boolean }) {
+export default function Timeline({ embedded = false, onDismiss }: {
+	embedded?: boolean;
+	onDismiss?: () => void;
+}) {
   const uiLocale = useUiLocale();
   const ui = useGT();
   const uiMessages = useMessages();
@@ -704,6 +707,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// blocker — the inline spinner on the date control is enough feedback.
 	const hasInitialFrames = frames.length > 0;
 	const showBlockingLoader = isLoading && !hasInitialFrames && !isNavigating;
+	// Home owns embedded navigation; Main is a separate overlay window.
+	const dismissBlockingState = useCallback(() => {
+		if (embedded) onDismiss?.();
+		else void commands.closeWindow("Main");
+	}, [embedded, onDismiss]);
 	firstFrameHadCacheRef.current = hasCachedData;
 	firstFrameCountRef.current = frames.length;
 
@@ -950,6 +958,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		navigateToSearchResultRef,
 		findNextDevice,
 		embedded,
+		onDismissBlockingState: (showBlockingLoader || error) && onDismiss ? dismissBlockingState : undefined,
 		isMac,
 		searchResultIndex,
 		searchResults,
@@ -1481,12 +1490,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				{/* Loading/Error States - Progressive loading: only block when no frames yet */}
 				{showBlockingLoader && (
 					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
-						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
-						{!embedded && (
+						{(!embedded || onDismiss) && (
 							<button
-								onClick={() => commands.closeWindow("Main")}
+								onClick={dismissBlockingState}
 								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
 								title={ui("Close (Esc)")}
+								aria-label={ui("Close (Esc)")}
 							>
 								<X className="w-4 h-4 text-muted-foreground" />
 							</button>
@@ -1512,12 +1521,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 				{error && (
 					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
-						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
-						{!embedded && (
+						{(!embedded || onDismiss) && (
 							<button
-								onClick={() => commands.closeWindow("Main")}
+								onClick={dismissBlockingState}
 								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
 								title={ui("Close (Esc)")}
+								aria-label={ui("Close (Esc)")}
 							>
 								<X className="w-4 h-4 text-muted-foreground" />
 							</button>
