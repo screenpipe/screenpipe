@@ -269,26 +269,8 @@ fn extract_browser_url(
     window_name: &str,
     require_fresh: bool,
 ) -> Option<String> {
-    // Tier 1: AXDocument attribute on the window.
-    if let Some(url) = get_string_attr(window, ax::attr::document()) {
-        if is_http_url(&url) {
-            debug!(
-                "browser_url: tier1 AXDocument hit for {}: {}",
-                app_name, url
-            );
-            return Some(url);
-        }
-    }
-
-    // Tier 2: descend to the focused window's first AXWebArea and read AXURL.
-    if let Some(url) = find_web_area_url(window, WEB_AREA_DEPTH_CAP, WEB_AREA_VISIT_CAP) {
-        if is_http_url(&url) {
-            debug!(
-                "browser_url: tier2 AXWebArea AXURL hit for {}: {}",
-                app_name, url
-            );
-            return Some(url);
-        }
+    if let Some(url) = window_document_url(window) {
+        return Some(url);
     }
 
     // Tier 3: Arc-only in-process AppleScript fallback (no web area found yet).
@@ -319,6 +301,30 @@ fn extract_browser_url(
         app_name, window_name
     );
     None
+}
+
+fn window_document_url(window: &ax::UiElement) -> Option<String> {
+    get_string_attr(window, ax::attr::document())
+        .filter(|url| is_http_url(url))
+        .or_else(|| {
+            find_web_area_url(window, WEB_AREA_DEPTH_CAP, WEB_AREA_VISIT_CAP)
+                .filter(|url| is_http_url(url))
+        })
+}
+
+/// Resolve only the hit-tested window. A click can target a background window,
+/// so the focused-window/Arc AppleScript fallback and its cache are unsuitable.
+/// Runs on the existing click worker, never on the event-tap callback.
+pub(crate) fn clicked_window_browser_url(window: &ax::UiElement) -> Result<String, String> {
+    window_document_url(window)
+        .or_else(|| find_url_in_children(window, 0, 5))
+        .ok_or_else(|| {
+            let document_status = match window.attr_value(ax::attr::document()) {
+                Err(error) => format!("AXDocument read failed: {error:?}"),
+                Ok(_) => "AXDocument exposed no usable browser URL".to_string(),
+            };
+            format!("{document_status}; AXWebArea/AXURL and browser chrome yielded no URL")
+        })
 }
 
 /// Depth/visit caps for the [`find_web_area_url`] descent.
@@ -671,6 +677,11 @@ fn find_url_in_children(elem: &ax::UiElement, depth: usize, max_depth: usize) ->
 
         if let Ok(role) = child.role() {
             let role_str = role.to_string();
+            // A URL typed into the page is not the browser's address. Search
+            // browser chrome only when the committed document URL is absent.
+            if role_str == "AXWebArea" {
+                continue;
+            }
             if role_str == "AXTextField" || role_str == "AXComboBox" {
                 if let Some(val) = get_string_attr(child, ax::attr::value()) {
                     if looks_like_url(&val) {

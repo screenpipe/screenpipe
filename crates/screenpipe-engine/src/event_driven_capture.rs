@@ -3870,9 +3870,10 @@ async fn do_capture(
 
     // Final URL gate after metadata resolution. This protects the OCR fallback
     // and every other path that can continue after a missing tree. A non-empty
-    // URL policy requires a fresh, coherent HTTP(S) URL for browser content.
+    // URL policy requires a fresh, coherent hostname for browser content,
+    // independent of the URL scheme.
     // Native apps remain governed by app/window filters; unknown ownership,
-    // internal browser pages and missing browser URLs fail closed.
+    // hostless browser pages and missing browser URLs fail closed.
     if !params.window_filters.is_valid(
         app_name_owned.as_deref().unwrap_or_default(),
         window_name_owned.as_deref().unwrap_or_default(),
