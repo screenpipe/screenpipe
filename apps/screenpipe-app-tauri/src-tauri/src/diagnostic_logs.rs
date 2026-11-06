@@ -457,7 +457,10 @@ mod tests {
             "-25202",
             "withheld_unattributable",
         ] {
-            assert!(report.contains(evidence), "support evidence missing {evidence}");
+            assert!(
+                report.contains(evidence),
+                "support evidence missing {evidence}"
+            );
         }
         assert!(!report.contains("hunter2"));
     }
