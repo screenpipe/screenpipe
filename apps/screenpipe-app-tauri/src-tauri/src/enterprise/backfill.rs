@@ -1568,6 +1568,38 @@ mod tests {
             .all(|r| r.url.path() != "/api/enterprise/frame-requests"));
     }
 
+    #[test]
+    fn backfill_poll_license_binding_refuses_mixed_batches() {
+        // First observation of a poll binds the poll's license id.
+        let mut poll = None;
+        let first = "22222222-2222-2222-2222-222222222222";
+        let other = "33333333-3333-3333-3333-333333333333";
+        assert!(bind_poll_license(&mut poll, first).is_ok());
+        assert_eq!(poll.as_deref(), Some(first));
+
+        // A replayed-id second page within the same poll stays accepted.
+        assert!(bind_poll_license(&mut poll, first).is_ok());
+
+        // A mixed batch is refused and names both licenses.
+        let error = bind_poll_license(&mut poll, other).unwrap_err();
+        assert!(
+            matches!(error, EnterpriseSyncError::Configuration(_)),
+            "{error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains(first) && message.contains(other),
+            "{message}"
+        );
+        // The original binding survives the failed attempt.
+        assert_eq!(poll.as_deref(), Some(first));
+
+        // A fresh poll re-binds independently (per-invocation state only).
+        let mut fresh = None;
+        assert!(bind_poll_license(&mut fresh, other).is_ok());
+        assert_eq!(fresh.as_deref(), Some(other));
+    }
+
     #[tokio::test]
     async fn image_continuation_uses_its_own_checkpoint_and_never_replays_telemetry() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
@@ -1820,6 +1852,30 @@ mod tests {
     }
 }
 
+/// Tenant binding within one backfill poll: every request the control plane
+/// hands this device during one invocation must carry the same license id. A
+/// batch mixing tenants is never valid (server bug, queue leak, or a replayed
+/// request from another org) — refuse the whole poll instead of executing
+/// pages that would splice another license's history into this device's
+/// uploads. The device cannot independently confirm which UUID its own
+/// license key maps to, so pick-first trust-on-first-use would be noise; the
+/// bounded invariant is "no mixed batch". Full license-id↔key binding stays
+/// server-side (device-config).
+fn bind_poll_license(
+    poll_license_id: &mut Option<String>,
+    license_id: &str,
+) -> Result<(), EnterpriseSyncError> {
+    match poll_license_id {
+        Some(prev) if prev != license_id => Err(EnterpriseSyncError::Configuration(format!(
+            "backfill poll mixes licenses: {prev} and {license_id}"
+        ))),
+        _ => {
+            *poll_license_id = Some(license_id.to_string());
+            Ok(())
+        }
+    }
+}
+
 /// Return whether acknowledged checkpoint progress leaves ready recovery work.
 /// A page yield gives live sync a turn; it must not impose the idle poll delay.
 pub(super) async fn fulfill_requests(
@@ -1833,6 +1889,16 @@ pub(super) async fn fulfill_requests(
     };
     let url = format!("{base}/api/enterprise/backfill-requests");
     let mut more_pending = false;
+    // Tenant binding within this poll: every request the control plane hands
+    // this device during one invocation must carry the same license id. A
+    // batch mixing tenants is never valid (server bug, queue leak, or a
+    // replayed request from another org) — refuse the whole poll instead of
+    // executing pages that would splice another license's history into this
+    // device's uploads. The device cannot independently confirm which UUID
+    // its own license key maps to, so picking the first request would be
+    // trust-on-first-use noise; the bounded invariant is "no mixed batch".
+    // Full license-id↔key binding stays server-side (device-config).
+    let mut poll_license_id: Option<String> = None;
     // At most 10 pages after live sync; poll each page so cancellation and
     // server policy changes take effect before the next local read.
     for _ in 0..10 {
@@ -1862,6 +1928,7 @@ pub(super) async fn fulfill_requests(
             break;
         };
         request.validate(cfg)?;
+        bind_poll_license(&mut poll_license_id, &request.license_id)?;
         let mut replay_cfg = cfg.clone();
         replay_cfg.cursor_path = cfg.cursor_path.with_file_name(format!(
             "enterprise_backfill_{}_{}{}.json",
