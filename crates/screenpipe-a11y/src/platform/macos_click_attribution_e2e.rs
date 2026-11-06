@@ -366,17 +366,25 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
     std::thread::spawn(move || {
         use std::io::BufRead;
         for mut stream in listener.incoming().flatten() {
-            let mut request = String::new();
-            std::io::BufReader::new(&stream)
-                .read_line(&mut request)
-                .unwrap();
-            let title = if request.contains("/blocked") {
-                "Blocked click fixture"
-            } else {
-                "Allowed click fixture"
-            };
-            let body = format!("<title>{title}</title><h1>{title}</h1><button style='width:100%;height:300px'>Click fixture</button><input value='https://wrong.example/embedded'>");
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            // Firefox opens speculative connections before sending requests.
+            // An idle connection must not block the page's actual request.
+            std::thread::spawn(move || {
+                let mut request = String::new();
+                if !std::io::BufReader::new(&stream)
+                    .read_line(&mut request)
+                    .is_ok_and(|bytes| bytes > 0)
+                {
+                    return;
+                }
+                eprintln!("fixture HTTP request: {}", request.trim());
+                let title = if request.contains("/blocked") {
+                    "Blocked click fixture"
+                } else {
+                    "Allowed click fixture"
+                };
+                let body = format!("<title>{title}</title><h1>{title}</h1><button style='width:100%;height:300px'>Click fixture</button><input value='https://wrong.example/embedded'>");
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            });
         }
     });
     let allowed_url = format!("http://127.0.0.1:{port}/allowed");
@@ -397,7 +405,11 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
                     break snapshot;
                 }
             }
-            assert!(Instant::now() < deadline, "Firefox did not show {marker}");
+            assert!(
+                Instant::now() < deadline,
+                "Firefox did not show {marker}: {:?}",
+                window_snapshot(firefox.0)
+            );
             std::thread::sleep(Duration::from_millis(100));
         }
     };
