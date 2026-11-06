@@ -101,7 +101,11 @@ jobs:
 
   enterprise-workflows-entry:
     name: Enterprise Workflows entry
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04: ubuntu-latest now resolves to Ubuntu 26, where
+    # Playwright has no chromium build ("does not support chromium on
+    # ubuntu26.04-x64") and `install --with-deps` fails before any test runs.
+    # Revisit when Playwright ships Ubuntu 26.04 support.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
