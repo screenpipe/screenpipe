@@ -17,11 +17,14 @@ import { useGT } from "gt-react";
 
 const desktopTasks = { load: loadWorkflowTaskSetup, enable: enableWorkflowTask, disable: disableWorkflowTasks };
 
-export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady = true, canEnable = true, onEnableUnavailable }: {
+export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady = true, canEnable = true, onEnableUnavailable, requested = false, onRequestHandled, onSetupChange }: {
   active: boolean;
   backendReady?: boolean;
   canEnable?: boolean;
   onEnableUnavailable?: () => void;
+  requested?: boolean;
+  onRequestHandled?: () => void;
+  onSetupChange?: (enabled: boolean | undefined) => void;
   tasks?: { load: () => Promise<WorkflowTaskSetup>; enable: () => Promise<void>; disable: () => Promise<void> };
 }) {
 
@@ -59,6 +62,14 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
       setOpen(true);
     }
   }, [active, settings.user?.id]);
+  useEffect(() => { onSetupChange?.(setup?.enabled); }, [setup, onSetupChange]);
+  // The build/update action uses this same explicit opt-in dialog. Merely
+  // requesting setup must never enable schedules or start an agent.
+  useEffect(() => {
+    if (!active || !requested || !setup || !canEnable) return;
+    if (!setup.enabled) { setStep("tasks"); setOpen(true); }
+    onRequestHandled?.();
+  }, [active, requested, setup, canEnable, onRequestHandled]);
   useEffect(() => { if (open) title.current?.focus(); }, [step, open]);
 
   // Read again on reconnection, returning from Chat, and external task changes.

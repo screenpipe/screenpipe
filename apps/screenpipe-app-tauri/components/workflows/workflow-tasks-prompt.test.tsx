@@ -28,6 +28,19 @@ async function enable() {
   fireEvent.click(await screen.findByRole("button", { name: "Enable automatic updates" }));
 }
 describe("workflow schedule control", () => {
+  it("opens existing opt-in for a build request without enabling until confirmed", async () => {
+    const tasks = service();
+    const handled = vi.fn(), setup = vi.fn();
+    render(<WorkflowTasksPrompt active requested tasks={tasks} onRequestHandled={handled} onSetupChange={setup} />);
+    expect(await screen.findByRole("dialog", { name: "Keep your workflows up to date?" })).toBeVisible();
+    expect(tasks.enable).not.toHaveBeenCalled();
+    expect(handled).toHaveBeenCalled();
+    expect(setup).toHaveBeenLastCalledWith(false);
+    fireEvent.click(screen.getByRole("button", { name: "Enable automatic updates" }));
+    await waitFor(() => expect(toggle()).toBeChecked());
+    expect(setup).toHaveBeenLastCalledWith(true);
+    expect(tasks.enable).toHaveBeenCalledOnce();
+  });
   it("does not load, prompt, or mutate while Chat is active", () => {
     f.settings.workflowSharingPromptSeen = {};
     const tasks = service(); render(<WorkflowTasksPrompt active={false} tasks={tasks} />);

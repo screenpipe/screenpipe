@@ -1,10 +1,28 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Identity-free Windows capture diagnostics, shared with support-bundle tests.
+//! Identity-free capture diagnostics, shared with support-bundle tests.
 
 use crate::tree::TruncationReason;
 use std::time::Duration;
+
+/// No titles, page content, or URLs belong in this operational diagnostic.
+pub fn report_browser_click_failure(
+    stage: &str,
+    cause: &str,
+    elapsed: Duration,
+    event_outcome: &str,
+) {
+    tracing::warn!(
+        target: "screenpipe_a11y::browser_click",
+        stage,
+        cause,
+        elapsed_ms = elapsed.as_millis() as u64,
+        url_outcome = "unavailable",
+        event_outcome,
+        "browser click URL unavailable; active URL policy may withhold the click and its capture trigger"
+    );
+}
 
 pub struct UiaCaptureIssue {
     pub view: &'static str,

@@ -52,6 +52,6 @@ assert(await toggle().isVisible());
 assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
 await page.setViewportSize({width:390,height:844});await snap('narrow');
 assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
-assert((await page.getByRole('textbox',{name:'Search workflows',exact:true}).boundingBox()).width > 100, 'Search stays usable at narrow widths');
+assert((await page.getByRole('combobox',{name:'Search workflows',exact:true}).boundingBox()).width > 100, 'Search stays usable at narrow widths');
 console.log('PASS: on/off/mixed, confirmation, persistence/re-entry, keyboard, partial-failure retry, loading/error, responsive');
 }finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});

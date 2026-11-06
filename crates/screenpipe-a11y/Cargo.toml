@@ -1,3 +1,6 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
 [package]
 name = "screenpipe-a11y"
 version = "0.1.0"
@@ -91,6 +94,7 @@ libc = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
 # Linux debug examples are compiled by `cargo clippy --all-targets` on every
 # developer OS, so keep their D-Bus dependency available outside Linux too.
 zbus = { workspace = true }
