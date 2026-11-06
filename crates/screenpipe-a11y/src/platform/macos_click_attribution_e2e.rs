@@ -435,7 +435,23 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         Some(firefox.0),
         "point must hit the Firefox process"
     );
-    let hit_window = hit.window().expect("hit element must expose its AXWindow");
+    eprintln!(
+        "Firefox clicked element exposes AXWindow: {}",
+        hit.window().is_ok()
+    );
+    let preflight = super::ContextCaptureRequest {
+        x: point.x,
+        y: point.y,
+        app_pid: firefox.0,
+        captured_at: Instant::now(),
+        timestamp: Utc::now(),
+        relative_ms: 0,
+        button: 0,
+        click_count: 1,
+        modifiers: 0,
+    };
+    let hit_window = super::resolve_clicked_window(&hit, &preflight)
+        .expect("clicked Firefox ancestry must resolve its window");
     assert_eq!(
         string_attr(&hit_window, ax::attr::title()).as_deref(),
         Some(allowed_title.as_str())

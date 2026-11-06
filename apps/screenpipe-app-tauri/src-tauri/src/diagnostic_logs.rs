@@ -424,9 +424,17 @@ mod tests {
             .with_writer(std::fs::File::create(&current).unwrap())
             .finish();
         tracing::subscriber::with_default(subscriber, || {
-            screenpipe_a11y::capture_diagnostics::report_browser_click_url_failure(
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_window_url",
                 "AXDocument read failed: Error(-25205); AXWebArea/AXURL and browser chrome yielded no URL",
                 Duration::from_millis(17),
+                "forwarded_to_privacy_filter",
+            );
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_window",
+                "AXWindow read failed: Error(-25205); clicked AXParent read failed: Error(-25202)",
+                Duration::from_millis(19),
+                "withheld_unattributable",
             );
         });
         std::fs::rename(&current, dir.path().join("screenpipe.2026-11-06.1.log")).unwrap();
@@ -445,6 +453,9 @@ mod tests {
             "event_outcome=\"forwarded_to_privacy_filter\"",
             "active URL policy may withhold the click and its capture trigger",
             "recorder restarted",
+            "clicked AXParent read failed",
+            "-25202",
+            "withheld_unattributable",
         ] {
             assert!(report.contains(evidence), "support evidence missing {evidence}");
         }

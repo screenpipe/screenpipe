@@ -7,14 +7,19 @@ use crate::tree::TruncationReason;
 use std::time::Duration;
 
 /// No titles, page content, or URLs belong in this operational diagnostic.
-pub fn report_browser_click_url_failure(cause: &str, elapsed: Duration) {
+pub fn report_browser_click_failure(
+    stage: &str,
+    cause: &str,
+    elapsed: Duration,
+    event_outcome: &str,
+) {
     tracing::warn!(
         target: "screenpipe_a11y::browser_click",
-        stage = "clicked_window_url",
+        stage,
         cause,
         elapsed_ms = elapsed.as_millis() as u64,
         url_outcome = "unavailable",
-        event_outcome = "forwarded_to_privacy_filter",
+        event_outcome,
         "browser click URL unavailable; active URL policy may withhold the click and its capture trigger"
     );
 }

@@ -1991,9 +1991,22 @@ fn capture_click_at_position(
     // next clicks' context. Cap it like the tree walker does (tree/macos.rs).
     let _ = elem.set_messaging_timeout_secs(0.1);
 
-    // AXWindow belongs to the hit-tested element, unlike AXFocusedWindow which
-    // can still describe the previously focused app at mouse-down time.
-    let window = elem.window().ok()?;
+    // Firefox page elements can omit AXWindow. Resolve the clicked ancestry,
+    // never AXFocusedWindow (which can describe another window at mouse-down).
+    let window = match resolve_clicked_window(&elem, request) {
+        Ok(window) => window,
+        Err(cause) => {
+            if crate::url_filter::is_known_browser(&app_name) {
+                crate::capture_diagnostics::report_browser_click_failure(
+                    "clicked_window",
+                    &cause,
+                    request.captured_at.elapsed(),
+                    "withheld_unattributable",
+                );
+            }
+            return None;
+        }
+    };
     let _ = window.set_messaging_timeout_secs(0.1);
     let raw_window_title = get_string_attr(&window, ax::attr::title())
         .or_else(|| get_string_attr(&window, ax::attr::desc()));
@@ -2031,13 +2044,52 @@ fn capture_click_at_position(
         };
         match url {
             Ok(url) => event.browser_url = Some(url),
-            Err(cause) => crate::capture_diagnostics::report_browser_click_url_failure(
+            Err(cause) => crate::capture_diagnostics::report_browser_click_failure(
+                "clicked_window_url",
                 &cause,
                 started.elapsed(),
+                "forwarded_to_privacy_filter",
             ),
         }
     }
     Some(event)
+}
+
+fn resolve_clicked_window(
+    elem: &ax::UiElement,
+    request: &ContextCaptureRequest,
+) -> Result<Retained<ax::UiElement>, String> {
+    let window_error = match elem.window() {
+        Ok(window) => {
+            validate_click_element_pid(
+                request.app_pid,
+                window.pid().ok(),
+                std::process::id() as i32,
+            )
+            .map_err(|reason| format!("clicked AXWindow identity rejected: {reason:?}"))?;
+            return Ok(window);
+        }
+        Err(error) => error,
+    };
+    let mut current = elem.retained();
+    loop {
+        // Reuse the mouse-down freshness requirement; delayed ancestry cannot
+        // safely describe a window that may have moved since the click.
+        validate_click_request_age(request.captured_at, Instant::now()).map_err(|reason| {
+            format!("AXWindow read failed: {window_error:?}; clicked ancestry {reason:?}")
+        })?;
+        let _ = current.set_messaging_timeout_secs(0.1);
+        validate_click_element_pid(request.app_pid, current.pid().ok(), std::process::id() as i32)
+            .map_err(|reason| format!("AXWindow read failed: {window_error:?}; clicked ancestor identity rejected: {reason:?}"))?;
+        if role_string(&current).as_deref() == Some("AXWindow") {
+            return Ok(current);
+        }
+        current = current.parent().map_err(|error| {
+            format!(
+                "AXWindow read failed: {window_error:?}; clicked AXParent read failed: {error:?}"
+            )
+        })?;
+    }
 }
 
 fn valid_event_target_pid(raw_pid: i64) -> Option<i32> {
