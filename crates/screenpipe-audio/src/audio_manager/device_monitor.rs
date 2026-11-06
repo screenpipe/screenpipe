@@ -34,7 +34,7 @@ fn is_legacy_display_output(device_name: &str) -> bool {
 ///
 /// `DeviceManager::is_running` flips true when the record pipeline attaches — before
 /// the first audio frame — so we also require a live stream handle. Streams that
-/// failed to open never get inserted; streams that died (timeout, zero-fill hijack)
+/// failed to open never get inserted; streams that died (timeout, backend failure)
 /// set `is_disconnected` and are treated as not running so recovery can retry.
 ///
 /// `pub(crate)` so the piggyback sweep can observe stream liveness through the

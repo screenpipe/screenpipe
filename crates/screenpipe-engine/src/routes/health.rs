@@ -1593,10 +1593,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         .any(|device| input_device_is_available(&device.to_string(), clamshell_mode));
 
     // Detect "active_no_data": the device appears active (selected and in the
-    // device list) but the zero-fill watchdog has fired *recently*, indicating
-    // the stream was hijacked by another app or went dead (Issue #3144). The
-    // watchdog reconnects after 30s of no real audio and keeps re-firing while
-    // the stream stays dead.
+    // device list) but its delivery watchdog has fired *recently*. Silent
+    // microphone samples are valid delivery and do not produce a timeout.
     //
     // Gate on a recent timeout that the SAME current device has not recovered
     // from. The old global timestamp let a healthy output stream mask a dead
@@ -3392,7 +3390,7 @@ mod tests {
 
     #[test]
     fn audio_status_active_no_data_only_while_timeout_is_recent() {
-        // Issue #3144: an active device whose zero-fill watchdog fired *recently*
+        // An active device whose delivery watchdog fired recently
         // is "active_no_data" (hijacked / dead stream, recovery in progress).
         assert_eq!(audio_status_for(true, true), "active_no_data");
         assert_eq!(audio_status_for(true, false), "active_no_data");
