@@ -409,6 +409,11 @@ type EnterpriseCredential =
   | { type: "license_key"; value: string }
   | { type: "account"; value: string };
 
+function deviceTimezone(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone; }
+  catch { return undefined; }
+}
+
 async function sendHeartbeat(
   credential: EnterpriseCredential,
   options: { timeoutMs?: number; deploymentLicenseKey?: string | null } = {}
@@ -475,6 +480,7 @@ async function sendHeartbeat(
           hostname,
           platform: devicePlatform,
           app_version: appVersion,
+          timezone: deviceTimezone(),
           recording_status: { frame_status: frameStatus, audio_status: audioStatus, ...recordingContext },
           update_manager: installMetadata.update_manager,
           management_detected: installMetadata.managed,
