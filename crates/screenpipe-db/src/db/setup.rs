@@ -246,6 +246,12 @@ impl DatabaseManager {
         // path. dunce keeps the prefix when stripping is unsafe (paths over 260
         // characters, reserved names, network shares); those still use it.
         let sqlite_file = dunce::simplified(database_file);
+        if sqlite_file.as_os_str().to_string_lossy().starts_with(r"\\") {
+            warn!(
+                path = %sqlite_file.display(),
+                "SQLite opens this database with network-share locking; WAL checkpoints may stall"
+            );
+        }
         let connect_options = if is_in_memory {
             format!("sqlite:{database_path}").parse::<SqliteConnectOptions>()?
         } else {
