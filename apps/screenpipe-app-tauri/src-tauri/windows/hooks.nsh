@@ -995,6 +995,34 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; Tauri's checkbox only removes bundle-id AppData directories. Screenpipe's
+  ; recordings live in this exact current-profile child instead; never honor
+  ; SCREENPIPE_DATA_DIR here because uninstall must not broaden its scope.
+  ${If} $DeleteAppDataCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+    SetShellVarContext current
+    ClearErrors
+    RMDir /r "$PROFILE\.screenpipe"
+    ${If} ${Errors}
+      StrCpy $2 1
+    ${Else}
+      StrCpy $2 0
+    ${EndIf}
+    System::Call 'kernel32::GetLastError() i.r0'
+    ${If} $2 = 1
+    ${OrIf} ${FileExists} "$PROFILE\.screenpipe\*.*"
+      ; The retained root is part of normal, consented support collection.
+      ; Keep the requested path, Windows cause, and actual outcome together.
+      CreateDirectory "$PROFILE\.screenpipe"
+      FileOpen $1 "$PROFILE\.screenpipe\update-install.log" a
+      FileSeek $1 0 END
+      FileWrite $1 'uninstaller_app_data_cleanup_failed: path=$PROFILE\.screenpipe windows_result=$0 outcome=data_retained$\r$\n'
+      FileClose $1
+      DetailPrint "Screenpipe app data could not be fully deleted: $PROFILE\.screenpipe (Windows result $0)"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Screenpipe was uninstalled, but some app data could not be deleted from $PROFILE\.screenpipe (Windows result $0). The remaining folder contains support details." /SD IDOK
+    ${EndIf}
+  ${EndIf}
+
   !ifdef SCREENPIPE_PERSISTENT_INSTALLER
     Delete "$SMPROGRAMS\Remove Screenpipe Enterprise Persistence.lnk"
   !endif
