@@ -88,11 +88,24 @@ fn launch_fresh_app(
     document: Option<&Path>,
     timeout: Duration,
 ) -> Result<OwnedApp, String> {
+    launch_fresh_app_with_args(app_name, bundle_id, document, timeout, &[])
+}
+
+fn launch_fresh_app_with_args(
+    app_name: &str,
+    bundle_id: &str,
+    document: Option<&Path>,
+    timeout: Duration,
+    args: &[&str],
+) -> Result<OwnedApp, String> {
     let existing = app_pids(bundle_id);
     let mut command = Command::new("open");
     command.args(["-n", "-a", app_name]);
     if let Some(document) = document {
         command.arg(document);
+    }
+    if !args.is_empty() {
+        command.arg("--args").args(args);
     }
     let status = command
         .status()
@@ -442,11 +455,22 @@ fn exercise_live_browser_click_urls(
     });
     let allowed_url = format!("http://127.0.0.1:{port}/allowed");
     let blocked_url = format!("http://localhost:{port}/blocked");
-    let browser = launch_fresh_app(
+    let chromium_args: &[&str] =
+        if new_window_executable.is_some() && bundle_id != "org.mozilla.firefox" {
+            &[
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-features=ChromeWhatsNewUI",
+            ]
+        } else {
+            &[]
+        };
+    let browser = launch_fresh_app_with_args(
         app_name,
         bundle_id,
         Some(Path::new(&allowed_url)),
         Duration::from_secs(10),
+        chromium_args,
     )
     .unwrap();
     wait_for_focus(browser.0, Duration::from_secs(10)).unwrap();
@@ -518,6 +542,31 @@ fn exercise_live_browser_click_urls(
             .accessibility
     );
     let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+    let mut mouse = cg::Event::mouse(
+        None,
+        cg::EventType::LEFT_MOUSE_DOWN,
+        point,
+        cg::MouseButton::Left,
+    )
+    .unwrap();
+    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
+    mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+    mouse.set_flags(cg::EventFlags(0));
+    let request =
+        snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
+    let started = Instant::now();
+    let background = capture_click_at_position(&request, &config).unwrap_or_else(|| {
+        panic!(
+            "browser click attribution failed; native hit-test: {:?}",
+            ax::UiElement::sys_wide()
+                .element_at_pos(point.x as f32, point.y as f32)
+                .err()
+        );
+    });
+    eprintln!(
+        "{app_name} background click URL lookup took {:?}",
+        started.elapsed()
+    );
     let hit = ax::UiElement::sys_wide()
         .element_at_pos(point.x as f32, point.y as f32)
         .expect("background browser point must be AX-accessible");
@@ -535,24 +584,6 @@ fn exercise_live_browser_click_urls(
     assert_eq!(
         string_attr(&hit_window, ax::attr::title()).as_deref(),
         Some(allowed_title.as_str())
-    );
-    let mut mouse = cg::Event::mouse(
-        None,
-        cg::EventType::LEFT_MOUSE_DOWN,
-        point,
-        cg::MouseButton::Left,
-    )
-    .unwrap();
-    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
-    mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
-    mouse.set_flags(cg::EventFlags(0));
-    let request =
-        snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
-    let started = Instant::now();
-    let background = capture_click_at_position(&request, &config).unwrap();
-    eprintln!(
-        "{app_name} background click URL lookup took {:?}",
-        started.elapsed()
     );
     if background.browser_url.is_none() {
         eprintln!(
