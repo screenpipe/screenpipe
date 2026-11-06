@@ -336,7 +336,11 @@ jobs:
       github.event_name == 'schedule' ||
       needs.changes.outputs.desktop == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'full-ci')
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04: the Ubuntu 26 base removed the package this
+    # suite needs (`webkit2gtk-driver`, renamed upstream to
+    # webkitgtk-webdriver without compatibility). Revisit if apt regains the
+    # legacy name or the package list learns the new spelling.
+    runs-on: ubuntu-24.04
     continue-on-error: true
     # 90 was set when the suite was ~70 specs; it is 112 now, and the job has
     # been cancelled at exactly 90m on every run since 2026-08-07 — which
