@@ -8,7 +8,6 @@
 //! URL must produce neither frames nor accessibility snapshots.
 
 pub use screenpipe_config::{DomainRule, UrlRule};
-use std::borrow::Cow;
 use url::Url;
 
 /// Browser name fragments shared by URL extraction and capture admission.
@@ -217,20 +216,8 @@ pub fn normalize_rule_hostname(input: &str) -> Result<String, String> {
         return Err("domain cannot be empty".to_string());
     }
 
-    let candidate = if input.contains("://") {
-        Cow::Borrowed(input)
-    } else {
-        Cow::Owned(format!("https://{input}"))
-    };
-    let parsed = Url::parse(candidate.as_ref()).map_err(|_| format!("invalid domain: {input}"))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(format!("domain URL must use http or https: {input}"));
-    }
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| format!("domain has no hostname: {input}"))?
-        .trim_end_matches('.')
-        .to_lowercase();
+    let host = parse_detected_hostname(input)
+        .ok_or_else(|| format!("invalid domain or missing hostname: {input}"))?;
 
     if !host.contains('.') {
         return Err(format!("domain must contain a dot: {host}"));
@@ -240,11 +227,41 @@ pub fn normalize_rule_hostname(input: &str) -> Result<String, String> {
 }
 
 fn parse_detected_hostname(input: &str) -> Option<String> {
-    let parsed = Url::parse(input.trim()).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return None;
+    let parsed = parse_domain_url(input).ok()?;
+    // Non-special schemes use opaque hosts in `Url`. Apply the same IDNA and
+    // percent-decoding rules as HTTP so changing schemes cannot evade a rule.
+    let mut host = match url::Host::parse(parsed.host_str()?).ok()? {
+        url::Host::Domain(domain) => domain,
+        host => host.to_string(),
+    };
+    host.truncate(host.trim_end_matches('.').len());
+    Some(host)
+}
+
+/// Parse domain-policy input without restricting its scheme. Address bars can
+/// omit the scheme, including for a domain followed by a port. HTTPS here is
+/// only a parsing base for those bare addresses; no network request is made.
+/// Keep opaque URLs intact so an embedded domain (e.g. in `mailto:`) cannot be
+/// mistaken for the page's hostname.
+fn parse_domain_url(input: &str) -> Result<Url, url::ParseError> {
+    let input = input.trim();
+    if input.contains("://") {
+        return Url::parse(input);
     }
-    Some(parsed.host_str()?.trim_end_matches('.').to_lowercase())
+    if input.starts_with("//") {
+        return Url::parse(&format!("https:{input}"));
+    }
+
+    let bare_domain_port = input.split_once(':').is_some_and(|(host, rest)| {
+        let port = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        host.contains('.') && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    if let Ok(parsed) = Url::parse(input) {
+        if parsed.has_host() || !bare_domain_port {
+            return Ok(parsed);
+        }
+    }
+    Url::parse(&format!("https://{input}"))
 }
 
 fn is_descendant(host: &str, domain: &str) -> bool {
@@ -294,20 +311,10 @@ pub(crate) fn is_url_blocked_by_normalized_patterns(
         return false;
     }
 
-    // Normalize so bare hosts ("wellsfargo.com") parse too.
-    let url_to_parse = if !url.starts_with("http://") && !url.starts_with("https://") {
-        Cow::Owned(format!("https://{}", url))
-    } else {
-        Cow::Borrowed(url)
-    };
-
-    if let Ok(parsed) = Url::parse(url_to_parse.as_ref()) {
-        if let Some(host) = parsed.host_str() {
-            let host_lower = host.to_lowercase();
-            return blocked_patterns_lower
-                .iter()
-                .any(|blocked| host_matches_pattern(&host_lower, blocked));
-        }
+    if let Some(host) = parse_detected_hostname(url) {
+        return blocked_patterns_lower
+            .iter()
+            .any(|blocked| host_matches_pattern(&host, blocked));
     }
 
     // Fallback to simple contains check if URL parsing fails.
@@ -458,7 +465,7 @@ mod tests {
         ] {
             assert!(policy.should_capture_window(Some("Notepad"), None));
             for app in [Some("Microsoft Edge"), Some("HELIUM.exe"), None, Some("")] {
-                for url in [None, Some(""), Some("edge://settings"), Some("invalid url")] {
+                for url in [None, Some(""), Some("about:blank"), Some("invalid url")] {
                     assert!(!policy.should_capture_window(app, url), "{app:?} {url:?}");
                 }
                 assert!(policy.should_capture_window(app, Some("https://en.wikipedia.org")));
@@ -485,6 +492,146 @@ mod tests {
         assert!(!policy.should_capture(Some("https://deep.abc.worktrace.ai")));
         assert!(!policy.should_capture(Some("https://notworktrace.ai")));
         assert!(!policy.should_capture(None));
+    }
+
+    #[test]
+    fn domain_policy_matches_hostnames_independently_of_scheme() {
+        let allow = UrlPolicy::new(
+            &[],
+            &[rule("worktrace.ai", true, &["private.worktrace.ai"])],
+        );
+        let legacy_block = UrlPolicy::new(&[legacy("worktrace.ai")], &[]);
+        let structured_block = UrlPolicy::new(&[structured("worktrace.ai", true, &[])], &[]);
+
+        for prefix in [
+            "https://",
+            "http://",
+            "ftp://",
+            "ws://",
+            "wss://",
+            "custom+app://",
+            "file://",
+            "chrome://",
+            "//",
+            "",
+        ] {
+            let allowed = format!("{prefix}app.worktrace.ai/dashboard");
+            let private = format!("{prefix}private.worktrace.ai/dashboard");
+            let unrelated = format!("{prefix}notworktrace.ai/dashboard");
+            assert!(allow.should_capture(Some(&allowed)), "{allowed}");
+            assert!(
+                allow.should_capture_window(Some("Firefox"), Some(&allowed)),
+                "{allowed}"
+            );
+            assert!(!allow.should_capture(Some(&private)), "{private}");
+            assert!(!allow.should_capture(Some(&unrelated)), "{unrelated}");
+            for block in [&legacy_block, &structured_block] {
+                assert!(
+                    !block.should_capture_window(Some("Firefox"), Some(&allowed)),
+                    "{allowed}"
+                );
+                assert!(
+                    block.should_capture_window(Some("Firefox"), Some(&unrelated)),
+                    "{unrelated}"
+                );
+            }
+            assert!(
+                is_url_blocked(&allowed, &blocked(&["worktrace.ai"])),
+                "{allowed}"
+            );
+            assert!(
+                !is_url_blocked(&unrelated, &blocked(&["worktrace.ai"])),
+                "{unrelated}"
+            );
+        }
+        assert!(legacy_block.should_capture_window(Some("Chrome"), Some("chrome://settings")));
+    }
+
+    #[test]
+    fn bare_domains_with_ports_and_scheme_independent_rules_use_the_same_host() {
+        let policy = UrlPolicy::new(&[], &[rule("ftp://WWW.Example.COM:21/path", false, &[])]);
+        for url in [
+            "www.example.com:8443/path?q=1#x",
+            "//www.example.com:8443/path",
+            "http://www.example.com/path",
+            "custom://WWW.Example.COM:8443/path",
+        ] {
+            assert!(
+                policy.should_capture_window(Some("Firefox"), Some(url)),
+                "{url}"
+            );
+        }
+        assert_eq!(
+            normalize_rule_hostname("www.example.com:8443/path").unwrap(),
+            "www.example.com"
+        );
+    }
+
+    #[test]
+    fn custom_scheme_hosts_cannot_evade_domain_normalization() {
+        let allow = UrlPolicy::new(&[], &[rule("worktrace.ai", true, &[])]);
+        let block = UrlPolicy::new(&[legacy("worktrace.ai")], &[]);
+        for url in [
+            "custom://%77orktrace.ai/path",
+            "custom://WORKTRACE.AI./path",
+        ] {
+            assert!(
+                allow.should_capture_window(Some("Firefox"), Some(url)),
+                "{url}"
+            );
+            assert!(
+                !block.should_capture_window(Some("Firefox"), Some(url)),
+                "{url}"
+            );
+        }
+        let unicode = UrlPolicy::new(&[], &[rule("https://bücher.example", false, &[])]);
+        for url in [
+            "https://bücher.example",
+            "custom://bücher.example",
+            "bücher.example",
+        ] {
+            assert!(
+                unicode.should_capture_window(Some("Firefox"), Some(url)),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_agnostic_policy_still_requires_the_actual_hostname() {
+        let allow = UrlPolicy::new(&[], &[rule("worktrace.ai", true, &[])]);
+        let block = UrlPolicy::new(&[legacy("private.worktrace.ai")], &[]);
+        for url in [
+            "https://worktrace.ai@evil.example/path",
+            "custom://evil.example/worktrace.ai",
+            "https://evil.example/?next=https://worktrace.ai",
+            "mailto:person@worktrace.ai",
+            "data:text/plain,worktrace.ai",
+            "blob:https://worktrace.ai/id",
+            "file:///worktrace.ai/page.html",
+            "about:blank",
+            "",
+            "not a url",
+        ] {
+            assert!(!allow.should_capture(Some(url)), "{url}");
+        }
+        for url in [
+            "mailto:person@worktrace.ai",
+            "file:///path",
+            "about:blank",
+            "http://",
+            "custom://",
+            "https://worktrace.ai:invalid/path",
+            "https://worktrace.ai:65536/path",
+            "",
+        ] {
+            assert!(
+                !block.should_capture_window(Some("Firefox"), Some(url)),
+                "{url}"
+            );
+        }
+        assert!(!block.should_capture_window(Some("Firefox"), None));
+        assert!(!allow.should_capture(Some("worktrace.ai:invalid/path")));
     }
 
     #[test]
