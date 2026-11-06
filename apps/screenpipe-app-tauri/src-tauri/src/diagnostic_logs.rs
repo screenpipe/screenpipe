@@ -415,6 +415,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_click_url_failure_survives_support_collection_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe.2026-11-06.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_window_url",
+                "AXDocument read failed: Error(-25205); AXWebArea/AXURL and browser chrome yielded no URL",
+                Duration::from_millis(17),
+                "forwarded_to_privacy_filter",
+            );
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_window",
+                "AXWindow read failed: Error(-25205); clicked AXParent read failed: Error(-25202)",
+                Duration::from_millis(19),
+                "withheld_unattributable",
+            );
+            screenpipe_a11y::capture_diagnostics::report_browser_click_failure(
+                "clicked_element",
+                "system-wide AX hit-test failed: Error(-25208); receiver window resolution failed: CGEvent receiver window ID missing",
+                Duration::from_millis(23),
+                "withheld_unattributable",
+            );
+        });
+        std::fs::rename(&current, dir.path().join("screenpipe.2026-11-06.1.log")).unwrap();
+        std::fs::write(&current, "recorder restarted\npassword=hunter2\n").unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        for evidence in [
+            "browser click URL unavailable",
+            "clicked_window_url",
+            "AXDocument read failed",
+            "-25205",
+            "AXWebArea/AXURL and browser chrome yielded no URL",
+            "elapsed_ms=17",
+            "url_outcome=\"unavailable\"",
+            "event_outcome=\"forwarded_to_privacy_filter\"",
+            "active URL policy may withhold the click and its capture trigger",
+            "recorder restarted",
+            "clicked AXParent read failed",
+            "-25202",
+            "withheld_unattributable",
+            "clicked_element",
+            "system-wide AX hit-test failed",
+            "receiver window resolution failed",
+            "CGEvent receiver window ID missing",
+            "-25208",
+        ] {
+            assert!(
+                report.contains(evidence),
+                "support evidence missing {evidence}"
+            );
+        }
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
     async fn filtered_screenshot_failure_survives_rotation_and_support_redaction() {
         let root = tempfile::tempdir().unwrap();
         let emitted = include_str!(
