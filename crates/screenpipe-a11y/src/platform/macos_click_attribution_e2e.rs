@@ -414,13 +414,6 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         }
     };
     wait_title("Allowed click fixture");
-    // The fresh Firefox profile can show a Spotlight welcome overlay. Dismiss
-    // setup UI before testing clicks on the ordinary page behind it.
-    for down in [true, false] {
-        let mut escape = cg::Event::keyboard(None, 53, down).unwrap();
-        escape.set_flags(cg::EventFlags(0));
-        escape.post(cg::EventTapLocation::Hid);
-    }
     set_window_frame(firefox.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
     let (allowed_title, bounds) = wait_title("Allowed click fixture");
     assert!(
@@ -539,6 +532,18 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         ))
         .unwrap();
     let handle = UiRecorder::new(config).start().unwrap();
+    // start() spawns the tap asynchronously. Do not post input before its
+    // actual installation has established Input Monitoring ground truth.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while super::INPUT_MONITORING_GROUND_TRUTH.load(std::sync::atomic::Ordering::SeqCst) == -1 {
+        assert!(Instant::now() < deadline, "recorder tap did not initialize");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        super::INPUT_MONITORING_GROUND_TRUTH.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "real event tap must have Input Monitoring permission"
+    );
     for (bounds, expected, admitted) in [
         (bounds, &allowed_url, true),
         (blocked_bounds, &blocked_url, false),
@@ -548,6 +553,9 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
             let mut mouse = cg::Event::mouse(None, kind, point, cg::MouseButton::Left).unwrap();
             mouse.set_flags(cg::EventFlags(0));
             mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+            // Synthetic mouse events do not acquire the kernel receiver field
+            // before this session tap. Preserve the production PID check.
+            mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(firefox.0));
             mouse.post(cg::EventTapLocation::Hid);
         }
         let deadline = Instant::now() + Duration::from_secs(5);
