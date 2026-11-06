@@ -24,9 +24,8 @@ use whisper_rs::WhisperContext;
 use screenpipe_db::DatabaseManager;
 
 /// True if `e` is the VPIO-relevant kind of stream death: a receive-timeout
-/// (the stream was created but delivered no data). A zero-fill hijack
-/// (`StreamDeath::ZeroFill`) is deliberately excluded — that is another process
-/// seizing the device, not a VPIO fault, and the HAL path would be hijacked too.
+/// (the stream was created but delivered no data). Silent samples remain
+/// valid delivery and never become a stream-death error.
 /// Walks the `anyhow` cause chain so it stays correct even if a caller later
 /// wraps the error with `.context(...)`.
 #[cfg(target_os = "macos")]
@@ -3959,7 +3958,7 @@ mod tests {
     }
 
     /// The VPIO-fallback classifier must fire only on a receive-timeout death —
-    /// not a zero-fill hijack (not VPIO's fault) and not unrelated errors.
+    /// not unrelated errors.
     #[cfg(target_os = "macos")]
     #[test]
     fn vpio_relevant_death_matches_only_receive_timeout() {
@@ -3971,12 +3970,6 @@ mod tests {
         assert!(is_vpio_relevant_stream_death(
             &anyhow!(StreamDeath::ReceiveTimeout { secs: 8 }).context("rebuilding device")
         ));
-        assert!(!is_vpio_relevant_stream_death(&anyhow!(
-            StreamDeath::ZeroFill {
-                device: "Mic (input)".to_string(),
-                secs: 30
-            }
-        )));
         assert!(!is_vpio_relevant_stream_death(&anyhow!(
             "device disconnected"
         )));

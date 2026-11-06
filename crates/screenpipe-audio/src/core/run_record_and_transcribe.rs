@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    core::{device::DeviceType, get_device_capture_time_exact, update_device_capture_time},
+    core::{device::DeviceType, update_device_capture_time},
     meeting_streaming::{MeetingAudioFrame, MeetingAudioTap},
     metrics::AudioPipelineMetrics,
     utils::audio::StreamResampler,
@@ -53,31 +53,9 @@ const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 8;
 /// ScreenCaptureKit may take a moment to begin delivering callbacks.
 const STREAM_STARTUP_GRACE_SECS: u64 = 10;
 
-/// Maximum tolerated duration of zero-fill input buffers before declaring
-/// the stream functionally dead.
-///
-/// Bug class this catches: macOS CoreAudio (and similar HALs on other
-/// platforms) can deliver zero-filled buffers to a non-priority client
-/// when another app exclusively claims an input device. Most reproducible
-/// with Bluetooth mics — e.g. AirPods during a videoconference call: the
-/// AudioUnit render callback keeps firing on the expected schedule, so
-/// the existing AUDIO_RECEIVE_TIMEOUT_SECS watchdog stays happy, but the
-/// buffer contents are exact zeros — no thermal noise, no ADC quantization
-/// noise, no signal at all.
-///
-/// Real microphones never produce sustained exact-zero output; the
-/// preamp + ADC noise floor is always above SILENT_BUFFER_PEAK_THRESHOLD.
-/// 30 s is conservative enough to absorb any legitimate transient (a
-/// short software-mute, a buffering hiccup) while still recovering well
-/// before a typical lost-audio incident becomes minutes long.
-///
-/// Recovery path is identical to AUDIO_RECEIVE_TIMEOUT_SECS: tear down,
-/// let device_monitor rebuild a fresh stream.
-const INPUT_SILENT_BUFFER_TIMEOUT_SECS: u64 = 30;
-
-/// Threshold below which a buffer is treated as functionally silent.
-/// CoreAudio zero-fill produces exact 0.0; any real input source — even
-/// a muted-by-hand AirPods mic — sits well above this floor.
+/// Signal threshold used by the display-anchored output watchdog. Input
+/// silence, including exact zeros from digital mute or noise suppression,
+/// is valid delivery and must not trigger microphone recovery.
 const SILENT_BUFFER_PEAK_THRESHOLD: f32 = 1e-6;
 const RECORDER_OUTPUT_CHANNELS: u16 = 1;
 
@@ -94,10 +72,6 @@ pub enum StreamDeath {
     /// CoreAudio/VPIO stall and a VPIO stream that was created ("AEC
     /// initialized") but never delivered a single sample.
     ReceiveTimeout { secs: u64 },
-    /// Callbacks kept firing but delivered only exact-zero buffers for `secs` —
-    /// suspected hijack by another process holding the device. NOT a VPIO fault
-    /// (HAL would be zero-filled too), so it must not trigger VPIO fallback.
-    ZeroFill { device: String, secs: u64 },
 }
 
 impl std::fmt::Display for StreamDeath {
@@ -106,11 +80,6 @@ impl std::fmt::Display for StreamDeath {
             StreamDeath::ReceiveTimeout { secs } => write!(
                 f,
                 "Audio stream timeout - no data received for {secs}s (stream dead)"
-            ),
-            StreamDeath::ZeroFill { device, secs } => write!(
-                f,
-                "Audio stream zero-fill — no usable data from {device} for {secs}s \
-                 (suspected device hijack by another process)"
             ),
         }
     }
@@ -121,47 +90,6 @@ impl std::error::Error for StreamDeath {}
 #[inline]
 fn is_silent_buffer(chunk: &[f32]) -> bool {
     !chunk.is_empty() && chunk.iter().all(|s| s.abs() < SILENT_BUFFER_PEAK_THRESHOLD)
-}
-
-#[cfg(target_os = "windows")]
-fn zero_fill_reconnect_enabled_for_platform() -> bool {
-    // WASAPI input devices, especially built-in Intel/Realtek microphone
-    // arrays, can emit exact-zero buffers during ordinary quiet periods.
-    // Treating that as fatal causes reconnect churn and creates avoidable
-    // capture gaps. A real dead Windows stream is still caught by the
-    // receive-timeout path when callbacks stop arriving.
-    false
-}
-
-#[cfg(not(target_os = "windows"))]
-fn zero_fill_reconnect_enabled_for_platform() -> bool {
-    true
-}
-
-fn should_reconnect_after_silent_input(
-    device_type: &DeviceType,
-    stream_elapsed: Duration,
-    last_non_zero_elapsed: Duration,
-) -> bool {
-    if *device_type != DeviceType::Input {
-        return false;
-    }
-
-    if stream_elapsed.as_secs() < STREAM_STARTUP_GRACE_SECS {
-        return false;
-    }
-
-    if last_non_zero_elapsed.as_secs() < INPUT_SILENT_BUFFER_TIMEOUT_SECS {
-        return false;
-    }
-
-    zero_fill_reconnect_enabled_for_platform()
-}
-
-fn last_non_zero_seed_after_restart(device_name: &str, restarted_at: Instant) -> Option<Instant> {
-    get_device_capture_time_exact(device_name)
-        .filter(|captured_at| *captured_at > 0)
-        .map(|_| restarted_at)
 }
 
 fn meeting_frame_from_recorder_output(
@@ -293,11 +221,9 @@ pub async fn run_record_and_transcribe(
                                     // speaker traffic or the 50ms AEC tick.
                                     mic_deadline = tokio::time::Instant::now()
                                         + Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS);
-                                }
-                                metrics.update_audio_levels(&device_name, &chunk);
-                                if !chunk.is_empty() && chunk.iter().any(|&x| x.abs() >= SILENT_BUFFER_PEAK_THRESHOLD) {
                                     update_device_capture_time(&device_name);
                                 }
+                                metrics.update_audio_levels(&device_name, &chunk);
 
                                 // Hardware-clock aligned capture timestamp
                                 let ts = mic_start_time + ((mic_sample_counter as f64 * 1000.0) / mic_sample_rate as f64) as u64;
@@ -480,13 +406,9 @@ pub async fn run_record_and_transcribe(
         let mut collected_audio = Vec::new();
         let mut segment_start_time = now_epoch_secs();
         let stream_start = Instant::now();
-        // Preserve the fact that this device produced usable audio before a
-        // watchdog-driven rebuild. If the replacement stream only emits
-        // zero-fill, it must trip the watchdog again after 30s instead of
-        // silently clearing a persistent failure merely because the task was
-        // recreated. A device that has never produced usable audio retains the
-        // existing fail-open behavior for genuinely digital-silent hardware.
-        let mut last_non_zero_at = last_non_zero_seed_after_restart(&device_name, Instant::now());
+        // Signal activity is needed only for the display-anchored output
+        // watchdog. Microphone liveness is independent of sample amplitude.
+        let mut last_output_signal_at = None;
         let mut sck_watchdog = crate::core::sck_output_watchdog::SckOutputWatchdog::default();
         let mut segment_count: u64 = 0;
         let mut stream_error = None;
@@ -523,7 +445,7 @@ pub async fn run_record_and_transcribe(
                     &device_name,
                     &metrics,
                     &stream_start,
-                    &mut last_non_zero_at,
+                    &mut last_output_signal_at,
                     &mut sck_watchdog,
                 )
                 .await
@@ -629,7 +551,7 @@ async fn recv_audio_chunk(
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
     stream_start: &Instant,
-    last_non_zero_at: &mut Option<Instant>,
+    last_output_signal_at: &mut Option<Instant>,
     sck_watchdog: &mut crate::core::sck_output_watchdog::SckOutputWatchdog,
 ) -> Result<Option<Vec<f32>>> {
     // Consume packets already queued before the terminal wake-up. A native
@@ -647,40 +569,17 @@ async fn recv_audio_chunk(
         Ok(Ok(chunk)) => {
             metrics.update_audio_levels(device_name, &chunk);
 
-            if !is_silent_buffer(&chunk) {
-                *last_non_zero_at = Some(Instant::now());
-                // Only tick "device is delivering data" on real audio so
-                // the UI / health endpoint cannot show green during a
-                // zero-fill hijack.
+            if !chunk.is_empty() && audio_stream.device.device_type == DeviceType::Input {
+                // A digital mute/noise gate can deliver zeros indefinitely.
+                // Track delivery so valid silence cannot become a stale mic.
+                update_device_capture_time(device_name);
+            } else if !chunk.is_empty() && !is_silent_buffer(&chunk) {
+                *last_output_signal_at = Some(Instant::now());
                 update_device_capture_time(device_name);
                 // While System Audio is actually flowing, snapshot the display
                 // topology so a later silence can be classified as dead-anchor
                 // vs nothing-playing (#3901).
                 note_output_topology_if_flowing(audio_stream, sck_watchdog);
-                return Ok(Some(chunk));
-            }
-
-            // Silent buffer. Only declare the stream hijacked if we had
-            // confirmed real audio earlier — i.e. the stream WAS healthy
-            // and went silent. Input devices only; output devices
-            // legitimately go silent when nothing is playing.
-            if let Some(last_seen) = *last_non_zero_at {
-                if should_reconnect_after_silent_input(
-                    &audio_stream.device.device_type,
-                    stream_start.elapsed(),
-                    last_seen.elapsed(),
-                ) {
-                    warn!(
-                        "no usable audio from {} for {}s — only zero-fill buffers \
-                         (likely OS device hijack by another app), triggering reconnect",
-                        device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
-                    );
-                    metrics.record_stream_timeout(device_name);
-                    return Err(anyhow!(StreamDeath::ZeroFill {
-                        device: device_name.to_string(),
-                        secs: INPUT_SILENT_BUFFER_TIMEOUT_SECS,
-                    }));
-                }
             }
 
             // Pass the silent buffer through; downstream VAD will drop it.
@@ -725,7 +624,7 @@ async fn recv_audio_chunk(
                     device_name,
                     metrics,
                     stream_start,
-                    *last_non_zero_at,
+                    *last_output_signal_at,
                     sck_watchdog,
                 )
             } else {
@@ -1102,6 +1001,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!stream.is_disconnected());
+        assert!(crate::core::get_device_capture_time_exact("AEC silent input (input)").is_some());
         assert!(!segments_rx.try_recv().unwrap().data.is_empty());
     }
 
@@ -1425,15 +1325,6 @@ mod tests {
             .to_string(),
             "Audio stream timeout - no data received for 8s (stream dead)"
         );
-        assert_eq!(
-            StreamDeath::ZeroFill {
-                device: "MacBook Pro Microphone (input)".to_string(),
-                secs: INPUT_SILENT_BUFFER_TIMEOUT_SECS,
-            }
-            .to_string(),
-            "Audio stream zero-fill — no usable data from MacBook Pro Microphone (input) \
-             for 30s (suspected device hijack by another process)"
-        );
     }
 
     #[test]
@@ -1453,55 +1344,89 @@ mod tests {
         );
     }
 
-    #[test]
-    fn output_silent_buffers_do_not_trigger_input_reconnect_watchdog() {
-        assert!(!should_reconnect_after_silent_input(
-            &DeviceType::Output,
-            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
-            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
-        ));
+    #[tokio::test]
+    async fn silent_input_preserves_delivery_health_and_resumes_on_the_same_stream() {
+        use crate::core::get_device_capture_time_exact;
+
+        let device_name = "digital mute delivery regression (input)";
+        let device = Arc::new(AudioDevice::new(device_name.into(), DeviceType::Input));
+        let (stream, sender) = AudioStream::from_sender_for_test(device, 16_000, 1);
+        let stream = Arc::new(stream);
+        let mut receiver = stream.subscribe().await;
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+        let stream_start = Instant::now() - Duration::from_secs(120);
+        update_device_capture_time(device_name);
+
+        // Below, at and beyond the retired 30-second silence boundary, including
+        // a mic that delivered signal before being muted or reopened.
+        for silence_secs in [29, 30, 31, 120] {
+            let mut last_signal = Some(Instant::now() - Duration::from_secs(silence_secs));
+            let mut output_watchdog =
+                crate::core::sck_output_watchdog::SckOutputWatchdog::default();
+            sender.send(vec![0.0; 320]).unwrap();
+            let chunk = recv_audio_chunk(
+                &mut receiver,
+                &stream,
+                device_name,
+                &metrics,
+                &stream_start,
+                &mut last_signal,
+                &mut output_watchdog,
+            )
+            .await
+            .expect("silent delivery must not request recovery")
+            .expect("silent samples must remain in the recording pipeline");
+            assert_eq!(chunk, vec![0.0; 320]);
+            assert!(get_device_capture_time_exact(device_name).is_some());
+            assert!(!stream.is_disconnected());
+            assert_eq!(metrics.stream_timeouts.load(Ordering::Relaxed), 0);
+
+            sender.send(vec![0.25; 320]).unwrap();
+            let resumed = recv_audio_chunk(
+                &mut receiver,
+                &stream,
+                device_name,
+                &metrics,
+                &stream_start,
+                &mut last_signal,
+                &mut output_watchdog,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(resumed, vec![0.25; 320]);
+        }
     }
 
-    #[test]
-    fn startup_grace_blocks_silent_input_reconnect_watchdog() {
-        assert!(!should_reconnect_after_silent_input(
-            &DeviceType::Input,
-            Duration::from_secs(STREAM_STARTUP_GRACE_SECS - 1),
-            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
+    #[tokio::test]
+    async fn missing_input_callbacks_still_request_recovery() {
+        let device = Arc::new(AudioDevice::new(
+            "stalled input fixture".into(),
+            DeviceType::Input,
         ));
-    }
-
-    #[test]
-    fn restarted_stream_keeps_prior_usable_audio_as_zero_fill_baseline() {
-        const DEVICE: &str = "restart-zero-fill-regression (input)";
-        let restarted_at = Instant::now();
-
-        assert_eq!(last_non_zero_seed_after_restart(DEVICE, restarted_at), None);
-        update_device_capture_time(DEVICE);
+        let (stream, _sender) = AudioStream::from_sender_for_test(device, 16_000, 1);
+        let stream = Arc::new(stream);
+        let mut receiver = stream.subscribe().await;
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+        let stream_start = Instant::now() - Duration::from_secs(120);
+        let error = recv_audio_chunk(
+            &mut receiver,
+            &stream,
+            "stalled input fixture",
+            &metrics,
+            &stream_start,
+            &mut None,
+            &mut crate::core::sck_output_watchdog::SckOutputWatchdog::default(),
+        )
+        .await
+        .expect_err("a live sender without callbacks must still time out");
         assert_eq!(
-            last_non_zero_seed_after_restart(DEVICE, restarted_at),
-            Some(restarted_at)
+            error.downcast_ref::<StreamDeath>(),
+            Some(&StreamDeath::ReceiveTimeout {
+                secs: AUDIO_RECEIVE_TIMEOUT_SECS
+            })
         );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_sustained_zero_fill_is_treated_as_silence_not_disconnect() {
-        assert!(!should_reconnect_after_silent_input(
-            &DeviceType::Input,
-            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
-            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
-        ));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn non_windows_sustained_zero_fill_still_triggers_reconnect() {
-        assert!(should_reconnect_after_silent_input(
-            &DeviceType::Input,
-            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
-            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
-        ));
+        assert_eq!(metrics.stream_timeouts.load(Ordering::Relaxed), 1);
     }
 
     #[cfg(target_os = "windows")]
@@ -1593,13 +1518,12 @@ mod tests {
         pipeline_result.expect("pipeline result");
     }
 
-    #[cfg(target_os = "windows")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn windows_recorder_e2e_keeps_running_after_zero_fill_input() {
+    async fn recorder_e2e_keeps_running_after_zero_fill_input() {
         let sample_rate = 16_000_u32;
         let chunk_samples = 320_usize;
         let device = Arc::new(AudioDevice::new(
-            "Microphone Array (Intel Smart Sound Technology for Digital Microphones)".to_string(),
+            "Digital mute recorder fixture".to_string(),
             DeviceType::Input,
         ));
         let (audio_stream, tx) = AudioStream::from_sender_for_test(device, sample_rate, 2);
