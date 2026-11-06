@@ -7,7 +7,7 @@ import { ChevronDown, FilterX, LayoutGrid, List } from "lucide-react";
 import { WorkflowAppIcons } from "./workflow-map-app-icon";
 import styles from "./workflow-collection.module.css";
 
-export { WorkflowSearch, readWorkflowFilters, type WorkflowFilterOption } from "./workflow-search";
+export { WorkflowSearch, readWorkflowFilters, type WorkflowFilterOption, type WorkflowFilterGroup } from "./workflow-search";
 export type WorkflowCollectionView = "cards" | "list";
 
 /** Shared by the Enterprise Studio and the desktop catalog. Data stays in adapters. */
