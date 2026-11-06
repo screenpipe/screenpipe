@@ -149,7 +149,7 @@ vi.mock("@/lib/hooks/use-audio-playback", () => ({
 	useAudioPlayback: () => ({
 		isPlaying: false,
 		togglePlayPause: noop,
-		pausePlayback: noop,
+		pause: noop,
 		mutedDevices: new Set(),
 		toggleDeviceMute: noop,
 		activeDevices: [],
@@ -190,6 +190,8 @@ vi.mock("@/components/rewind/hooks/use-timeline-filters", () => ({
 		snapToFiltered: (i: number) => i,
 		findNextDevice: (i: number) => i,
 		resetFilters: noop,
+		selectedDeviceIdRef: { current: "all" },
+		selectedAppNameRef: { current: "all" },
 	}),
 }));
 vi.mock("@/components/rewind/hooks/use-scroll-zoom", () => ({
@@ -211,9 +213,6 @@ vi.mock("@/components/rewind/hooks/use-date-navigation", () => ({
 		navigateToSearchResultRef: { current: noop },
 	}),
 }));
-vi.mock("@/components/rewind/hooks/use-timeline-keyboard", () => ({
-	useTimelineKeyboard: () => ({ isArrowNav: false }),
-}));
 
 // Child components are not under test — render nothing so the assertions can
 // only be satisfied by Timeline's own markup.
@@ -229,7 +228,10 @@ vi.mock("@/components/rewind/current-frame-timeline", () => ({
 		</div>
 	),
 }));
-vi.mock("@/components/rewind/timeline/timeline", () => ({ TimelineSlider: () => null }));
+vi.mock("@/components/rewind/timeline/timeline", () => ({
+	TimelineSlider: () => null,
+	getFrameAppName: () => "Safari",
+}));
 vi.mock("@/components/rewind/timeline/timeline-controls", () => ({
 	TimelineControls: () => null,
 }));
@@ -258,7 +260,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 	currentMonitor: async () => null,
 	cursorPosition: async () => ({ x: 0, y: 0 }),
 }));
-vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindow: vi.fn() } }));
+vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindow: vi.fn(), closeWindow: vi.fn() } }));
 vi.mock("@/lib/api", () => ({ localFetch: async () => ({ ok: true, json: async () => ({}) }) }));
 vi.mock("@/lib/actions/get-start-date", () => ({
 	getStartDate: async () => new Date("2026-07-01"),
@@ -274,6 +276,7 @@ vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
 vi.mock("posthog-js", () => ({ default: { capture: posthogCapture } }));
 
 import Timeline from "@/components/rewind/timeline";
+import { commands } from "@/lib/utils/tauri";
 
 /** Put the store in the state a given render should see. */
 function setStore(next: Partial<typeof store>) {
@@ -305,6 +308,7 @@ beforeEach(() => {
 		hasCachedData: false,
 	});
 	posthogCapture.mockClear();
+	vi.mocked(commands.closeWindow).mockClear();
 	tauriEventListeners.clear();
 });
 
@@ -447,5 +451,84 @@ describe("Timeline empty state (mounted)", () => {
 		expect(
 			screen.queryByRole("heading", { name: /screenshots are turned off/i }),
 		).toBeNull();
+	});
+});
+
+
+describe("Timeline blocking-state dismissal", () => {
+	it.each([
+		["loading", { isLoading: true, error: null }],
+		["connection error", { isLoading: false, error: "API unavailable" }],
+	] as const)("dismisses embedded %s with X or Escape through its host", (_, state) => {
+		setStore(state);
+		const onDismiss = vi.fn();
+		render(<Timeline embedded onDismiss={onDismiss} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Close (Esc)" }));
+		expect(onDismiss).toHaveBeenCalledTimes(1);
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onDismiss).toHaveBeenCalledTimes(2);
+		expect(commands.closeWindow).not.toHaveBeenCalled();
+	});
+
+	it("consumes Escape before the always-mounted Chat can close or abort a reply", () => {
+		setStore({ isLoading: true });
+		const chatEscape = vi.fn();
+		window.addEventListener("keydown", chatEscape);
+		try {
+			const onDismiss = vi.fn();
+			render(<Timeline embedded onDismiss={onDismiss} />);
+			fireEvent.keyDown(document.body, { key: "Escape" });
+			expect(onDismiss).toHaveBeenCalledTimes(1);
+			expect(chatEscape).not.toHaveBeenCalled();
+		} finally {
+			window.removeEventListener("keydown", chatEscape);
+		}
+	});
+
+	it("leaves search in charge of Escape above an embedded loader", () => {
+		setStore({ isLoading: true });
+		const onDismiss = vi.fn();
+		render(<Timeline embedded onDismiss={onDismiss} />);
+		fireEvent.keyDown(document.body, { key: "/" });
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onDismiss).not.toHaveBeenCalled();
+	});
+
+	it("ignores global Escape and local Escape already consumed by another control", () => {
+		setStore({ isLoading: true });
+		const onDismiss = vi.fn();
+		render(<Timeline embedded onDismiss={onDismiss} />);
+		for (const listener of tauriEventListeners.get("escape-pressed") ?? []) {
+			listener({ payload: null });
+		}
+		const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+		event.preventDefault();
+		fireEvent(document.body, event);
+		expect(onDismiss).not.toHaveBeenCalled();
+		expect(commands.closeWindow).not.toHaveBeenCalled();
+	});
+
+	it("keeps recovery live and stops dismissing when the blocker clears", () => {
+		setStore({ isLoading: true });
+		const onDismiss = vi.fn();
+		const { rerender } = render(<Timeline embedded onDismiss={onDismiss} />);
+		expect(screen.getByText("Loading Timeline")).toBeVisible();
+		setStore({ isLoading: false, frames: [aug5Frame()] });
+		rerender(<Timeline embedded onDismiss={onDismiss} />);
+		expect(screen.queryByText("Loading Timeline")).toBeNull();
+		expect(screen.getByTestId("frame-canvas")).toBeVisible();
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onDismiss).not.toHaveBeenCalled();
+		expect(commands.closeWindow).not.toHaveBeenCalled();
+	});
+
+	it("still closes Main for a standalone loader", () => {
+		setStore({ isLoading: true });
+		render(<Timeline />);
+		fireEvent.click(screen.getByRole("button", { name: "Close (Esc)" }));
+		expect(commands.closeWindow).toHaveBeenCalledWith("Main");
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(commands.closeWindow).toHaveBeenCalledTimes(2);
 	});
 });
