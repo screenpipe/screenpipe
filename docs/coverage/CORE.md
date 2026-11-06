@@ -9,10 +9,10 @@ confidence, and criticality.
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y, screenpipe-fs
 - Mapped suites: 37
 - Mapped Rust files: 410
-- Active test blocks: 3991
+- Active test blocks: 3992
 - Ignored/manual test blocks: 197
-- Declared test blocks: 4188
-- Weighted coverage points: 3290.8
+- Declared test blocks: 4189
+- Weighted coverage points: 3291.2
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -24,7 +24,7 @@ are explicitly enabled in a runtime lane.
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | windows | 33 | 3828 | 174 | 3217.8 | 21 | 11 | 100% |
-| macos | 32 | 3871 | 158 | 3213.1 | 22 | 11 | 100% |
+| macos | 32 | 3872 | 158 | 3213.5 | 22 | 11 | 100% |
 | linux | 29 | 3406 | 149 | 2836.1 | 20 | 11 | 100% |
 
 ## Crate Summary
@@ -36,7 +36,7 @@ are explicitly enabled in a runtime lane.
 | screenpipe-sqlite-coordinator | 1 | 0 | 3 | 27 | 0 | 27.0 | 2 |
 | screenpipe-audio | 8 | 29 | 54 | 706 | 56 | 617.0 | 5 |
 | screenpipe-screen | 6 | 9 | 23 | 302 | 10 | 270.4 | 4 |
-| screenpipe-a11y | 4 | 2 | 34 | 405 | 43 | 295.5 | 3 |
+| screenpipe-a11y | 4 | 2 | 34 | 406 | 43 | 295.9 | 3 |
 | screenpipe-fs | 1 | 0 | 1 | 3 | 0 | 3.0 | 3 |
 
 ## Line Coverage
@@ -62,7 +62,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 
 | Layer | windows | macos | linux |
 | --- | --- | --- | --- |
-| accessibility | 4 suites / 388 active / 35 ignored / 353.0 pts | 4 suites / 444 active / 19 ignored / 354.7 pts | 4 suites / 346 active / 7 ignored / 318.0 pts |
+| accessibility | 4 suites / 388 active / 35 ignored / 353.0 pts | 4 suites / 445 active / 19 ignored / 355.1 pts | 4 suites / 346 active / 7 ignored / 318.0 pts |
 | audio | 10 suites / 844 active / 60 ignored / 755.0 pts | 9 suites / 838 active / 60 ignored / 750.8 pts | 8 suites / 759 active / 59 ignored / 695.5 pts |
 | audio-device | 2 suites / 243 active / 10 ignored / 219.3 pts | 2 suites / 243 active / 10 ignored / 219.3 pts | 1 suites / 164 active / 9 ignored / 164.0 pts |
 | configuration | 2 suites / 155 active / 3 ignored / 140.7 pts | 2 suites / 155 active / 3 ignored / 140.7 pts | 2 suites / 155 active / 3 ignored / 140.7 pts |
@@ -73,10 +73,10 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | meeting | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 4 suites / 1416 active / 28 ignored / 1116.0 pts |
 | ocr | 4 suites / 141 active / 7 ignored / 130.8 pts | 4 suites / 134 active / 7 ignored / 128.6 pts | 3 suites / 125 active / 6 ignored / 119.6 pts |
 | os-integration | 1 suites / 6 active / 0 ignored / 1.7 pts | 1 suites / 6 active / 0 ignored / 1.7 pts | - |
-| performance | 13 suites / 1760 active / 90 ignored / 1554.4 pts | 14 suites / 1885 active / 103 ignored / 1604.4 pts | 13 suites / 1760 active / 90 ignored / 1554.4 pts |
+| performance | 13 suites / 1760 active / 90 ignored / 1554.4 pts | 14 suites / 1886 active / 103 ignored / 1604.8 pts | 13 suites / 1760 active / 90 ignored / 1554.4 pts |
 | pipes | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
-| privacy | 5 suites / 1049 active / 43 ignored / 850.4 pts | 5 suites / 1105 active / 27 ignored / 852.1 pts | 5 suites / 1007 active / 15 ignored / 815.3 pts |
-| real-app | - | 1 suites / 125 active / 13 ignored / 50.0 pts | - |
+| privacy | 5 suites / 1049 active / 43 ignored / 850.4 pts | 5 suites / 1106 active / 27 ignored / 852.5 pts | 5 suites / 1007 active / 15 ignored / 815.3 pts |
+| real-app | - | 1 suites / 126 active / 13 ignored / 50.4 pts | - |
 | speaker | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts |
 | storage | 4 suites / 712 active / 44 ignored / 593.5 pts | 4 suites / 712 active / 44 ignored / 593.5 pts | 4 suites / 712 active / 44 ignored / 593.5 pts |
 | sync | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
@@ -121,7 +121,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | a11y-core-tree-cross-platform | screenpipe-a11y | windows, macos, linux | accessibility, ui-events, privacy, performance | accessibility-ui-events, privacy-and-redaction, performance-liveness | high | strong | unit | 14 | 184 | 0 | Cross-platform accessibility config, tree normalization, cache, privacy title matching, events, budget, and activity feed units. |
 | a11y-linux-tree | screenpipe-a11y | linux | accessibility, privacy | accessibility-ui-events, privacy-and-redaction | medium | partial | unit | 4 | 27 | 1 | Linux-specific accessibility/incognito normalization tests. |
-| a11y-macos-tree | screenpipe-a11y | macos | accessibility, privacy, real-app, performance | accessibility-ui-events, privacy-and-redaction, performance-liveness | high | conditional | mixed | 11 | 125 | 13 | macOS AX unit coverage, a scored 100-case click-attribution policy eval, and real TextEdit/Finder/Obsidian probes. Click attribution and Obsidian live tests are ignored by default when they require a logged-in desktop, app install, or AX permission. |
+| a11y-macos-tree | screenpipe-a11y | macos | accessibility, privacy, real-app, performance | accessibility-ui-events, privacy-and-redaction, performance-liveness | high | conditional | mixed | 11 | 126 | 13 | macOS AX unit coverage, a scored 100-case click-attribution policy eval, and real TextEdit/Finder/Obsidian probes. Click attribution and Obsidian live tests are ignored by default when they require a logged-in desktop, app install, or AX permission. |
 | a11y-windows-tree | screenpipe-a11y | windows | accessibility, privacy, ui-events | accessibility-ui-events, privacy-and-redaction | high | partial | unit | 7 | 69 | 29 | Windows UIA/accessibility parsing and privacy matching; some UIA tests are ignored where they require a live desktop. |
 | audio-device-stream-health | screenpipe-audio | windows, macos, linux | audio-device, audio, performance | audio-device-health, audio-record-transcribe, performance-liveness | high | strong | mixed | 15 | 164 | 9 | Device monitor, device manager, stream buffering, source lag, audio metrics, Bluetooth gap/hallucination regressions, and cross-platform process-tap watchdog counters (process_tap.rs split into src/core/process_tap/ modules). |
 | audio-meetings-speakers-dedup | screenpipe-audio | windows, macos, linux | audio, meeting, speaker, transcription | audio-record-transcribe, meeting-live-notes, performance-liveness | high | strong | mixed | 28 | 281 | 14 | Meeting streaming config/controller logic, speaker embedding state, cross-device dedupe simulations, and overlap cleanup coverage. |
@@ -174,7 +174,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | a11y-linux-tree | screenpipe-a11y | src/platform/linux.rs | source | 9 | 1 | 10 |
 | a11y-macos-tree | screenpipe-a11y | src/platform/macos_click_attribution_e2e.rs | source | 0 | 9 | 9 |
 | a11y-macos-tree | screenpipe-a11y | src/platform/macos_click_attribution_eval.rs | source | 2 | 0 | 2 |
-| a11y-macos-tree | screenpipe-a11y | src/platform/macos.rs | source | 27 | 0 | 27 |
+| a11y-macos-tree | screenpipe-a11y | src/platform/macos.rs | source | 28 | 0 | 28 |
 | a11y-macos-tree | screenpipe-a11y | src/platform/macos/clipboard_delivery.rs | source | 6 | 0 | 6 |
 | a11y-macos-tree | screenpipe-a11y | src/platform/macos/input_focus.rs | source | 2 | 0 | 2 |
 | a11y-macos-tree | screenpipe-a11y | src/platform/macos/text_buffer.rs | source | 3 | 0 | 3 |

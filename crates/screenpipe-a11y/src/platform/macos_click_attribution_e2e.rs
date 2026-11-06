@@ -460,6 +460,15 @@ fn exercise_live_browser_click_urls(
     });
     let allowed_url = format!("http://127.0.0.1:{port}/allowed");
     let blocked_url = format!("http://localhost:{port}/blocked");
+    let assert_fixture_url = |actual: Option<&str>, expected: &str| {
+        let actual = actual.expect("browser click must carry its window URL");
+        // Safari can expose a bare address. The fixture serves HTTP; do not
+        // invent a scheme in captured or persisted browser metadata.
+        assert_eq!(
+            actual.strip_prefix("http://").unwrap_or(actual),
+            expected.strip_prefix("http://").unwrap_or(expected)
+        );
+    };
     let chromium_args: &[&str] =
         if new_window_executable.is_some() && bundle_id != "org.mozilla.firefox" {
             &[
@@ -640,10 +649,7 @@ fn exercise_live_browser_click_urls(
         .window_title
         .as_deref()
         .is_some_and(|title| title.contains("Allowed click fixture")));
-    assert_eq!(
-        background.browser_url.as_deref(),
-        Some(allowed_url.as_str())
-    );
+    assert_fixture_url(background.browser_url.as_deref(), &allowed_url);
     if !supports_hit_test {
         let with_context = capture_click_at_position(
             &request,
@@ -655,16 +661,26 @@ fn exercise_live_browser_click_urls(
         .unwrap();
         assert_eq!(
             with_context.browser_url.as_deref(),
-            Some(allowed_url.as_str())
+            background.browser_url.as_deref()
         );
         assert!(
             with_context.element.is_none(),
             "a window is not a hit-tested page element"
         );
+        for window_id in [None, Some(u32::MAX)] {
+            let mut unverified =
+                snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0)
+                    .unwrap();
+            unverified.window_id = window_id;
+            assert!(
+                capture_click_at_position(&unverified, &config).is_none(),
+                "missing/stale receiver windows must not use a foreground URL"
+            );
+        }
     }
     assert_eq!(
         background.to_db_insert(None).browser_url.as_deref(),
-        Some(allowed_url.as_str())
+        background.browser_url.as_deref()
     );
     let browser_app = background.app_name.as_deref().unwrap();
     assert!(browser_app.eq_ignore_ascii_case(app_name));
@@ -689,6 +705,7 @@ fn exercise_live_browser_click_urls(
             Default::default(),
         ))
         .unwrap();
+    let mut persisted_url = None;
     let handle = UiRecorder::new(config).start().unwrap();
     // start() spawns the tap asynchronously. Do not post input before its
     // actual installation has established Input Monitoring ground truth.
@@ -727,25 +744,28 @@ fn exercise_live_browser_click_urls(
             }
         };
         assert_eq!(click.app_name.as_deref(), Some(browser_app));
-        assert_eq!(click.browser_url.as_deref(), Some(expected.as_str()));
+        assert_fixture_url(click.browser_url.as_deref(), expected);
+        let actual = click.browser_url.as_deref().unwrap();
         let row = click.to_db_insert(None);
-        assert_eq!(row.browser_url.as_deref(), Some(expected.as_str()));
+        assert_eq!(row.browser_url.as_deref(), Some(actual));
         assert_eq!(
             policy.should_capture_window(row.app_name.as_deref(), row.browser_url.as_deref()),
             admitted
         );
         if admitted {
+            persisted_url = row.browser_url.clone();
             let ids = runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
             assert_eq!(ids.len(), 1);
         }
-        eprintln!("{app_name} real click url={expected} privacy_admitted={admitted}");
+        eprintln!("{app_name} real click url={actual} privacy_admitted={admitted}");
     }
     handle.stop();
     let saved = runtime
         .block_on(db.get_recent_ui_events_by_app(browser_app, 2))
         .unwrap();
     assert_eq!(saved.len(), 1, "only the allowed click is persisted");
-    assert_eq!(saved[0].browser_url.as_deref(), Some(allowed_url.as_str()));
+    assert_eq!(saved[0].browser_url, persisted_url);
+    assert_fixture_url(saved[0].browser_url.as_deref(), &allowed_url);
     eprintln!(
         "persisted {} allowed {browser_app} click; blocked click absent",
         saved.len()

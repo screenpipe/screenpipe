@@ -3395,7 +3395,8 @@ mod tests {
         event.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, 42);
         event.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
         for (raw, expected) in [
-            (-1, None),
+            // CoreGraphics canonicalizes this field to UInt32 on write.
+            (-1, Some(u32::MAX)),
             (0, None),
             (123, Some(123)),
             (i64::from(u32::MAX), Some(u32::MAX)),
@@ -3405,7 +3406,7 @@ mod tests {
             let request =
                 snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &event, Utc::now(), 1)
                     .unwrap();
-            assert_eq!(request.window_id, expected);
+            assert_eq!(request.window_id, expected, "native window field {raw}");
         }
     }
 
