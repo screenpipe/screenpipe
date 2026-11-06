@@ -464,7 +464,18 @@ mod tests {
             UrlPolicy::new(&[structured("de.wikipedia.org", true, &[])], &[]),
         ] {
             assert!(policy.should_capture_window(Some("Notepad"), None));
-            for app in [Some("Microsoft Edge"), Some("HELIUM.exe"), None, Some("")] {
+            for app in BROWSER_NAMES
+                .iter()
+                .copied()
+                .chain([
+                    "Google Chrome",
+                    "Microsoft Edge",
+                    "HELIUM.exe",
+                    "Safari Technology Preview",
+                ])
+                .map(Some)
+                .chain([None, Some("")])
+            {
                 for url in [None, Some(""), Some("about:blank"), Some("invalid url")] {
                     assert!(!policy.should_capture_window(app, url), "{app:?} {url:?}");
                 }

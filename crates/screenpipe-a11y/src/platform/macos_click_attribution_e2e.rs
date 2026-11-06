@@ -352,6 +352,59 @@ fn live_ax_click_attribution_uses_event_target_process_and_window() {
 #[cfg(feature = "db")]
 #[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Firefox in a disposable Mac VM"]
 fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Firefox",
+        "org.mozilla.firefox",
+        Some("/Applications/Firefox.app/Contents/MacOS/firefox"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Google Chrome in a disposable Mac VM"]
+fn live_chrome_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Google Chrome",
+        "com.google.Chrome",
+        Some("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Safari in a disposable Mac VM"]
+fn live_safari_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls("Safari", "com.apple.Safari", None);
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Brave Browser in a disposable Mac VM"]
+fn live_brave_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Brave Browser",
+        "com.brave.Browser",
+        Some("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Microsoft Edge in a disposable Mac VM"]
+fn live_edge_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Microsoft Edge",
+        "com.microsoft.edgemac",
+        Some("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+    );
+}
+
+#[cfg(feature = "db")]
+fn exercise_live_browser_click_urls(
+    app_name: &str,
+    bundle_id: &str,
+    new_window_executable: Option<&str>,
+) {
     assert_eq!(
         std::env::var("SCREENPIPE_ISOLATED_VM_TEST").as_deref(),
         Ok("1")
@@ -366,7 +419,7 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
     std::thread::spawn(move || {
         use std::io::BufRead;
         for mut stream in listener.incoming().flatten() {
-            // Firefox opens speculative connections before sending requests.
+            // Browsers open speculative connections before sending requests.
             // An idle connection must not block the page's actual request.
             std::thread::spawn(move || {
                 let mut request = String::new();
@@ -389,42 +442,58 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
     });
     let allowed_url = format!("http://127.0.0.1:{port}/allowed");
     let blocked_url = format!("http://localhost:{port}/blocked");
-    let firefox = launch_fresh_app(
-        "Firefox",
-        "org.mozilla.firefox",
+    let browser = launch_fresh_app(
+        app_name,
+        bundle_id,
         Some(Path::new(&allowed_url)),
         Duration::from_secs(10),
     )
     .unwrap();
-    wait_for_focus(firefox.0, Duration::from_secs(10)).unwrap();
+    wait_for_focus(browser.0, Duration::from_secs(10)).unwrap();
     let wait_title = |marker: &str| {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Ok(snapshot) = window_snapshot(firefox.0) {
+            if let Ok(snapshot) = window_snapshot(browser.0) {
                 if snapshot.0.contains(marker) {
                     break snapshot;
                 }
             }
             assert!(
                 Instant::now() < deadline,
-                "Firefox did not show {marker}: {:?}",
-                window_snapshot(firefox.0)
+                "{app_name} did not show {marker}: {:?}",
+                window_snapshot(browser.0)
             );
             std::thread::sleep(Duration::from_millis(100));
         }
     };
     wait_title("Allowed click fixture");
-    set_window_frame(firefox.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
+    set_window_frame(browser.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
     let (allowed_title, bounds) = wait_title("Allowed click fixture");
-    assert!(
-        Command::new("/Applications/Firefox.app/Contents/MacOS/firefox")
+    if let Some(executable) = new_window_executable {
+        assert!(Command::new(executable)
             .args(["--new-window", &blocked_url])
             .status()
             .unwrap()
-            .success()
-    );
+            .success());
+    } else {
+        // Safari uses the normal New Window shortcut and LaunchServices URL
+        // opening, without an Automation grant or browser scripting fallback.
+        for down in [true, false] {
+            let mut event = cg::Event::keyboard(None, 45, down).unwrap();
+            event.set_flags(cg::EventFlags::CMD);
+            event.post(cg::EventTapLocation::Hid);
+        }
+        let mut release = cg::Event::keyboard(None, 55, false).unwrap();
+        release.set_flags(cg::EventFlags(0));
+        release.post(cg::EventTapLocation::Hid);
+        assert!(Command::new("open")
+            .args(["-a", app_name, &blocked_url])
+            .status()
+            .unwrap()
+            .success());
+    }
     wait_title("Blocked click fixture");
-    set_window_frame(firefox.0, cg::Rect::new(520.0, 80.0, 460.0, 600.0)).unwrap();
+    set_window_frame(browser.0, cg::Rect::new(520.0, 80.0, 460.0, 600.0)).unwrap();
     let (_, blocked_bounds) = wait_title("Blocked click fixture");
 
     let config = UiCaptureConfig {
@@ -441,18 +510,18 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
     let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
     let hit = ax::UiElement::sys_wide()
         .element_at_pos(point.x as f32, point.y as f32)
-        .expect("background Firefox point must be AX-accessible");
+        .expect("background browser point must be AX-accessible");
     assert_eq!(
         hit.pid().ok(),
-        Some(firefox.0),
-        "point must hit the Firefox process"
+        Some(browser.0),
+        "point must hit the browser process"
     );
     eprintln!(
-        "Firefox clicked element exposes AXWindow: {}",
+        "browser clicked element exposes AXWindow: {}",
         hit.window().is_ok()
     );
-    let hit_window = super::resolve_clicked_window(&hit, firefox.0)
-        .expect("clicked Firefox ancestry must resolve its window");
+    let hit_window = super::resolve_clicked_window(&hit, browser.0)
+        .expect("clicked browser ancestry must resolve its window");
     assert_eq!(
         string_attr(&hit_window, ax::attr::title()).as_deref(),
         Some(allowed_title.as_str())
@@ -464,7 +533,7 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         cg::MouseButton::Left,
     )
     .unwrap();
-    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(firefox.0));
+    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
     mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
     mouse.set_flags(cg::EventFlags(0));
     let request =
@@ -472,7 +541,7 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
     let started = Instant::now();
     let background = capture_click_at_position(&request, &config).unwrap();
     eprintln!(
-        "background Firefox click URL lookup took {:?}",
+        "{app_name} background click URL lookup took {:?}",
         started.elapsed()
     );
     if background.browser_url.is_none() {
@@ -513,9 +582,9 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         Some(allowed_url.as_str())
     );
     let browser_app = background.app_name.as_deref().unwrap();
-    assert!(browser_app.eq_ignore_ascii_case("firefox"));
+    assert!(browser_app.eq_ignore_ascii_case(app_name));
     assert!(
-        window_snapshot(firefox.0)
+        window_snapshot(browser.0)
             .unwrap()
             .0
             .contains("Blocked click fixture"),
@@ -559,14 +628,14 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
             mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
             // Synthetic mouse events do not acquire the kernel receiver field
             // before this session tap. Preserve the production PID check.
-            mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(firefox.0));
+            mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
             mouse.post(cg::EventTapLocation::Hid);
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         let click = loop {
             let event = handle
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .expect("real Firefox click must reach the recorder");
+                .expect("real browser click must reach the recorder");
             if matches!(event.data, EventData::Click { .. }) {
                 break event;
             }
@@ -583,7 +652,7 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
             let ids = runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
             assert_eq!(ids.len(), 1);
         }
-        eprintln!("real Firefox click url={expected} privacy_admitted={admitted}");
+        eprintln!("{app_name} real click url={expected} privacy_admitted={admitted}");
     }
     handle.stop();
     let saved = runtime
