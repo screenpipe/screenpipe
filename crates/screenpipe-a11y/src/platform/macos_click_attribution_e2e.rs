@@ -414,6 +414,13 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         }
     };
     wait_title("Allowed click fixture");
+    // The fresh Firefox profile can show a Spotlight welcome overlay. Dismiss
+    // setup UI before testing clicks on the ordinary page behind it.
+    for down in [true, false] {
+        let mut escape = cg::Event::keyboard(None, 53, down).unwrap();
+        escape.set_flags(cg::EventFlags(0));
+        escape.post(cg::EventTapLocation::Hid);
+    }
     set_window_frame(firefox.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
     let (allowed_title, bounds) = wait_title("Allowed click fixture");
     assert!(
