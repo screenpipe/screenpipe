@@ -15,7 +15,7 @@ test('rejects client credentials before contacting a provider', async () => {
 test('accepts only bounded Decisions choice requests and forwards no other fields', async () => {
   const fetch = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ model: 'gpt-6-luna', answers: [] }));
   expect((await handleContentDecisions(request({ ...payload, tools: ['unsafe'] } as any), env)).status).toBe(200);
-  const [url, options] = fetch.mock.calls[0]; expect(url).toBe('https://api.openai.com/v1/decisions');
+  const [url, options] = fetch.mock.calls[0]; expect(url).toBe('https://api.openai.com/v1/decisions'); expect(options!.redirect).toBe('manual');
   expect(JSON.parse(options!.body as string)).toEqual(payload); fetch.mockRestore();
 });
 test('rejects unsupported model and duplicate question identities without inference', async () => {

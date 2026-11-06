@@ -30,12 +30,23 @@ export async function handleContentDecisions(request: Request, env: Env): Promis
     if (q.type !== 'choice' || typeof q.name !== 'string' || !/^r\d+$/.test(q.name) || names.has(q.name) || typeof q.instructions !== 'string' || q.instructions.length > 2000 || !Array.isArray(q.choices) || q.choices.length < 2 || q.choices.length > 42 || q.choices.some((c: any) => typeof c.value !== 'string' || c.value.length > 64 || typeof c.description !== 'string' || c.description.length > 2000)) return failure(400, 'invalid_decision_request');
     names.add(q.name);
   }
-  if (!env.OPENAI_API_KEY?.trim()) return failure(503, 'decision_provider_not_configured');
+  if (!env.OPENAI_API_KEY?.trim()) { console.warn('decisions_failure', JSON.stringify({ code: 'not_configured' })); return failure(503, 'decision_provider_not_configured'); }
   try {
-    const upstream = await fetch('https://api.openai.com/v1/decisions', { method: 'POST', redirect: 'error', signal,
+    const upstream = await fetch('https://api.openai.com/v1/decisions', { method: 'POST', redirect: 'manual', signal,
       headers: { Authorization: `Bearer ${env.OPENAI_API_KEY.trim()}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'gpt-6-luna', input: body.input, questions: body.questions }) });
-    if (!upstream.ok) { await upstream.body?.cancel(); return failure(upstream.status === 429 ? 429 : 503, 'decision_provider_unavailable'); }
+    if (!upstream.ok) {
+      let code = 'unknown';
+      try { const error = await upstream.json() as any;
+        const allowed = ['invalid_api_key', 'model_not_found', 'insufficient_quota', 'invalid_request_error', 'rate_limit_exceeded', 'unsupported_parameter'];
+        if (allowed.includes(error?.error?.code)) code = error.error.code;
+        else if (allowed.includes(error?.error?.type)) code = error.error.type;
+      } catch { /* never log arbitrary provider bodies */ }
+      console.warn('decisions_failure', JSON.stringify({ code, status: upstream.status }));
+      // Numeric diagnostics reveal transport/access failures without echoing
+      // provider bodies, captured inputs, credentials or request headers.
+      return Response.json({ error: { code: 'decision_provider_unavailable', upstream_status: upstream.status } }, { status: upstream.status >= 400 && upstream.status < 500 ? upstream.status : 503, headers: { 'Cache-Control': 'no-store' } });
+    }
     return new Response(upstream.body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
-  } catch { return failure(503, 'decision_provider_unavailable'); }
+  } catch { console.warn('decisions_failure', JSON.stringify({ code: 'transport' })); return failure(503, 'decision_provider_unavailable'); }
 }
