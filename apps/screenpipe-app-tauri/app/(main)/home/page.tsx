@@ -1113,7 +1113,9 @@ function HomeContent() {
             <StarredTimeline showStrip />
             <div className="min-h-0 flex-1">
               <NativeTimeline
-                fallback={<Timeline embedded />}
+                fallback={
+                  <Timeline embedded onDismiss={() => { void setActiveSection("home"); }} />
+                }
                 showActivityReturn={activityReturnVisible}
               />
             </div>

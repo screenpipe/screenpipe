@@ -628,6 +628,16 @@ describe("enterprise policy runtime manual activation", () => {
     expect(result.current.isEnterpriseAuthenticated).toBe(false);
   });
 
+  it("keeps enrollment working if the webview cannot determine its timezone",async()=>{
+    const timezone=vi.spyOn(Intl.DateTimeFormat.prototype,"resolvedOptions").mockImplementation(()=>{throw Error("unavailable");});
+    try {
+      mockEnterpriseApi({});const {result}=await renderEnterprisePolicy();
+      await act(async()=>{await result.current.submitLicenseKey(KEY);});
+      const call=mocks.tauriFetch.mock.calls.find(([url])=>String(url).includes("/api/enterprise/heartbeat"));
+      expect(call).toBeDefined();expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty("timezone");
+    } finally {timezone.mockRestore();}
+  });
+
   it("sends only X-License-Key for key authentication", async () => {
     Object.assign(mocks.settings, { user: { token: "existing-account-token" } });
     mockEnterpriseApi({});
@@ -654,6 +664,7 @@ describe("enterprise policy runtime manual activation", () => {
     expect(keyHeartbeatCall?.[1]?.headers["X-License-Key"]).toBe(KEY);
     expect(keyHeartbeatCall?.[1]?.headers.Authorization).toBeUndefined();
     const heartbeatBody = JSON.parse(String(keyHeartbeatCall?.[1]?.body));
+    expect(heartbeatBody.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(heartbeatBody.recording_status).toEqual({ frame_status: "ok", audio_status: "ok", schedule_paused: true,
       drm_content_paused: false, vision_reason: "no_displays_expected", audio_reason: "screen_locked", activity: "unknown" });
     expect(heartbeatBody).toMatchObject({

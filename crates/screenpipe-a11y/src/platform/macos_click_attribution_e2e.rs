@@ -10,7 +10,7 @@
 
 use super::{
     capture_click_at_position, snapshot_click_request, EventData, UiCaptureConfig, UiRecorder,
-    CG_EVENT_TARGET_UNIX_PROCESS_ID,
+    CG_EVENT_RECEIVER_WINDOW_ID, CG_EVENT_TARGET_UNIX_PROCESS_ID,
 };
 use chrono::Utc;
 use cidre::{ax, cf, cg, ns};
@@ -88,11 +88,24 @@ fn launch_fresh_app(
     document: Option<&Path>,
     timeout: Duration,
 ) -> Result<OwnedApp, String> {
+    launch_fresh_app_with_args(app_name, bundle_id, document, timeout, &[])
+}
+
+fn launch_fresh_app_with_args(
+    app_name: &str,
+    bundle_id: &str,
+    document: Option<&Path>,
+    timeout: Duration,
+    args: &[&str],
+) -> Result<OwnedApp, String> {
     let existing = app_pids(bundle_id);
     let mut command = Command::new("open");
     command.args(["-n", "-a", app_name]);
     if let Some(document) = document {
         command.arg(document);
+    }
+    if !args.is_empty() {
+        command.arg("--args").args(args);
     }
     let status = command
         .status()
@@ -345,6 +358,427 @@ fn live_ax_click_attribution_uses_event_target_process_and_window() {
     assert!(
         capture_click_at_position(&request, &ignored_window_config).is_none(),
         "the resolved AXWindow must enforce scoped app/window exclusions"
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Firefox in a disposable Mac VM"]
+fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Firefox",
+        "org.mozilla.firefox",
+        Some("/Applications/Firefox.app/Contents/MacOS/firefox"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Google Chrome in a disposable Mac VM"]
+fn live_chrome_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Google Chrome",
+        "com.google.Chrome",
+        Some("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Safari in a disposable Mac VM"]
+fn live_safari_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls("Safari", "com.apple.Safari", None);
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Brave Browser in a disposable Mac VM"]
+fn live_brave_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Brave Browser",
+        "com.brave.Browser",
+        Some("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+    );
+}
+
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Microsoft Edge in a disposable Mac VM"]
+fn live_edge_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    exercise_live_browser_click_urls(
+        "Microsoft Edge",
+        "com.microsoft.edgemac",
+        Some("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+    );
+}
+
+#[cfg(feature = "db")]
+fn exercise_live_browser_click_urls(
+    app_name: &str,
+    bundle_id: &str,
+    new_window_executable: Option<&str>,
+) {
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_env_filter("screenpipe_a11y=debug,screenpipe_db=warn,sqlx=warn")
+        .with_test_writer()
+        .try_init();
+    assert_eq!(
+        std::env::var("SCREENPIPE_ISOLATED_VM_TEST").as_deref(),
+        Ok("1")
+    );
+    let _serial = LIVE_E2E_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let _restore = RestoreFrontmostApp::capture();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Both origins are served locally; no real browser history is involved.
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for mut stream in listener.incoming().flatten() {
+            // Browsers open speculative connections before sending requests.
+            // An idle connection must not block the page's actual request.
+            std::thread::spawn(move || {
+                let mut request = String::new();
+                if !std::io::BufReader::new(&stream)
+                    .read_line(&mut request)
+                    .is_ok_and(|bytes| bytes > 0)
+                {
+                    return;
+                }
+                eprintln!("fixture HTTP request: {}", request.trim());
+                let title = if request.contains("/blocked") {
+                    "Blocked click fixture"
+                } else {
+                    "Allowed click fixture"
+                };
+                let body = format!("<title>{title}</title><h1>{title}</h1><button style='width:100%;height:300px'>Click fixture</button><input value='https://wrong.example/embedded'>");
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            });
+        }
+    });
+    let allowed_url = format!("http://127.0.0.1:{port}/allowed");
+    let blocked_url = format!("http://localhost:{port}/blocked");
+    let assert_fixture_url = |actual: Option<&str>, expected: &str| {
+        let actual = actual.expect("browser click must carry its window URL");
+        // Safari can expose a bare address. The fixture serves HTTP; do not
+        // invent a scheme in captured or persisted browser metadata.
+        assert_eq!(
+            actual.strip_prefix("http://").unwrap_or(actual),
+            expected.strip_prefix("http://").unwrap_or(expected)
+        );
+    };
+    let chromium_args: &[&str] =
+        if new_window_executable.is_some() && bundle_id != "org.mozilla.firefox" {
+            &[
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-features=ChromeWhatsNewUI",
+            ]
+        } else {
+            &[]
+        };
+    let browser = launch_fresh_app_with_args(
+        app_name,
+        bundle_id,
+        Some(Path::new(&allowed_url)),
+        Duration::from_secs(10),
+        chromium_args,
+    )
+    .unwrap();
+    wait_for_focus(browser.0, Duration::from_secs(10)).unwrap();
+    wait_for_window_snapshot(browser.0, Duration::from_secs(10)).unwrap();
+    if let Some(executable) = new_window_executable {
+        // Open the fixture after startup tabs have been created. Brave may
+        // select its startup tab after the initial LaunchServices URL event.
+        assert!(Command::new(executable)
+            .args(["--new-window", &allowed_url])
+            .status()
+            .unwrap()
+            .success());
+    }
+    let wait_title = |marker: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(snapshot) = window_snapshot(browser.0) {
+                if snapshot.0.contains(marker) {
+                    break snapshot;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{app_name} did not show {marker}: {:?}",
+                window_snapshot(browser.0)
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    wait_title("Allowed click fixture");
+    set_window_frame(browser.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
+    let (allowed_title, bounds) = wait_title("Allowed click fixture");
+    let focused_window_id = || {
+        let app = ax::UiElement::with_app_pid(browser.0);
+        let value = app.attr_value(ax::attr::focused_window()).unwrap();
+        assert_eq!(value.get_type_id(), ax::UiElement::type_id());
+        let window: &ax::UiElement = unsafe { std::mem::transmute(&*value) };
+        super::native_window_id(window).unwrap()
+    };
+    let allowed_window_id = focused_window_id();
+    if let Some(executable) = new_window_executable {
+        assert!(Command::new(executable)
+            .args(["--new-window", &blocked_url])
+            .status()
+            .unwrap()
+            .success());
+    } else {
+        // Safari uses the normal New Window shortcut and LaunchServices URL
+        // opening, without an Automation grant or browser scripting fallback.
+        for down in [true, false] {
+            let mut event = cg::Event::keyboard(None, 45, down).unwrap();
+            event.set_flags(cg::EventFlags::CMD);
+            event.post(cg::EventTapLocation::Hid);
+        }
+        let mut release = cg::Event::keyboard(None, 55, false).unwrap();
+        release.set_flags(cg::EventFlags(0));
+        release.post(cg::EventTapLocation::Hid);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while window_snapshot(browser.0)
+            .is_ok_and(|snapshot| snapshot.0.contains("Allowed click fixture"))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Safari did not open a new window"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(Command::new("open")
+            .args(["-a", app_name, &blocked_url])
+            .status()
+            .unwrap()
+            .success());
+    }
+    wait_title("Blocked click fixture");
+    set_window_frame(browser.0, cg::Rect::new(520.0, 80.0, 460.0, 600.0)).unwrap();
+    let (_, blocked_bounds) = wait_title("Blocked click fixture");
+    let blocked_window_id = focused_window_id();
+    assert_ne!(allowed_window_id, blocked_window_id);
+
+    let config = UiCaptureConfig {
+        capture_context: false,
+        capture_text: false,
+        capture_clipboard: false,
+        ..UiCaptureConfig::new()
+    };
+    assert!(
+        UiRecorder::new(config.clone())
+            .check_permissions()
+            .accessibility
+    );
+    let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+    let mut mouse = cg::Event::mouse(
+        None,
+        cg::EventType::LEFT_MOUSE_DOWN,
+        point,
+        cg::MouseButton::Left,
+    )
+    .unwrap();
+    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
+    mouse.set_field_i64(CG_EVENT_RECEIVER_WINDOW_ID, i64::from(allowed_window_id));
+    mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+    mouse.set_flags(cg::EventFlags(0));
+    let request =
+        snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
+    let started = Instant::now();
+    let background = capture_click_at_position(&request, &config).unwrap_or_else(|| {
+        panic!(
+            "browser click attribution failed; native hit-test: {:?}",
+            ax::UiElement::sys_wide()
+                .element_at_pos(point.x as f32, point.y as f32)
+                .err()
+        );
+    });
+    eprintln!(
+        "{app_name} background click URL lookup took {:?}",
+        started.elapsed()
+    );
+    let native_hit = ax::UiElement::sys_wide().element_at_pos(point.x as f32, point.y as f32);
+    let supports_hit_test = native_hit.is_ok();
+    let hit = native_hit.unwrap_or_else(|_| super::clicked_window_for_receiver(&request).unwrap());
+    assert_eq!(
+        hit.pid().ok(),
+        Some(browser.0),
+        "point must hit the browser process"
+    );
+    eprintln!(
+        "browser clicked element exposes AXWindow: {}",
+        hit.window().is_ok()
+    );
+    let hit_window = super::resolve_clicked_window(&hit, browser.0)
+        .expect("clicked browser ancestry must resolve its window");
+    assert_eq!(
+        string_attr(&hit_window, ax::attr::title()).as_deref(),
+        Some(allowed_title.as_str())
+    );
+    if background.browser_url.is_none() {
+        eprintln!(
+            "clicked-window URL result: {:?}",
+            crate::tree::clicked_window_browser_url(&hit_window)
+        );
+        fn dump_chrome(node: &ax::UiElement, depth: usize) {
+            let _ = node.set_messaging_timeout_secs(0.1);
+            let role = string_attr(node, ax::attr::role()).unwrap_or_default();
+            eprintln!(
+                "AX fixture depth={depth} role={role} id={:?} value={:?} document={:?} url={:?}",
+                node.attr_value(ax::attr::id()),
+                node.attr_value(ax::attr::value()),
+                node.attr_value(ax::attr::document()),
+                node.attr_value(ax::attr::url())
+            );
+            if role != "AXWebArea" {
+                if let Ok(children) = node.children() {
+                    for child in children.iter() {
+                        dump_chrome(child, depth + 1);
+                    }
+                }
+            }
+        }
+        dump_chrome(&hit_window, 0);
+    }
+    assert!(background
+        .window_title
+        .as_deref()
+        .is_some_and(|title| title.contains("Allowed click fixture")));
+    assert_fixture_url(background.browser_url.as_deref(), &allowed_url);
+    if !supports_hit_test {
+        let with_context = capture_click_at_position(
+            &request,
+            &UiCaptureConfig {
+                capture_context: true,
+                ..config.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            with_context.browser_url.as_deref(),
+            background.browser_url.as_deref()
+        );
+        assert!(
+            with_context.element.is_none(),
+            "a window is not a hit-tested page element"
+        );
+    }
+    // Exercise receiver-window resolution even if the earlier lookup woke
+    // the provider and it now supports element hit testing.
+    let receiver_window = super::clicked_window_for_receiver(&request).unwrap();
+    assert_eq!(
+        string_attr(&receiver_window, ax::attr::title()).as_deref(),
+        Some(allowed_title.as_str())
+    );
+    assert_fixture_url(
+        Some(&crate::tree::clicked_window_browser_url(&receiver_window).unwrap()),
+        &allowed_url,
+    );
+    for window_id in [None, Some(u32::MAX)] {
+        let mut unverified =
+            snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
+        unverified.window_id = window_id;
+        assert!(
+            super::clicked_window_for_receiver(&unverified).is_err(),
+            "missing/stale receiver windows must not use a foreground URL"
+        );
+    }
+    assert_eq!(
+        background.to_db_insert(None).browser_url.as_deref(),
+        background.browser_url.as_deref()
+    );
+    let browser_app = background.app_name.as_deref().unwrap();
+    assert!(browser_app.eq_ignore_ascii_case(app_name));
+    assert!(
+        window_snapshot(browser.0)
+            .unwrap()
+            .0
+            .contains("Blocked click fixture"),
+        "URL lookup must not activate the clicked window"
+    );
+
+    let policy = crate::url_filter::UrlPolicy::new(
+        &[screenpipe_config::UrlRule::Legacy("localhost".into())],
+        &[],
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let db_dir = tempfile::tempdir().unwrap();
+    let db_path = db_dir.path().join("clicks.db");
+    let db = runtime
+        .block_on(screenpipe_db::DatabaseManager::new(
+            db_path.to_str().unwrap(),
+            Default::default(),
+        ))
+        .unwrap();
+    let mut persisted_url = None;
+    let handle = UiRecorder::new(config).start().unwrap();
+    // start() spawns the tap asynchronously. Do not post input before its
+    // actual installation has established Input Monitoring ground truth.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while super::INPUT_MONITORING_GROUND_TRUTH.load(std::sync::atomic::Ordering::SeqCst) == -1 {
+        assert!(Instant::now() < deadline, "recorder tap did not initialize");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        super::INPUT_MONITORING_GROUND_TRUTH.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "real event tap must have Input Monitoring permission"
+    );
+    for (bounds, window_id, expected, admitted) in [
+        (bounds, allowed_window_id, &allowed_url, true),
+        (blocked_bounds, blocked_window_id, &blocked_url, false),
+    ] {
+        let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+        for kind in [cg::EventType::LEFT_MOUSE_DOWN, cg::EventType::LEFT_MOUSE_UP] {
+            let mut mouse = cg::Event::mouse(None, kind, point, cg::MouseButton::Left).unwrap();
+            mouse.set_flags(cg::EventFlags(0));
+            mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+            // Synthetic mouse events do not acquire the kernel receiver field
+            // before this session tap. Preserve the production PID check.
+            mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(browser.0));
+            mouse.set_field_i64(CG_EVENT_RECEIVER_WINDOW_ID, i64::from(window_id));
+            mouse.post(cg::EventTapLocation::Hid);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let click = loop {
+            let event = handle
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("real browser click must reach the recorder");
+            if matches!(event.data, EventData::Click { .. }) {
+                break event;
+            }
+        };
+        assert_eq!(click.app_name.as_deref(), Some(browser_app));
+        assert_fixture_url(click.browser_url.as_deref(), expected);
+        let actual = click.browser_url.as_deref().unwrap();
+        let row = click.to_db_insert(None);
+        assert_eq!(row.browser_url.as_deref(), Some(actual));
+        assert_eq!(
+            policy.should_capture_window(row.app_name.as_deref(), row.browser_url.as_deref()),
+            admitted
+        );
+        if admitted {
+            persisted_url = row.browser_url.clone();
+            let ids = runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
+            assert_eq!(ids.len(), 1);
+        }
+        eprintln!("{app_name} real click url={actual} privacy_admitted={admitted}");
+    }
+    handle.stop();
+    let saved = runtime
+        .block_on(db.get_recent_ui_events_by_app(browser_app, 2))
+        .unwrap();
+    assert_eq!(saved.len(), 1, "only the allowed click is persisted");
+    assert_eq!(saved[0].browser_url, persisted_url);
+    assert_fixture_url(saved[0].browser_url.as_deref(), &allowed_url);
+    eprintln!(
+        "persisted {} allowed {browser_app} click; blocked click absent",
+        saved.len()
     );
 }
 
