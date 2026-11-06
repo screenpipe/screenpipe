@@ -3115,7 +3115,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn strict_customer_storage_never_collects_remote_diagnostic_logs() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -3150,7 +3150,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn readable_customer_storage_keeps_remote_diagnostic_logs_available() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -3920,6 +3920,7 @@ pub(crate) mod tests {
         let prior_license = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY").ok();
         let prior_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok();
         let prior_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+        let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
 
         // Case 1: no license env → None.
         std::env::remove_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY");
@@ -3960,7 +3961,12 @@ pub(crate) mod tests {
         assert_eq!(cfg.ingest_url, "https://staging/ingest");
 
         // Case 5: write-only direct upload needs no local key material and
-        // derives sibling control-plane URLs from the ingest URL.
+        // derives sibling control-plane URLs from the ingest URL. Direct
+        // modes fail closed without an MDM destination pin, so deploy one.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
+            "storage.customer.example.com",
+        );
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_write_only",
@@ -4025,6 +4031,21 @@ pub(crate) mod tests {
         )
         .is_none());
 
+        // Case 9: an explicit direct upload mode without a destination pin
+        // (and without the escape hatch) refuses to start sync — the
+        // fail-closed default for plaintext batches.
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS");
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_write_only",
+        );
+        let dir = TempDir::new().unwrap();
+        assert!(
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .is_none(),
+            "direct upload without a destination pin must refuse to start sync"
+        );
+
         // Restore prior state so we don't pollute other tests / the process.
         match prior_license {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY", v),
@@ -4037,6 +4058,10 @@ pub(crate) mod tests {
         match prior_mode {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v),
             None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+        }
+        match prior_pin {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
         }
     }
 
@@ -5180,13 +5205,26 @@ pub(crate) mod tests {
         assert!(!apply_rotated_device_config(&mut cfg, &remote));
     }
 
-    struct UploadModeEnvGuard(Option<String>);
+    struct UploadModeEnvGuard(Option<String>, Option<String>);
 
     impl UploadModeEnvGuard {
         fn clear() -> Self {
             let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
             std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
-            Self(prior)
+            Self(prior, None)
+        }
+
+        /// Like `clear`, but also deploys an MDM destination pin for the
+        /// guard's lifetime — direct modes fail closed without one.
+        fn pin() -> Self {
+            let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+            std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
+            let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
+            std::env::set_var(
+                "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
+                "storage.customer.example.com",
+            );
+            Self(prior, prior_pin)
         }
     }
 
@@ -5195,6 +5233,12 @@ pub(crate) mod tests {
             match self.0.take() {
                 Some(value) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", value),
                 None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+            }
+            match self.1.take() {
+                Some(value) => {
+                    std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", value)
+                }
+                None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
             }
         }
     }
@@ -5714,7 +5758,7 @@ pub(crate) mod tests {
     async fn sync_diagnostic_reports_failed_tick_independently_and_retries_after_restart() {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _policy_guard = crate::enterprise_policy::sync_streams_test_lock();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -6154,7 +6198,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn server_mode_resolution_covers_hosted_and_both_direct_modes() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         for (desired_mode, expected_label) in [
             ("hosted_ingest", "hosted_ingest"),
             ("direct_upload_readable", "direct_readable"),
@@ -6182,7 +6226,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn explicit_mdm_mode_resolves_without_calling_the_control_plane() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard(std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok());
+        let _mode_env = UploadModeEnvGuard::pin();
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_write_only",
