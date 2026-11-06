@@ -486,6 +486,16 @@ fn exercise_live_browser_click_urls(
         let mut release = cg::Event::keyboard(None, 55, false).unwrap();
         release.set_flags(cg::EventFlags(0));
         release.post(cg::EventTapLocation::Hid);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while window_snapshot(browser.0)
+            .is_ok_and(|snapshot| snapshot.0.contains("Allowed click fixture"))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Safari did not open a new window"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(Command::new("open")
             .args(["-a", app_name, &blocked_url])
             .status()
