@@ -904,6 +904,7 @@ mod tests {
             concat!(
                 "installer_elevation_failed: result=1223 scope=all recovery=original_app_relaunch_succeeded contact=private-person@example.com\n",
                 "installer_migration_failed: operation=copy_enterprise_config windows_result=5 scope=current recovery=original_app_relaunch_result_0 contact=private-person@example.com\n",
+                "uninstaller_app_data_cleanup_failed: operation=remove_directory path=current_profile_screenpipe_data windows_result=145 outcome=data_retained contact=private-person@example.com\n",
             ),
         )
         .await
@@ -911,12 +912,18 @@ mod tests {
         let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
             .await
             .unwrap();
+        println!("redacted installer failure support report:\n{report}");
         assert!(report.contains("installer_elevation_failed: result=1223"));
         assert!(report.contains("recovery=original_app_relaunch_succeeded"));
         assert!(report.contains(
             "installer_migration_failed: operation=copy_enterprise_config windows_result=5"
         ));
         assert!(report.contains("recovery=original_app_relaunch_result_0"));
+        assert!(report.contains(
+            "uninstaller_app_data_cleanup_failed: operation=remove_directory"
+        ));
+        assert!(report.contains("path=current_profile_screenpipe_data"));
+        assert!(report.contains("windows_result=145 outcome=data_retained"));
         assert!(!report.contains("private-person@example.com"));
     }
 
