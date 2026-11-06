@@ -2016,9 +2016,28 @@ fn capture_click_at_position(
         .then(|| build_click_element_context(&elem, request.x, request.y, config))
         .flatten();
 
-    attributed_click_event(request, app_name, window_title, element)
+    let mut event = attributed_click_event(request, app_name, window_title, element)
         .map_err(|reason| debug!(?reason, "dropping click with invalid event coordinates"))
-        .ok()
+        .ok()?;
+    if crate::url_filter::is_known_browser(event.app_name.as_deref().unwrap_or_default()) {
+        let started = Instant::now();
+        let url = crate::tree::clicked_window_browser_url(&window);
+        let current_title = get_string_attr(&window, ax::attr::title())
+            .or_else(|| get_string_attr(&window, ax::attr::desc()));
+        let url = if current_title.as_deref() == raw_window_title.as_deref() {
+            url
+        } else {
+            Err("clicked window title changed during URL lookup; URL attribution discarded".into())
+        };
+        match url {
+            Ok(url) => event.browser_url = Some(url),
+            Err(cause) => crate::capture_diagnostics::report_browser_click_url_failure(
+                &cause,
+                started.elapsed(),
+            ),
+        }
+    }
+    Some(event)
 }
 
 fn valid_event_target_pid(raw_pid: i64) -> Option<i32> {

@@ -348,6 +348,170 @@ fn live_ax_click_attribution_uses_event_target_process_and_window() {
     );
 }
 
+#[test]
+#[cfg(feature = "db")]
+#[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 and Firefox in a disposable Mac VM"]
+fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
+    assert_eq!(
+        std::env::var("SCREENPIPE_ISOLATED_VM_TEST").as_deref(),
+        Ok("1")
+    );
+    let _serial = LIVE_E2E_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let _restore = RestoreFrontmostApp::capture();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Both origins are served locally; no real browser history is involved.
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for mut stream in listener.incoming().flatten() {
+            let mut request = String::new();
+            std::io::BufReader::new(&stream)
+                .read_line(&mut request)
+                .unwrap();
+            let title = if request.contains("/blocked") {
+                "Blocked click fixture"
+            } else {
+                "Allowed click fixture"
+            };
+            let body = format!("<title>{title}</title><h1>{title}</h1><button style='width:100%;height:300px'>Click fixture</button><input value='https://wrong.example/embedded'>");
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+    let allowed_url = format!("http://127.0.0.1:{port}/allowed");
+    let blocked_url = format!("http://localhost:{port}/blocked");
+    let firefox = launch_fresh_app(
+        "Firefox",
+        "org.mozilla.firefox",
+        Some(Path::new(&allowed_url)),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    wait_for_focus(firefox.0, Duration::from_secs(10)).unwrap();
+    let wait_title = |marker: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(snapshot) = window_snapshot(firefox.0) {
+                if snapshot.0.contains(marker) {
+                    break snapshot;
+                }
+            }
+            assert!(Instant::now() < deadline, "Firefox did not show {marker}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    wait_title("Allowed click fixture");
+    set_window_frame(firefox.0, cg::Rect::new(20.0, 80.0, 460.0, 600.0)).unwrap();
+    let (allowed_title, bounds) = wait_title("Allowed click fixture");
+    assert!(
+        Command::new("/Applications/Firefox.app/Contents/MacOS/firefox")
+            .args(["--new-window", &blocked_url])
+            .status()
+            .unwrap()
+            .success()
+    );
+    wait_title("Blocked click fixture");
+    set_window_frame(firefox.0, cg::Rect::new(520.0, 80.0, 460.0, 600.0)).unwrap();
+    let (_, blocked_bounds) = wait_title("Blocked click fixture");
+
+    let config = UiCaptureConfig {
+        capture_context: false,
+        capture_text: false,
+        capture_clipboard: false,
+        ..UiCaptureConfig::new()
+    };
+    let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+    let mut mouse = cg::Event::mouse(
+        None,
+        cg::EventType::LEFT_MOUSE_DOWN,
+        point,
+        cg::MouseButton::Left,
+    )
+    .unwrap();
+    mouse.set_field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID, i64::from(firefox.0));
+    mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+    mouse.set_flags(cg::EventFlags(0));
+    let request =
+        snapshot_click_request(cg::EventType::LEFT_MOUSE_DOWN, &mouse, Utc::now(), 0).unwrap();
+    let started = Instant::now();
+    let background = capture_click_at_position(&request, &config).unwrap();
+    eprintln!(
+        "background Firefox click URL lookup took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        background.window_title.as_deref(),
+        Some(allowed_title.as_str())
+    );
+    assert_eq!(
+        background.browser_url.as_deref(),
+        Some(allowed_url.as_str())
+    );
+    assert_eq!(
+        background.to_db_insert(None).browser_url.as_deref(),
+        Some(allowed_url.as_str())
+    );
+    assert!(
+        window_snapshot(firefox.0)
+            .unwrap()
+            .0
+            .contains("Blocked click fixture"),
+        "URL lookup must not activate the clicked window"
+    );
+
+    let policy = crate::url_filter::UrlPolicy::new(
+        &[screenpipe_config::UrlRule::Legacy("localhost".into())],
+        &[],
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let db = runtime
+        .block_on(screenpipe_db::DatabaseManager::new(
+            "sqlite::memory:",
+            Default::default(),
+        ))
+        .unwrap();
+    let handle = UiRecorder::new(config).start().unwrap();
+    for (bounds, expected, admitted) in [
+        (bounds, &allowed_url, true),
+        (blocked_bounds, &blocked_url, false),
+    ] {
+        let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+        for kind in [cg::EventType::LEFT_MOUSE_DOWN, cg::EventType::LEFT_MOUSE_UP] {
+            let mut mouse = cg::Event::mouse(None, kind, point, cg::MouseButton::Left).unwrap();
+            mouse.set_flags(cg::EventFlags(0));
+            mouse.set_field_i64(cg::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+            mouse.post(cg::EventTapLocation::Hid);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let click = loop {
+            let event = handle
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("real Firefox click must reach the recorder");
+            if matches!(event.data, EventData::Click { .. }) {
+                break event;
+            }
+        };
+        assert_eq!(click.browser_url.as_deref(), Some(expected.as_str()));
+        let row = click.to_db_insert(None);
+        assert_eq!(row.browser_url.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            policy.should_capture_window(row.app_name.as_deref(), row.browser_url.as_deref()),
+            admitted
+        );
+        if admitted {
+            runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
+        }
+        eprintln!("real Firefox click url={expected} privacy_admitted={admitted}");
+    }
+    handle.stop();
+    let saved = runtime
+        .block_on(db.get_recent_ui_events_by_app("Firefox", 2))
+        .unwrap();
+    assert_eq!(saved.len(), 1, "only the allowed click is persisted");
+    assert_eq!(saved[0].browser_url.as_deref(), Some(allowed_url.as_str()));
+}
+
 /// Exercise the real CGEvent tap and AX observer, not a constructed UiEvent.
 /// Opt-in is deliberately separate from --ignored: this types into real apps.
 #[test]
