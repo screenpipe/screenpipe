@@ -418,6 +418,10 @@ fn exercise_live_browser_click_urls(
     bundle_id: &str,
     new_window_executable: Option<&str>,
 ) {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("screenpipe_a11y=debug,screenpipe_db=warn,sqlx=warn")
+        .with_test_writer()
+        .try_init();
     assert_eq!(
         std::env::var("SCREENPIPE_ISOLATED_VM_TEST").as_deref(),
         Ok("1")
