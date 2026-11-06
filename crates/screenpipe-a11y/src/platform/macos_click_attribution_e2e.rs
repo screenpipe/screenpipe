@@ -512,6 +512,8 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         background.to_db_insert(None).browser_url.as_deref(),
         Some(allowed_url.as_str())
     );
+    let browser_app = background.app_name.as_deref().unwrap();
+    assert!(browser_app.eq_ignore_ascii_case("firefox"));
     assert!(
         window_snapshot(firefox.0)
             .unwrap()
@@ -525,9 +527,11 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         &[],
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    let db_dir = tempfile::tempdir().unwrap();
+    let db_path = db_dir.path().join("clicks.db");
     let db = runtime
         .block_on(screenpipe_db::DatabaseManager::new(
-            "sqlite::memory:",
+            db_path.to_str().unwrap(),
             Default::default(),
         ))
         .unwrap();
@@ -567,6 +571,7 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
                 break event;
             }
         };
+        assert_eq!(click.app_name.as_deref(), Some(browser_app));
         assert_eq!(click.browser_url.as_deref(), Some(expected.as_str()));
         let row = click.to_db_insert(None);
         assert_eq!(row.browser_url.as_deref(), Some(expected.as_str()));
@@ -575,16 +580,21 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
             admitted
         );
         if admitted {
-            runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
+            let ids = runtime.block_on(db.insert_ui_events_batch(&[row])).unwrap();
+            assert_eq!(ids.len(), 1);
         }
         eprintln!("real Firefox click url={expected} privacy_admitted={admitted}");
     }
     handle.stop();
     let saved = runtime
-        .block_on(db.get_recent_ui_events_by_app("Firefox", 2))
+        .block_on(db.get_recent_ui_events_by_app(browser_app, 2))
         .unwrap();
     assert_eq!(saved.len(), 1, "only the allowed click is persisted");
     assert_eq!(saved[0].browser_url.as_deref(), Some(allowed_url.as_str()));
+    eprintln!(
+        "persisted {} allowed {browser_app} click; blocked click absent",
+        saved.len()
+    );
 }
 
 /// Exercise the real CGEvent tap and AX observer, not a constructed UiEvent.
