@@ -421,7 +421,25 @@ fn live_firefox_click_urls_follow_the_clicked_window_and_privacy_policy() {
         capture_clipboard: false,
         ..UiCaptureConfig::new()
     };
+    assert!(
+        UiRecorder::new(config.clone())
+            .check_permissions()
+            .accessibility
+    );
     let point = cg::Point::new(bounds.origin.x + 100., bounds.origin.y + 300.);
+    let hit = ax::UiElement::sys_wide()
+        .element_at_pos(point.x as f32, point.y as f32)
+        .expect("background Firefox point must be AX-accessible");
+    assert_eq!(
+        hit.pid().ok(),
+        Some(firefox.0),
+        "point must hit the Firefox process"
+    );
+    let hit_window = hit.window().expect("hit element must expose its AXWindow");
+    assert_eq!(
+        string_attr(&hit_window, ax::attr::title()).as_deref(),
+        Some(allowed_title.as_str())
+    );
     let mut mouse = cg::Event::mouse(
         None,
         cg::EventType::LEFT_MOUSE_DOWN,
