@@ -23,6 +23,7 @@ export function WorkflowAccess({ active, requested = false, onRequestChange, onA
   const backendReady = !!health && !isServerDown;
   const router = useRouter();
   const [mode, setMode] = useState<WorkflowModelMode>("intelligent");
+  const [tasksEnabled, setTasksEnabled] = useState<boolean | undefined>();
   useEffect(() => {
     const refresh = () => { void workflowModelPreference.load().then(setMode).catch(() => setMode("intelligent")); };
     refresh(); window.addEventListener("workflows:model-changed", refresh);
@@ -33,11 +34,13 @@ export function WorkflowAccess({ active, requested = false, onRequestChange, onA
   const preset = mode.startsWith("preset:") ? settings.aiPresets.find(p => p.id === mode.slice(7)) : undefined;
   const customProvider = !!preset && ["openai", "openai-chatgpt", "anthropic", "custom", "native-ollama"].includes(preset.provider);
   const access = workflowAccess(query.usage, mode, customProvider);
-  const reason = query.isLoading ? "Checking workflow access…" : access.state === "ready" ? undefined : access.message;
+  const reason = query.isLoading ? "Checking workflow access…" : access.state !== "ready" ? access.message
+    : tasksEnabled === undefined ? "Checking automatic updates…"
+    : !tasksEnabled ? "Enable automatic updates before updating workflows." : undefined;
   useEffect(() => { onAccessChange?.(reason); }, [onAccessChange, reason]);
-  useEffect(() => { if (requested && access.state === "ready") onRequestChange?.(false); }, [requested, access.state, onRequestChange]);
   if (!active) return null;
-  return <><WorkflowTasksPrompt active={active} backendReady={backendReady} canEnable={!query.isLoading && access.state === "ready"} onEnableUnavailable={() => onRequestChange?.(true)} />
+  return <><WorkflowTasksPrompt active={active} backendReady={backendReady} canEnable={!query.isLoading && access.state === "ready"} onEnableUnavailable={() => onRequestChange?.(true)}
+    onSetupChange={setTasksEnabled} requested={requested && access.state === "ready"} onRequestHandled={() => onRequestChange?.(false)} />
     <WorkflowAccessNotice open={requested} onOpenChange={onRequestChange} access={access} refreshing={query.isRefreshing} onRetry={() => void query.refresh()} onAccount={() => router.push("/settings?section=account")} onUsage={() => router.push("/settings?section=usage")} /></>;
 }
 
