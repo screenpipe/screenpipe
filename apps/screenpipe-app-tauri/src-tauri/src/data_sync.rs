@@ -291,14 +291,7 @@ mod imp {
                 .send()
                 .await
                 .map_err(|error| error.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("local search returned {}", response.status()));
-            }
-            response
-                .json::<LocalSearchResponse>()
-                .await
-                .map(|body| body.data)
-                .map_err(|error| format!("local search decode failed: {error}"))
+            decode_local_search_response(response, content_type).await
         }
 
         async fn frames(&self, since: &str, offset: u32) -> Result<Vec<FrameRow>, String> {
@@ -491,6 +484,42 @@ mod imp {
     }
 
     #[derive(Debug, Deserialize)]
+    struct LocalSearchError {
+        error: Option<String>,
+        code: Option<String>,
+    }
+
+    async fn decode_local_search_response(
+        response: reqwest::Response,
+        stream: &str,
+    ) -> Result<Vec<LocalSearchItem>, String> {
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response.json::<LocalSearchError>().await.ok();
+            let mut fields = Vec::new();
+            if let Some(code) = detail.as_ref().and_then(|body| body.code.as_deref()) {
+                fields.push(format!("code={code}"));
+            }
+            if let Some(error) = detail.as_ref().and_then(|body| body.error.as_deref()) {
+                fields.push(format!("error={error}"));
+            }
+            return Err(if fields.is_empty() {
+                format!("local search {stream} returned {status}")
+            } else {
+                format!(
+                    "local search {stream} returned {status}: {}",
+                    fields.join("; ")
+                )
+            });
+        }
+        response
+            .json::<LocalSearchResponse>()
+            .await
+            .map(|body| body.data)
+            .map_err(|error| format!("local search decode failed: {error}"))
+    }
+
+    #[derive(Debug, Deserialize)]
     #[serde(tag = "type", content = "content")]
     enum LocalSearchItem {
         OCR(LocalOcr),
@@ -582,8 +611,9 @@ mod imp {
             .consumer_sync_source_id(&config.device_id)
             .await
             .map_err(|error| error.to_string())?;
+        // Recording may append while these pages are fetched. Only deletion or privacy changes may revoke bytes already prepared for upload.
         let read = db
-            .storage_read_token()
+            .storage_export_token()
             .await
             .map_err(|error| error.to_string())?;
         let mut binding = format!(
@@ -944,6 +974,78 @@ mod imp {
             assert_eq!(
                 effective_enabled_at(server_enabled_at, Some(device_enabled_at)),
                 device_enabled_at
+            );
+        }
+
+        #[tokio::test]
+        async fn local_search_error_keeps_safe_server_cause_in_support_diagnostics() {
+            use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+            let server = MockServer::start().await;
+            Mock::given(path("/search"))
+                .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                    "error": "frame storage: read revision changed; retry the complete query",
+                    "code": "storage_read_revoked",
+                    "private_content": "private-person@example.com",
+                    "token": "password=hunter2"
+                })))
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .get(format!("{}/search", server.uri()))
+                .send()
+                .await
+                .unwrap();
+            let error = decode_local_search_response(response, "ocr")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error,
+                "local search ocr returned 503 Service Unavailable: code=storage_read_revoked; error=frame storage: read revision changed; retry the complete query"
+            );
+            assert!(!error.contains("private-person@example.com"));
+            assert!(!error.contains("hunter2"));
+
+            let logs = tempfile::tempdir().unwrap();
+            tokio::fs::write(
+                logs.path().join("screenpipe-app.2026-11-05.1.log"),
+                format!(
+                    "WARN data sync frames fetch skipped: {error}\ncontact=private-person@example.com password=hunter2\n"
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::fs::write(
+                logs.path().join("screenpipe-app.2026-11-06.log"),
+                "INFO recorder restarted\n",
+            )
+            .await
+            .unwrap();
+            let report =
+                crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                    .await
+                    .unwrap();
+            assert!(report.contains("local search ocr returned 503 Service Unavailable"));
+            assert!(report.contains("code=storage_read_revoked"));
+            assert!(report.contains("frame storage: read revision changed"));
+            assert!(report.contains("recorder restarted"));
+            assert!(!report.contains("private-person@example.com"));
+            assert!(!report.contains("hunter2"));
+
+            Mock::given(path("/malformed"))
+                .respond_with(ResponseTemplate::new(503).set_body_string("not json"))
+                .mount(&server)
+                .await;
+            let malformed = reqwest::Client::new()
+                .get(format!("{}/malformed", server.uri()))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                decode_local_search_response(malformed, "audio")
+                    .await
+                    .unwrap_err(),
+                "local search audio returned 503 Service Unavailable"
             );
         }
 
