@@ -564,6 +564,20 @@ fn refresh_desktop_skills(layout: &AgentLayout) -> Result<()> {
     Ok(())
 }
 
+/// `bun` arguments that start screenpipe-mcp. On Windows, plain `bun x` runs
+/// the package in a second process, and that process opens its own visible
+/// terminal window when the MCP client started bun without a console (#7560).
+/// `--bun` keeps the server inside the bun process. The desktop's Settings
+/// connect path builds the same arguments (`bundledBunMcpArgs`).
+fn bundled_bun_mcp_args() -> Vec<String> {
+    let mut args = vec!["x".to_string()];
+    if cfg!(windows) {
+        args.push("--bun".to_string());
+    }
+    args.push("screenpipe-mcp@latest".to_string());
+    args
+}
+
 fn desktop_launch_config(
     bun_path: &Path,
     api_key: Option<&str>,
@@ -579,7 +593,7 @@ fn desktop_launch_config(
     }
     McpLaunchConfig {
         command: bun_path.to_string_lossy().to_string(),
-        args: vec!["x".to_string(), "screenpipe-mcp@latest".to_string()],
+        args: bundled_bun_mcp_args(),
         env,
         transport: (agent.id == "openclaw").then_some("stdio".to_string()),
         server_type: matches!(agent.id, "runner" | "vscode").then_some("stdio".to_string()),
@@ -1967,6 +1981,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_bun_mcp_args_run_the_server_inside_bun_on_windows() {
+        let expected: Vec<String> = if cfg!(windows) {
+            vec!["x".into(), "--bun".into(), "screenpipe-mcp@latest".into()]
+        } else {
+            vec!["x".into(), "screenpipe-mcp@latest".into()]
+        };
+        assert_eq!(bundled_bun_mcp_args(), expected);
+    }
+
+    #[test]
     fn additional_json_agents_detect_setup_repair_and_opt_out() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
@@ -2165,10 +2189,10 @@ mod tests {
         let entry = &root["mcp"]["screenpipe"];
         assert_eq!(entry["type"], "local");
         assert_eq!(entry["enabled"], true);
-        assert_eq!(
-            entry["command"],
-            serde_json::json!([bun.to_string_lossy(), "x", "screenpipe-mcp@latest"])
-        );
+        let expected_command: Vec<String> = std::iter::once(bun.to_string_lossy().to_string())
+            .chain(bundled_bun_mcp_args())
+            .collect();
+        assert_eq!(entry["command"], serde_json::json!(expected_command));
         assert_eq!(entry["environment"]["SCREENPIPE_LOCAL_API_KEY"], "test-key");
         assert_eq!(
             entry["environment"]["SCREENPIPE_API_URL"],

@@ -8,6 +8,7 @@
 
 import { screenpipeWebUrl, PROD_WEB_BASE } from "@/lib/web-url";
 import { homeDir, configDir, join, dirname } from "@tauri-apps/api/path";
+import { platform } from "@tauri-apps/plugin-os";
 import {
   readTextFile,
   writeFile,
@@ -160,6 +161,22 @@ async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
 }
 
 /**
+ * `bun` arguments that start screenpipe-mcp. On Windows, plain `bun x` runs the
+ * package in a second process, and that process opens its own visible terminal
+ * window when the MCP client started bun without a console (#7560). `--bun`
+ * keeps the server inside the bun process. Must match `bundled_bun_mcp_args`
+ * in crates/screenpipe-engine/src/cli/agent.rs, which reconciles the same
+ * configs natively.
+ */
+export function bundledBunMcpArgs(): string[] {
+  let windows = false;
+  try {
+    windows = platform() === "windows";
+  } catch { /* not running inside Tauri */ }
+  return windows ? ["x", "--bun", "screenpipe-mcp@latest"] : ["x", "screenpipe-mcp@latest"];
+}
+
+/**
  * MCP install config for screenpipe. Prefers the `bun` binary we ship with the
  * desktop app over `npx`: no Node dependency, ~3× faster cold start, absolute
  * path. `forceNpx` is for copy-paste configs aimed at users without the app.
@@ -179,7 +196,7 @@ export async function buildMcpConfig(opts?: {
   try {
     const res = await commands.bunCheck();
     if (res.status === "ok" && res.data.available && res.data.path) {
-      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
+      return { command: res.data.path, args: bundledBunMcpArgs(), env };
     }
   } catch { /* fall through to npx */ }
   // Unintended fallback: the desktop app should always ship a bundled `bun`, so

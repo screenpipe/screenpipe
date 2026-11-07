@@ -21,6 +21,15 @@ describe("isStaleClaudeScreenpipeEntry", () => {
     ).toBe(true);
   });
 
+  it("flags a Windows bundled-bun entry (x --bun) that is missing the key", () => {
+    expect(
+      isStaleClaudeScreenpipeEntry({
+        command: "C:\\Users\\me\\AppData\\Local\\screenpipe\\bun.exe",
+        args: ["x", "--bun", "screenpipe-mcp@latest"],
+      }),
+    ).toBe(true);
+  });
+
   it("flags the older README npx snippet (unpinned)", () => {
     expect(isStaleClaudeScreenpipeEntry({ command: "npx", args: ["-y", "screenpipe-mcp"] })).toBe(true);
   });
