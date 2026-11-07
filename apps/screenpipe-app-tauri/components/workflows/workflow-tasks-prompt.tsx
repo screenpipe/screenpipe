@@ -175,11 +175,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
       if (!value && step === "sharing") finishSharing(); else setOpen(value);
     }}>
     <DialogContent onInteractOutside={event => event.preventDefault()} onOpenAutoFocus={event => { event.preventDefault(); title.current?.focus(); }} style={{
-      "--foreground": "0 0% 9%", "--background": "0 0% 100%", "--muted-foreground": "80 4% 42%",
-      "--border": "70 10% 85%", "--primary": "0 0% 9%", "--primary-foreground": "0 0% 100%",
-      "--accent": "70 10% 95%", "--accent-foreground": "0 0% 9%",
-      "--destructive": "0 0% 9%", "--destructive-foreground": "0 0% 100%",
-      colorScheme: "light", background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+      background: "hsl(var(--background))", color: "hsl(var(--foreground))", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
     } as CSSProperties} className="max-w-md [&_button]:normal-case [&_button]:tracking-normal [&_button]:font-[inherit]" overlayClassName="bg-black/30" hideCloseButton={busy}>
       <DialogHeader className="text-left">
         <DialogTitle ref={title} tabIndex={-1} style={{ fontFamily: "inherit", letterSpacing: 0 }} className="text-xl normal-case outline-none">
