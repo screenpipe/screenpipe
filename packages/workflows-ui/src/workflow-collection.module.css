@@ -19,13 +19,6 @@
   --collection-panel: #141414;
   --collection-soft: #212121;
 }
-:global([data-workflows-theme="light"]) .theme {
-  --collection-ink: #0a0a0a;
-  --collection-muted: #666666;
-  --collection-line: #dfdfd8;
-  --collection-panel: #fff;
-  --collection-soft: #efefeb;
-}
 .theme *, .theme *::before, .theme *::after { box-sizing: border-box; }
 .theme button, .theme input, .theme select { font-family: inherit; color: inherit; }
 .theme button { cursor: pointer; }

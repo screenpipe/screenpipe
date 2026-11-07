@@ -510,7 +510,7 @@ export function WorkflowsView({ refreshControl, emptyState, reviewIds, workflows
     }), [query, workflows, selectedStatuses, selectedApps, selectedPeople, showArchived, sort]);
 
   return (
-    <section data-workflows-theme="light" aria-label="Workflow list">
+    <section aria-label="Workflow list">
       <div className={`${styles.catalogHeader} ${styles.quietCatalogHeader}`}>
         <div className={styles.catalogHeading}>
           <h1>Workflows</h1>

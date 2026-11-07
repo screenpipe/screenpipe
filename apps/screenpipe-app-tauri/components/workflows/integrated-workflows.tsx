@@ -118,7 +118,7 @@ export function IntegratedWorkflows(props: Parameters<typeof DeviceWorkflows>[0]
     finally { setSaving(false); }
   }
   const sourceControl = <label className="relative flex shrink-0 flex-col gap-2 text-xs"><span className="sr-only">Workflow source</span>
-    <select aria-label="Workflow source" style={{ color: "var(--ink)", colorScheme: "light" }} className="w-36 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-xs text-inherit opacity-75 hover:opacity-100 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" value={source} disabled={saving} onChange={event => void change(event.target.value as "device" | "cloud")}>
+    <select aria-label="Workflow source" style={{ color: "var(--ink)" }} className="w-36 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-xs text-inherit opacity-75 hover:opacity-100 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" value={source} disabled={saving} onChange={event => void change(event.target.value as "device" | "cloud")}>
       <option value="cloud">Cloud workspace</option><option value="device">This device</option>
     </select>
     {error && <span role="alert" className="absolute left-0 top-full z-20 mt-1 w-60 rounded-md border bg-background p-3 text-foreground shadow-sm">{error}</span>}
