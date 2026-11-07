@@ -5,7 +5,7 @@
 "use client";
 
 import { useId, useRef, useState, type ReactNode } from "react";
-import { AppWindow, Archive, Check, CheckCircle2, Circle, CircleAlert, ListFilter, Search, Users, X } from "lucide-react";
+import { AppWindow, Archive, Check, CheckCircle2, Circle, CircleAlert, ListFilter, Search, Users, X, type LucideIcon } from "lucide-react";
 import styles from "./workflow-collection.module.css";
 const procedureReviewLabels: Record<string, string> = { approved: "Approved", needs_edits: "Needs edits", unreviewed: "Unreviewed" };
 import { WorkflowAppIcon } from "./workflow-map-app-icon";
@@ -14,7 +14,7 @@ export type WorkflowFilterOption = { key: string; label: string; count: number }
 type Kind = "people" | "apps" | "status";
 const standardKinds = ["people", "apps", "status"] as const;
 export type WorkflowFilterGroup = {
-  key: string; label: string; singular?: string;
+  key: string; label: string; singular?: string; icon?: LucideIcon;
   options: WorkflowFilterOption[]; selected: string[];
   onToggle: (key: string, clearQuery: boolean) => void;
 };
@@ -29,7 +29,8 @@ export function readWorkflowFilters(value: string | null): string[] {
   return [value];
 }
 
-function FilterIcon({ kind, label, value, renderAppIcon }: { kind: string; label: string; value: string; renderAppIcon?: (name: string) => ReactNode }) {
+function FilterIcon({ kind, label, value, renderAppIcon, icon: Icon }: { icon?: LucideIcon; kind: string; label: string; value: string; renderAppIcon?: (name: string) => ReactNode }) {
+  if (Icon) return <Icon aria-hidden="true" className={styles.icon} />;
   if (kind === "status") {
     const Icon = value === "approved" ? CheckCircle2 : value === "needs_edits" ? CircleAlert : Circle;
     return <Icon aria-hidden="true" className={`${styles.icon} ${value === "approved" ? styles.approved : value === "needs_edits" ? styles.needsEdits : styles.muted}`} />;
@@ -122,7 +123,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
       </div>
       {open && <div className={styles.popover}>
         <div className={styles.categories} role="group" aria-label="Filter categories">
-          {([["people", Users, sourcesOnly ? "Filter by recording sources" : "Filter by people"], ["apps", AppWindow, "Filter by apps"], ["status", ListFilter, "Filter by status"], ...extraGroups.map(group => [group.key, Circle, `Filter by ${group.label.toLocaleLowerCase()}`] as const)] as const).filter(([kind]) => kind !== "status" || statuses.length > 0 || !!onArchivedChange).map(([kind, Icon, label]) =>
+          {([["people", Users, sourcesOnly ? "Filter by recording sources" : "Filter by people"], ["apps", AppWindow, "Filter by apps"], ["status", ListFilter, "Filter by status"], ...extraGroups.map(group => [group.key, group.icon ?? Circle, `Filter by ${group.label.toLocaleLowerCase()}`] as const)] as const).filter(([kind]) => kind !== "status" || statuses.length > 0 || !!onArchivedChange).map(([kind, Icon, label]) =>
             <button key={kind} type="button" aria-label={label} aria-pressed={category === kind}
               className={`${styles.category} ${category === kind ? styles.selected : ""}`}
               onClick={() => { setCategory(category === kind ? null : kind); setActive(-1); input.current?.focus(); }}>
@@ -140,7 +141,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
                 return <button key={option.key} id={`${id}-${index}`} type="button" role="option" aria-selected={checked} tabIndex={-1}
                   className={`${styles.option} ${active === index ? styles.selected : ""}`}
                   onMouseDown={event => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(kind, option.key)}>
-                  <FilterIcon renderAppIcon={renderAppIcon} kind={kind} label={option.label} value={option.key} />
+                  <FilterIcon icon={extraGroups.find(group => group.key === kind)?.icon} renderAppIcon={renderAppIcon} kind={kind} label={option.label} value={option.key} />
                   <span className={styles.optionLabel}>{option.label}</span>
                   <span className={styles.count} aria-label={`${option.count} workflows`}>{option.count}</span>
                   <Check className={`${styles.smallIcon} ${checked ? "" : styles.invisible}`} aria-hidden="true" />
@@ -172,7 +173,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
         return <button key={`${kind}:${key}`} type="button" aria-label={`Remove ${singular[kind]} filter: ${label}`} title={`Remove ${label}`}
           className={styles.chip}
           onClick={() => toggle(kind, key, false)}>
-          <FilterIcon renderAppIcon={renderAppIcon} kind={kind} label={label} value={key} /><span className={styles.chipLabel}>{label}</span><X className={styles.removeIcon} aria-hidden="true" />
+          <FilterIcon icon={extraGroups.find(group => group.key === kind)?.icon} renderAppIcon={renderAppIcon} kind={kind} label={label} value={key} /><span className={styles.chipLabel}>{label}</span><X className={styles.removeIcon} aria-hidden="true" />
         </button>;
       }))}
     </div>}
