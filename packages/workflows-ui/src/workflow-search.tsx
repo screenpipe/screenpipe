@@ -5,14 +5,19 @@
 "use client";
 
 import { useId, useRef, useState, type ReactNode } from "react";
-import { AppWindow, Archive, Check, CheckCircle2, Circle, CircleAlert, ListFilter, Search, Users, X } from "lucide-react";
+import { AppWindow, Archive, Check, CheckCircle2, Circle, CircleAlert, ListFilter, Search, Users, X, type LucideIcon } from "lucide-react";
 import styles from "./workflow-collection.module.css";
 const procedureReviewLabels: Record<string, string> = { approved: "Approved", needs_edits: "Needs edits", unreviewed: "Unreviewed" };
 import { WorkflowAppIcon } from "./workflow-map-app-icon";
 
 export type WorkflowFilterOption = { key: string; label: string; count: number };
 type Kind = "people" | "apps" | "status";
-const kinds = ["people", "apps", "status"] as const;
+const standardKinds = ["people", "apps", "status"] as const;
+export type WorkflowFilterGroup = {
+  key: string; label: string; singular?: string; icon?: LucideIcon;
+  options: WorkflowFilterOption[]; selected: string[];
+  onToggle: (key: string, clearQuery: boolean) => void;
+};
 
 /** Read existing single-value links as well as new multiple selections. */
 export function readWorkflowFilters(value: string | null): string[] {
@@ -24,17 +29,20 @@ export function readWorkflowFilters(value: string | null): string[] {
   return [value];
 }
 
-function FilterIcon({ kind, label, value, renderAppIcon }: { kind: Kind; label: string; value: string; renderAppIcon?: (name: string) => ReactNode }) {
+function FilterIcon({ kind, label, value, renderAppIcon, icon: Icon }: { icon?: LucideIcon; kind: string; label: string; value: string; renderAppIcon?: (name: string) => ReactNode }) {
+  if (Icon) return <Icon aria-hidden="true" className={styles.icon} />;
   if (kind === "status") {
     const Icon = value === "approved" ? CheckCircle2 : value === "needs_edits" ? CircleAlert : Circle;
     return <Icon aria-hidden="true" className={`${styles.icon} ${value === "approved" ? styles.approved : value === "needs_edits" ? styles.needsEdits : styles.muted}`} />;
   }
+  if (kind !== "apps" && kind !== "people") return <Circle aria-hidden="true" className={styles.icon} />;
   return kind === "apps" ? (renderAppIcon?.(label) ?? <WorkflowAppIcon name={label} compact decorative />)
     : <span aria-hidden="true" className={styles.avatar}>{label.split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}</span>;
 }
 
 /** A single search field, with keyboard-accessible people, app and status suggestions. */
-export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, selectedPeople, selectedApps, selectedStatuses, onToggle, showArchived = false, onArchivedChange, sourcesOnly = false, unassignedPeopleHref, renderAppIcon }: {
+export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, selectedPeople, selectedApps, selectedStatuses, onToggle, showArchived = false, onArchivedChange, sourcesOnly = false, unassignedPeopleHref, renderAppIcon, filterGroups = [] }: {
+  filterGroups?: WorkflowFilterGroup[];
   renderAppIcon?: (name: string) => ReactNode;
   unassignedPeopleHref?: string;
   sourcesOnly?: boolean;
@@ -50,21 +58,27 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
   selectedStatuses: string[];
   onToggle: (kind: Kind, key: string, clearQuery: boolean) => void;
 }) {
-  const groupLabels = { people: sourcesOnly ? "Recording sources" : "People", apps: "Apps", status: "Status" };
-  const singular = { people: sourcesOnly ? "recording source" : "person", apps: "app", status: "status" };
+  const extraGroups = filterGroups.filter(group => !standardKinds.includes(group.key as Kind));
+  const kinds = [...standardKinds, ...extraGroups.map(group => group.key)];
+  const groupLabels: Record<string, string> = { ...Object.fromEntries(extraGroups.map(group => [group.key, group.label])), people: sourcesOnly ? "Recording sources" : "People", apps: "Apps", status: "Status" };
+  const singular: Record<string, string> = { ...Object.fromEntries(extraGroups.map(group => [group.key, group.singular ?? group.label.toLocaleLowerCase()])), people: sourcesOnly ? "recording source" : "person", apps: "app", status: "status" };
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [category, setCategory] = useState<Kind | null>(null);
+  const [category, setCategory] = useState<string | null>(null);
   const [active, setActive] = useState(-1);
-  const options = { people, apps, status: statuses };
-  const selected = { people: selectedPeople, apps: selectedApps, status: selectedStatuses };
+  const options: Record<string, WorkflowFilterOption[]> = { ...Object.fromEntries(extraGroups.map(group => [group.key, group.options])), people, apps, status: statuses };
+  const selected: Record<string, string[]> = { ...Object.fromEntries(extraGroups.map(group => [group.key, group.selected])), people: selectedPeople, apps: selectedApps, status: selectedStatuses };
   const needle = query.trim().toLocaleLowerCase();
   const suggestions = kinds.flatMap(kind => category && category !== kind ? [] : options[kind]
     .filter(option => !needle || option.label.toLocaleLowerCase().includes(needle))
     .map(option => ({ ...option, kind })));
-  const choose = (kind: Kind, key: string) => {
-    onToggle(kind, key, true);
+  const toggle = (kind: string, key: string, clearQuery: boolean) => {
+    const group = extraGroups.find(group => group.key === kind);
+    if (group) group.onToggle(key, clearQuery); else onToggle(kind as Kind, key, clearQuery);
+  };
+  const choose = (kind: string, key: string) => {
+    toggle(kind, key, true);
     setActive(-1);
     input.current?.focus();
   };
@@ -109,7 +123,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
       </div>
       {open && <div className={styles.popover}>
         <div className={styles.categories} role="group" aria-label="Filter categories">
-          {([["people", Users, sourcesOnly ? "Filter by recording sources" : "Filter by people"], ["apps", AppWindow, "Filter by apps"], ["status", ListFilter, "Filter by status"]] as const).filter(([kind]) => kind !== "status" || statuses.length > 0 || !!onArchivedChange).map(([kind, Icon, label]) =>
+          {([["people", Users, sourcesOnly ? "Filter by recording sources" : "Filter by people"], ["apps", AppWindow, "Filter by apps"], ["status", ListFilter, "Filter by status"], ...extraGroups.map(group => [group.key, group.icon ?? Circle, `Filter by ${group.label.toLocaleLowerCase()}`] as const)] as const).filter(([kind]) => kind !== "status" || statuses.length > 0 || !!onArchivedChange).map(([kind, Icon, label]) =>
             <button key={kind} type="button" aria-label={label} aria-pressed={category === kind}
               className={`${styles.category} ${category === kind ? styles.selected : ""}`}
               onClick={() => { setCategory(category === kind ? null : kind); setActive(-1); input.current?.focus(); }}>
@@ -127,7 +141,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
                 return <button key={option.key} id={`${id}-${index}`} type="button" role="option" aria-selected={checked} tabIndex={-1}
                   className={`${styles.option} ${active === index ? styles.selected : ""}`}
                   onMouseDown={event => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(kind, option.key)}>
-                  <FilterIcon renderAppIcon={renderAppIcon} kind={kind} label={option.label} value={option.key} />
+                  <FilterIcon icon={extraGroups.find(group => group.key === kind)?.icon} renderAppIcon={renderAppIcon} kind={kind} label={option.label} value={option.key} />
                   <span className={styles.optionLabel}>{option.label}</span>
                   <span className={styles.count} aria-label={`${option.count} workflows`}>{option.count}</span>
                   <Check className={`${styles.smallIcon} ${checked ? "" : styles.invisible}`} aria-hidden="true" />
@@ -149,7 +163,7 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
         </div>}
       </div>}
     </div>
-    {(showArchived || selectedPeople.length > 0 || selectedApps.length > 0 || selectedStatuses.length > 0) && <div className={styles.chips} aria-label="Active workflow filters">
+    {(showArchived || kinds.some(kind => selected[kind].length > 0)) && <div className={styles.chips} aria-label="Active workflow filters">
       {showArchived && onArchivedChange && <button type="button" aria-label="Remove Archived filter" onClick={() => onArchivedChange(false)}
         className={styles.chip}>
         <Archive className={styles.smallIcon} aria-hidden="true" />Archived<X className={styles.removeIcon} aria-hidden="true" />
@@ -158,8 +172,8 @@ export function WorkflowSearch({ query, onQueryChange, people, apps, statuses, s
         const label = options[kind].find(option => option.key === key)?.label ?? (kind === "status" && Object.hasOwn(procedureReviewLabels, key) ? procedureReviewLabels[key as keyof typeof procedureReviewLabels] : `Unavailable ${singular[kind]}`);
         return <button key={`${kind}:${key}`} type="button" aria-label={`Remove ${singular[kind]} filter: ${label}`} title={`Remove ${label}`}
           className={styles.chip}
-          onClick={() => onToggle(kind, key, false)}>
-          <FilterIcon renderAppIcon={renderAppIcon} kind={kind} label={label} value={key} /><span className={styles.chipLabel}>{label}</span><X className={styles.removeIcon} aria-hidden="true" />
+          onClick={() => toggle(kind, key, false)}>
+          <FilterIcon icon={extraGroups.find(group => group.key === kind)?.icon} renderAppIcon={renderAppIcon} kind={kind} label={label} value={key} /><span className={styles.chipLabel}>{label}</span><X className={styles.removeIcon} aria-hidden="true" />
         </button>;
       }))}
     </div>}
