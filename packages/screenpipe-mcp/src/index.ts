@@ -129,6 +129,11 @@ async function discoverApiKey(): Promise<string> {
   // spent we stop attempting further fallbacks.
   const PER_CANDIDATE_MS = 30000;
   const OVERALL_DEADLINE = Date.now() + 60000;
+  // Every helper below is a console program run in the background. On Windows,
+  // a host that starts this server without a console (e.g. detached) would make
+  // each helper open its own visible terminal window (#7560). windowsHide keeps
+  // the helper's console hidden whatever console state the host gave us.
+  const HIDE_HELPER_WINDOW = { windowsHide: true } as const;
   const budgetLeft = () => Math.max(0, OVERALL_DEADLINE - Date.now());
 
   // 2. CLI via bundled `bun` shipped with the desktop app. The Tauri
@@ -192,6 +197,7 @@ async function discoverApiKey(): Promise<string> {
       const { stdout } = await execFileAsync(bunPath, ["x", "screenpipe@latest", "auth", "token"], {
         timeout: Math.min(PER_CANDIDATE_MS, budgetLeft()),
         encoding: "utf-8",
+        ...HIDE_HELPER_WINDOW,
       });
       const token = String(stdout).trim();
       if (token && token.startsWith("sp-")) return token;
@@ -209,6 +215,7 @@ async function discoverApiKey(): Promise<string> {
       const { stdout } = await execFileAsync(npxPath, ["screenpipe@latest", "auth", "token"], {
         timeout: Math.min(PER_CANDIDATE_MS, budgetLeft()),
         encoding: "utf-8",
+        ...HIDE_HELPER_WINDOW,
       });
       const token = String(stdout).trim();
       if (token && token.startsWith("sp-")) return token;
@@ -222,6 +229,7 @@ async function discoverApiKey(): Promise<string> {
       const { stdout } = await execAsync("npx screenpipe@latest auth token", {
         timeout: Math.min(PER_CANDIDATE_MS, budgetLeft()),
         encoding: "utf-8",
+        ...HIDE_HELPER_WINDOW,
       });
       const token = String(stdout).trim();
       if (token && token.startsWith("sp-")) return token;
