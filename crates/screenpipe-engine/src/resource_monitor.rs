@@ -826,10 +826,10 @@ impl ResourceTelemetryReporter {
                     _ = tokio::time::sleep(interval) => {
                         sampler.refresh();
 
-                        // Tell the system allocator to return freed pages to the OS.
-                        // Without this, the default macOS allocator holds freed large
-                        // allocations as "empty" regions indefinitely, causing RSS to
-                        // grow monotonically even though Rust is freeing correctly.
+                        // Best-effort relief for allocator zones that implement it.
+                        // Current macOS XZM zones use a no-op pressure_relief fallback;
+                        // this call cannot force their deferred pages back to the OS.
+                        // Bound caches at their owners rather than relying on this trim.
                         #[cfg(target_os = "macos")]
                         {
                             extern "C" {
