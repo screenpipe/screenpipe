@@ -26,6 +26,8 @@ const CHUNKS_PATCH: &str = include_str!("../../assets/pi-summary-chunks.patch");
 const CHUNKS_MARKER: &str = "// screenpipe-summary-chunks-v1\n";
 const BUDGET_PATCH: &str = include_str!("../../assets/pi-summary-budget.patch");
 const BUDGET_MARKER: &str = "// screenpipe-summary-budget-v1\n";
+const THINKING_BINDING_PATCH: &str = include_str!("../../assets/pi-thinking-binding.patch");
+const THINKING_BINDING_MARKER: &str = "// screenpipe-thinking-binding-v1\n";
 static PATCH_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn ensure_for_entrypoint(entrypoint: &Path) -> Result<()> {
@@ -88,6 +90,10 @@ pub fn ensure(install_dir: &Path) -> Result<()> {
             ][..],
         ),
         (
+            "../../../pi-ai/dist/api/anthropic-messages.js",
+            &[(THINKING_BINDING_PATCH, THINKING_BINDING_MARKER)][..],
+        ),
+        (
             "../../../pi-ai/dist/utils/error-body.js",
             &[(TRANSPORT_PATCH, TRANSPORT_MARKER)][..],
         ),
@@ -133,6 +139,7 @@ mod tests {
             CONTRACT_PATCH,
             FAILURE_PATCH,
             TRANSPORT_PATCH,
+            THINKING_BINDING_PATCH,
             CHUNKS_PATCH,
             BUDGET_PATCH,
         ] {

@@ -34,13 +34,17 @@ try {
     const patchedSummarizer = await readFile(summarizer, "utf8");
     const transport = join(root, "node_modules/@earendil-works/pi-ai/dist/utils/error-body.js");
     const patchedTransport = await readFile(transport, "utf8");
+    const thinking = join(root, "node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js");
+    const patchedThinking = await readFile(thinking, "utf8");
     await run(patcher, repo);
-    if (await readFile(runtime, "utf8") !== patched || await readFile(serializer, "utf8") !== patchedSerializer || await readFile(summarizer, "utf8") !== patchedSummarizer || await readFile(transport, "utf8") !== patchedTransport) {
+    if (await readFile(runtime, "utf8") !== patched || await readFile(serializer, "utf8") !== patchedSerializer || await readFile(summarizer, "utf8") !== patchedSummarizer || await readFile(transport, "utf8") !== patchedTransport || await readFile(thinking, "utf8") !== patchedThinking) {
       throw new Error("Pi compaction patch changed an already-patched runtime");
     }
   }
-  const testFile = process.argv.includes("--transport") ? "pi-transport-cause.test.ts" : "pi-context-compaction.test.ts";
-  await run([process.execPath, "test", join(repo, "crates/screenpipe-core/assets", testFile)], root,
+  const testFiles = process.argv.includes("--thinking-binding") ? ["pi-thinking-binding.test.ts"]
+    : process.argv.includes("--transport") ? ["pi-transport-cause.test.ts"]
+    : ["pi-context-compaction.test.ts", "pi-thinking-binding.test.ts"];
+  await run([process.execPath, "test", ...testFiles.map(file => join(repo, "crates/screenpipe-core/assets", file))], root,
     { ...process.env, SCREENPIPE_TEST_PI_DIR: root });
 } finally {
   await rm(root, { recursive: true, force: true });
