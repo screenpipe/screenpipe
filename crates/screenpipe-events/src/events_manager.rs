@@ -1,3 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
 use anyhow::Result;
 use futures::Stream;
 use once_cell::sync::Lazy;
@@ -5,7 +8,6 @@ use parking_lot::RwLock;
 use serde::Deserialize;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use std::any::Any;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -23,9 +25,9 @@ pub struct Event<T = Value> {
     pub data: T,
 }
 
+// Keep metadata only: an unpolled receiver pins otherwise-consumed payloads.
 struct SubscriptionEntry {
     last_used: Instant,
-    subscription: Box<dyn Any + Send + Sync>,
 }
 
 pub struct EventManager {
@@ -178,15 +180,6 @@ impl EventManager {
         event: impl Into<String>,
     ) -> EventSubscription<T> {
         let event_name = event.into();
-        {
-            let mut subs = self.subscriptions.write();
-            if let Some(entry) = subs.get_mut(&event_name) {
-                entry.last_used = Instant::now();
-                if let Some(typed_sub) = entry.subscription.downcast_ref::<EventSubscription<T>>() {
-                    return typed_sub.clone();
-                }
-            }
-        }
 
         let rx = self.sender.subscribe();
         let sub = EventSubscription {
@@ -200,7 +193,6 @@ impl EventManager {
             event_name,
             SubscriptionEntry {
                 last_used: Instant::now(),
-                subscription: Box::new(sub.clone()),
             },
         );
         sub
@@ -226,4 +218,62 @@ pub fn subscribe_to_event<T: DeserializeOwned + Unpin + Clone + Send + Sync + 's
 
 pub fn subscribe_to_all_events() -> EventSubscription<serde_json::Value> {
     EventManager::instance().subscribe::<serde_json::Value>("")
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn fully_consumed_events_do_not_remain_retained() {
+        let mut subscriber = subscribe_to_event::<serde_json::Value>("memory_probe");
+        for i in 0..256 {
+            send_event(
+                "memory_probe",
+                serde_json::json!({"i": i, "payload": "x".repeat(4096)}),
+            )
+            .unwrap();
+            let received = subscriber.next().await.unwrap();
+            assert_eq!(received.data["i"], i);
+        }
+        let retained = EVENT_MANAGER.sender.len();
+        assert_eq!(
+            retained, 0,
+            "event registry's unpolled clone retains consumed JSON payloads"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn dropping_last_consumer_removes_all_receivers() {
+        let subscriber = subscribe_to_event::<serde_json::Value>("drop_probe");
+        assert_eq!(EVENT_MANAGER.sender.receiver_count(), 1);
+        drop(subscriber);
+        assert_eq!(EVENT_MANAGER.sender.receiver_count(), 0);
+        struct MustNotSerialize;
+        impl Serialize for MustNotSerialize {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom(
+                    "no listeners should skip serialization",
+                ))
+            }
+        }
+        send_event("drop_probe", MustNotSerialize).unwrap();
+        assert_eq!(EVENT_MANAGER.sender.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn release_waits_for_actual_consumers_only() {
+        let mut first = subscribe_to_event::<serde_json::Value>("two_probe");
+        let mut second = subscribe_to_event::<serde_json::Value>("two_probe");
+        assert_eq!(EVENT_MANAGER.sender.receiver_count(), 2);
+        send_event("two_probe", serde_json::json!({"payload":"test"})).unwrap();
+        first.next().await.unwrap();
+        assert_eq!(EVENT_MANAGER.sender.len(), 1);
+        second.next().await.unwrap();
+        assert_eq!(EVENT_MANAGER.sender.len(), 0);
+    }
 }
