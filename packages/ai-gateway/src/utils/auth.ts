@@ -71,12 +71,19 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
   // marked so the chat handler can allow a requested frontier model on the
   // otherwise-downgraded background lane.
   if (env.AI_GATEWAY_SERVICE_TOKEN && token === env.AI_GATEWAY_SERVICE_TOKEN) {
+    const enterpriseIdHash = request.headers.get('X-Screenpipe-Enterprise-Id-Hash');
+    const operation = request.headers.get('X-Screenpipe-AI-Operation');
+    const enterpriseAiAttribution = enterpriseIdHash && /^[a-f0-9]{64}$/.test(enterpriseIdHash)
+      ? { enterprise_id_hash: enterpriseIdHash,
+          ...(operation && /^[a-z][a-z0-9-]{0,47}$/.test(operation) ? { ai_operation: operation } : {}) }
+      : undefined;
     return {
       isValid: true,
       tier: 'subscribed',
       accountPlan: 'business',
       deviceId: headerDeviceId,
       service: true,
+      ...(enterpriseAiAttribution ? { enterpriseAiAttribution } : {}),
     };
   }
   // Authenticate the caller before trusting any user identifier. A Supabase
