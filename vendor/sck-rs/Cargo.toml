@@ -1,0 +1,58 @@
+[package]
+name = "sck-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A modern screen capture library for macOS using Apple's ScreenCaptureKit framework via cidre"
+license = "MIT"
+repository = "https://github.com/louis030195/sck-rs"
+keywords = ["screenshot", "screen-capture", "macos", "screencapturekit", "apple"]
+categories = ["multimedia::images", "os::macos-apis"]
+
+[lib]
+name = "sck_rs"
+path = "src/lib.rs"
+
+[dependencies]
+# Image handling - same as xcap
+image = "0.25"
+
+# Apple frameworks bindings (pure Rust, no Swift)
+# Using upstream cidre - includes SCContentFilter initializers from PR #51.
+# Pinned: an unpinned git dep re-resolves to upstream HEAD on every consumer
+# `cargo update`, so different downstream lockfiles ended up compiling this
+# crate against different (untested) cidre versions. Bump deliberately.
+cidre = { git = "https://github.com/yury/cidre.git", rev = "9c20f5ee5abaad4598843a33e13d6e48822d1f30", features = ["sc", "cg", "cv", "cm", "dispatch", "blocks", "async"] }
+
+# Error handling
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Async runtime for sync wrapper
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
+
+# Lazy static for runtime initialization
+once_cell = "1.19"
+
+
+
+[dev-dependencies]
+libc = "0.2"
+tracing-subscriber = "0.3"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+default = []
+
+[[example]]
+name = "capture_window"
+path = "examples/capture_window.rs"
+
+[[example]]
+name = "capture_monitor"
+path = "examples/capture_monitor.rs"
+
+[[example]]
+name = "list_windows"
+path = "examples/list_windows.rs"

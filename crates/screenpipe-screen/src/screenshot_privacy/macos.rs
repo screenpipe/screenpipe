@@ -3,7 +3,7 @@
 
 use super::*;
 use anyhow::{anyhow, ensure};
-use cidre::{api, cv, ns, sc};
+use cidre::api;
 use once_cell::sync::Lazy;
 use std::future::Future;
 use std::sync::Arc;
@@ -24,12 +24,146 @@ pub(crate) async fn capture_filtered(
         api::macos_available("14.0"),
         "window-filtered screenshots require macOS 14 or newer"
     );
-    let id = monitor.id();
+    let frame = monitor_frame(monitor);
+    let filters = filters.clone();
+    let prepared = {
+        let filters = filters.clone();
+        tokio::task::spawn_blocking(move || prepare_filtered_capture(frame, &filters, sources))
+            .await
+            .map_err(|err| anyhow!("window enumeration task failed: {err}"))??
+    };
+    // One persistent SCStream for the whole display. A per-window
+    // SCScreenshotManager capture posts the system consent sheet
+    // ("bypass the window picker") on every call, and the capture retry
+    // loop was stacking hundreds of those sheets after Screen Recording
+    // was already granted.
+    let (image, _) =
+        crate::utils::capture_monitor_image_with_freshness(monitor, &prepared.excluded, false)
+            .await?;
     let filters = filters.clone();
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
-        capture(id, &filters, sources).await
+        verify_filtered_frame(image, prepared, &filters, sources)
     })
     .await
+}
+
+fn monitor_frame(monitor: &SafeMonitor) -> cidre::cg::Rect {
+    cidre::cg::Rect {
+        origin: cidre::cg::Point {
+            x: f64::from(monitor.x()),
+            y: f64::from(monitor.y()),
+        },
+        size: cidre::cg::Size {
+            width: monitor.width() as f64,
+            height: monitor.height() as f64,
+        },
+    }
+}
+
+struct PreparedCapture {
+    frame: cidre::cg::Rect,
+    before: Vec<Surface>,
+    allowed: Vec<bool>,
+    excluded: Vec<u32>,
+    dock_pid: Option<i32>,
+    dock_before: Option<Vec<Surface>>,
+}
+
+fn prepare_filtered_capture(
+    frame: cidre::cg::Rect,
+    filters: &WindowFilters,
+    sources: ExclusionSources,
+) -> anyhow::Result<PreparedCapture> {
+    let detector = sources
+        .ignore_incognito_windows
+        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
+    let before = snapshot(frame)?;
+    let dock_pid = before
+        .iter()
+        .find(|surface| surface.layer == 20 && surface.app == "Dock")
+        .map(|surface| surface.pid);
+    let dock_before = dock_masks(dock_pid, frame, filters, detector.as_deref());
+    let allowed: Vec<bool> = before
+        .iter()
+        .map(|surface| {
+            !surface.app.is_empty()
+                && window_allowed(
+                    filters,
+                    detector.as_deref(),
+                    &surface.app,
+                    &surface.title,
+                    surface.pid,
+                )
+                && !(Some(surface.pid) == dock_pid && surface.layer == 20 && dock_before.is_none())
+        })
+        .collect();
+    let mut excluded: Vec<u32> = before
+        .iter()
+        .zip(&allowed)
+        .filter_map(|(surface, ok)| {
+            if *ok || surface.id == 0 {
+                None
+            } else {
+                Some(surface.id)
+            }
+        })
+        .collect();
+    excluded.sort_unstable();
+    excluded.dedup();
+    Ok(PreparedCapture {
+        frame,
+        before,
+        allowed,
+        excluded,
+        dock_pid,
+        dock_before,
+    })
+}
+
+fn verify_filtered_frame(
+    image: DynamicImage,
+    prepared: PreparedCapture,
+    filters: &WindowFilters,
+    sources: ExclusionSources,
+) -> anyhow::Result<DynamicImage> {
+    let detector = sources
+        .ignore_incognito_windows
+        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
+    let image = if let Some(masks) = &prepared.dock_before {
+        let mut canvas = image.to_rgba8();
+        let (width, height) = canvas.dimensions();
+        for mask in masks {
+            super::scene::paint_black(
+                &mut canvas,
+                output_rect(mask, prepared.frame, width, height),
+            );
+        }
+        DynamicImage::ImageRgba8(canvas)
+    } else {
+        image
+    };
+    let after = snapshot(prepared.frame)?;
+    validate_scene(
+        &prepared.before,
+        &prepared.allowed,
+        &after,
+        filters,
+        detector.as_deref(),
+    )?;
+    ensure!(
+        same_dock_coverage(
+            prepared.dock_before.as_deref(),
+            dock_masks(
+                prepared.dock_pid,
+                prepared.frame,
+                filters,
+                detector.as_deref(),
+            )
+            .as_deref(),
+        ),
+        "Dock thumbnail policy changed during capture"
+    );
+    Ok(image)
 }
 
 // Construct the future on its native worker: ScreenCaptureKit objects must stay
@@ -311,247 +445,6 @@ fn output_rect(
         width: (((surface.x + surface.width - display.origin.x) * sx).ceil() - x).max(0.0) as u32,
         height: (((surface.y + surface.height - display.origin.y) * sy).ceil() - y).max(0.0) as u32,
     }
-}
-
-async fn take(
-    filter: &sc::ContentFilter,
-    width: usize,
-    height: usize,
-    window: bool,
-) -> anyhow::Result<image::RgbaImage> {
-    let mut cfg = sc::StreamCfg::new();
-    cfg.set_width(width);
-    cfg.set_height(height);
-    cfg.set_pixel_format(cv::PixelFormat::_32_BGRA);
-    cfg.set_shows_cursor(false);
-    cfg.set_scales_to_fit(true);
-    if window {
-        cfg.set_ignore_shadows_single_window(true);
-    }
-    if api::macos_available("15.0") {
-        cfg.set_show_mouse_clicks(false);
-    }
-    let sample = sc::ScreenshotManager::capture_sample_buf(filter, &cfg)
-        .await
-        .map_err(|e| anyhow!("window-filtered screenshot: {e:?}"))?;
-    let mut pixels = sample
-        .image_buf()
-        .ok_or_else(|| anyhow!("missing screenshot pixels"))?
-        .retained();
-    Ok(rgba(&mut pixels)?.into_rgba8())
-}
-
-async fn capture(
-    id: u32,
-    filters: &WindowFilters,
-    sources: ExclusionSources,
-) -> anyhow::Result<DynamicImage> {
-    use super::scene::{self, Rect};
-    let detector = sources
-        .ignore_incognito_windows
-        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
-    let content = sc::ShareableContent::current()
-        .await
-        .map_err(|e| anyhow!("window enumeration: {e:?}"))?;
-    let displays = content.displays();
-    let display = displays
-        .iter()
-        .find(|d| d.display_id().0 == id)
-        .ok_or_else(|| anyhow!("filtered display disappeared"))?;
-    let frame = display.frame();
-    let before = snapshot(frame)?;
-    let available = content.windows();
-    let native = |surface: &Surface| {
-        available.iter().find(|w| {
-            w.id() == surface.id
-                && w.is_on_screen()
-                && w.owning_app()
-                    .is_some_and(|a| a.process_id() == surface.pid)
-        })
-    };
-    let dock_pid = before.iter().filter(|s| s.layer == 20).find_map(|s| {
-        native(s)
-            .filter(|w| {
-                w.owning_app()
-                    .is_some_and(|a| a.bundle_id().to_string() == "com.apple.dock")
-            })
-            .map(|_| s.pid)
-    });
-    let dock_before = dock_masks(dock_pid, frame, filters, detector.as_deref());
-    let allowed: Vec<bool> = before
-        .iter()
-        .map(|s| {
-            native(s).is_some()
-                && !(Some(s.pid) == dock_pid && s.layer == 20 && dock_before.is_none())
-                && window_allowed(filters, detector.as_deref(), &s.app, &s.title, s.pid)
-        })
-        .collect();
-    let selected: Vec<_> = before
-        .iter()
-        .zip(&allowed)
-        .filter_map(|(s, ok)| {
-            if *ok {
-                native(s).map(|w| w.retained())
-            } else {
-                None
-            }
-        })
-        .collect();
-    let windows = ns::Array::from_slice_retained(&selected);
-    let mut filter = sc::ContentFilter::with_display_including_windows(display, &windows);
-    // SCDisplay dimensions are logical points on Retina displays. Preserve the
-    // native pixel density before applying the user's explicit resolution cap.
-    let scale = filter.point_pixel_scale() as f64;
-    ensure!(
-        scale.is_finite() && scale > 0.0,
-        "invalid display pixel scale"
-    );
-    let nw = (frame.size.width * scale).round() as usize;
-    let nh = (frame.size.height * scale).round() as usize;
-    ensure!(
-        nw > 0 && nh > 0 && nw <= 16384 && nh <= 16384,
-        "invalid display dimensions"
-    );
-    let cap = crate::monitor::sck_capture_max_width() as usize;
-    let width = if cap == 0 { nw } else { nw.min(cap) };
-    let height = (nh * width / nw).max(1);
-    let mut canvas = if selected.is_empty() {
-        image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]))
-    } else {
-        if api::macos_available("14.2") {
-            filter.set_include_menu_bar(before.iter().zip(&allowed).any(|(s, ok)| {
-                *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
-            }));
-        }
-        let pixels = take(&filter, width, height, false).await?;
-        let mut canvas =
-            image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]));
-        scene::overlay_premultiplied(&mut canvas, &pixels, 0, 0, None);
-        canvas
-    };
-    let bounds = Rect {
-        x: 0,
-        y: 0,
-        width: width as u32,
-        height: height as u32,
-    };
-    let mut redacted = Vec::<Rect>::new();
-    for (surface, ok) in before.iter().zip(&allowed) {
-        let rect = output_rect(surface, frame, width as u32, height as u32);
-        if !*ok {
-            // The system Dock owns a display-sized transparent overlay. Its
-            // rectangle is not its visible coverage. Use only native alpha as
-            // a mask; none of this excluded surface's RGB enters the output.
-            let dock = native(surface).filter(|w| {
-                surface.layer == 20
-                    && w.owning_app()
-                        .is_some_and(|a| a.bundle_id().to_string() == "com.apple.dock")
-            });
-            if let Some(dock) = dock {
-                let filter = sc::ContentFilter::with_desktop_independent_window(dock);
-                let coverage =
-                    take(&filter, rect.width as usize, rect.height as usize, true).await?;
-                scene::paint_black_coverage(&mut canvas, &coverage, rect.x, rect.y);
-            } else {
-                scene::paint_black(&mut canvas, rect);
-            }
-            if let Some(clipped) = rect.intersection(bounds) {
-                scene::add_region(&mut redacted, clipped);
-            }
-        } else if redacted.iter().any(|r| rect.intersects(*r)) {
-            // Restore only the affected part of an allowed foreground surface.
-            // Capturing its native pixels preserves translucent corners without
-            // revealing excluded pixels or repainting unrelated foreground UI.
-            let window = native(surface).ok_or_else(|| anyhow!("allowed window disappeared"))?;
-            let filter = sc::ContentFilter::with_desktop_independent_window(window);
-            let pixels = take(&filter, rect.width as usize, rect.height as usize, true).await?;
-            for region in &redacted {
-                scene::overlay_premultiplied(&mut canvas, &pixels, rect.x, rect.y, Some(*region));
-            }
-        }
-    }
-    if let Some(masks) = &dock_before {
-        for mask in masks {
-            scene::paint_black(
-                &mut canvas,
-                output_rect(mask, frame, width as u32, height as u32),
-            );
-        }
-    }
-    ensure!(
-        same_dock_coverage(
-            dock_before.as_deref(),
-            dock_masks(dock_pid, frame, filters, detector.as_deref()).as_deref(),
-        ),
-        "Dock thumbnail policy changed during capture"
-    );
-    validate_scene(
-        &before,
-        &allowed,
-        &snapshot(frame)?,
-        filters,
-        detector.as_deref(),
-    )?;
-    let after = sc::ShareableContent::current()
-        .await
-        .map_err(|e| anyhow!("window revalidation: {e:?}"))?;
-    let after_windows = after.windows();
-    for (s, ok) in before.iter().zip(&allowed) {
-        if *ok {
-            ensure!(
-                after_windows.iter().any(|w| w.id() == s.id
-                    && w.is_on_screen()
-                    && w.owning_app().is_some_and(|a| a.process_id() == s.pid)),
-                "allowed window changed during capture"
-            );
-        }
-    }
-    Ok(DynamicImage::ImageRgba8(canvas))
-}
-
-fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
-    let (w, h) = (buf.width(), buf.height());
-    ensure!(
-        w > 0 && h > 0 && w <= 16384 && h <= 16384,
-        "invalid screenshot dimensions"
-    );
-    ensure!(
-        buf.plane_count() == 0 && buf.pixel_format() == cv::PixelFormat::_32_BGRA,
-        "unexpected screenshot format"
-    );
-    let flags = cv::pixel_buffer::LockFlags::READ_ONLY;
-    unsafe { buf.lock_base_addr(flags) }
-        .result()
-        .map_err(|e| anyhow!("pixel lock: {e:?}"))?;
-    // Keep every fallible operation inside this closure so the unlock runs on
-    // all error paths. The sample owns the buffer throughout the copy.
-    let result = (|| {
-        let stride = buf.bytes_per_row();
-        let len = stride
-            .checked_mul(h)
-            .ok_or_else(|| anyhow!("pixel size overflow"))?;
-        let ptr = unsafe { buf.base_address() } as *const u8;
-        ensure!(
-            !ptr.is_null() && stride >= w * 4 && len <= buf.data_size(),
-            "invalid screenshot storage"
-        );
-        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-        let mut image = image::RgbaImage::new(w as u32, h as u32);
-        for (source, target) in data
-            .chunks_exact(stride)
-            .zip(image.as_mut().chunks_exact_mut(w * 4))
-        {
-            for (s, t) in source[..w * 4]
-                .chunks_exact(4)
-                .zip(target.chunks_exact_mut(4))
-            {
-                t.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
-            }
-        }
-        Ok(DynamicImage::ImageRgba8(image))
-    })();
-    unsafe { buf.unlock_lock_base_addr(flags) };
-    result
 }
 
 #[cfg(test)]

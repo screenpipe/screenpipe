@@ -449,6 +449,7 @@ impl SafeMonitor {
 
         match self.capture_sck_bounded(Vec::new(), fresh).await {
             Ok(image) => Ok(image),
+            Err(sck_error) if capture_miss_keeps_persistent_stream(&sck_error) => Err(sck_error),
             Err(sck_error) => {
                 self.release_capture_stream();
                 let image = self.capture_xcap_bounded().await.map_err(|cg_error| {
@@ -499,7 +500,16 @@ impl SafeMonitor {
         let result = self
             .capture_sck_bounded(excluded_window_ids.to_vec(), fresh)
             .await;
-        if result.is_err() {
+        // A first-frame timeout means the persistent stream has not latched a
+        // buffer yet. It is still the same SCStream. Dropping it forces the
+        // next attempt through SCStream.start, and macOS posts a new
+        // "bypass the window picker" consent sheet on every start. That loop
+        // stacked a few hundred sheets every few seconds after Screen
+        // Recording was already granted.
+        if result
+            .as_ref()
+            .is_err_and(|error| !capture_miss_keeps_persistent_stream(error))
+        {
             self.release_capture_stream();
         }
         result
@@ -525,6 +535,19 @@ impl SafeMonitor {
     pub fn last_capture_seq(&self) -> Option<u64> {
         crate::stream_invalidation::monitor_frame_seq(self.monitor_id)
     }
+}
+
+/// True when this capture failure must leave the persistent SCStream running.
+///
+/// `SCStream.start` is what presents the system consent sheet. A miss while
+/// the first frame is still in flight, or a refusal to start again during the
+/// restart cooldown, is not evidence the stream handle is dead.
+fn capture_miss_keeps_persistent_stream(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("timeout waiting for first stream frame")
+        || message.contains("stream disappeared or changed exclusions")
+        || message.contains("persistent stream restart is cooling down")
+        || message.contains("content filter update is cooling down")
 }
 
 /// Skip the built-in laptop display when the lid is closed (clamshell mode).
@@ -1195,6 +1218,20 @@ mod tests {
             .build()
             .expect("test runtime")
             .block_on(list_monitors_cached())
+    }
+
+    #[test]
+    fn first_frame_timeout_does_not_tear_down_the_persistent_stream() {
+        let timeout = anyhow::anyhow!("Capture failed: timeout waiting for first stream frame");
+        let raced = anyhow::anyhow!("stream disappeared or changed exclusions after creation");
+        let cooling = anyhow::anyhow!("persistent stream restart is cooling down");
+        let filter = anyhow::anyhow!("content filter update is cooling down");
+        let dead = anyhow::anyhow!("stream start error: SCStreamErrorDomain -3801");
+        assert!(capture_miss_keeps_persistent_stream(&timeout));
+        assert!(capture_miss_keeps_persistent_stream(&raced));
+        assert!(capture_miss_keeps_persistent_stream(&cooling));
+        assert!(capture_miss_keeps_persistent_stream(&filter));
+        assert!(!capture_miss_keeps_persistent_stream(&dead));
     }
 
     #[test]

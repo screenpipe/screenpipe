@@ -2936,6 +2936,17 @@ impl StreamLivenessWatch {
             self.last_advance = now;
             return false;
         };
+        if seq == 0 {
+            // This stream generation has not received a screen callback yet.
+            // That is the state while macOS is still presenting the
+            // screen-recording consent sheet, and while the first frame is
+            // still being converted. Rebuilding here calls `SCStream.start`
+            // again and stacks another consent sheet on a stream that was
+            // never shown to be wedged.
+            self.last_seq = Some(0);
+            self.last_advance = now;
+            return false;
+        }
         // `seq != prev` covers both a normal advance and a post-rebuild reset
         // to 0 (seq < prev) — both mean "the stream is delivering", so we treat
         // them as healthy and re-anchor.
@@ -6442,6 +6453,17 @@ mod tests {
         assert!(!w.observe(Some(2), t0 + Duration::from_secs(4))); // single advance re-anchors
                                                                    // Timeout is measured from the advance, so shortly after is still fine.
         assert!(!w.observe(Some(2), t0 + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn liveness_never_restarts_a_stream_that_has_not_delivered_a_frame() {
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        assert!(!w.observe(Some(0), t0));
+        assert!(!w.observe(
+            Some(0),
+            t0 + STREAM_RECOVERY_COOLDOWN + STREAM_STALL_TIMEOUT + Duration::from_secs(30)
+        ));
     }
 
     #[test]
