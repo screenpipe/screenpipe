@@ -174,6 +174,7 @@ describe("step evidence media", () => {
     play();
     const video = await screen.findByLabelText("Local recording");
     expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("preload", "metadata");
     Object.defineProperty(video, "duration", { value: 30 });
     fireEvent.loadedMetadata(video);
     expect((video as HTMLVideoElement).currentTime).toBe(2);
@@ -187,6 +188,21 @@ describe("step evidence media", () => {
     close();
     await waitFor(() => expect(release).toHaveBeenCalledWith("https://fixture.invalid/clip.mp4"));
     expect(screen.queryByLabelText("Local recording")).toBeNull();
+  });
+
+  it("does not time out while a metadata-only player waits for the user to play", async () => {
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/clip.mp4", timestamp: stage.evidence[0].timestamp, frameId: 1, offsetSeconds: 2 });
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowRecording: load } as unknown as WorkflowsPlatform} />);
+    play();
+    const video = await screen.findByLabelText("Local recording");
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(video, "duration", { value: 30 });
+      fireEvent.loadedMetadata(video);
+      act(() => vi.advanceTimersByTime(13000));
+      expect(screen.getByLabelText("Local recording")).toBe(video);
+      expect(screen.queryByText(/could not decode/)).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 
   it("shows a failed load and retries on request", async () => {

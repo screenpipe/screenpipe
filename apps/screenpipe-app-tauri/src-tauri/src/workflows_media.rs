@@ -1,162 +1,507 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Ephemeral, capability-scoped loopback media. WebKit needs real byte-range
-//! responses for reliable MP4 seeking; recorder credentials never leave Rust.
-use axum::{body::Body, extract::{Path, State}, http::{HeaderMap, Method, Response, StatusCode}, routing::get, Router};
-use std::{collections::HashMap, sync::{Arc, Mutex}, time::{Duration, Instant}};
-use tokio::sync::OnceCell;
+//! Capability-scoped, read-only replay proxy. The recorder authorizes every
+//! range request. Credentials stay in Rust; video streams directly to the
+//! webview without a full-clip memory cache.
+use axum::{
+    body::Body,
+    extract::{Path, State},
+    http::{HeaderMap, Method, Response, StatusCode},
+    routing::get,
+    Router,
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use tokio::sync::{OnceCell, Semaphore};
 
 const TTL: Duration = Duration::from_secs(300);
-const MAX_MEDIA: usize = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 2;
-struct Entry { bytes: Arc<Vec<u8>>, created: Instant }
 #[derive(Clone)]
-struct MediaServer { port: u16, entries: Arc<Mutex<HashMap<String, Entry>>> }
+struct Entry {
+    url: reqwest::Url,
+    api_key: Option<String>,
+    touched: Instant,
+}
+#[derive(Clone)]
+struct MediaServer {
+    port: u16,
+    entries: Arc<Mutex<HashMap<String, Entry>>>,
+    client: reqwest::Client,
+    streams: Arc<Semaphore>,
+}
 static SERVER: OnceCell<MediaServer> = OnceCell::const_new();
 
 impl MediaServer {
-    fn insert(&self, bytes: Vec<u8>) -> Result<String, String> {
-        if bytes.is_empty() || bytes.len() > MAX_MEDIA { return Err("Recording exceeds the inline preview limit".into()); }
-        let mut entries = self.entries.lock().map_err(|_| "Recording cache unavailable")?;
-        entries.retain(|_, value| value.created.elapsed() < TTL);
+    fn new(port: u16) -> Result<Self, String> {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(3))
+            .read_timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|_| "Could not start local replay")?;
+        Ok(Self {
+            port,
+            entries: Default::default(),
+            client,
+            streams: Arc::new(Semaphore::new(4)),
+        })
+    }
+    fn insert(
+        &self,
+        base_url: &str,
+        chunk_id: i64,
+        api_key: Option<String>,
+    ) -> Result<String, String> {
+        let mut url = reqwest::Url::parse(base_url).map_err(|_| "Invalid local recorder")?;
+        if chunk_id <= 0
+            || url.scheme() != "http"
+            || !matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !matches!(url.path(), "" | "/")
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("Invalid local recorder".into());
+        }
+        url.set_path(&format!("/frames/preview-media/{chunk_id}"));
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "Recording access unavailable")?;
+        entries.retain(|_, value| value.touched.elapsed() < TTL);
         while entries.len() >= MAX_ENTRIES {
-            if let Some(oldest) = entries.iter().min_by_key(|(_, value)| value.created).map(|(key, _)| key.clone()) { entries.remove(&oldest); }
+            if let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, value)| value.touched)
+                .map(|(key, _)| key.clone())
+            {
+                entries.remove(&oldest);
+            }
         }
         let token = uuid::Uuid::new_v4().to_string();
-        entries.insert(token.clone(), Entry { bytes: Arc::new(bytes), created: Instant::now() });
+        entries.insert(
+            token.clone(),
+            Entry {
+                url,
+                api_key,
+                touched: Instant::now(),
+            },
+        );
         Ok(format!("http://127.0.0.1:{}/media/{token}", self.port))
+    }
+    fn release(&self, url: &str) {
+        let prefix = format!("http://127.0.0.1:{}/media/", self.port);
+        if let Some(token) = url.strip_prefix(&prefix) {
+            if let Ok(mut entries) = self.entries.lock() {
+                entries.remove(token);
+            }
+        }
     }
 }
 
 async fn server() -> Result<&'static MediaServer, String> {
-    SERVER.get_or_try_init(|| async {
-        let socket = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(|_| "Could not start local replay")?;
-        socket.set_nonblocking(true).map_err(|_| "Could not start local replay")?;
-        let state = MediaServer { port: socket.local_addr().map_err(|_| "Could not start local replay")?.port(), entries: Default::default() };
-        let router = Router::new().route("/media/:token", get(serve_media)).with_state(state.clone());
-        let listener = axum::Server::from_tcp(socket).map_err(|_| "Could not start local replay")?;
-        tauri::async_runtime::spawn(async move { if listener.serve(router.into_make_service()).await.is_err() { tracing::warn!("Workflow replay server stopped"); } });
-        let cleanup = state.clone();
-        tauri::async_runtime::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                if let Ok(mut entries) = cleanup.entries.lock() { entries.retain(|_, entry| entry.created.elapsed() < TTL); }
-            }
-        });
-        Ok::<_, String>(state)
-    }).await
+    SERVER
+        .get_or_try_init(|| async {
+            let socket = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .map_err(|_| "Could not start local replay")?;
+            socket
+                .set_nonblocking(true)
+                .map_err(|_| "Could not start local replay")?;
+            let state = MediaServer::new(
+                socket
+                    .local_addr()
+                    .map_err(|_| "Could not start local replay")?
+                    .port(),
+            )?;
+            let router = Router::new()
+                .route("/media/:token", get(serve_media))
+                .with_state(state.clone());
+            let listener =
+                axum::Server::from_tcp(socket).map_err(|_| "Could not start local replay")?;
+            tauri::async_runtime::spawn(async move {
+                if listener.serve(router.into_make_service()).await.is_err() {
+                    tracing::warn!("Workflow replay server stopped");
+                }
+            });
+            let cleanup = state.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    if let Ok(mut entries) = cleanup.entries.lock() {
+                        entries.retain(|_, entry| entry.touched.elapsed() < TTL);
+                    }
+                }
+            });
+            Ok::<_, String>(state)
+        })
+        .await
 }
 
-pub async fn publish(bytes: Vec<u8>) -> Result<String, String> { server().await?.insert(bytes) }
+pub async fn publish(
+    base_url: &str,
+    chunk_id: i64,
+    api_key: Option<String>,
+) -> Result<String, String> {
+    server().await?.insert(base_url, chunk_id, api_key)
+}
 
 #[tauri::command]
 #[specta::specta]
 pub fn release_workflow_recording(url: String) {
-    let Some(server) = SERVER.get() else { return; };
-    let prefix = format!("http://127.0.0.1:{}/media/", server.port);
-    if let Some(token) = url.strip_prefix(&prefix) {
-        if let Ok(mut entries) = server.entries.lock() { entries.remove(token); }
+    if let Some(server) = SERVER.get() {
+        server.release(&url);
     }
 }
 
-fn byte_range(range: &str, length: usize) -> Option<(usize, usize)> {
-    if length == 0 { return None; }
-    let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
-    if start.is_empty() {
-        let suffix = end.parse::<usize>().ok()?;
-        return (suffix > 0).then_some((length.saturating_sub(suffix), length - 1));
+async fn serve_media(
+    State(server): State<MediaServer>,
+    Path(token): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response<Body> {
+    media_response(&server, &token, &method, &headers).await
+}
+
+async fn media_response(
+    server: &MediaServer,
+    token: &str,
+    method: &Method,
+    headers: &HeaderMap,
+) -> Response<Body> {
+    let empty = |status| {
+        Response::builder()
+            .status(status)
+            .header("Cache-Control", "no-store")
+            .body(Body::empty())
+            .unwrap()
+    };
+    if headers.get("host").and_then(|h| h.to_str().ok())
+        != Some(format!("127.0.0.1:{}", server.port).as_str())
+    {
+        return empty(StatusCode::FORBIDDEN);
     }
-    let start = start.parse::<usize>().ok()?;
-    let end = if end.is_empty() { length - 1 } else { end.parse::<usize>().ok()?.min(length - 1) };
-    (start <= end && start < length).then_some((start, end))
-}
-
-async fn serve_media(State(server): State<MediaServer>, Path(token): Path<String>, method: Method, headers: HeaderMap) -> Response<Body> {
-    media_response(&server, &token, &method, &headers)
-}
-
-fn media_response(server: &MediaServer, token: &str, method: &Method, headers: &HeaderMap) -> Response<Body> {
-    let empty = |status| Response::builder().status(status).header("Cache-Control", "no-store").body(Body::empty()).unwrap();
-    if headers.get("host").and_then(|h| h.to_str().ok()) != Some(format!("127.0.0.1:{}", server.port).as_str()) { return empty(StatusCode::FORBIDDEN); }
-    if !matches!(*method, Method::GET | Method::HEAD) { return empty(StatusCode::METHOD_NOT_ALLOWED); }
+    if !matches!(*method, Method::GET | Method::HEAD) {
+        return empty(StatusCode::METHOD_NOT_ALLOWED);
+    }
     let origin = headers.get("origin").and_then(|h| h.to_str().ok());
-    if origin.is_some_and(|o| !matches!(o, "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost" | "http://localhost:1430" | "http://127.0.0.1:1430")) { return empty(StatusCode::FORBIDDEN); }
-    let bytes = server.entries.lock().ok().and_then(|mut entries| {
-        entries.retain(|_, entry| entry.created.elapsed() < TTL);
-        entries.get(token).map(|entry| entry.bytes.clone())
+    if origin.is_some_and(|o| {
+        !matches!(
+            o,
+            "tauri://localhost"
+                | "http://tauri.localhost"
+                | "https://tauri.localhost"
+                | "http://localhost:1430"
+                | "http://127.0.0.1:1430"
+        )
+    }) {
+        return empty(StatusCode::FORBIDDEN);
+    }
+    let entry = server.entries.lock().ok().and_then(|mut entries| {
+        entries.retain(|_, entry| entry.touched.elapsed() < TTL);
+        entries.get_mut(token).map(|entry| {
+            entry.touched = Instant::now();
+            entry.clone()
+        })
     });
-    let Some(bytes) = bytes else { return empty(StatusCode::NOT_FOUND); };
-    let range = headers.get("range");
-    let (start, end) = if let Some(range) = range {
-        match range.to_str().ok().and_then(|range| byte_range(range, bytes.len())) {
-            Some(range) => range,
-            None => return Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header("Content-Range", format!("bytes */{}", bytes.len())).body(Body::empty()).unwrap(),
-        }
-    } else { (0, bytes.len() - 1) };
+    let Some(entry) = entry else {
+        return empty(StatusCode::NOT_FOUND);
+    };
+    let Ok(permit) = server.streams.clone().try_acquire_owned() else {
+        return empty(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    let mut request = if *method == Method::HEAD {
+        server.client.head(entry.url)
+    } else {
+        server.client.get(entry.url)
+    };
+    if let Some(key) = entry.api_key {
+        request = request.bearer_auth(key);
+    }
+    if let Some(range) = headers.get("range").and_then(|value| value.to_str().ok()) {
+        request = request.header("Range", range);
+    }
+    let upstream = match request.send().await {
+        Ok(response) => response,
+        Err(_) => return empty(StatusCode::BAD_GATEWAY),
+    };
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    if !matches!(
+        status,
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::RANGE_NOT_SATISFIABLE
+    ) {
+        return empty(
+            if matches!(
+                status,
+                StatusCode::UNAUTHORIZED
+                    | StatusCode::FORBIDDEN
+                    | StatusCode::NOT_FOUND
+                    | StatusCode::SERVICE_UNAVAILABLE
+            ) {
+                status
+            } else {
+                StatusCode::BAD_GATEWAY
+            },
+        );
+    }
+    if status != StatusCode::RANGE_NOT_SATISFIABLE
+        && upstream
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            != Some("video/mp4")
+    {
+        return empty(StatusCode::BAD_GATEWAY);
+    }
     let mut response = Response::builder()
-        .status(if range.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK })
-        .header("Content-Type", "video/mp4").header("Accept-Ranges", "bytes")
-        .header("Content-Length", (end - start + 1).to_string())
-        .header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff");
-    if range.is_some() { response = response.header("Content-Range", format!("bytes {start}-{end}/{}", bytes.len())); }
-    if let Some(origin) = origin { response = response.header("Access-Control-Allow-Origin", origin); }
-    response.body(if *method == Method::HEAD { Body::empty() } else { Body::from(bytes[start..=end].to_vec()) }).unwrap()
+        .status(status)
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff");
+    for name in [
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+    ] {
+        if let Some(value) = upstream
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+        {
+            response = response.header(name, value);
+        }
+    }
+    if let Some(origin) = origin {
+        response = response.header("Access-Control-Allow-Origin", origin);
+    }
+    let body = if *method == Method::HEAD || status == StatusCode::RANGE_NOT_SATISFIABLE {
+        Body::empty()
+    } else {
+        // Pull only as the browser consumes data. Dropping the body drops the
+        // upstream response and permit; no clip-sized allocations or decoding.
+        Body::wrap_stream(futures::stream::try_unfold(
+            (upstream, permit),
+            |(mut upstream, permit)| async move {
+                upstream
+                    .chunk()
+                    .await
+                    .map(|chunk| chunk.map(|bytes| (bytes, (upstream, permit))))
+                    .map_err(|_| std::io::Error::other("Recording stream interrupted"))
+            },
+        ))
+    };
+    response.body(body).unwrap()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    async fn actual_loopback_stream_returns_range_bytes_and_revokes() {
-        let url = publish(vec![10, 20, 30, 40, 50]).await.unwrap();
-        let response = reqwest::Client::new().get(&url).header("Range", "bytes=1-3").send().await.unwrap();
-        assert_eq!(response.status().as_u16(), 206);
-        assert_eq!(response.headers()["content-range"], "bytes 1-3/5");
-        assert_eq!(response.bytes().await.unwrap().as_ref(), &[20, 30, 40]);
-        release_workflow_recording(url.clone());
-        assert_eq!(reqwest::get(url).await.unwrap().status().as_u16(), 404);
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    #[derive(Clone, Default)]
+    struct Recorder {
+        denied: Arc<AtomicBool>,
+        requests: Arc<AtomicUsize>,
     }
-    fn fixture() -> (MediaServer, String, HeaderMap) {
-        let server = MediaServer { port: 12345, entries: Default::default() };
-        let url = server.insert(vec![0, 1, 2, 3, 4]).unwrap();
+    async fn mock_media(
+        State(state): State<Recorder>,
+        method: Method,
+        headers: HeaderMap,
+    ) -> Response<Body> {
+        state.requests.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(headers["authorization"], "Bearer synthetic-test-key");
+        if state.denied.load(Ordering::SeqCst) {
+            return Response::builder()
+                .status(503)
+                .body(Body::from("private error"))
+                .unwrap();
+        }
+        assert!(matches!(method, Method::GET | Method::HEAD));
+        assert_eq!(headers["range"], "bytes=20000000-20000001");
+        Response::builder()
+            .status(206)
+            .header("content-type", "video/mp4")
+            .header("accept-ranges", "bytes")
+            .header("content-length", "2")
+            .header("content-range", "bytes 20000000-20000001/64000000")
+            .body(if method == Method::HEAD {
+                Body::empty()
+            } else {
+                Body::from(vec![7, 8])
+            })
+            .unwrap()
+    }
+    fn fixture(base: &str) -> (MediaServer, String, HeaderMap) {
+        let server = MediaServer::new(12345).unwrap();
+        let url = server
+            .insert(base, 42, Some("synthetic-test-key".into()))
+            .unwrap();
         let token = url.rsplit('/').next().unwrap().to_string();
-        let mut headers = HeaderMap::new(); headers.insert("host", "127.0.0.1:12345".parse().unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "127.0.0.1:12345".parse().unwrap());
         (server, token, headers)
     }
-    #[test] fn supports_closed_open_suffix_and_rejects_invalid_ranges() {
-        assert_eq!(byte_range("bytes=0-1", 5), Some((0, 1)));
-        assert_eq!(byte_range("bytes=3-", 5), Some((3, 4)));
-        assert_eq!(byte_range("bytes=-2", 5), Some((3, 4)));
-        assert_eq!(byte_range("bytes=0-999", 5), Some((0, 4)));
-        for range in ["bytes=6-", "bytes=3-1", "bytes=-0", "bytes=0-1,3-4", "wrong"] { assert_eq!(byte_range(range, 5), None); }
-    }
-    #[test] fn serves_ranges_and_head_with_correct_metadata() {
-        let (server, token, mut headers) = fixture();
-        headers.insert("range", "bytes=1-3".parse().unwrap());
-        let response = media_response(&server, &token, &Method::GET, &headers);
+    #[tokio::test]
+    async fn streams_large_clip_ranges_lazily_and_rechecks_recorder_privacy() {
+        let state = Recorder::default();
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", socket.local_addr().unwrap());
+        let router = Router::new()
+            .route("/frames/preview-media/42", get(mock_media))
+            .with_state(state.clone());
+        let listener = tokio::spawn(
+            axum::Server::from_tcp(socket)
+                .unwrap()
+                .serve(router.into_make_service()),
+        );
+        let (server, token, mut headers) = fixture(&base);
+        assert_eq!(
+            state.requests.load(Ordering::SeqCst),
+            0,
+            "publishing a capability must not download video"
+        );
+        headers.insert("range", "bytes=20000000-20000001".parse().unwrap());
+        let response = media_response(&server, &token, &Method::GET, &headers).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(response.headers()["content-range"], "bytes 1-3/5");
-        assert_eq!(response.headers()["content-length"], "3");
-        assert_eq!(media_response(&server, &token, &Method::HEAD, &headers).status(), StatusCode::PARTIAL_CONTENT);
-        headers.insert("range", "bytes=999-".parse().unwrap());
-        assert_eq!(media_response(&server, &token, &Method::GET, &headers).status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            response.headers()["content-range"],
+            "bytes 20000000-20000001/64000000"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        use axum::body::HttpBody;
+        let mut body = response.into_body();
+        assert_eq!(body.data().await.unwrap().unwrap().as_ref(), &[7, 8]);
+        drop(body);
+        let head = media_response(&server, &token, &Method::HEAD, &headers).await;
+        assert_eq!(head.status(), StatusCode::PARTIAL_CONTENT);
+        assert!(head.into_body().data().await.is_none());
+        // Exercise both HTTP hops, not just the handler, including the range
+        // contract used by WebKit for clips larger than the former 16 MiB cap.
+        let proxy_socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        proxy_socket.set_nonblocking(true).unwrap();
+        let mut proxy = server.clone();
+        proxy.port = proxy_socket.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}/media/{token}", proxy.port);
+        let router = Router::new()
+            .route("/media/:token", get(serve_media))
+            .with_state(proxy);
+        let proxy_listener = tokio::spawn(
+            axum::Server::from_tcp(proxy_socket)
+                .unwrap()
+                .serve(router.into_make_service()),
+        );
+        let response = reqwest::Client::new()
+            .get(&url)
+            .header("Range", "bytes=20000000-20000001")
+            .header("Origin", "tauri://localhost")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 206);
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "tauri://localhost"
+        );
+        assert_eq!(response.bytes().await.unwrap().as_ref(), &[7, 8]);
+        proxy_listener.abort();
+        let slots = server.streams.clone().try_acquire_many_owned(4).unwrap();
+        assert_eq!(
+            media_response(&server, &token, &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            state.requests.load(Ordering::SeqCst),
+            3,
+            "excess streams must not reach capture"
+        );
+        drop(slots);
+        state.denied.store(true, Ordering::SeqCst);
+        let denied = media_response(&server, &token, &Method::GET, &headers).await;
+        assert_eq!(
+            denied.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a cached capability cannot bypass changed privacy policy"
+        );
+        assert!(denied.into_body().data().await.is_none());
+        server.release(&format!("http://127.0.0.1:12345/media/{token}"));
+        assert_eq!(
+            media_response(&server, &token, &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(state.requests.load(Ordering::SeqCst), 4);
+        listener.abort();
     }
-    #[test] fn refuses_unknown_capabilities_remote_origins_and_rebinding() {
-        let (server, token, mut headers) = fixture();
-        assert_eq!(media_response(&server, "unknown", &Method::GET, &headers).status(), StatusCode::NOT_FOUND);
+    #[tokio::test]
+    async fn rejects_remote_origins_rebinding_expired_and_unknown_capabilities() {
+        let (server, token, mut headers) = fixture("http://127.0.0.1:3030");
+        assert_eq!(
+            media_response(&server, "unknown", &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         headers.insert("origin", "https://evil.example".parse().unwrap());
-        assert_eq!(media_response(&server, &token, &Method::GET, &headers).status(), StatusCode::FORBIDDEN);
-        headers.remove("origin"); headers.insert("host", "evil.example:12345".parse().unwrap());
-        assert_eq!(media_response(&server, &token, &Method::GET, &headers).status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            media_response(&server, &token, &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        headers.remove("origin");
+        headers.insert("host", "evil.example:12345".parse().unwrap());
+        assert_eq!(
+            media_response(&server, &token, &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        headers.insert("host", "127.0.0.1:12345".parse().unwrap());
+        assert_eq!(
+            media_response(&server, &token, &Method::POST, &headers)
+                .await
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        server
+            .entries
+            .lock()
+            .unwrap()
+            .get_mut(&token)
+            .unwrap()
+            .touched = Instant::now() - TTL;
+        assert_eq!(
+            media_response(&server, &token, &Method::GET, &headers)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
     }
-    #[test] fn bounds_memory_and_expires_capabilities() {
-        let (server, token, headers) = fixture();
-        server.entries.lock().unwrap().get_mut(&token).unwrap().created = Instant::now() - TTL;
-        assert_eq!(media_response(&server, &token, &Method::GET, &headers).status(), StatusCode::NOT_FOUND);
-        for _ in 0..5 { server.insert(vec![1]).unwrap(); }
+    #[test]
+    fn bounds_capabilities_and_rejects_non_recorder_targets() {
+        let (server, _, _) = fixture("http://127.0.0.1:3030");
+        for _ in 0..5 {
+            server.insert("http://127.0.0.1:3030", 42, None).unwrap();
+        }
         assert_eq!(server.entries.lock().unwrap().len(), MAX_ENTRIES);
-        assert!(server.insert(vec![]).is_err());
-        assert!(server.insert(vec![0; MAX_MEDIA + 1]).is_err());
+        for base in [
+            "https://example.com",
+            "http://127.0.0.1.evil.test",
+            "http://secret@localhost:3030",
+            "http://localhost:3030/private",
+            "http://localhost:3030?path=private",
+        ] {
+            assert!(server.insert(base, 42, None).is_err());
+        }
+        assert!(server.insert("http://127.0.0.1:3030", 0, None).is_err());
     }
 }

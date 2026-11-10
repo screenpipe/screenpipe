@@ -41,11 +41,15 @@ function RecordingVideo({ media, poster, failed }: { media: WorkflowRecording; p
     const timer = setTimeout(() => failed("This video could not decode. Use the captured image or open this moment in Screenpipe."), 12000);
     return () => clearTimeout(timer);
   }, [ready, failed]);
-  return <><video controls muted playsInline preload="auto" poster={poster} aria-label={ui("Local recording")}
+  return <><video controls muted playsInline preload="metadata" poster={poster} aria-label={ui("Local recording")}
     onLoadedMetadata={(event) => {
       const video = event.currentTarget;
       if (!Number.isFinite(video.duration) || !Number.isFinite(media.offsetSeconds) || media.offsetSeconds < 0 || media.offsetSeconds >= video.duration) { failed("The recorded offset is outside this video. Try another captured moment."); return; }
       video.currentTime = media.offsetSeconds;
+      // Metadata and a valid seek are sufficient to show the controls. With
+      // metadata-only preload, waiting for a decoded frame can time out before
+      // the user presses play.
+      setReady(true);
     }}
     onLoadedData={() => setReady(true)} onSeeked={() => setReady(true)}
     onError={() => failed("This video cannot be played here. Try another captured moment.")} src={media.url} />
