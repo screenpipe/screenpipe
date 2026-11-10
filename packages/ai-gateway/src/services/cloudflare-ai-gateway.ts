@@ -18,6 +18,9 @@ export type HostedChatLimitScope = 'combined' | 'frontier' | 'unknown';
 const SUPER_ADMIN_ACTOR_ID = 'f0d67846f15d207818a4016c5f12edac415d35adf8084792fec508554def5906';
 
 export interface HostedChatGatewayContext {
+	/** Accounting only. The allowance actor and training-consent contract stay independent. */
+	enterprise_id_hash?: string;
+	ai_operation?: string;
 	user_id: string;
 	plan: HostedChatPlan;
 	lane: HostedChatLane;
@@ -103,7 +106,7 @@ export async function hostedChatActorId(auth: AuthResult): Promise<string> {
 	return sha256Hex(`screenpipe-hosted-chat:v1:${identity}`);
 }
 
-/** Build the five reviewed metadata fields Cloudflare receives. No prompt data is included. */
+/** Preserve allowance metadata and append verified enterprise accounting labels. No prompt data. */
 export async function buildHostedChatGatewayContext(
 	auth: AuthResult,
 	model: string,
@@ -111,6 +114,10 @@ export async function buildHostedChatGatewayContext(
 ): Promise<HostedChatGatewayContext> {
 	const userId = await hostedChatActorId(auth);
 	const plan = collapsePlan(auth);
+	const tags = buildExperientialRequestTags(auth);
+	const attribution = auth.service ? auth.enterpriseAiAttribution : tags;
+	const enterpriseIdHash = auth.isValid && attribution?.enterprise_id_hash;
+	const operation = auth.service ? auth.enterpriseAiAttribution?.ai_operation : undefined;
 	return attachExperientialRequestTags({
 		user_id: userId,
 		plan: userId === SUPER_ADMIN_ACTOR_ID ? 'super_admin' : plan,
@@ -120,7 +127,11 @@ export async function buildHostedChatGatewayContext(
 		),
 		workload,
 		trial: auth.hostedAiTrial === true,
-	}, buildExperientialRequestTags(auth));
+		...(enterpriseIdHash && /^[a-f0-9]{64}$/.test(enterpriseIdHash) ? {
+			enterprise_id_hash: enterpriseIdHash,
+			...(operation && /^[a-z][a-z0-9-]{0,47}$/.test(operation) ? { ai_operation: operation } : {}),
+		} : {}),
+	}, tags);
 }
 
 export function hostedChatLaneForModel(

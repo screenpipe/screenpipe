@@ -115,6 +115,22 @@ describe('validateAuth — verified identities only', () => {
     expect(verifyTokenMock).toHaveBeenCalledTimes(0);
   });
 
+  it('accepts bounded accounting labels only with the service credential', async () => {
+    const request = (token?: string, hash = 'b'.repeat(64), operation = 'studio-chat') => new Request('https://gateway.test/v1/chat/completions', {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'X-Screenpipe-Enterprise-Id-Hash': hash, 'X-Screenpipe-AI-Operation': operation },
+    });
+    const serviceEnv = { ...env, AI_GATEWAY_SERVICE_TOKEN: 'runner-service-secret' } as Env;
+    const authenticated = await validateAuth(request('runner-service-secret'), serviceEnv);
+    expect(authenticated.enterpriseAiAttribution).toEqual({ enterprise_id_hash: 'b'.repeat(64), ai_operation: 'studio-chat' });
+    expect(authenticated.service).toBe(true);
+    expect((await validateAuth(request(), serviceEnv)).enterpriseAiAttribution).toBeUndefined();
+    expect((await validateAuth(request('invalid-credential'), serviceEnv)).enterpriseAiAttribution).toBeUndefined();
+    expect((await validateAuth(request('runner-service-secret', 'raw-license'), serviceEnv)).enterpriseAiAttribution).toBeUndefined();
+    expect((await validateAuth(request('runner-service-secret', 'b'.repeat(64), 'person@example.com'), serviceEnv)).enterpriseAiAttribution)
+      .toEqual({ enterprise_id_hash: 'b'.repeat(64) });
+  });
+
   it('does not authenticate an arbitrary UUID, even if it names an account', async () => {
     const fetchMock = mock(async () => new Response(JSON.stringify([{ id: 'active-subscription' }])));
     globalThis.fetch = fetchMock as typeof fetch;

@@ -21,6 +21,21 @@ use tracing::{debug, error, info, warn};
 static USER_SKILL_SYNC_LOCK: Mutex<()> = Mutex::new(());
 static PI_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
+/// Backend runner accounting only; never infer a tenant from prompts or change auth.
+fn cloud_pipe_headers(enterprise_hash: Option<&str>) -> serde_json::Value {
+    let mut headers = json!({
+        "x-screenpipe-latency": "background",
+        "x-screenpipe-workload": "pipe"
+    });
+    if let Some(hash) = enterprise_hash.filter(|hash| {
+        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        headers["X-Screenpipe-Enterprise-Id-Hash"] = json!(hash);
+        headers["X-Screenpipe-AI-Operation"] = json!("cloud-pipes");
+    }
+    headers
+}
+
 struct PiPromptInput {
     user_prompt: std::fs::File,
     system_prompt: Option<tempfile::NamedTempFile>,
@@ -1451,10 +1466,7 @@ impl PiExecutor {
                 "api": "openai-completions",
                 "apiKey": api_key_value,
                 "authHeader": true,
-                "headers": {
-                    "x-screenpipe-latency": "background",
-                    "x-screenpipe-workload": "pipe"
-                },
+                "headers": cloud_pipe_headers(std::env::var("SCREENPIPE_ENTERPRISE_ID_HASH").ok().as_deref()),
                 "models": models
             });
 
@@ -4767,6 +4779,20 @@ pub fn ensure_bash_available() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enterprise_ai_accounting_headers_preserve_latency_and_reject_raw_identity() {
+        let original = super::cloud_pipe_headers(None);
+        assert_eq!(original["x-screenpipe-workload"], "pipe");
+        assert_eq!(original["x-screenpipe-latency"], "background");
+        for invalid in ["", "license-raw", "person@example.com", &"a".repeat(65)] {
+            assert_eq!(super::cloud_pipe_headers(Some(invalid)), original);
+        }
+        let hash = "b".repeat(64);
+        let tagged = super::cloud_pipe_headers(Some(&hash));
+        assert_eq!(tagged["X-Screenpipe-Enterprise-Id-Hash"], hash);
+        assert_eq!(tagged["X-Screenpipe-AI-Operation"], "cloud-pipes");
+        assert_eq!(tagged["x-screenpipe-workload"], original["x-screenpipe-workload"]);
+    }
     use super::*;
 
     #[test]

@@ -26,14 +26,15 @@ describe('Experiential pseudonymous metadata', () => {
     expect(parseTrainingMetadata({ audience: 'consumer', user_id_hash: tags.user_id_hash })).toEqual({ audience: 'consumer', user_id_hash: tags.user_id_hash });
   });
 
-  it('preserves tags across lane/fallback spreads while CF JSON keeps its existing five fields', async () => {
+  it('preserves private training tags and exposes only the verified enterprise accounting hash to CF', async () => {
     const context = await buildHostedChatGatewayContext(auth, 'auto', 'interactive');
     const json = JSON.stringify(context);
     attachExperientialRequestTags(context, tags);
     const spread = withHostedChatLane({ ...context }, 'gpt-5.4-pro', 'explicit');
     expect(getExperientialRequestTags(spread)).toEqual(tags);
     expect(JSON.stringify(context)).toBe(json);
-    expect(Object.keys(spread).sort()).toEqual(['lane', 'plan', 'trial', 'user_id', 'workload']);
+    expect(Object.keys(spread).sort()).toEqual(['enterprise_id_hash', 'lane', 'plan', 'trial', 'user_id', 'workload']);
+    expect(spread.enterprise_id_hash).toBe(tags.enterprise_id_hash);
     const returned = getExperientialRequestTags(spread)!;
     returned.user_id_hash = 'c'.repeat(64);
     expect(getExperientialRequestTags(spread)).toEqual(tags);

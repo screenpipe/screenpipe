@@ -26,6 +26,19 @@ function auth(overrides: Partial<AuthResult> = {}): AuthResult {
 }
 
 describe('Cloudflare hosted-chat metadata', () => {
+	it('attributes service spend without changing its allowance actor or granting training identity', async () => {
+		const service = auth({ service: true, userId: undefined });
+		const original = await buildHostedChatGatewayContext(service, 'gpt-6-astra', 'background');
+		const context = await buildHostedChatGatewayContext({ ...service, enterpriseAiAttribution: {
+			enterprise_id_hash: 'b'.repeat(64), ai_operation: 'cloud-pipes',
+		} }, 'gpt-6-astra', 'background');
+		expect(context).toEqual({ ...original, enterprise_id_hash: 'b'.repeat(64), ai_operation: 'cloud-pipes' });
+		expect(withHostedChatLane(context, 'auto', 'auto').enterprise_id_hash).toBe('b'.repeat(64));
+		const user = await buildHostedChatGatewayContext(auth({ enterpriseAiAttribution: {
+			enterprise_id_hash: 'c'.repeat(64), ai_operation: 'forged',
+		} }), 'auto', 'interactive');
+		expect(user.enterprise_id_hash).toBeUndefined();
+	});
 	it('hashes the account identity and sends only the five reviewed fields', async () => {
 		const first = await buildHostedChatGatewayContext(auth(), 'auto', 'interactive');
 		const second = await buildHostedChatGatewayContext(
