@@ -28,7 +28,10 @@ fn cloud_pipe_headers(enterprise_hash: Option<&str>) -> serde_json::Value {
         "x-screenpipe-workload": "pipe"
     });
     if let Some(hash) = enterprise_hash.filter(|hash| {
-        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     }) {
         headers["X-Screenpipe-Enterprise-Id-Hash"] = json!(hash);
         headers["X-Screenpipe-AI-Operation"] = json!("cloud-pipes");
@@ -4791,7 +4794,10 @@ mod tests {
         let tagged = super::cloud_pipe_headers(Some(&hash));
         assert_eq!(tagged["X-Screenpipe-Enterprise-Id-Hash"], hash);
         assert_eq!(tagged["X-Screenpipe-AI-Operation"], "cloud-pipes");
-        assert_eq!(tagged["x-screenpipe-workload"], original["x-screenpipe-workload"]);
+        assert_eq!(
+            tagged["x-screenpipe-workload"],
+            original["x-screenpipe-workload"]
+        );
     }
     use super::*;
 
