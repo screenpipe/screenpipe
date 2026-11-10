@@ -73,6 +73,8 @@ pub mod mcp_servers_api;
 pub mod meeting_export;
 pub mod meeting_summary;
 pub mod meeting_watcher;
+#[cfg(target_os = "macos")]
+pub mod native_allocator;
 mod oauth_result_page;
 pub mod permission_monitor;
 pub mod piggyback_telemetry;

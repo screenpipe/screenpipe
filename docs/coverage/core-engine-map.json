@@ -577,6 +577,29 @@
       "notes": "Local retention deletion (including lean-mode heavy-text stripping), cloud archive watermarking, atomic state-file replacement, and the low-disk capture monitor."
     },
     {
+      "id": "engine-native-allocator-startup",
+      "label": "macOS native allocator startup policy",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/native_allocator.rs"
+      ],
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "engine-lifecycle",
+        "performance"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Subprocess coverage verifies the one-time pre-runtime exec preserves PID and test arguments, sets the uncached native-heap default, and respects explicit launcher settings."
+    },
+    {
       "id": "engine-telemetry-observability",
       "label": "Engine telemetry, crash logs, and reliability metrics",
       "crate": "screenpipe-engine",

@@ -475,8 +475,17 @@ macro_rules! define_specta_builder {
     }};
 }
 
+fn main() {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = screenpipe_engine::native_allocator::prepare_native_heap() {
+        eprintln!("Unable to initialize native allocator: {error}");
+        std::process::exit(1);
+    }
+    run_app();
+}
+
 #[tokio::main]
-async fn main() {
+async fn run_app() {
     #[cfg(target_os = "macos")]
     if let Some(code) = screenpipe_audio::core::vpio_process::run_hidden_mode().await {
         std::process::exit(code);

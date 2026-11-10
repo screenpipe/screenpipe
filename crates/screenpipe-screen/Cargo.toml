@@ -84,7 +84,7 @@ harness = false
 
 # macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
 [target.'cfg(target_os = "macos")'.dependencies]
-sck-rs = { git = "https://github.com/screenpipe/sck-rs", rev = "62d79abed212015eb9beaa03138002807f61f59a" }
+sck-rs = { git = "https://github.com/screenpipe/sck-rs", rev = "b18356d580f7b61043a791aa14dc8a0ece6f96b1" }
 xcap = { workspace = true }
 libc = { workspace = true }
 cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["vn", "cv", "cg", "app"] }

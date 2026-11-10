@@ -32,10 +32,12 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = RfdetrConfig::default();
     println!("model: {}", cfg.model_path.display());
+    memory_sample("before_load");
     let t0 = Instant::now();
     let redactor = RfdetrRedactor::load_or_download(cfg).await?;
     println!("loaded in {:.1}s", t0.elapsed().as_secs_f64());
 
+    memory_sample("after_load");
     // Probe image: any on-disk frame works; synthesize a plain one if
     // no path was given so the probe has zero data dependencies.
     let path = match std::env::args().nth(1) {
@@ -54,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         "warmup (incl. EP compile): {:.0} ms",
         t0.elapsed().as_secs_f64() * 1000.0
     );
+    memory_sample("after_warmup");
     let n = 10;
     let t0 = Instant::now();
     let mut last = Vec::new();
@@ -65,5 +68,29 @@ async fn main() -> anyhow::Result<()> {
         t0.elapsed().as_secs_f64() * 1000.0 / n as f64,
         last.len()
     );
+    println!("regions_json={}", serde_json::to_string(&last)?);
+    memory_sample("after_inference");
+    drop(redactor);
+    memory_sample("after_drop");
     Ok(())
+}
+
+fn memory_sample(phase: &str) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = phase;
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, data: *mut u8) -> i32;
+        }
+        let mut data = [0u64; 512];
+        assert_eq!(
+            unsafe { proc_pid_rusage(std::process::id() as i32, 2, data.as_mut_ptr().cast()) },
+            0
+        );
+        println!(
+            "memory_json={{\"phase\":\"{phase}\",\"footprint_bytes\":{}}}",
+            data[9]
+        );
+    }
 }

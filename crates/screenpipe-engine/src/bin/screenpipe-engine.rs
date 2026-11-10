@@ -293,6 +293,9 @@ fn restart_after_database_fault() -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    screenpipe_engine::native_allocator::prepare_native_heap()?;
+
     #[cfg(feature = "heap-prof")]
     let _profiler = dhat::Profiler::new_heap();
 
