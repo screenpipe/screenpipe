@@ -45,4 +45,16 @@ const video: GuideVideoPlatform = {
   release: async () => { document.body.dataset.releases = String(++releaseCount); },
 };
 if (params.get("state") !== "before") platform.guides!.video = video;
+// Exercise the desktop's dual-capability path: inline video plus Timeline.
+if (params.get("state")?.startsWith("recording")) {
+  platform.loadWorkflowRecording = async (timestamp, app) => {
+    document.body.dataset.recordingLoads = String(Number(document.body.dataset.recordingLoads ?? 0) + 1);
+    const stage = fixtureWorkflowAnalysis.analysis.workflows.flatMap(workflow => workflow.stages)
+      .find(stage => stage.evidence.some(entry => entry.timestamp === timestamp && entry.app === app));
+    return { kind: "video", url: params.get("state") === "recording-error" ? "/missing.mp4" : "/synthetic-video.mp4",
+      timestamp, frameId: stage?.screenshot?.frameId ?? 1, offsetSeconds: 2, matchDistanceSeconds: 0 };
+  };
+  platform.openCapturedMoment = async () => { document.body.dataset.timelineOpened = "true"; };
+  platform.releaseWorkflowRecording = async () => { document.body.dataset.recordingReleased = "true"; };
+}
 createRoot(document.getElementById("root")!).render(<GTProvider><WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} /></GTProvider>);

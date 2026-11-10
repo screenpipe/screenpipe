@@ -2,7 +2,7 @@
 // https://screenpipe.com
 // Local, synthetic product-component preview. Does not call native commands or providers.
 import { createServer } from "vite";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 const app = resolve(import.meta.dir, "..");
 const video = process.argv[2] && resolve(process.argv[2]);
@@ -21,8 +21,19 @@ const server = await createServer({
         response.end(await server.transformIndexHtml(request.url,
           '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Video SOP component preview</title><style>body{margin:0}*{box-sizing:border-box}</style></head><body><div id="root"></div><script type="module" src="/e2e/fixtures/workflow-video-preview.tsx"></script></body></html>'));
       } else if (request.url === "/synthetic-video.mp4" && video && existsSync(video)) {
+        const size = statSync(video).size;
+        const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
+        const start = range ? Number(range[1]) : 0;
+        const end = range?.[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+        if (start > end || start >= size) { response.writeHead(416, { "Content-Range": `bytes */${size}` }); response.end(); return; }
         response.setHeader("Content-Type", "video/mp4");
-        createReadStream(video).pipe(response);
+        response.setHeader("Accept-Ranges", "bytes");
+        response.setHeader("Content-Length", end - start + 1);
+        if (range) {
+          response.statusCode = 206;
+          response.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+        }
+        createReadStream(video, { start, end }).pipe(response);
       } else next();
     });
   } }],

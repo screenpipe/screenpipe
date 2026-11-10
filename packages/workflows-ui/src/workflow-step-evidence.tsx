@@ -27,9 +27,9 @@ export function WorkflowStepEvidence({ workflow, stage, platform, onImageLayoutC
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState(false);
   const replay = useMemo(() => ({ ...workflow, stages: [selected ? {
-    ...stage, evidence: stage.evidence.filter(e => e.app.toLowerCase() === selected.app.toLowerCase()
-      && Date.parse(e.timestamp) === Date.parse(selected.timestamp)),
+    ...stage, evidence: [{ timestamp: selected.timestamp, app: selected.app, detail: "", source: "screen" }],
   } : stage] }), [workflow, stage, selected]);
+  useEffect(() => { setPlaying(false); setSelected(null); setOpenError(false); }, [workflow.id, workflow.title, stage.id, stage.name]);
   const attached = verifiedStageScreenshots(stage);
   const preview = useSourceScreenshot(stage, attached.length > 0, platform.loadWorkflowScreenshot);
   const available = attached.length ? attached : preview.image ? [preview.image] : [];
@@ -54,26 +54,15 @@ export function WorkflowStepEvidence({ workflow, stage, platform, onImageLayoutC
     }
   };
   const screenshot = screenshots[0];
-  const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
+  const canReplay = platform.loadWorkflowRecording && (screenshots.length > 0 || stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp))));
   const openRecording = async (capture = screenshot) => {
-    if (!platform.openCapturedMoment) { setSelected(capture ?? null); setPlaying(true); return; }
+    if (platform.loadWorkflowRecording) { setSelected(capture ?? null); setPlaying(true); return; }
+    if (!capture || !platform.openCapturedMoment) return;
     setOpening(true); setOpenError(false);
-    let media: Awaited<ReturnType<NonNullable<WorkflowsPlatform["loadWorkflowRecording"]>>> = null;
     try {
-      if (capture) await platform.openCapturedMoment(capture.frameId, capture.timestamp);
-      else {
-        const entry = stage.evidence.find(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
-        if (!entry || !platform.loadWorkflowRecording) throw new Error("Missing capture");
-        media = await platform.loadWorkflowRecording(entry.timestamp, entry.app);
-        if (!media) throw new Error("Capture unavailable");
-        await platform.openCapturedMoment(media.frameId, media.timestamp);
-      }
+      await platform.openCapturedMoment(capture.frameId, capture.timestamp);
     } catch { setOpenError(true); }
-    finally {
-      setOpening(false);
-      if (media?.url.startsWith("blob:")) URL.revokeObjectURL(media.url);
-      else if (media?.url && platform.releaseWorkflowRecording) void platform.releaseWorkflowRecording(media.url).catch(() => {});
-    }
+    finally { setOpening(false); }
   };
   return <section ref={preview.ref} onKeyDown={event => {
     if (event.key === "Escape") { setSelectedImage(null); event.stopPropagation(); }
@@ -97,7 +86,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform, onImageLayoutC
       <WorkflowReplay workflow={replay} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
     </div>}
     <div className={styles.links}>
-      {!screenshots.length && (canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
+      {!screenshots.length && canReplay && !playing && <button className={styles.recording} title="View recording" type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`View recording for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
       {openError && <span role="alert">Could not open this capture. Try again.</span>}
     </div>
   </section>;
@@ -138,7 +127,7 @@ function EvidenceFigure({ capture, stage, platform, suffix, selected, opening, s
       <button type="button" onClick={actions.remove} aria-label="Delete image"><Trash2 size={15} />Delete</button>
     </div>}
     <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
-      {replay && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={replay} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
+      {replay && <button className={styles.recording} title={platform.loadWorkflowRecording ? "View recording" : "Open in Timeline"} type="button" disabled={opening} onClick={replay} aria-label={`${platform.loadWorkflowRecording ? "View" : "Open"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
     </figcaption>
   </figure>;
 }
