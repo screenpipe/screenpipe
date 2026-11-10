@@ -3200,6 +3200,7 @@ async fn do_capture(
             corrupt: None,
         });
     }
+    #[cfg(not(target_os = "macos"))]
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
     #[cfg(target_os = "windows")]
@@ -3297,6 +3298,11 @@ async fn do_capture(
             Err(error) => return Err(error),
         }
     };
+    // Privacy reselection can span a scene transition. Timestamp the returned
+    // pixels rather than the request before settling/retries; the latter can
+    // make a later screenshot appear to coincide with an earlier UI event.
+    #[cfg(target_os = "macos")]
+    let captured_at = Utc::now();
     // This scalar is the screenshot's app identity. Read it immediately after
     // ScreenCaptureKit returns so no process object travels with the pixels.
     let screenshot_focus_pid = if monitor_hosts_focus && !screenshot_disabled {

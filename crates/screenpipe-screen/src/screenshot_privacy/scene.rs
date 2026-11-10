@@ -48,9 +48,54 @@ pub(super) fn paint_black(image: &mut RgbaImage, rect: Rect) {
     }
 }
 
-/// Use only coverage from a native shell surface; never copy excluded RGB.
+/// Native alpha coverage stays in its original buffer. Expanding fragmented
+/// shell alpha into rectangles can create per-pixel region bookkeeping.
 #[cfg(any(target_os = "macos", test))]
-pub(super) fn paint_black_coverage(canvas: &mut RgbaImage, mask: &RgbaImage, x: i64, y: i64) {
+pub(super) enum Redaction {
+    Rect(Rect),
+    Coverage {
+        bounds: Rect,
+        mask: RgbaImage,
+        x: i64,
+        y: i64,
+    },
+}
+#[cfg(any(target_os = "macos", test))]
+impl Redaction {
+    fn bounds(&self) -> Rect {
+        match self {
+            Self::Rect(rect) => *rect,
+            Self::Coverage { bounds, .. } => *bounds,
+        }
+    }
+    pub fn intersects(&self, rect: Rect) -> bool {
+        self.bounds().intersects(rect)
+    }
+    fn covers(&self, dx: i64, dy: i64) -> bool {
+        let r = self.bounds();
+        if dx < r.x || dy < r.y || dx >= r.x + i64::from(r.width) || dy >= r.y + i64::from(r.height)
+        {
+            return false;
+        }
+        match self {
+            Self::Rect(_) => true,
+            Self::Coverage { mask, x, y, .. } => {
+                mask.get_pixel((dx - x) as u32, (dy - y) as u32)[3] > 0
+            }
+        }
+    }
+}
+
+/// Mask only native alpha, never excluded RGB. The returned bounds exclude the
+/// display-sized transparent shell area; holes remain in the original mask.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn paint_black_coverage(
+    canvas: &mut RgbaImage,
+    mask: &RgbaImage,
+    x: i64,
+    y: i64,
+) -> Option<Rect> {
+    let (mut left, mut top, mut right, mut bottom) = (canvas.width(), canvas.height(), 0, 0);
     for (sx, sy, pixel) in mask.enumerate_pixels() {
         let dx = x + i64::from(sx);
         let dy = y + i64::from(sy);
@@ -60,8 +105,63 @@ pub(super) fn paint_black_coverage(canvas: &mut RgbaImage, mask: &RgbaImage, x: 
             && dx < i64::from(canvas.width())
             && dy < i64::from(canvas.height())
         {
-            canvas.put_pixel(dx as u32, dy as u32, Rgba([0, 0, 0, 255]));
+            let (dx, dy) = (dx as u32, dy as u32);
+            canvas.put_pixel(dx, dy, Rgba([0, 0, 0, 255]));
+            left = left.min(dx);
+            top = top.min(dy);
+            right = right.max(dx + 1);
+            bottom = bottom.max(dy + 1);
         }
+    }
+    (right > left && bottom > top).then(|| Rect {
+        x: i64::from(left),
+        y: i64::from(top),
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+/// Restore once across the union of opaque rectangles and native shell alpha.
+/// In particular, never blend foreground again through a transparent mask hole.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn overlay_redacted(
+    canvas: &mut RgbaImage,
+    source: &RgbaImage,
+    x: i64,
+    y: i64,
+    redactions: &[Redaction],
+) {
+    let source_rect = Rect {
+        x,
+        y,
+        width: source.width(),
+        height: source.height(),
+    };
+    let mut clip: Option<Rect> = None;
+    for redaction in redactions {
+        if let Some(rect) = redaction.bounds().intersection(source_rect) {
+            clip = Some(match clip {
+                None => rect,
+                Some(old) => {
+                    let x = old.x.min(rect.x);
+                    let y = old.y.min(rect.y);
+                    Rect {
+                        x,
+                        y,
+                        width: ((old.x + i64::from(old.width)).max(rect.x + i64::from(rect.width))
+                            - x) as u32,
+                        height: ((old.y + i64::from(old.height))
+                            .max(rect.y + i64::from(rect.height))
+                            - y) as u32,
+                    }
+                }
+            });
+        }
+    }
+    if let Some(clip) = clip {
+        overlay_where(canvas, source, x, y, Some(clip), |dx, dy| {
+            redactions.iter().any(|r| r.covers(dx, dy))
+        });
     }
 }
 
@@ -73,6 +173,17 @@ pub(super) fn overlay_premultiplied(
     x: i64,
     y: i64,
     region: Option<Rect>,
+) {
+    overlay_where(canvas, source, x, y, region, |_, _| true);
+}
+
+fn overlay_where<F: Fn(i64, i64) -> bool>(
+    canvas: &mut RgbaImage,
+    source: &RgbaImage,
+    x: i64,
+    y: i64,
+    region: Option<Rect>,
+    covers: F,
 ) {
     let source_rect = Rect {
         x,
@@ -97,6 +208,9 @@ pub(super) fn overlay_premultiplied(
     }
     for dy in clip.y..clip.y + i64::from(clip.height) {
         for dx in clip.x..clip.x + i64::from(clip.width) {
+            if !covers(dx, dy) {
+                continue;
+            }
             let s = source.get_pixel((dx - x) as u32, (dy - y) as u32);
             if s[3] == 0 {
                 continue;
@@ -128,30 +242,91 @@ mod tests {
         let mask =
             RgbaImage::from_raw(3, 1, vec![255, 0, 255, 0, 255, 0, 255, 1, 255, 0, 255, 255])
                 .unwrap();
-        paint_black_coverage(&mut canvas, &mask, 0, 0);
+        assert_eq!(
+            paint_black_coverage(&mut canvas, &mask, 0, 0),
+            Some(rect(1, 0, 2, 1))
+        );
         assert_eq!(canvas.get_pixel(0, 0).0, [0, 255, 255, 255]);
         assert_eq!(canvas.get_pixel(1, 0).0, [0, 0, 0, 255]);
         assert_eq!(canvas.get_pixel(2, 0).0, [0, 0, 0, 255]);
     }
     #[test]
     fn overlapping_exclusions_restore_transparency_once_per_pixel() {
-        let mut regions = Vec::new();
-        add_region(&mut regions, rect(0, 0, 3, 3));
-        add_region(&mut regions, rect(1, 1, 3, 3));
-        add_region(&mut regions, rect(0, 0, 3, 3));
-        for (i, a) in regions.iter().enumerate() {
-            for b in regions.iter().skip(i + 1) {
-                assert!(!a.intersects(*b));
-            }
-        }
+        let regions = [
+            Redaction::Rect(rect(0, 0, 3, 3)),
+            Redaction::Rect(rect(1, 1, 3, 3)),
+            Redaction::Rect(rect(0, 0, 3, 3)),
+        ];
         let mut canvas = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, 255]));
         let source = RgbaImage::from_pixel(4, 4, Rgba([64, 0, 0, 128]));
-        for r in regions {
-            overlay_premultiplied(&mut canvas, &source, 0, 0, Some(r));
-        }
+        overlay_redacted(&mut canvas, &source, 0, 0, &regions);
         assert_eq!(canvas.get_pixel(1, 1).0, [64, 0, 0, 255]);
         assert_eq!(canvas.get_pixel(3, 0).0, [0, 0, 0, 255]);
         assert_eq!(canvas.pixels().filter(|p| p[0] == 64).count(), 14);
+    }
+
+    #[test]
+    fn fragmented_shell_coverage_preserves_holes_and_clips_overlaps() {
+        let mut canvas = RgbaImage::from_pixel(8, 8, Rgba([0, 100, 0, 255]));
+        let mut mask = RgbaImage::from_pixel(8, 8, Rgba([255, 0, 255, 0]));
+        for y in 0..8 {
+            for x in 0..8 {
+                if (x + y) % 2 == 0 {
+                    mask.put_pixel(x, y, Rgba([255, 0, 255, 1]));
+                }
+            }
+        }
+        let bounds = paint_black_coverage(&mut canvas, &mask, -1, 0).unwrap();
+        let regions = [
+            Redaction::Coverage {
+                bounds,
+                mask,
+                x: -1,
+                y: 0,
+            },
+            Redaction::Rect(rect(0, 0, 2, 1)),
+        ];
+        paint_black(&mut canvas, rect(0, 0, 2, 1));
+        let source = RgbaImage::from_pixel(8, 8, Rgba([64, 0, 0, 128]));
+        overlay_redacted(&mut canvas, &source, 0, 0, &regions);
+        for y in 0..8 {
+            for x in 0..8 {
+                let covered = x < 2 && y == 0 || x < 7 && (x + 1 + y) % 2 == 0;
+                assert_eq!(
+                    canvas.get_pixel(x, y).0,
+                    if covered {
+                        [64, 0, 0, 255]
+                    } else {
+                        [0, 100, 0, 255]
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transparent_shell_does_not_restore_unrelated_foreground() {
+        let mut canvas = RgbaImage::from_pixel(8, 6, Rgba([0, 100, 0, 255]));
+        let mut mask = RgbaImage::from_pixel(8, 6, Rgba([255, 0, 255, 0]));
+        assert!(paint_black_coverage(&mut canvas, &mask, 0, 0).is_none());
+        for y in 4..6 {
+            for x in 2..6 {
+                mask.put_pixel(x, y, Rgba([255, 0, 255, 128]));
+            }
+        }
+        let bounds = paint_black_coverage(&mut canvas, &mask, 0, 0).unwrap();
+        assert_eq!(bounds, rect(2, 4, 4, 2));
+        let region = Redaction::Coverage {
+            bounds,
+            mask,
+            x: 0,
+            y: 0,
+        };
+        assert!(!region.intersects(rect(0, 0, 8, 4)));
+        let foreground = RgbaImage::from_pixel(8, 6, Rgba([64, 0, 0, 128]));
+        overlay_redacted(&mut canvas, &foreground, 0, 0, &[region]);
+        assert_eq!(canvas.get_pixel(0, 0).0, [0, 100, 0, 255]);
+        assert_eq!(canvas.get_pixel(3, 5).0, [64, 0, 0, 255]);
     }
 
     #[test]
@@ -195,52 +370,4 @@ mod tests {
         assert_eq!(canvas.get_pixel(1, 1).0, [200, 0, 0, 255]);
         assert_eq!(canvas.get_pixel(2, 1).0, [0, 0, 200, 255]);
     }
-}
-
-/// Keep an exact disjoint union so translucent foreground pixels are never
-/// blended twice where two excluded windows overlap.
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn add_region(regions: &mut Vec<Rect>, rect: Rect) {
-    let mut pending = vec![rect];
-    for existing in regions.iter() {
-        let mut next = Vec::new();
-        for r in pending {
-            let Some(i) = r.intersection(*existing) else {
-                next.push(r);
-                continue;
-            };
-            for part in [
-                Rect {
-                    x: r.x,
-                    y: r.y,
-                    width: r.width,
-                    height: (i.y - r.y) as u32,
-                },
-                Rect {
-                    x: r.x,
-                    y: i.y + i64::from(i.height),
-                    width: r.width,
-                    height: (r.y + i64::from(r.height) - i.y - i64::from(i.height)) as u32,
-                },
-                Rect {
-                    x: r.x,
-                    y: i.y,
-                    width: (i.x - r.x) as u32,
-                    height: i.height,
-                },
-                Rect {
-                    x: i.x + i64::from(i.width),
-                    y: i.y,
-                    width: (r.x + i64::from(r.width) - i.x - i64::from(i.width)) as u32,
-                    height: i.height,
-                },
-            ] {
-                if part.width > 0 && part.height > 0 {
-                    next.push(part);
-                }
-            }
-        }
-        pending = next;
-    }
-    regions.extend(pending);
 }
