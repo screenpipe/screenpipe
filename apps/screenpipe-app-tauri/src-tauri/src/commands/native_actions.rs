@@ -80,6 +80,15 @@ pub(super) fn install_shortcut_action_callback(app_handle: &tauri::AppHandle) {
     install_native_timeline_placement(app_handle);
     if STARRED_STATE_INSTALLED.set(()).is_err() { return; }
     use tauri::Listener;
+    app_handle.listen("focused-recording-state", |event| {
+        if let Ok(end) = serde_json::from_str::<Option<String>>(event.payload()) {
+            let until = end
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+                .map(|value| value.timestamp_millis())
+                .unwrap_or(0);
+            native_shortcut_reminder::set_focused_until(until);
+        }
+    });
     app_handle.listen("starred-session-state", |event| {
         if let Ok(end) = serde_json::from_str::<Option<String>>(event.payload()) {
             let until = end.and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())

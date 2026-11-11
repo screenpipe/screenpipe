@@ -520,7 +520,7 @@ private func testClampWithoutDisplaysIsIdentity() {
 
 /// Selecting a UI locale must translate labels and leave shortcut tokens intact.
 private func testLocalizedDisclosure() {
-    let sources = ["right-click", "star work session", "{minutes} min left · click to end", "timeline", "ask chat", "search", "mic capture", "live", "idle", "settings"]
+    let sources = ["right-click", "star work session", "Open recording controls", "timeline", "ask chat", "search", "mic capture", "live", "idle", "settings"]
     let translations = Dictionary(uniqueKeysWithValues: sources.map { source in
         (SHA256.hash(data: Data(source.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined(), "localized " + source)
     })
@@ -537,8 +537,8 @@ private func testLocalizedDisclosure() {
     metrics.starredActive = true
     metrics.starredMinutesRemaining = 42
     let activeStar = disclosureContent(for: "star", overlayShortcut: "", chatShortcut: "", searchShortcut: "", starShortcut: "⌥B", metrics: metrics)
-    expect(activeStar?.0 == "localized 42 min left · click to end", "active session status must replace the start hint")
-    expect(activeStar?.1 == "⌥B", "active session preserves its stop shortcut")
+    expect(activeStar?.0 == "localized Open recording controls", "active session status must replace the start hint")
+    expect(activeStar?.1 == "⌥B", "active session preserves its controls shortcut")
     metrics.starredActive = false
     let disabledStar = disclosureContent(for: "star", overlayShortcut: "", chatShortcut: "", searchShortcut: "", starShortcut: "", metrics: metrics)
     expect(disabledStar?.1 == "", "disabled star shortcut must not show a chord")

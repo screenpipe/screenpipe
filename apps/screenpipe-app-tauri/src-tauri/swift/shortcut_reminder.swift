@@ -949,7 +949,7 @@ func disclosureContent(
     switch control {
     case "brand": return ("screenpipe", uiText("right-click"))
     case "star": return (metrics.starredActive
-        ? uiText("{minutes} min left · click to end", ["minutes": String(metrics.starredMinutesRemaining)])
+        ? uiText("Open recording controls")
         : uiText("star work session"), starShortcut)
     case "timeline": return (uiText("timeline"), overlayShortcut)
     case "chat": return (uiText("ask chat"), chatShortcut)
@@ -1310,10 +1310,10 @@ struct ShortcutReminderView: View {
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
-            DockIconButton(icon: metrics.starredActive ? "star.fill" : "star", active: metrics.hoveredControl == "star", scale: scale, caption: metrics.starredActive ? "\(metrics.starredMinutesRemaining)m" : nil) {
+            DockIconButton(icon: metrics.starredActive ? "star.fill" : "star", active: metrics.hoveredControl == "star", scale: scale) {
                 onAction("open_starred_sessions")
             }
-            .accessibilityLabel(metrics.starredActive ? uiText("{minutes} min left · click to end", ["minutes": String(metrics.starredMinutesRemaining)]) : uiText("Star a work session"))
+            .accessibilityLabel(metrics.starredActive ? uiText("Open recording controls") : uiText("Star a work session"))
             DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
                 onAction("open_timeline")
             }

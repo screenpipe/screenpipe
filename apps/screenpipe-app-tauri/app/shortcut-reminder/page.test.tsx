@@ -941,19 +941,19 @@ describe("cross-platform star controls", () => {
   });
 });
 
-it("shows remaining minutes in the star button and updates the active disclosure", async () => {
+it("keeps legacy minutes visible while the star opens recording controls", async () => {
   mocks.meetingOverlayState.active = false;
   mocks.getRecordingHealthState.mockResolvedValue("normal");
   mocks.starred = { active: { end: new Date(3600000).toISOString() }, now: 59000 };
   const view = render(<ShortcutReminderPage />);
   fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
-  const star = await screen.findByRole("button", { name: "60 min left · click to end" });
+  const star = await screen.findByRole("button", { name: "Open recording controls" });
   expect(star).toHaveTextContent("60m");
   fireEvent.mouseEnter(star);
-  expect(await screen.findByText("60 min left · click to end", { exact: false })).toBeVisible();
+  expect((await screen.findAllByText("Open recording controls", { exact: false })).length).toBeGreaterThan(0);
   mocks.starred.now = 60000;
   view.rerender(<ShortcutReminderPage />);
-  expect(screen.getByRole("button", { name: "59 min left · click to end" })).toHaveTextContent("59m");
+  expect(screen.getByRole("button", { name: "Open recording controls" })).toHaveTextContent("59m");
   mocks.starred.active = undefined;
   view.rerender(<ShortcutReminderPage />);
   expect(screen.getByRole("button", { name: "Starred work sessions" })).not.toHaveTextContent("59m");

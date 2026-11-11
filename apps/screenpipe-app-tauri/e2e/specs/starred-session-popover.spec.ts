@@ -11,7 +11,7 @@ const visible = (label: string) =>
 describe("starred session popover", function () {
   this.timeout(t(150_000));
 
-  it("saves in floating controls, dismisses and reopens without showing Home", async () => {
+  it("records immediately, pauses, and reopens the same workflow without showing Home", async () => {
     await waitForAppReady();
     // Use the existing test-only account seam, with production refresh disabled.
     await browser.execute(() => {
@@ -37,7 +37,7 @@ describe("starred session popover", function () {
         try {
           return (
             await fetch(
-              `http://127.0.0.1:${config.port}/starred-sessions?limit=100`,
+              `http://127.0.0.1:${config.port}/focused-recordings/current`,
               {
                 headers: authHeaders(config.key),
               },
@@ -50,7 +50,7 @@ describe("starred session popover", function () {
       {
         timeout: t(45_000),
         interval: 500,
-        timeoutMsg: "starred session storage did not become ready",
+        timeoutMsg: "focused recording storage did not become ready",
       },
     );
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
@@ -70,40 +70,35 @@ describe("starred session popover", function () {
     }
     await invokeOrThrow("hide_starred_sessions");
     await invokeOrThrow("toggle_starred_sessions");
-    // The visibility event remounts controls. Do not retain a WebDriver
-    // element across that remount while waiting for the backend.
-    await browser.waitUntil(async () => browser.execute(() =>
-      Array.from(document.querySelectorAll("button")).some(button =>
-        button.textContent?.trim() === "15 min" && !button.disabled)),
-      { timeout: t(30_000) });
+    await $("button=Pause").waitForDisplayed({ timeout: t(30_000) });
     expect(await visible("starred-sessions")).toBe(true);
     expect(await browser.getWindowHandles()).not.toContain("home");
-    await browser.pause(t(250)); // Let WebKit finish compositing the snapshot.
-    await browser.saveScreenshot("e2e/results/starred-session-popover.png");
-    await $("button=15 min").click();
-    await $("button=End session").waitForDisplayed({ timeout: t(15_000) });
-    const closeBounds = await $(
-      '[aria-label="Close session controls"]',
-    ).getLocation();
-    expect(closeBounds.y).toBeGreaterThanOrEqual(0);
-    const response = await fetch(
-      `http://127.0.0.1:${config.port}/starred-sessions?limit=100`,
-      { headers: authHeaders(config.key) },
-    );
-    expect(response.ok).toBe(true);
-    const payload = (await response.json()) as {
-      data: Array<{ start: string; end: string }>;
+    expect(await $("button=Start").isExisting()).toBe(false);
+    const readSession = async () => {
+      const response = await fetch(`http://127.0.0.1:${config.port}/focused-recordings/current`, {headers:authHeaders(config.key)});
+      expect(response.ok).toBe(true);
+      return await response.json() as {id:string;phase:string;intervals:Array<{start:number;end:number|null}>};
     };
-    expect(payload.data).toHaveLength(1);
-    expect(
-      Date.parse(payload.data[0].end) - Date.parse(payload.data[0].start),
-    ).toBe(15 * 60_000);
+    const started = await readSession();
+    expect(started.phase).toBe("recording");
+    await $('[aria-label="Workflow name"]').setValue("Review an invoice");
+    await $("button=Pause").click();
+    await $("button=Resume").waitForDisplayed({ timeout: t(15_000) });
+    const paused = await readSession();
+    expect(paused.id).toBe(started.id);
+    expect(paused.phase).toBe("paused");
+    expect(paused.intervals.at(-1)?.end).not.toBeNull();
+    await browser.saveScreenshot("e2e/results/starred-session-popover.png");
     await browser.keys("Escape");
     await browser.waitUntil(async () => !(await visible("starred-sessions")), {
       timeout: t(5000),
     });
     await invokeOrThrow("toggle_starred_sessions");
-    await $("button=End session").waitForDisplayed({ timeout: t(15_000) });
+    await $("button=Resume").waitForDisplayed({ timeout: t(15_000) });
+    expect((await readSession()).id).toBe(started.id);
+    await $("button=Finish").click();
+    await $("button=Submit").waitForDisplayed({ timeout: t(15_000) });
+    expect((await readSession()).phase).toBe("summary");
     await $('[aria-label="Close session controls"]').click();
     await browser.waitUntil(async () => !(await visible("starred-sessions")), {
       timeout: t(5000),

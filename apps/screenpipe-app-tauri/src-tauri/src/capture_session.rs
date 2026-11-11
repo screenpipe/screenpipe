@@ -48,6 +48,7 @@ pub struct CaptureSession {
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
     audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
     audio_disabled: bool,
+    focused_capture: Arc<screenpipe_engine::high_fps_controller::HighFpsController>,
     /// Cleared on stop so `/vision/device/*` stops pointing at a shut-down manager.
     vision_manager_handle: Option<
         Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
@@ -341,6 +342,7 @@ impl CaptureSession {
             ui_recorder_handle,
             audio_manager: server.audio_manager.clone(),
             audio_disabled: config.disable_audio,
+            focused_capture: server.high_fps_controller.clone(),
             vision_manager_handle,
         })
     }
@@ -376,6 +378,7 @@ impl CaptureSession {
             crate::enterprise::recording_events::State::Stopping, reason,
         );
         info!("Stopping capture session");
+        self.focused_capture.interrupt_focused_capture();
         screenpipe_engine::meeting_watcher::set_capture_stopped(true);
         let mut failures = Vec::new();
 

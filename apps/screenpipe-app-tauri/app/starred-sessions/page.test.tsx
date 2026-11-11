@@ -39,142 +39,75 @@ vi.mock("@/lib/hooks/use-tauri-event", () => ({
 }));
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
+vi.mock("@/lib/hooks/use-managed-policy", () => ({ useManagedPolicy: () => ({ isManagedDeploymentResolved:true,isManagedAuthenticated:true,authenticationState:"authenticated",policy:{recordingAllowed:true,lockedSettings:{}} }) }));
+vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ isSettingsLoaded:true,settings:{disableAudio:false} }) }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async()=>{}) }));
+const fixture = () => ({ id:"fixture",name:"Fixture workflow",phase:"recording",voiceEnabled:false,revision:1,createdAt:Date.now(),lastCaptureAt:Date.now(),captureUntil:Date.now()+15000,intervals:[{start:Date.now(),end:null}],media:null });
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.hide.mockResolvedValue({ status: "ok", data: null });
-  mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
+  mocks.fetch.mockResolvedValue({ ok: true, json: async () => fixture() });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-it("opens just the duration picker and dismisses with Escape", async () => {
+it("opens the running recording directly and dismisses with Escape", async () => {
   render(<Page />);
-  expect(
-    await screen.findByRole("dialog", { name: "Starred work sessions" }),
-  ).toBeVisible();
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "15 min" })).toBeEnabled(),
-  );
-  fireEvent.keyDown(window, { key: "Escape" });
+  expect(await screen.findByRole("button",{name:"Finish"})).toBeVisible();
+  expect(screen.queryByRole("button",{name:"Start"})).toBeNull();
+  fireEvent.keyDown(window,{key:"Escape"});
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(mocks.hide).toHaveBeenCalledTimes(1);
+  expect(mocks.hide).toHaveBeenCalledOnce();
 });
-it("unmounts controls while hidden and reloads on reopening", async () => {
+it("keeps the same controls mounted while hidden and reopens without a new capture", async () => {
   render(<Page />);
-  await waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(1));
-  act(() => mocks.visibility!({ payload: false }));
+  const name = await screen.findByRole("textbox",{name:"Workflow name"});
+  act(() => mocks.visibility!({payload:false}));
   expect(screen.queryByRole("dialog")).toBeNull();
-  act(() => mocks.visibility!({ payload: true }));
-  await waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(2));
-  expect(screen.getByRole("button", { name: "5 min" })).toBeVisible();
+  expect(name).toBeInTheDocument();
+  act(() => mocks.visibility!({payload:true}));
+  expect(screen.getByRole("textbox",{name:"Workflow name"})).toBe(name);
+  expect(mocks.fetch).toHaveBeenCalledOnce();
 });
-it("keeps storage errors and retry visible inside the picker", async () => {
-  mocks.fetch.mockResolvedValue({
-    ok: false,
-    json: async () => ({ error: "could not access starred sessions" }),
-  });
+it("keeps load errors and Retry visible without fabricating a recording", async () => {
+  mocks.fetch.mockResolvedValue({ok:false,status:503,json:async()=>({error:"Save unavailable"})});
   render(<Page />);
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "could not access starred sessions",
-  );
-  expect(screen.getByRole("button", { name: "15 min" })).toBeDisabled();
-  mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
-  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "15 min" })).toBeEnabled(),
-  );
+  expect(await screen.findByRole("alert")).toHaveTextContent("Save unavailable");
+  expect(screen.queryByRole("button",{name:"Finish"})).toBeNull();
+  mocks.fetch.mockResolvedValue({ok:true,json:async()=>fixture()});
+  fireEvent.click(screen.getByRole("button",{name:"Retry"}));
+  expect(await screen.findByRole("button",{name:"Finish"})).toBeEnabled();
 });
-it("does not dismiss when an editor consumes Escape", () => {
+it("Escape cancels delete confirmation before it can dismiss the native panel", async () => {
+  const saved = {...fixture(),phase:"summary",intervals:[],media:{screenFrames:1,audioSeconds:0,audioChunks:0}};
+  mocks.fetch.mockResolvedValue({ok:true,json:async()=>saved});
   render(<Page />);
-  const event = new KeyboardEvent("keydown", {
-    key: "Escape",
-    cancelable: true,
-  });
-  event.preventDefault();
-  window.dispatchEvent(event);
+  fireEvent.click(await screen.findByRole("button",{name:"Delete"}));
+  expect(screen.getByText("Delete recording?")).toBeVisible();
+  fireEvent.keyDown(screen.getByRole("region",{name:"Focused recording"}),{key:"Escape"});
+  expect(screen.getByRole("button",{name:"Submit"})).toBeVisible();
   expect(mocks.hide).not.toHaveBeenCalled();
 });
-
-it("dismisses after five idle seconds without changing the saved session", async () => {
-  const session = { id: "active", start: new Date().toISOString(), end: new Date(Date.now() + 3600000).toISOString(), revision: 1, hd_requested: false, has_audio: false };
-  mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [session] }) });
-  render(<Page />);
-  await screen.findByText("Session starred");
-  vi.useFakeTimers();
-  fireEvent.pointerMove(screen.getByRole("region", { name: "Starred work sessions" }));
-  await act(async () => { await vi.advanceTimersByTimeAsync(4999); });
-  expect(mocks.hide).not.toHaveBeenCalled();
-  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-  expect(mocks.hide).toHaveBeenCalledTimes(1);
-  expect(mocks.fetch.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
-});
-it("keeps the popup open during inline time edits", async () => {
-  const session = { id: "active", start: new Date().toISOString(), end: new Date(Date.now() + 3600000).toISOString(), revision: 1, hd_requested: false, has_audio: false };
-  mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [session] }) });
-  render(<Page />);
-  await screen.findByText("Session starred");
-  fireEvent.click(screen.getByRole("button", { name: "More", exact: true }));
-  fireEvent.click(screen.getByRole("button", { name: "Edit session end" }));
-  vi.useFakeTimers();
-  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
-  expect(mocks.hide).not.toHaveBeenCalled();
-  expect(screen.getByLabelText("Session end")).toBeVisible();
-});
-it("does not auto-dismiss a storage error", async () => {
-  mocks.fetch.mockResolvedValue({ ok: false, json: async () => ({ error: "Save unavailable" }) });
-  render(<Page />);
-  await screen.findByRole("alert");
-  vi.useFakeTimers();
-  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+it("never dismisses an unsent summary after five idle seconds", async () => {
+  mocks.fetch.mockResolvedValue({ok:true,json:async()=>({...fixture(),phase:"summary",intervals:[],media:{screenFrames:0,audioSeconds:0,audioChunks:0}})});
+  render(<Page />); await screen.findByRole("button",{name:"Submit"});
+  vi.useFakeTimers(); await act(async()=>{await vi.advanceTimersByTimeAsync(60000);});
   expect(mocks.hide).not.toHaveBeenCalled();
 });
-
-it("shows the star before controls, keeps the default, and updates the same session", async () => {
-  vi.useFakeTimers();
-  let session = { id: "active", start: new Date().toISOString(), end: new Date(Date.now() + 3600000).toISOString(), revision: 1, hd_requested: false, has_audio: false };
-  mocks.fetch.mockImplementation(async (_url, init) => {
-    if (init?.method === "POST") {
-      session = { ...JSON.parse(init.body), revision: 2 };
-      return { ok: true, json: async () => session };
-    }
-    return { ok: true, json: async () => ({ data: [session] }) };
-  });
-  await act(async () => { render(<Page />); });
-  expect(screen.getByRole("status", { name: "Session starred" })).toBeVisible();
-  expect(screen.queryByRole("button", { name: "15 min" })).toBeNull();
-  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
-  expect(screen.getByRole("button", { name: "60 min" })).toHaveAttribute("aria-pressed", "true");
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "15 min" })); });
-  expect(session.id).toBe("active");
-  expect(Date.parse(session.end) - Date.parse(session.start)).toBe(15 * 60000);
-  expect(session.hd_requested).toBe(false);
-  expect(screen.getByText("15 min left")).toBeVisible();
+it("retains the controls when native dismissal fails", async () => {
+  render(<Page />); await screen.findByRole("button",{name:"Finish"});
+  mocks.hide.mockResolvedValueOnce({status:"error",error:"Unavailable"});
+  fireEvent.click(screen.getByRole("button",{name:"Close session controls"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not close the panel");
+  expect(screen.getByRole("dialog")).toBeVisible();
 });
-
-it("pauses dismissal while hovered and resumes after leaving", async () => {
-  mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: "active", start: new Date().toISOString(), end: new Date(Date.now() + 3600000).toISOString(), revision: 1, hd_requested: false, has_audio: false }] }) });
-  render(<Page />);
-  await screen.findByText("Session starred");
-  vi.useFakeTimers();
-  const controls = screen.getByRole("region", { name: "Starred work sessions" });
-  fireEvent.pointerEnter(controls);
-  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
-  expect(mocks.hide).not.toHaveBeenCalled();
-  fireEvent.pointerLeave(controls);
-  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-  expect(mocks.hide).toHaveBeenCalledTimes(1);
-});
-
-it("fits expanded controls inside a negative-origin monitor work area", async () => {
+it("fits controls inside a negative-origin monitor work area", async () => {
   let resized!: () => void;
-  vi.stubGlobal("ResizeObserver", class {
-    constructor(callback: () => void) { resized = callback; }
-    observe() {} disconnect() {}
-  });
+  vi.stubGlobal("ResizeObserver",class { constructor(callback:()=>void){resized=callback;} observe(){} disconnect(){} });
   try {
-    const { container } = render(<Page />);
-    Object.defineProperty(container.firstElementChild, "scrollHeight", { value: 300 });
-    await act(async () => { resized(); });
-    expect(mocks.resize).toHaveBeenCalledWith(expect.objectContaining({ width: 308, height: 300 }));
-    expect(mocks.move).toHaveBeenCalledWith(expect.objectContaining({ x: -616, y: -640 }));
-  } finally { cleanup(); vi.unstubAllGlobals(); }
+    const {container}=render(<Page />);
+    Object.defineProperty(container.firstElementChild,"scrollHeight",{value:300});
+    await act(async()=>{resized();});
+    expect(mocks.resize).toHaveBeenCalledWith(expect.objectContaining({width:308,height:300}));
+    expect(mocks.move).toHaveBeenCalledWith(expect.objectContaining({x:-616,y:-640}));
+  } finally {cleanup();vi.unstubAllGlobals();}
 });

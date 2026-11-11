@@ -26,6 +26,8 @@ import {
   Star,
   X,
 } from "lucide-react";
+import { localFetch } from "@/lib/api";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { useStarredSessions } from "@/components/starred-sessions/use-starred-sessions";
 import { useOverlayData } from "./use-overlay-data";
 import { useMeetingOverlay } from "./use-meeting-overlay";
@@ -111,6 +113,20 @@ export default function ShortcutReminderPage() {
   const [expanded, setExpanded] = useState(false);
   const [starError, setStarError] = useState(false);
   const starredSessions = useStarredSessions();
+  const [focusedUntil, setFocusedUntil] = useState(0);
+  useTauriEvent<string | null>("focused-recording-state", event => {
+    setFocusedUntil(event.payload ? Date.parse(event.payload) || 0 : 0);
+  });
+  useEffect(() => {
+    let disposed = false;
+    void localFetch("/focused-recordings/current").then(async response => {
+      if (!response.ok) return;
+      const session = await response.json();
+      if (!disposed) setFocusedUntil(session?.phase === "recording" ? session.captureUntil : 0);
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, []);
+  const starredActive = Boolean(starredSessions.active) || focusedUntil > starredSessions.now;
   const starredMinutes = starredSessions.active
     ? Math.max(1, Math.ceil((Date.parse(starredSessions.active.end) - starredSessions.now) / 60000))
     : 0;
@@ -711,14 +727,14 @@ export default function ShortcutReminderPage() {
               Meeting live{meetingOverlay.meetingApp ? ` · ${meetingOverlay.meetingApp}` : ""}
             </span>
             <button
-              aria-label={starredSessions.active ? ui("{minutes} min left · click to end", { minutes: starredMinutes }) : ui("Starred work sessions")}
-              title={starredSessions.active ? ui("{minutes} min left · click to end", { minutes: starredMinutes }) : ui("Starred work sessions")}
+              aria-label={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
+              title={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={() => void openStarPanel()}
               className="ml-auto flex items-center justify-center px-1.5 h-full text-white/70 hover:text-white hover:bg-white/10"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             >
-              <Star className={starredSessions.active ? "fill-white" : ""} style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
+              <Star className={starredActive ? "fill-white" : ""} style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
             </button>
             <button
               onClick={(event) => {
@@ -772,7 +788,7 @@ export default function ShortcutReminderPage() {
   }
 
   const disclosure = hoveredControl === "star"
-    ? [starredSessions.active ? ui("{minutes} min left · click to end", { minutes: starredMinutes }) : "Star work session", starShortcut]
+    ? [starredActive ? ui("Open recording controls") : "Star work session", starShortcut]
     : hoveredControl === "search"
     ? ["search", searchShortcut]
     : hoveredControl === "brand"
@@ -831,7 +847,7 @@ export default function ShortcutReminderPage() {
               backgroundImage: "url('/32x32.png')",
             }}
           />
-          {starredSessions.active && <Star aria-label="Work session starred" className="absolute -top-1 -left-1 h-2 w-2 fill-white text-white" />}
+          {starredActive && <Star aria-label="Work session starred" className="absolute -top-1 -left-1 h-2 w-2 fill-white text-white" />}
           {meetingOverlay.active && (
             <span
               role="status"
@@ -919,8 +935,8 @@ export default function ShortcutReminderPage() {
           <MessageCircle style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
         <button
-          title={starredSessions.active ? ui("{minutes} min left · click to end", { minutes: starredMinutes }) : ui("Starred work sessions")}
-          aria-label={starredSessions.active ? ui("{minutes} min left · click to end", { minutes: starredMinutes }) : ui("Starred work sessions")}
+          title={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
+          aria-label={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
           aria-haspopup="dialog"
           className={dockButtonClass}
           style={dockButtonStyle}
@@ -930,8 +946,8 @@ export default function ShortcutReminderPage() {
           onClick={() => void openStarPanel()}
         >
           <span className="flex flex-col items-center gap-px">
-            <Star className={starredSessions.active ? "fill-white" : ""} style={{ width: `${(starredMinutes ? 10 : 12) * overlayScale}px`, height: `${(starredMinutes ? 10 : 12) * overlayScale}px` }} />
-            {starredMinutes > 0 && <span className="font-mono tabular-nums leading-none" style={{ fontSize: `${7 * overlayScale}px` }}>{starredMinutes}m</span>}
+            <Star className={starredActive ? "fill-white" : ""} style={{ width: `${(starredMinutes ? 10 : 12) * overlayScale}px`, height: `${(starredMinutes ? 10 : 12) * overlayScale}px` }} />
+            {!focusedUntil && starredMinutes > 0 && <span className="font-mono tabular-nums leading-none" style={{ fontSize: `${7 * overlayScale}px` }}>{starredMinutes}m</span>}
           </span>
         </button>
         <button

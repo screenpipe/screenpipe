@@ -49,6 +49,7 @@ pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, ActivityActionDraft,
     ActivityActionRecord, ActivityEvidenceDraft, ActivityEvidenceRecord, ActivityIntervalDraft,
     ActivityIntervalRecord, ActivityLedgerObservation, ActivityTaskDraft, DatabaseManager,
+    FocusedAction, FocusedPhase, FocusedRecording, FocusedInterval, FocusedMedia,
     DeleteTimeRangeResult, ImmediateTx, NewMeetingTranscriptSegment, SemanticActor,
     SemanticActorAlias, SemanticActorReference, SemanticAttachResult, SemanticCleanupResult,
     SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult, StarredSession,

@@ -176,6 +176,8 @@ impl HighFpsSnapshot {
 pub struct HighFpsController {
     inner: Mutex<Option<Session>>,
     starred: Mutex<Option<(String, Session)>>,
+    focused: Mutex<Option<(String, Session)>>,
+    focused_owner: String,
     /// Default mode persists across sessions. Stored as `AtomicI8` so the
     /// hot path doesn't take the inner lock just to read it.
     default_mode: AtomicI8,
@@ -202,6 +204,8 @@ impl HighFpsController {
         Self {
             inner: Mutex::new(None),
             starred: Mutex::new(None),
+            focused: Mutex::new(None),
+            focused_owner: uuid::Uuid::new_v4().to_string(),
             default_mode: AtomicI8::new(default_mode.as_i8()),
             interval_ms: AtomicU64::new(interval_ms.max(MIN_INTERVAL_MS)),
             detector,
@@ -254,6 +258,19 @@ impl HighFpsController {
             (a, b) => a.or(b),
         };
         drop(starred);
+        // Keep the last boundary as recovery proof even after expiry.
+        let focused = self.focused.lock().expect("focused HD mutex poisoned");
+        let session = match (
+            session,
+            focused
+                .as_ref()
+                .map(|(_, s)| *s)
+                .filter(|s| s.expires_at > now),
+        ) {
+            (Some(a), Some(b)) => Some(if a.expires_at >= b.expires_at { a } else { b }),
+            (a, b) => a.or(b),
+        };
+        drop(focused);
         if let Some(s) = session {
             HighFpsSnapshot {
                 active: true,
@@ -439,9 +456,70 @@ impl HighFpsController {
         }
     }
 
+    /// A separate short-lived lease: focused controls cannot replace a star,
+    /// meeting, or manual HD timer. The host renews it while capture is alive.
+    pub fn set_focused_session(&self, id: &str, duration: Duration) {
+        let mut slot = self.focused.lock().expect("focused HD mutex poisoned");
+        if duration.is_zero() {
+            if let Some((_, session)) = slot.as_mut().filter(|(current, _)| current == id) {
+                session.expires_at = session.expires_at.min(Instant::now());
+            }
+        } else {
+            let now = Instant::now();
+            let started_at = slot
+                .as_ref()
+                .filter(|(current, s)| current == id && s.expires_at > now)
+                .map(|(_, s)| s.started_at)
+                .unwrap_or(now);
+            *slot = Some((
+                id.to_owned(),
+                Session {
+                    kind: SessionKind::Starred,
+                    started_at,
+                    expires_at: now + duration.min(Duration::from_secs(30)),
+                },
+            ));
+        }
+    }
+    pub fn focused_session_active(&self, id: &str) -> bool {
+        self.focused
+            .lock()
+            .expect("focused HD mutex poisoned")
+            .as_ref()
+            .is_some_and(|(current, s)| current == id && s.expires_at > Instant::now())
+    }
+
+    pub fn focused_owner(&self) -> &str {
+        &self.focused_owner
+    }
+    /// Convert this controller's proven monotonic stop time to the API clock.
+    pub fn focused_capture_end(&self, id: &str) -> Option<i64> {
+        let slot = self.focused.lock().expect("focused HD mutex poisoned");
+        let (_, session) = slot.as_ref().filter(|(current, _)| current == id)?;
+        let now = Instant::now();
+        if session.expires_at > now {
+            return None;
+        }
+        Some(
+            chrono::Utc::now().timestamp_millis()
+                - now.duration_since(session.expires_at).as_millis() as i64,
+        )
+    }
+
+    pub fn interrupt_focused_capture(&self) {
+        if let Some((_, session)) = self
+            .focused
+            .lock()
+            .expect("focused HD mutex poisoned")
+            .as_mut()
+        {
+            session.expires_at = session.expires_at.min(Instant::now());
+        }
+    }
     /// Stop all HD, including a star lease, on an explicit user stop.
     pub fn stop_session(&self) -> HighFpsSnapshot {
         *self.starred.lock().expect("starred HD mutex poisoned") = None;
+        self.interrupt_focused_capture();
         let mut guard = self.inner.lock().expect("HighFpsController mutex poisoned");
         if let Some(s) = guard.take() {
             tracing::info!(
@@ -972,5 +1050,41 @@ mod starred_tests {
         assert_eq!(controller.snapshot().kind, Some(SessionKind::Timer));
         controller.set_starred_session("b", Duration::from_secs(900));
         assert!(!controller.stop_session().active);
+    }
+    #[test]
+    fn focused_pause_preserves_other_capture_leases() {
+        let c = HighFpsController::new(None, DefaultMode::Ask, 100);
+        c.start_timer_session(Duration::from_secs(120));
+        c.set_starred_session("star", Duration::from_secs(60));
+        c.set_focused_session("focus", Duration::from_secs(15));
+        assert!(c.focused_session_active("focus"));
+        c.set_focused_session("other", Duration::ZERO);
+        assert!(c.focused_session_active("focus"));
+        c.set_focused_session("focus", Duration::ZERO);
+        assert!(!c.focused_session_active("focus"));
+        assert!(c.snapshot().active);
+        c.set_starred_session("star", Duration::ZERO);
+        assert!(c.snapshot().active);
+    }
+    #[test]
+    fn explicit_stop_revokes_focused_capture_as_well() {
+        let c = HighFpsController::new(None, DefaultMode::Ask, 100);
+        c.set_focused_session("focus", Duration::from_secs(15));
+        c.stop_session();
+        assert!(!c.focused_session_active("focus"));
+        assert!(!c.snapshot().active);
+    }
+    #[test]
+    fn focused_stop_boundary_survives_snapshot_for_failed_write_recovery() {
+        let c = HighFpsController::new(None, DefaultMode::Ask, 100);
+        let before = chrono::Utc::now().timestamp_millis();
+        c.set_focused_session("focus", Duration::from_secs(15));
+        c.set_focused_session("focus", Duration::ZERO);
+        assert!(!c.snapshot().active);
+        let stopped = c.focused_capture_end("focus").unwrap();
+        assert!(stopped >= before && stopped <= chrono::Utc::now().timestamp_millis());
+        let other = HighFpsController::new(None, DefaultMode::Ask, 100);
+        assert_ne!(c.focused_owner(), other.focused_owner());
+        assert!(other.focused_capture_end("focus").is_none());
     }
 }

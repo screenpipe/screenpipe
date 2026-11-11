@@ -17,6 +17,7 @@ pub mod data;
 pub mod data_sync_proxy;
 pub mod elements;
 pub mod frames;
+pub mod focused;
 pub mod health;
 pub mod internal_telemetry;
 pub mod live_views;

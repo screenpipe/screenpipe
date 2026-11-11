@@ -259,11 +259,35 @@ pub use ffi::*;
 #[cfg(not(target_os = "macos"))]
 pub fn set_ui_locale(_json: &str) {}
 
-/// Persisted starred-session end time, projected into the macOS pill.
+#[cfg(target_os = "macos")]
+static STARRED_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+#[cfg(target_os = "macos")]
+static FOCUSED_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+#[cfg(target_os = "macos")]
+fn project_recording_state() {
+    use std::sync::atomic::Ordering;
+    extern "C" {
+        fn shortcut_set_starred_until(until_ms: i64);
+    }
+    let until = STARRED_UNTIL
+        .load(Ordering::SeqCst)
+        .max(FOCUSED_UNTIL.load(Ordering::SeqCst));
+    unsafe {
+        shortcut_set_starred_until(until);
+    }
+}
+/// Legacy stars and focused recording own independent indicators.
 #[cfg(target_os = "macos")]
 pub fn set_starred_until(until_ms: i64) {
-    extern "C" { fn shortcut_set_starred_until(until_ms: i64); }
-    unsafe { shortcut_set_starred_until(until_ms); }
+    STARRED_UNTIL.store(until_ms, std::sync::atomic::Ordering::SeqCst);
+    project_recording_state();
 }
 #[cfg(not(target_os = "macos"))]
 pub fn set_starred_until(_until_ms: i64) {}
+#[cfg(target_os = "macos")]
+pub fn set_focused_until(until_ms: i64) {
+    FOCUSED_UNTIL.store(until_ms, std::sync::atomic::Ordering::SeqCst);
+    project_recording_state();
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_focused_until(_until_ms: i64) {}

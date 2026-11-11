@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
-import { CompactSessionControls } from "@/components/starred-sessions/compact-session-controls";
+import { FocusedSessionControls } from "@/components/starred-sessions/focused-session-controls";
 import {
   getCurrentWindow,
   LogicalSize,
@@ -16,7 +16,6 @@ import {
 
 export default function StarredSessionsPage() {
   const [visible, setVisible] = useState(true);
-  const [pulsing, setPulsing] = useState(true);
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!visible || !content.current) return;
@@ -89,26 +88,23 @@ export default function StarredSessionsPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hide]);
-  if (!visible) return null;
   return (
-    <div ref={content} className="w-screen bg-transparent p-1">
+    <div ref={content} hidden={!visible} className="w-screen bg-transparent p-1">
       <section
         role="dialog"
         aria-label="Starred work sessions"
-        className={`relative max-h-[412px] overflow-y-auto rounded-lg border text-white ${pulsing ? "border-transparent bg-transparent" : "border-white/20 bg-black"}`}
+        className="relative max-h-[412px] overflow-y-auto rounded-lg border border-white/20 bg-black text-white"
       >
-        {!pulsing && (
-          <button
-            aria-label="Close session controls"
-            className="absolute right-3 top-3 z-10 rounded text-white/60 hover:text-white focus-visible:outline focus-visible:outline-1"
-            onClick={() => void hide()}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-        <CompactSessionControls
+        <button
+          aria-label="Close session controls"
+          className="absolute right-3 top-3 z-10 rounded text-white/60 hover:text-white focus-visible:outline focus-visible:outline-1"
+          onClick={() => void hide()}
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <FocusedSessionControls
           onDismiss={closeError ? undefined : hide}
-          onPulseChange={setPulsing}
+          visible={visible}
         />
         {closeError && (
           <p role="alert" className="px-3 pb-3 text-xs">

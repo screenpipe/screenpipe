@@ -192,6 +192,37 @@ function mockAppFrames(appName: string, limit: number, offset: number) {
   );
 }
 
+// Synthetic focused capture used only by the browser development transport.
+let focusedFixture: any;
+function focusedResponse(url: URL, init?: RequestInit): Response {
+  const now = Date.now();
+  if (!focusedFixture) {
+    const state = new URLSearchParams(window.location.search).get("mockFocusedState") ?? "recording";
+    const phase = ["paused", "summary", "submitted"].includes(state) ? state : "recording";
+    focusedFixture = { id: "00000000-0000-4000-8000-000000000111", name: "Review an invoice", phase,
+      voiceEnabled: false, revision: 1, createdAt: now-42000, lastCaptureAt: now, captureUntil: now+15000,
+      intervals: [{ start: now-42000, end: phase === "recording" ? null : now }],
+      media: phase === "summary" || phase === "submitted" ? { screenFrames: 84, audioSeconds: 18, audioChunks: 4 } : null };
+  }
+  const body = parseJsonBody(init);
+  if (url.pathname.endsWith("/action")) {
+    if (body.action === "rename") focusedFixture.name = body.name;
+    if (body.action === "voice") focusedFixture.voiceEnabled = body.enabled;
+    if (body.action === "pause" || body.action === "finish") {
+      focusedFixture.phase = body.action === "pause" ? "paused" : "summary";
+      focusedFixture.intervals.at(-1).end ??= body.at ?? now;
+      if (body.action === "finish") focusedFixture.media = { screenFrames: 84, audioSeconds: 18, audioChunks: 4 };
+    }
+    if (body.action === "resume") { focusedFixture.phase = "recording"; focusedFixture.intervals.push({start:now,end:null}); }
+    // A fixture receipt exercises the submitted UI; this is not a real host submission.
+    if (body.action === "submit") focusedFixture.phase = "submitted";
+    if (body.action === "delete") focusedFixture.phase = "deleted";
+    focusedFixture.captureUntil = now+15000;
+    focusedFixture.revision++;
+  }
+  return Response.json(focusedFixture);
+}
+
 let mockStarredSessions: Array<{id:string;start:string;end:string;revision:number;hd_requested:boolean;has_audio:boolean}> = [];
 
 export function mockLocalApiResponse(
@@ -206,6 +237,7 @@ export function mockLocalApiResponse(
     );
   }
 
+  if (url.pathname.startsWith("/focused-recordings")) return focusedResponse(url, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/starred-sessions") {
     if (method === "POST") {
