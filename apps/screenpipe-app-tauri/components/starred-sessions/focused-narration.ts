@@ -71,11 +71,13 @@ export class FocusedNarration {
       const capture: Capture = { stream, recorder, stopped };
       recorder.ondataavailable = event => {
         const until = capture.end ?? Date.now();
-        if (event.data.size > 0) this.pending.push({
-          id: crypto.randomUUID(), recordingId, streamId, sequence: sequence++, start,
-          end: Math.max(start, until), audio: event.data,
-        });
-        start = until;
+        if (event.data.size > 0) {
+          this.pending.push({
+            id: crypto.randomUUID(), recordingId, streamId, sequence: sequence++, start,
+            end: Math.max(start, until), audio: event.data,
+          });
+          start = until;
+        }
         void this.flush().catch(error => {
           void this.stop().catch(() => {});
           this.publish({ hot: false, error: error instanceof Error ? error.message : "Could not save voice. Retry saving before continuing." });

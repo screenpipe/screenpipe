@@ -105,3 +105,16 @@ it("retains each audio chunk's recording owner when a save is retried before a n
   await h.voice.start("second"); await h.voice.stop();
   expect(h.save.mock.calls.map(([chunk]) => (chunk as {recordingId:string}).recordingId)).toEqual(["first","first","second"]);
 });
+it("keeps narration chunks contiguous when the recorder emits an empty event", async () => {
+  const h=fixture(); let now=1000; vi.spyOn(Date,"now").mockImplementation(()=>now);
+  try {
+    await h.voice.start(); const recorder=Recorder.instances[0];
+    now=6000; recorder.ondataavailable?.({data:new Blob(["first"])}); await h.voice.flush();
+    now=7000; recorder.ondataavailable?.({data:new Blob([])}); await h.voice.flush();
+    now=8000; await h.voice.stop();
+    expect(h.save.mock.calls.map(([chunk])=>chunk)).toEqual([
+      expect.objectContaining({sequence:0,start:1000,end:6000}),
+      expect.objectContaining({sequence:1,start:6000,end:8000}),
+    ]);
+  } finally { vi.restoreAllMocks(); }
+});
