@@ -1360,9 +1360,9 @@ const AISection = ({
           value={settingsPreset?.url || ""}
           onChange={(value, isValid) => updateSettingsPreset({ url: value })}
           validation={(value) => validateAiProviderUrl(value, "custom")}
-          placeholder={ui("e.g. https://integrate.api.nvidia.com/v1 or http://localhost:11434/v1")}
+          placeholder={ui("e.g. https://integrate.api.nvidia.com/v1, https://api.demonroute.com/v1, or http://localhost:11434/v1")}
           required={true}
-          helperText={formErrors.url || ui("Base URL before /models and /chat/completions. Examples: Gemini https://generativelanguage.googleapis.com/v1beta/openai, NVIDIA NIM https://integrate.api.nvidia.com/v1, Ollama http://localhost:11434/v1")}
+          helperText={formErrors.url || ui("Base URL before /models and /chat/completions. Examples: Gemini https://generativelanguage.googleapis.com/v1beta/openai, NVIDIA NIM https://integrate.api.nvidia.com/v1, DemonRoute https://api.demonroute.com/v1, Ollama http://localhost:11434/v1")}
         />
       )}
 
