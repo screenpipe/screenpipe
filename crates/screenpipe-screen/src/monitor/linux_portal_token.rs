@@ -16,7 +16,7 @@
 //! The token is a capability: whoever presents it may restart the same screen
 //! share. It is therefore written with owner-only permissions (`0600`) through
 //! a temp-file-and-rename so a crash never leaves a truncated token behind.
-//! Anything that does not look like a token (empty, oversized, or containing
+//! Anything that does not look like a token (empty or containing
 //! control characters) is treated as absent rather than sent to the portal.
 
 use std::{
@@ -28,10 +28,6 @@ use std::{
 
 /// File name of the persisted token inside the screenpipe data directory.
 pub(super) const RESTORE_TOKEN_FILE_NAME: &str = "wayland-screencast-restore-token";
-
-/// Upper bound on an accepted token. Portal backends issue UUID-sized tokens
-/// (KDE and GNOME both use 36 characters); anything far larger is corrupt.
-const MAX_TOKEN_LEN: usize = 512;
 
 /// Reads, writes and clears the persisted ScreenCast restore token.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,12 +93,11 @@ impl RestoreTokenStore {
     }
 }
 
-/// Trims surrounding whitespace and returns the token when it is non-empty,
-/// at most [`MAX_TOKEN_LEN`] bytes, and free of control characters.
+/// Trims surrounding whitespace and returns a non-empty token free of control
+/// characters. Restore tokens are opaque strings with no portal-defined length cap.
 fn sanitize_token(raw: &str) -> Option<String> {
     let token = raw.trim();
-    let well_formed =
-        !token.is_empty() && token.len() <= MAX_TOKEN_LEN && !token.chars().any(char::is_control);
+    let well_formed = !token.is_empty() && !token.chars().any(char::is_control);
     well_formed.then(|| token.to_string())
 }
 
@@ -191,11 +186,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(&dir);
         store.save("good").unwrap();
-        for bad in ["", "   ", "has\ncontrol", &"x".repeat(MAX_TOKEN_LEN + 1)] {
+        for bad in ["", "   ", "has\ncontrol"] {
             let error = store.save(bad).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         }
         assert_eq!(store.load().as_deref(), Some("good"));
+    }
+
+    #[test]
+    fn opaque_tokens_round_trip_across_the_former_length_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        for length in [511, 512, 513, 4096] {
+            let token = "x".repeat(length);
+            store.save(&token).unwrap();
+            let reopened = RestoreTokenStore::in_dir(dir.path());
+            assert_eq!(reopened.load().as_deref(), Some(token.as_str()));
+        }
     }
 
     #[test]
