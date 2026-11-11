@@ -175,6 +175,9 @@ pub fn project_starred(ws: &mut Value, ledger: &mut Value, now: &str) {
 }
 
 pub fn starred_queue(ws: &Value, now: &str) -> Vec<Value> {
+    if !ws["starredIntake"]["error"].is_null() {
+        return Vec::new();
+    }
     let mut rows: Vec<_> = ws["starredIntake"]["sources"]
         .as_object()
         .into_iter()
@@ -334,6 +337,7 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         .as_ref()
         .is_none_or(|id| ws["drafts"][id].is_null());
     if task == TASKS[0]
+        && ws["starredIntake"]["error"].is_null()
         && ws["starredIntake"]["hasMore"] == true
         && matches!(change.action.as_str(), "propose" | "source_decision")
         && new_draft
@@ -452,6 +456,7 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         }
         "finish" => {
             if task == TASKS[0]
+                && ws["starredIntake"]["error"].is_null()
                 && (!queue.is_empty()
                     || ws["starredIntake"]["hasMore"] == true
                     || ws["starredIntake"]["hasPending"] == true)
@@ -644,6 +649,34 @@ pub fn validate_publication(raw: &Value, normalized: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unavailable_star_metadata_preserves_pending_sources_and_background_work() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        intake_starred(
+            &mut ws,
+            &[
+                json!({"id":"fixture","sequence":17,"revision":2,"start":"2026-10-01T10:00:00.000Z","end":"2026-10-01T11:00:00.000Z","name":"Fixture"}),
+            ],
+            true,
+            "2026-10-02T00:00:00.000Z",
+            None,
+        );
+        ws["starredIntake"]["error"] = json!({"message":"metadata unavailable"});
+        assert!(starred_queue(&ws, "2026-10-02T00:00:00.000Z").is_empty());
+        let proposal = change("propose", &ws, None, Some(TASKS[1]));
+        apply(&mut ws, TASKS[0], &proposal).unwrap();
+        let finish = change("finish", &ws, None, None);
+        apply(&mut ws, TASKS[0], &finish).unwrap();
+        assert_eq!(ws["starredIntake"]["after"], 17);
+        assert!(ws["starredIntake"]["sources"]["fixture"]["processedRevision"].is_null());
+        ws["starredIntake"]["error"] = Value::Null;
+        assert_eq!(
+            starred_queue(&ws, "2026-10-02T00:00:00.000Z")[0]["id"],
+            "fixture"
+        );
+    }
+
     #[test]
     fn large_intake_remains_durable_outside_the_working_context() {
         let mut ws = empty();

@@ -422,6 +422,64 @@ async fn starred_discovery_intake_is_local_durable_and_access_scoped() {
         Value::Null
     );
     assert_eq!(restored["workspace"]["drafts"], json!({}));
+    // Metadata outages defer sources without breaking background discovery.
+    // Renaming the derived table preserves its monotonic sequence and triggers.
+    let cursor = restored["workspace"]["starredIntake"]["after"].clone();
+    db.execute_raw_sql_write(
+        "ALTER TABLE _starred_session_sync RENAME TO _starred_session_sync_paused",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        post(json!({"action":"start","task":"workflow-discover"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let (_, degraded) = request(&restarted, path, Some("fixture-key")).await;
+    assert!(degraded["workspace"]["starredIntake"]["error"].is_object());
+    assert!(
+        degraded["workspace"]["revision"].as_u64().unwrap()
+            > restored["workspace"]["revision"].as_u64().unwrap()
+    );
+    assert_eq!(degraded["workspace"]["starredIntake"]["after"], cursor);
+    assert_eq!(degraded["starredSources"], json!([]));
+    assert!(db
+        .save_named_starred_session(
+            "fixture-0",
+            a,
+            b,
+            false,
+            1,
+            b,
+            Some("Late fixture during outage")
+        )
+        .await
+        .unwrap());
+    db.execute_raw_sql_write(
+        "ALTER TABLE _starred_session_sync_paused RENAME TO _starred_session_sync",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        post(json!({"action":"start","task":"workflow-discover"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let (_, recovered) = request(&restarted, path, Some("fixture-key")).await;
+    assert!(recovered["workspace"]["starredIntake"]["error"].is_null());
+    assert_eq!(recovered["starredSources"].as_array().unwrap().len(), 14);
+    assert_eq!(recovered["starredSources"][0]["id"], "fixture-0");
+    assert_eq!(recovered["starredSources"][0]["revision"], 2);
+    assert!(
+        recovered["workspace"]["starredIntake"]["after"]
+            .as_i64()
+            .unwrap()
+            > cursor.as_i64().unwrap()
+    );
     policy.set_last_24_hours(true);
     assert_eq!(
         request(&restarted, path, Some("fixture-key")).await.0,

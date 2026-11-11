@@ -273,67 +273,69 @@ pub(crate) async fn update(
             .filter_map(|s| s["id"].as_str())
             .map(str::to_owned)
             .collect();
-        let rows = state
+        match state
             .db
             .starred_sessions_for_discovery(after, &json!(pending).to_string(), 100)
             .await
-            .map_err(|e| {
-                tracing::error!(error=%e, "workflow starred intake failed");
-                error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Could not read starred sources.",
-                )
-            })?;
-        // A missing source was deleted or expired. Do not investigate stale metadata.
-        for id in &pending {
-            if !rows.iter().any(|s| &s.id == id) {
-                ws["starredIntake"]["sources"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove(id);
-                source_decisions.as_object_mut().unwrap().remove(id);
-            }
-        }
-        // Restore prior source ownership/decisions when an edited source returns,
-        // including the other intervals of the same Capture demonstration.
-        for source in source_decisions
-            .as_object()
-            .into_iter()
-            .flat_map(|s| s.values())
         {
-            if rows.iter().any(|row| {
-                source["id"] == row.id
-                    || row
-                        .recording_id
-                        .as_ref()
-                        .is_some_and(|g| source["recording_id"] == *g)
-            }) {
-                let id = source["id"].as_str().unwrap();
-                if ws["starredIntake"]["sources"][id].is_null() {
-                    if !ws["starredIntake"].is_object() {
-                        ws["starredIntake"] = json!({"sources":{}});
+            Ok(rows) => {
+                ws["starredIntake"].as_object_mut().unwrap().remove("error");
+                // A missing source was deleted or expired. Do not investigate stale metadata.
+                for id in &pending {
+                    if !rows.iter().any(|s| &s.id == id) {
+                        ws["starredIntake"]["sources"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove(id);
+                        source_decisions.as_object_mut().unwrap().remove(id);
                     }
-                    ws["starredIntake"]["sources"][id] = source.clone();
                 }
+                // Restore prior source ownership/decisions when an edited source returns,
+                // including the other intervals of the same Capture demonstration.
+                for source in source_decisions
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|s| s.values())
+                {
+                    if rows.iter().any(|row| {
+                        source["id"] == row.id
+                            || row
+                                .recording_id
+                                .as_ref()
+                                .is_some_and(|g| source["recording_id"] == *g)
+                    }) {
+                        let id = source["id"].as_str().unwrap();
+                        if ws["starredIntake"]["sources"][id].is_null() {
+                            if !ws["starredIntake"].is_object() {
+                                ws["starredIntake"] = json!({"sources":{}});
+                            }
+                            ws["starredIntake"]["sources"][id] = source.clone();
+                        }
+                    }
+                }
+                let has_more = rows.iter().filter(|s| s.sequence > after).count() == 100;
+                let rows: Vec<_> = rows
+                    .into_iter()
+                    .map(|s| serde_json::to_value(s).expect("starred source serializes"))
+                    .collect();
+                workspace::intake_starred(
+                    &mut ws,
+                    &rows,
+                    has_more,
+                    &super::starred::stamp(chrono::Utc::now()),
+                    state
+                        .history_access
+                        .cutoff(chrono::Utc::now())
+                        .map(super::starred::stamp)
+                        .as_deref(),
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error=%e, "optional starred intake unavailable; preserving discovery cursor");
+                ws["revision"] = json!(workspace::revision(&ws) + 1);
+                ws["starredIntake"]["error"] = json!({"message":"Starred intake unavailable. Pending sources and cursor are kept; background research may continue.","checkedAt":super::starred::stamp(chrono::Utc::now())});
             }
         }
-        let has_more = rows.iter().filter(|s| s.sequence > after).count() == 100;
-        let rows: Vec<_> = rows
-            .into_iter()
-            .map(|s| serde_json::to_value(s).expect("starred source serializes"))
-            .collect();
-        workspace::intake_starred(
-            &mut ws,
-            &rows,
-            has_more,
-            &super::starred::stamp(chrono::Utc::now()),
-            state
-                .history_access
-                .cutoff(chrono::Utc::now())
-                .map(super::starred::stamp)
-                .as_deref(),
-        );
-
         json!({"revision":workspace::revision(&ws),"cycle":ws["cycle"]})
     } else {
         let change = serde_json::from_value(body.clone())
