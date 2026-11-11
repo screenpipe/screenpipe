@@ -401,52 +401,36 @@ describe('validateAuth — verified identities only', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('single-flights concurrent plan lookups after verifying each caller', async () => {
+  it('authenticates a retry while an older account lookup remains unresolved', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_concurrent' }) as any);
     let resolveResponse!: (response: Response) => void;
-    const response = new Promise<Response>((resolve) => {
-      resolveResponse = resolve;
-    });
-    const fetchMock = mock(async () => response);
-    globalThis.fetch = fetchMock as typeof fetch;
+    let lookupStarted!: () => void;
+    const started = new Promise<void>(resolve => { lookupStarted = resolve; });
+    const pending = new Promise<Response>(resolve => { resolveResponse = resolve; });
+    const planResponse = () => Response.json({ success: true, user: {
+      clerk_id: 'user_concurrent', cloud_subscribed: true, app_entitled: true,
+      subscription_plan: 'pro', entitlement: { active: true, plan: 'pro', features: { app: true } },
+    } });
+    let loads = 0;
+    globalThis.fetch = mock(async () => {
+      if (++loads === 1) { lookupStarted(); return pending; }
+      return planResponse();
+    }) as typeof fetch;
 
     const first = validateAuth(requestFor('eyJ.concurrent.clerk.1'), env);
-    const second = validateAuth(requestFor('eyJ.concurrent.clerk.2'), env);
-    await Promise.resolve();
-    await Promise.resolve();
-    resolveResponse(new Response(JSON.stringify({
-      success: true,
-      user: {
-        clerk_id: 'user_concurrent',
-        cloud_subscribed: true,
-        app_entitled: true,
-        subscription_plan: 'pro',
-        entitlement: { active: true, plan: 'pro', features: { app: true } },
-      },
-    }), { status: 200 }));
-
-    expect(await Promise.all([first, second])).toEqual([
-      {
-        isValid: true,
-        tier: 'subscribed',
-        accountPlan: 'business',
-        deviceId: 'user_concurrent',
-        userId: 'user_concurrent',
-        clerkUserId: 'user_concurrent',
-        clerkUserIdVerified: true,
-      },
-      {
-        isValid: true,
-        tier: 'subscribed',
-        accountPlan: 'business',
-        deviceId: 'user_concurrent',
-        userId: 'user_concurrent',
-        clerkUserId: 'user_concurrent',
-        clerkUserIdVerified: true,
-      },
-    ]);
-    expect(verifyTokenMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await started;
+    try {
+      expect(await validateAuth(requestFor('eyJ.concurrent.clerk.2'), env)).toMatchObject({
+        isValid: true, tier: 'subscribed', accountPlan: 'business', userId: 'user_concurrent',
+      });
+      // Completed verified truth is still reused, but every caller proves ownership.
+      expect(await validateAuth(requestFor('eyJ.concurrent.clerk.3'), env)).toMatchObject({ tier: 'subscribed' });
+      expect(loads).toBe(2);
+      expect(verifyTokenMock).toHaveBeenCalledTimes(3);
+    } finally {
+      resolveResponse(planResponse());
+      await first;
+    }
   });
 
   it('grants subscribed only after a Clerk JWT proves account ownership', async () => {
