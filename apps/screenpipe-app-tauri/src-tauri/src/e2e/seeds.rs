@@ -58,6 +58,14 @@ pub(crate) fn seed_cloud_authentication(store: &mut SettingsStore) {
     info!("E2E seed: synthetic cloud authentication enabled");
 }
 
+// Keep this marker in the raw account object: typed User serialization drops
+// unknown fields, but E2E webviews need it before their first account refresh.
+fn cloud_account_user_fixture(user: &User) -> serde_json::Value {
+    let mut fixture = json!(user);
+    fixture["__e2eSkipAccountRefresh"] = json!(true);
+    fixture
+}
+
 /// Apply deterministic settings mutations requested by `SCREENPIPE_E2E_SEED`.
 pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
     // E2E seed: when SCREENPIPE_E2E_SEED contains "no-recording", flip
@@ -171,6 +179,13 @@ pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
     if !e2e_flags.is_empty() {
         if let Err(e) = store.save(app) {
             warn!("Failed to persist E2E settings seed: {}", e);
+        }
+        if e2e_flags.iter().any(|flag| flag == "cloud-authenticated") {
+            if let Err(error) =
+                store.replace_startup_user(app, cloud_account_user_fixture(&store.user))
+            {
+                warn!("Failed to persist E2E account refresh marker: {}", error);
+            }
         }
     }
 }
@@ -854,4 +869,30 @@ pub(super) fn db_hard_fault_state(
         "bootPhase": boot.phase,
         "bootError": boot.error,
     }))
+}
+
+#[cfg(test)]
+mod cloud_account_fixture_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_marker_survives_in_raw_fixture_without_granting_plan_or_identity() {
+        let user = User {
+            token: Some("e2e-fake-token-onboarding-background-ai-tools".into()),
+            ..Default::default()
+        };
+        let fixture = cloud_account_user_fixture(&user);
+        assert_eq!(fixture["__e2eSkipAccountRefresh"], true);
+        assert_eq!(
+            fixture["token"],
+            "e2e-fake-token-onboarding-background-ai-tools"
+        );
+        assert!(fixture["id"].is_null());
+        assert!(fixture["subscription_plan"].is_null());
+        assert!(fixture["entitlement"].is_null());
+        // The fixture must be persisted after the typed settings save: a typed
+        // round trip intentionally discards the webview-only sentinel.
+        let typed: User = serde_json::from_value(fixture).unwrap();
+        assert!(json!(typed).get("__e2eSkipAccountRefresh").is_none());
+    }
 }

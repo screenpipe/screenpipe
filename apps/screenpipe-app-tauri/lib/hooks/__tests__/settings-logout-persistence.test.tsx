@@ -70,7 +70,7 @@ beforeEach(() => {
     id: "test-user", email: "logout@example.test", cloud_subscribed: false,
   } }), { status: 200 })));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("logout during account persistence", () => {
   it.each([false, true])("does not restore the native session after signout (unknown plan=%s)", async unknownPlan => {
@@ -106,5 +106,36 @@ describe("logout during account persistence", () => {
     expect(state.token).toBe("synthetic-session-token");
     await act(async () => { await hook.result.current.updateSettings({ user: null as any }); });
     expect(state.token).toBeNull(); expect(state.settings.user).toBeNull();
+  });
+});
+
+// Native cloud-authenticated seeds carry this marker in the raw shared store;
+// native User serialization alone cannot preserve unknown fixture-only fields.
+describe("native E2E account fixtures", () => {
+  const fixtureToken = "e2e-fake-token-onboarding-background-ai-tools";
+  it("retains the native fixture without sending its fictional token to the account API", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_E2E", "true");
+    state.token = fixtureToken;
+    state.settings.user = { ...state.settings.user, token: fixtureToken, __e2eSkipAccountRefresh: true };
+    const accountRequest = vi.fn(async () => new Response("fictional token rejected", { status: 401 }));
+    vi.stubGlobal("fetch", accountRequest);
+    const hook = await mount();
+    await act(async () => { await hook.result.current.loadUser(fixtureToken, true); });
+    expect(accountRequest).not.toHaveBeenCalled();
+    expect(hook.result.current.settings.user?.token).toBe(fixtureToken);
+    expect(state.token).toBe(fixtureToken);
+    expect(state.settings.user.__e2eSkipAccountRefresh).toBe(true);
+  });
+
+  it("still clears a rejected session with the same marker outside an E2E bundle", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_E2E", "false");
+    state.token = fixtureToken;
+    state.settings.user = { ...state.settings.user, token: fixtureToken, __e2eSkipAccountRefresh: true };
+    const accountRequest = vi.fn(async () => new Response("session rejected", { status: 401 }));
+    vi.stubGlobal("fetch", accountRequest);
+    const hook = await mount();
+    await waitFor(() => expect(state.token).toBeNull());
+    expect(accountRequest).toHaveBeenCalled();
+    expect(hook.result.current.settings.user).toBeNull();
   });
 });
