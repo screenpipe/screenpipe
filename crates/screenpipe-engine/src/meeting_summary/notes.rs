@@ -8,8 +8,9 @@
 //! section at the end. Everything that reads or writes that section — the
 //! HTTP endpoint, the run finalizer, the requeue guard — goes through this
 //! module, so the heading grammar and the merge rule cannot drift between
-//! writers (the note UI's reader regex in `meeting-summary-stream.ts` is the
-//! same grammar).
+//! writers (the saved-note reader in `meeting-workspace.tsx` is the same
+//! grammar). The live stream reader also accepts a heading glued to the end
+//! of a narration line; that recovery lives in `extract.rs`, not here.
 
 use screenpipe_db::{DatabaseManager, MeetingRecord};
 

@@ -143,6 +143,28 @@ describe("meeting summary stream", () => {
     expect(state.markdown).toBe("Renewal approved; Ana owns rollout.");
   });
 
+  it("streams a summary whose heading is glued to the narration line", () => {
+    const state = advanceMeetingSummaryStream(
+      emptyMeetingSummaryStream(),
+      textEnd(
+        "Rendering the transcript next.## Summary\n\nWe agreed to ship the fix on Tuesday.",
+      ),
+    );
+
+    expect(state.markdown).toBe("We agreed to ship the fix on Tuesday.");
+  });
+
+  it("ignores a heading mentioned inside a sentence", () => {
+    const state = advanceMeetingSummaryStream(
+      emptyMeetingSummaryStream(),
+      textEnd(
+        "start a line with exactly `## Summary` and put the finished summary markdown after that heading.",
+      ),
+    );
+
+    expect(state.markdown).toBe("");
+  });
+
   it("ignores tool narration that never reaches a summary heading", () => {
     let state = emptyMeetingSummaryStream();
     state = advanceMeetingSummaryStream(state, textEnd("Good, got data."));

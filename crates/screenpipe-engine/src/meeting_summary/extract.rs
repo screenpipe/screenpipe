@@ -46,16 +46,51 @@ pub(crate) fn extract_summary_markdown(stdout: &str) -> Option<String> {
 }
 
 /// Text after the LAST summary heading in `text`, or None.
+///
+/// A heading is the word `summary` after 1–6 hashes, ending the line. It may
+/// be the whole line, or glued to narration (`…context.## Summary`), which is
+/// how the Cursor preset emits it. `## Summary of the meeting` and a heading
+/// mentioned mid-sentence are not headings — the saved-note grammar in
+/// [`is_summary_heading`] stays strict on purpose.
 fn summary_tail(text: &str) -> Option<String> {
     let mut tail_start: Option<usize> = None;
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
-        if is_summary_heading(line.trim_end_matches(['\n', '\r'])) {
-            tail_start = Some(offset + line.len());
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if summary_heading_ends_line(bare) {
+            tail_start = Some(offset + bare.len());
         }
         offset += line.len();
     }
     tail_start.map(|start| text[start..].trim().to_string())
+}
+
+/// True when `line` ends in a summary heading, with or without a narration prefix.
+fn summary_heading_ends_line(line: &str) -> bool {
+    if is_summary_heading(line) {
+        return true;
+    }
+    let mut rest = line;
+    while let Some(rel) = rest.find('#') {
+        let start = rel;
+        let after_hashes = rest[start..]
+            .find(|c: char| c != '#')
+            .map(|index| start + index)
+            .unwrap_or(rest.len());
+        let hashes = rest[start..after_hashes].chars().count();
+        let suffix = &rest[after_hashes..];
+        if (1..=6).contains(&hashes)
+            && suffix.starts_with([' ', '\t'])
+            && suffix.trim().eq_ignore_ascii_case("summary")
+        {
+            return true;
+        }
+        rest = &rest[after_hashes..];
+        if rest.is_empty() {
+            break;
+        }
+    }
+    false
 }
 
 /// A summary worth persisting has more than a stray heading's worth of text.
@@ -181,6 +216,23 @@ mod tests {
     #[test]
     fn no_summary_in_the_stream_returns_none() {
         let stdout = r###"{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"nothing useful happened in this meeting, skipping the save"}]}]}"###;
+        assert_eq!(extract_summary_markdown(stdout), None);
+    }
+
+    /// Production failure: the Cursor preset writes the heading on the same
+    /// line as its narration and never calls the save endpoint. The body is
+    /// still the summary.
+    #[test]
+    fn recovers_summary_glued_to_the_narration_line() {
+        let stdout = r###"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Rendering the transcript next.## Summary\n\nWe agreed to ship the fix on Tuesday and follow up with the pilot team."}]}}"###;
+        let summary = extract_summary_markdown(stdout).expect("summary");
+        assert!(summary.starts_with("We agreed to ship the fix"));
+        assert!(!summary.contains("Rendering"));
+    }
+
+    #[test]
+    fn a_heading_mentioned_inside_a_sentence_is_not_a_summary() {
+        let stdout = r###"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"start a line with exactly `## Summary` and put the finished summary markdown after that heading. this is only the instruction."}]}}"###;
         assert_eq!(extract_summary_markdown(stdout), None);
     }
 
