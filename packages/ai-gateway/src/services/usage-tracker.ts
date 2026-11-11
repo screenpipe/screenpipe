@@ -133,6 +133,7 @@ const MODEL_WEIGHTS: Record<string, number> = {
   // OpenAI API
   // Same Standard token prices as Fable 5; cash caps also track actual usage.
   'gpt-6-astra': 10,
+  'gpt-6.1-sol': 2,
   'gpt-5.6': 6,
   'gpt-5.6-sol': 6,
   'gpt-5.6-terra': 3,

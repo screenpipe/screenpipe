@@ -29,6 +29,7 @@ const FREE_HOSTED_MODELS = ['auto'] as const;
 const BUSINESS_HOSTED_MODELS = [
 	...BASIC_HOSTED_MODELS,
 	'gpt-6-astra',
+	'gpt-6.1-sol',
 	'gpt-5.6',
 	'gpt-5.6-sol',
 	'gpt-5.6-terra',
