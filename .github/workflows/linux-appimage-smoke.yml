@@ -76,8 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
+          .github/scripts/apt-install-with-retries.sh \
             g++ \
             ffmpeg \
             tesseract-ocr \
