@@ -17,6 +17,7 @@ use tokio::sync::{Notify, Semaphore};
 // after the outer timeout so it cannot accumulate replacement blocking workers.
 static CAPTURE_SLOT: Lazy<Arc<CaptureSlot>> = Lazy::new(|| Arc::new(CaptureSlot::new()));
 const DEADLINE: Duration = Duration::from_secs(5);
+const QUEUE_DEADLINE: Duration = Duration::from_secs(1);
 
 struct CaptureSlot {
     semaphore: Arc<Semaphore>,
@@ -70,17 +71,34 @@ pub(crate) async fn capture_filtered(
         "window-filtered screenshots require macOS 14 or newer"
     );
     let id = monitor.id();
-    let filters = filters.clone();
-    capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
-        retry_scene_changes(id, || capture(id, &filters, sources)).await
+    capture_with_scene_retries(id, CAPTURE_SLOT.clone(), || {
+        let filters = filters.clone();
+        move || async move { capture(id, &filters, sources).await }
+    })
+    .await
+}
+
+async fn capture_with_scene_retries<F, J, Fut>(
+    monitor_id: u32,
+    slot: Arc<CaptureSlot>,
+    mut job: F,
+) -> anyhow::Result<DynamicImage>
+where
+    F: FnMut() -> J,
+    J: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+{
+    // Each rejected attempt releases its worker before reselection, so a
+    // changing display cannot reserve the slot across retries.
+    retry_scene_changes(monitor_id, || {
+        capture_on_worker(slot.clone(), DEADLINE, job())
     })
     .await
 }
 
 /// A scene transition invalidates the old selection, not permission to capture
-/// the next safe scene. Re-resolve it inside the existing native deadline rather
-/// than immediately treating this request as an AX-only capture. The worker's
-/// deadline still cancels a continuously changing scene or a lost OS callback.
+/// the next safe scene. Re-resolve it within the request's existing queue/native
+/// budget. Each completed attempt releases its worker before the next selection.
 async fn retry_scene_changes<F, Fut>(
     monitor_id: u32,
     mut capture_job: F,
@@ -91,8 +109,25 @@ where
 {
     let started = Instant::now();
     let mut retries = 0_u64;
+    let mut deadline: Option<RetryDeadline> = None;
     loop {
-        match capture_job().await {
+        let result = if let Some(deadline) = deadline {
+            let expired = || {
+                anyhow!(
+                "window-filtered capture timed out while reselecting (elapsed_ms={}, native_budget_ms={}, queue_budget_ms={}); screenshot pixels unavailable; the next capture must reselect current privacy state",
+                started.elapsed().as_millis(), deadline.budget.as_millis(), QUEUE_DEADLINE.as_millis(),
+            )
+            };
+            if tokio::time::Instant::now() >= deadline.at {
+                return Err(expired());
+            }
+            tokio::time::timeout_at(deadline.at, capture_job())
+                .await
+                .map_err(|_| expired())?
+        } else {
+            capture_job().await
+        };
+        match result {
             Ok(image) => {
                 if retries > 0 {
                     tracing::info!(
@@ -108,6 +143,9 @@ where
             Err(error) => {
                 if error.downcast_ref::<SceneChanged>().is_none() {
                     return Err(error);
+                }
+                if deadline.is_none() {
+                    deadline = error.downcast_ref::<RetryDeadline>().copied();
                 }
                 retries += 1;
                 if retries == 1 {
@@ -131,6 +169,54 @@ impl std::fmt::Display for SceneChanged {
 
 impl std::error::Error for SceneChanged {}
 
+#[derive(Clone, Copy, Debug)]
+struct RetryDeadline {
+    at: tokio::time::Instant,
+    budget: Duration,
+    reason: &'static str,
+}
+
+impl std::fmt::Display for RetryDeadline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+impl std::error::Error for RetryDeadline {}
+
+// Preserve retry classification across the worker boundary while destroying
+// native error objects inside their originating autorelease pool.
+#[derive(Clone)]
+enum WorkerFailure {
+    Scene {
+        marker: &'static str,
+        detail: String,
+    },
+    Native(String),
+}
+
+impl WorkerFailure {
+    fn from_error(error: anyhow::Error) -> Self {
+        if let Some(scene) = error.downcast_ref::<SceneChanged>() {
+            Self::Scene {
+                marker: scene.0,
+                detail: format!("{error:#}"),
+            }
+        } else {
+            Self::Native(format!("{error:#}"))
+        }
+    }
+
+    fn into_error(self) -> anyhow::Error {
+        match self {
+            Self::Scene { marker, detail } => {
+                anyhow::Error::new(SceneChanged(marker)).context(detail)
+            }
+            Self::Native(detail) => anyhow::Error::msg(detail),
+        }
+    }
+}
+
 // Construct the future on its native worker: ScreenCaptureKit objects must stay
 // on that thread and inside its autorelease pool.
 async fn capture_on_worker<F, Fut>(
@@ -142,12 +228,9 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<DynamicImage>>,
 {
-    let permit = tokio::time::timeout(
-        Duration::from_secs(1),
-        slot.semaphore.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
+    let permit = tokio::time::timeout(QUEUE_DEADLINE, slot.semaphore.clone().acquire_owned())
+        .await
+        .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
     let generation = slot
         .generation
         .fetch_add(1, Ordering::AcqRel)
@@ -183,13 +266,29 @@ where
                         }
                     }
                 })
-                .map_err(|e| e.to_string())
+                .map_err(WorkerFailure::from_error)
         })
-        .map_err(anyhow::Error::msg)
     });
-    tokio::time::timeout(deadline, work)
+    // Keep the original native deadline and synchronous-call containment.
+    // Later attempts share this first admission's deadline, including time
+    // spent fairly yielding the worker to another display.
+    let at = tokio::time::Instant::now() + deadline;
+    let result = tokio::time::timeout_at(at, work)
         .await
-        .map_err(|_| anyhow!("window-filtered capture timed out"))??
+        .map_err(|_| anyhow!("window-filtered capture timed out"))??;
+    result.map_err(|failure| {
+        let error = failure.into_error();
+        if let Some(scene) = error.downcast_ref::<SceneChanged>() {
+            let reason = scene.0;
+            error.context(RetryDeadline {
+                at,
+                budget: deadline,
+                reason,
+            })
+        } else {
+            error
+        }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -890,6 +989,82 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn stable_capture_gets_a_turn_before_another_capture_retries() {
+        let slot = Arc::new(CaptureSlot::new());
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (started, ready) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let changing_slot = slot.clone();
+        let changing_order = order.clone();
+        let changing = tokio::spawn(async move {
+            let mut first = Some((started, released));
+            capture_with_scene_retries(1, changing_slot, move || {
+                let first = first.take();
+                let order = changing_order.clone();
+                move || async move {
+                    if let Some((started, released)) = first {
+                        order.lock().unwrap().push("changing");
+                        let _ = started.send(());
+                        let _ = released.await;
+                        Err(SceneChanged("desktop scene changed during privacy capture").into())
+                    } else {
+                        order.lock().unwrap().push("retry");
+                        Ok(DynamicImage::new_rgba8(3, 2))
+                    }
+                }
+            })
+            .await
+        });
+        ready.await.unwrap();
+        let stable_order = order.clone();
+        let stable = capture_with_scene_retries(2, slot, move || {
+            let order = stable_order.clone();
+            move || async move {
+                order.lock().unwrap().push("stable");
+                Ok(DynamicImage::new_rgba8(4, 2))
+            }
+        });
+        tokio::pin!(stable);
+        // Queue the second caller while the first native attempt still owns
+        // the slot. Reselection must go behind this already-waiting work.
+        std::future::poll_fn(|cx| {
+            assert!(stable.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        release.send(()).unwrap();
+        assert_eq!(stable.await.unwrap().width(), 4);
+        assert_eq!(changing.await.unwrap().unwrap().width(), 3);
+        assert_eq!(*order.lock().unwrap(), ["changing", "stable", "retry"]);
+    }
+
+    #[tokio::test]
+    async fn repeated_scene_changes_stop_at_total_request_budget_and_recover() {
+        let slot = Arc::new(CaptureSlot::new());
+        let result = tokio::time::timeout(
+            QUEUE_DEADLINE + DEADLINE + QUEUE_DEADLINE,
+            capture_with_scene_retries(1, slot.clone(), || {
+                || {
+                    std::future::ready(Err(SceneChanged(
+                        "desktop scene changed during privacy capture",
+                    )
+                    .into()))
+                }
+            }),
+        )
+        .await
+        .expect("the request must not reset its deadline on each retry");
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("native_budget_ms=5000"), "{error}");
+        assert!(error.contains("screenshot pixels unavailable"), "{error}");
+        let next =
+            capture_with_scene_retries(2, slot, || || async { Ok(DynamicImage::new_rgba8(3, 2)) })
+                .await
+                .unwrap();
+        assert_eq!((next.width(), next.height()), (3, 2));
     }
 
     #[tokio::test]
