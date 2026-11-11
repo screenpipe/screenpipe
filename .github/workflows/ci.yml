@@ -404,13 +404,11 @@ jobs:
       # pipes_test removed — pipe manager system deleted in #2212
 
   test-macos:
-    # Pinned off `macos-latest`: that label rolled to the Xcode 26.5 image whose
-    # clang toolchain is missing `clang_rt.osx`, so `cargo test`'s debug link
-    # fails with `ld: library 'clang_rt.osx' not found` (green on the 3 prior
-    # commits, then red on the next 2 with no related code change). macos-14
-    # (Sonoma) has a complete toolchain and is proven here — e2e-macos.yml builds
-    # screenpipe-screen on it and passes. Revisit when macos-latest is fixed.
-    runs-on: macos-14
+    # macos-14 ARM is no longer supported. Pin the supported ARM image and
+    # Xcode 16.4 to retain the complete clang runtime used by these tests.
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     # A hung test otherwise burns the 6-hour GitHub default and blocks the
     # merge queue.
     timeout-minutes: 90

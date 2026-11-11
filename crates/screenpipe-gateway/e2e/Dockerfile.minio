@@ -1,0 +1,40 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+# Test-only MinIO images. Keep the incumbent releases, with official GitHub
+# artifacts pinned by checksum, independent of Quay image availability.
+FROM debian:bookworm-slim AS download
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM download AS server-download
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) checksum=eeda08f699f6592d1b868ac8bda864ae2cacdb5ee1b888663366e8c8ff566249 ;; \
+      arm64) checksum=f9466ed832ac4926c8870b3b8378d77861a87b41529fecae7789b9bc54acd78b ;; \
+      *) echo "Unsupported MinIO fixture architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --retry 3 \
+      "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio_20250907161309.0.0_${TARGETARCH}.deb" -o /tmp/minio.deb \
+    && echo "$checksum  /tmp/minio.deb" | sha256sum --check - \
+    && dpkg-deb --extract /tmp/minio.deb /tmp/minio-root
+
+FROM download AS client-download
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) checksum=01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891 ;; \
+      arm64) checksum=14c8c9616cfce4636add161304353244e8de383b2e2752c0e9dad01d4c27c12c ;; \
+      *) echo "Unsupported MinIO fixture architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --retry 3 \
+      "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-${TARGETARCH}.RELEASE.2025-08-13T08-35-41Z" -o /tmp/mc \
+    && echo "$checksum  /tmp/mc" | sha256sum --check - \
+    && chmod 755 /tmp/mc
+
+FROM download AS server
+COPY --from=server-download /tmp/minio-root/usr/local/bin/minio /usr/local/bin/minio
+ENTRYPOINT ["minio"]
+
+FROM download AS client
+COPY --from=client-download /tmp/mc /usr/local/bin/mc
+ENTRYPOINT ["mc"]
