@@ -137,7 +137,15 @@ mod tests {
     #[test]
     fn startup_preserves_pid_arguments_and_explicit_allocator_policy() {
         const CHILD: &str = "SCREENPIPE_NATIVE_ALLOCATOR_TEST_CHILD";
+        const ENTRIES: &str = "SCREENPIPE_NATIVE_ALLOCATOR_TEST_ENTRIES";
         if let Ok(expected) = std::env::var(CHILD) {
+            let entries = std::env::var(ENTRIES)
+                .ok()
+                .map(|value| value.parse::<usize>().unwrap())
+                .unwrap_or(0)
+                + 1;
+            assert!(entries <= 2, "bootstrap re-executed more than once");
+            std::env::set_var(ENTRIES, entries.to_string());
             super::prepare_native_heap();
             // Repeated calls must not re-exec after removing our injected env.
             super::prepare_native_heap();
@@ -182,7 +190,7 @@ mod tests {
                 "native_allocator::tests::startup_preserves_pid_arguments_and_explicit_allocator_policy",
                 "--nocapture", "--test-threads=1",
             ]).env(CHILD, expected).env_remove("MallocLargeCache")
-                .env_remove(super::BOOTSTRAP_MARKER);
+                .env_remove(super::BOOTSTRAP_MARKER).env_remove(ENTRIES);
             if let Some(policy) = policy {
                 command.env("MallocLargeCache", policy);
             }
