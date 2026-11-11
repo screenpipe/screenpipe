@@ -136,8 +136,10 @@ const persistAppLogs = process.env.SCREENPIPE_E2E_PERSIST_APP_LOGS === 'true';
 // capture, so devices are open at rest. It backs the #6089 regression spec:
 // restarting the capture session must bring back the same device set, and the
 // device monitor must survive to recover a device stopped afterwards.
+// The broad post-login suite needs the existing fictional account seed for
+// native server admission. Explicit first-run and fallback seeds stay logged out.
 export const E2E_SEED_FLAGS =
-  process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
+  process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture,cloud-authenticated';
 const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
   (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
 );

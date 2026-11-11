@@ -11,6 +11,7 @@ import { startApp, stopApp, WEBDRIVER_PORT } from './helpers/app-launcher.js';
 import { GatewayRequestProxy } from './helpers/gateway-request-proxy.js';
 import { getReporters, getMochaTimeout } from './helpers/reporter-utils.js';
 import { TestRecorder } from './helpers/test-recorder.js';
+import { installWindowsAsyncScriptTransport, type WindowsAsyncScriptDriver } from './helpers/windows-async-script.js';
 
 // Codex/Desktop can install a wrapped undici dispatcher in the parent process.
 // WebdriverIO passes the current dispatcher explicitly into every WebDriver
@@ -236,6 +237,9 @@ export const config: TestrunnerConfig = {
     console.log('Stopping app...');
     await stopApp();
     await stopLocalGateway();
+  },
+  before: async () => {
+    installWindowsAsyncScriptTransport(browser as unknown as WindowsAsyncScriptDriver);
   },
   beforeSession: async () => {
     if (!sessionRecorder) {
