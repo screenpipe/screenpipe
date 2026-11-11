@@ -327,6 +327,7 @@
         "src/routes/content.rs",
         "src/routes/data.rs",
         "src/routes/elements.rs",
+        "src/routes/focused.rs",
         "src/routes/frames.rs",
         "src/routes/health.rs",
         "src/routes/live_views.rs",
@@ -1528,6 +1529,31 @@
       "confidence": "conditional",
       "kind": "mixed",
       "notes": "Existing isolated-process missing/stalled bus regressions plus ignored live logind inhibitor tests. Live tests require logind and explicit execution."
+    },
+    {
+      "id": "db-focused-recording",
+      "label": "Focused recording intervals and narration persistence",
+      "crate": "screenpipe-db",
+      "files": [
+        "src/db/focused.rs"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "storage",
+        "local-api"
+      ],
+      "flows": [
+        "capture-ocr-pipeline",
+        "timeline-streaming"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Tests interval transitions, restart persistence, stale writes, raw audio ownership and pause gaps, inaccessible draft retirement, interrupted narration tails, and saved Voice preference. Does not verify hardware capture or media-container playback."
     }
   ]
 }
