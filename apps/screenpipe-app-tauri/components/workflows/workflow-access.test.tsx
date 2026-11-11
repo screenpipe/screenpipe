@@ -61,10 +61,18 @@ it("routes build through explicit schedule setup, then starts and tracks the age
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(state.enable).toHaveBeenCalledOnce();
   expect(screen.getByRole("switch", { name: "Automatic updates" })).toBeChecked();
-  await act(async () => fireEvent.click(build));
-  expect(platform.startAnalysisJob).toHaveBeenCalledOnce();
-  expect(platform.getAnalysisJob).toHaveBeenCalledWith("workflow-discover:1");
-  expect(screen.getByText("Looking for workflows")).toBeVisible();
+  const runtime = await platform.ensureRuntime();
+  let releaseRuntime!: () => void;
+  platform.ensureRuntime = vi.fn(() => new Promise<typeof runtime>(resolve => {
+    releaseRuntime = () => resolve(runtime);
+  }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+  expect(platform.ensureRuntime).toHaveBeenCalledOnce();
+  expect(platform.startAnalysisJob).not.toHaveBeenCalled();
+  await act(async () => releaseRuntime());
+  await waitFor(() => expect(platform.startAnalysisJob).toHaveBeenCalledOnce());
+  await waitFor(() => expect(platform.getAnalysisJob).toHaveBeenCalledWith("workflow-discover:1"));
+  expect(await screen.findByText("Looking for workflows")).toBeVisible();
 });
 
 it("allows cancelling setup and opening it again without enabling or starting work", async () => {
