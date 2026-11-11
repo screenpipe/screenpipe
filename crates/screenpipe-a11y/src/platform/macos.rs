@@ -222,7 +222,10 @@ type UniChar = u16;
 type OSStatus = i32;
 type TISInputSourceRef = *const c_void;
 
-const K_UC_KEY_ACTION_DISPLAY: u16 = 3;
+/// `kUCKeyActionDown`. `kUCKeyActionDisplay` (3) returns the keycap glyph,
+/// which for Cyrillic is the uppercase letter printed on the key, not the
+/// character a keypress inserts.
+const K_UC_KEY_ACTION_DOWN: u16 = 0;
 const K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK: OptionBits = 1;
 
 const CARBON_COMMAND_KEY: u32 = 1 << 8;
@@ -235,12 +238,20 @@ const CARBON_CONTROL_KEY: u32 = 1 << 12;
 extern "C" {
     #[allow(non_upper_case_globals)]
     static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+    #[allow(non_upper_case_globals)]
+    static kTISPropertyInputSourceID: *const c_void;
 
     fn TISCopyCurrentKeyboardLayoutInputSource() -> TISInputSourceRef;
 
     fn TISGetInputSourceProperty(
         input_source: TISInputSourceRef,
         property_key: *const c_void,
+    ) -> *const c_void;
+
+    /// `include_all_installed` is Carbon `Boolean` (`unsigned char`), not `bool`.
+    fn TISCreateInputSourceList(
+        properties: *const c_void,
+        include_all_installed: u8,
     ) -> *const c_void;
 
     fn LMGetKbdType() -> u8;
@@ -263,12 +274,18 @@ extern "C" {
 extern "C" {
     fn CFRelease(cf: *const c_void);
     fn CFDataGetBytePtr(the_data: *const c_void) -> *const u8;
+    fn CFDataGetLength(the_data: *const c_void) -> isize;
+    fn CFArrayGetCount(the_array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(the_array: *const c_void, idx: isize) -> *const c_void;
+    fn CFStringGetCString(
+        the_string: *const c_void,
+        buffer: *mut std::os::raw::c_char,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> u8;
 }
 
-#[link(name = "System")]
-extern "C" {
-    fn pthread_main_np() -> i32;
-}
+const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[link(name = "proc")]
 extern "C" {
@@ -814,6 +831,10 @@ struct TapState {
     /// Bounded channel for clipboard capture — avoids spawning a thread per
     /// Cmd+C/X/V and blocks the event tap with get_clipboard().
     clipboard_tx: Sender<ClipboardRequest>,
+    /// Active keyboard layout, snapshotted off this thread. The callback only
+    /// reads it; refreshing it here would call Text Input Source APIs on the
+    /// event-tap thread, which macOS 26.5 asserts on.
+    key_layout: Arc<ArcSwap<Option<Arc<OwnedKeyLayout>>>>,
 }
 
 /// Convert a coalesced scroll burst into the `UiEvent` shape the recorder
@@ -1031,6 +1052,12 @@ fn run_event_tap(
             .ok();
     }
 
+    let key_layout = Arc::new(ArcSwap::from_pointee(None));
+    // Hold the watcher for the whole tap. Its Drop stops and joins the
+    // snapshot thread, including the early return below when the tap fails
+    // to install. The thread is not the event-tap thread, so it may call TIS.
+    let _layout_watcher = spawn_layout_watcher(stop.clone(), key_layout.clone());
+
     let state = Box::leak(Box::new(TapState {
         tx,
         start,
@@ -1046,6 +1073,7 @@ fn run_event_tap(
         activity_feed,
         context_tx,
         clipboard_tx,
+        key_layout,
     }));
 
     let Some(mut installed) = InstalledTap::install(mask, tap_callback, state as *mut TapState)
@@ -1386,7 +1414,8 @@ extern "C" fn tap_callback(
                 // kernel's tap-timeout. Dropping a char from our buffer is
                 // strictly a capture-completeness issue; the user's keystroke
                 // still reaches the focused app normally (LISTEN_ONLY tap).
-                if let Some(c) = keycode_to_char(keycode, mods) {
+                let layout = state.key_layout.load_full();
+                if let Some(c) = keycode_to_char(keycode, mods, layout.as_deref()) {
                     if let Some(mut buf) = state.text_buf.try_lock() {
                         buf.capture(c, app_name, window_title, t, state.config.max_buffer_size);
                     }
@@ -2882,44 +2911,259 @@ fn truncate(s: &str, max: usize) -> String {
 // Keycode Mapping
 // ============================================================================
 
-fn keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
-    // macOS 26.5 asserts if Text Input Source APIs are called from the event-tap thread.
-    let layout_char = if unsafe { pthread_main_np() != 0 } {
-        layout_keycode_to_char(keycode, mods)
-    } else {
-        None
-    };
-    layout_char.or_else(|| us_keycode_to_char(keycode, mods))
+/// Owned copy of the active `uchr` keyboard layout.
+///
+/// The bytes are 4-byte aligned because `UCKeyTranslate` reads `UInt16` and
+/// `UInt32` fields out of them. The copy is what makes translation safe on the
+/// event-tap thread: that thread must not call Text Input Source APIs.
+struct OwnedKeyLayout {
+    words: Vec<u32>,
+    keyboard_type: u32,
 }
 
-fn layout_keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
-    let input_source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
-    if input_source.is_null() {
+impl OwnedKeyLayout {
+    fn translate(&self, keycode: u16, mods: Modifiers) -> Option<char> {
+        if self.words.is_empty() {
+            return None;
+        }
+        translate_uchr(
+            self.words.as_ptr() as *const UCKeyboardLayout,
+            self.keyboard_type,
+            keycode,
+            mods,
+        )
+    }
+}
+
+struct LayoutSnapshot {
+    source_id: String,
+    layout: OwnedKeyLayout,
+}
+
+/// Stop flag for the layout watcher, joined when the event tap exits.
+struct LayoutWatcher {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for LayoutWatcher {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn spawn_layout_watcher(
+    session_stop: Arc<AtomicBool>,
+    cache: Arc<ArcSwap<Option<Arc<OwnedKeyLayout>>>>,
+) -> LayoutWatcher {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop.clone();
+    let handle = thread::Builder::new()
+        .name("key-layout".into())
+        .spawn(move || watch_keyboard_layout(stop_thread, session_stop, cache))
+        .map_err(|err| error!(?err, "failed to spawn keyboard layout watcher"))
+        .ok();
+    LayoutWatcher { stop, handle }
+}
+
+fn watch_keyboard_layout(
+    stop: Arc<AtomicBool>,
+    session_stop: Arc<AtomicBool>,
+    cache: Arc<ArcSwap<Option<Arc<OwnedKeyLayout>>>>,
+) {
+    let mut stamp: Option<(String, u32)> = None;
+    let mut warned = false;
+    loop {
+        match snapshot_current_layout() {
+            Some(snapshot) => {
+                let next = (snapshot.source_id, snapshot.layout.keyboard_type);
+                if stamp.as_ref() != Some(&next) {
+                    debug!(
+                        source_id = %next.0,
+                        keyboard_type = next.1,
+                        "keyboard layout cache updated"
+                    );
+                    cache.store(Arc::new(Some(Arc::new(snapshot.layout))));
+                    stamp = Some(next);
+                }
+            }
+            None if !warned => {
+                warn!(
+                    "keyboard layout snapshot failed; typed text uses the US key table until a layout is available"
+                );
+                warned = true;
+            }
+            None => {}
+        }
+        if layout_watch_should_stop(&stop, &session_stop) {
+            break;
+        }
+        // 200ms between snapshots. A layout switch is rare; sleeping in short
+        // slices keeps shutdown inside one slice.
+        for _ in 0..10 {
+            if layout_watch_should_stop(&stop, &session_stop) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+fn layout_watch_should_stop(stop: &AtomicBool, session_stop: &AtomicBool) -> bool {
+    stop.load(Ordering::Acquire) || session_stop.load(Ordering::Acquire)
+}
+
+fn snapshot_current_layout() -> Option<LayoutSnapshot> {
+    let source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+    if source.is_null() {
         return None;
     }
+    let source_id = input_source_id(source).unwrap_or_default();
+    let layout = copy_layout_from_source(source);
+    unsafe { CFRelease(source) };
+    layout.map(|layout| LayoutSnapshot { source_id, layout })
+}
 
-    let layout_data =
-        unsafe { TISGetInputSourceProperty(input_source, kTISPropertyUnicodeKeyLayoutData) };
-    if layout_data.is_null() {
-        unsafe { CFRelease(input_source) };
+#[cfg(test)]
+fn owned_layout_for_source_id(target_id: &str) -> Option<OwnedKeyLayout> {
+    let list = unsafe { TISCreateInputSourceList(std::ptr::null(), 1) };
+    if list.is_null() {
         return None;
     }
+    let count = unsafe { CFArrayGetCount(list) };
+    let mut found = None;
+    for index in 0..count {
+        let source = unsafe { CFArrayGetValueAtIndex(list, index) };
+        if source.is_null() {
+            continue;
+        }
+        if input_source_id(source).as_deref() == Some(target_id) {
+            found = copy_layout_from_source(source);
+            break;
+        }
+    }
+    unsafe { CFRelease(list) };
+    found
+}
 
-    let layout = unsafe { CFDataGetBytePtr(layout_data) } as *const UCKeyboardLayout;
+fn input_source_id(source: TISInputSourceRef) -> Option<String> {
+    let property = unsafe { TISGetInputSourceProperty(source, kTISPropertyInputSourceID) };
+    cf_string_to_string(property)
+}
+
+fn cf_string_to_string(value: *const c_void) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let mut buf = [0u8; 512];
+    let ok = unsafe {
+        CFStringGetCString(
+            value,
+            buf.as_mut_ptr() as *mut std::os::raw::c_char,
+            buf.len() as isize,
+            CF_STRING_ENCODING_UTF8,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let len = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..len].to_vec()).ok()
+}
+
+fn copy_layout_from_source(source: TISInputSourceRef) -> Option<OwnedKeyLayout> {
+    let data = unsafe { TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) };
+    if data.is_null() {
+        return None;
+    }
+    let len = unsafe { CFDataGetLength(data) };
+    if len <= 0 || len > 1_048_576 {
+        return None;
+    }
+    let len = len as usize;
+    let ptr = unsafe { CFDataGetBytePtr(data) };
+    if ptr.is_null() {
+        return None;
+    }
+    let mut words = vec![0u32; len.div_ceil(4)];
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr, words.as_mut_ptr() as *mut u8, len);
+    }
+    Some(OwnedKeyLayout {
+        words,
+        keyboard_type: unsafe { LMGetKbdType() } as u32,
+    })
+}
+
+/// Map a hardware key to the character it inserts.
+///
+/// `layout` is the snapshotted active layout. Callers on the event-tap thread
+/// pass that snapshot instead of asking Text Input Source for it: macOS 26.5
+/// asserts if those APIs run on the tap thread, and falling through to the US
+/// table records Russian (and every other non-US layout) as Latin gibberish.
+/// The US table is used only before the first snapshot, and for non-letters
+/// the layout itself does not map.
+fn keycode_to_char(keycode: u16, mods: Modifiers, layout: Option<&OwnedKeyLayout>) -> Option<char> {
+    if let Some(layout) = layout {
+        if let Some(c) = layout.translate(keycode, mods) {
+            return Some(c);
+        }
+        // Enter, tab, and backspace are sometimes absent from a layout blob.
+        // Letters are not filled in from the US table: that is the bug this
+        // snapshot exists to avoid.
+        return us_keycode_to_char(keycode, mods).filter(|c| !c.is_ascii_alphabetic());
+    }
+    us_keycode_to_char(keycode, mods)
+}
+
+fn translate_uchr(
+    layout: *const UCKeyboardLayout,
+    keyboard_type: u32,
+    keycode: u16,
+    mods: Modifiers,
+) -> Option<char> {
+    let translated = translate_uchr_once(layout, keyboard_type, keycode, mods)?;
+    // Many 'uchr' resources have no Shift+Caps table, so passing both bits
+    // returns the Shift character. macOS inserts the unshifted letter in that
+    // combination (Caps does not shift punctuation).
+    if mods.0 & Modifiers::SHIFT != 0 && mods.0 & Modifiers::CAPS != 0 {
+        let mut shift_only = mods;
+        shift_only.0 &= !Modifiers::CAPS;
+        if translate_uchr_once(layout, keyboard_type, keycode, shift_only) == Some(translated) {
+            return Some(unshift_caps_lock(translated));
+        }
+    }
+    Some(translated)
+}
+
+fn unshift_caps_lock(c: char) -> char {
+    let mut lowered = c.to_lowercase();
+    match (lowered.next(), lowered.next()) {
+        (Some(lower), None) => lower,
+        _ => c,
+    }
+}
+
+fn translate_uchr_once(
+    layout: *const UCKeyboardLayout,
+    keyboard_type: u32,
+    keycode: u16,
+    mods: Modifiers,
+) -> Option<char> {
     if layout.is_null() {
-        unsafe { CFRelease(input_source) };
         return None;
     }
-
     let mut chars = [0u16; 8];
     let mut actual_len: UniCharCount = 0;
     let mut dead_keys = 0u32;
-    let keyboard_type = unsafe { LMGetKbdType() } as u32;
     let status = unsafe {
         UCKeyTranslate(
             layout,
             keycode,
-            K_UC_KEY_ACTION_DISPLAY,
+            K_UC_KEY_ACTION_DOWN,
             carbon_modifier_state(mods),
             keyboard_type,
             K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK,
@@ -2929,14 +3173,15 @@ fn layout_keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
             chars.as_mut_ptr(),
         )
     };
-    unsafe { CFRelease(input_source) };
-
     if status != 0 || actual_len == 0 {
         return None;
     }
-
-    let text = String::from_utf16_lossy(&chars[..actual_len as usize]);
-    let c = text.chars().next()?;
+    let n = (actual_len as usize).min(chars.len());
+    let text = String::from_utf16_lossy(&chars[..n]);
+    let c = match text.chars().next()? {
+        '\r' => '\n',
+        other => other,
+    };
     if c == '\0' || (c.is_control() && !matches!(c, '\n' | '\t' | '\x08')) {
         None
     } else {
@@ -3322,6 +3567,90 @@ mod tests {
         );
         assert_eq!(us_keycode_to_char(49, Modifiers::new()), Some(' '));
         assert_eq!(us_keycode_to_char(36, Modifiers::new()), Some('\n'));
+        // No snapshot yet: capture still records the US table instead of dropping the key.
+        assert_eq!(keycode_to_char(0, Modifiers::new(), None), Some('a'));
+    }
+
+    /// Physical key positions on Apple’s Russian layout (`com.apple.keylayout.Russian`).
+    /// Keycode 0 is the US `A` key, which that layout inserts as `ф`. Meeting notes
+    /// used to store the US character because the event tap refused to read the
+    /// active layout.
+    #[test]
+    fn russian_layout_maps_physical_keys_to_cyrillic() {
+        let Some(layout) = owned_layout_for_source_id("com.apple.keylayout.Russian") else {
+            panic!("com.apple.keylayout.Russian is not installed");
+        };
+        assert_eq!(
+            keycode_to_char(0, Modifiers::new(), Some(&layout)),
+            Some('ф'),
+            "US A key"
+        );
+        assert_eq!(
+            keycode_to_char(0, Modifiers(Modifiers::SHIFT), Some(&layout)),
+            Some('Ф')
+        );
+        assert_eq!(
+            keycode_to_char(0, Modifiers(Modifiers::CAPS), Some(&layout)),
+            Some('Ф')
+        );
+        assert_eq!(
+            keycode_to_char(
+                0,
+                Modifiers(Modifiers::SHIFT | Modifiers::CAPS),
+                Some(&layout)
+            ),
+            Some('ф')
+        );
+        // Caps lock does not unshift the number row.
+        assert_eq!(
+            keycode_to_char(
+                18,
+                Modifiers(Modifiers::SHIFT | Modifiers::CAPS),
+                Some(&layout)
+            ),
+            Some('!')
+        );
+        assert_eq!(
+            keycode_to_char(12, Modifiers::new(), Some(&layout)),
+            Some('й'),
+            "US Q key"
+        );
+        // These are punctuation in the US table and letters on Russian.
+        assert_eq!(
+            keycode_to_char(43, Modifiers::new(), Some(&layout)),
+            Some('б')
+        );
+        assert_eq!(
+            keycode_to_char(46, Modifiers::new(), Some(&layout)),
+            Some('ь')
+        );
+        // ё sits on different physical keys for ANSI and ISO.
+        assert!(
+            (0u16..64)
+                .any(|code| keycode_to_char(code, Modifiers::new(), Some(&layout)) == Some('ё')),
+            "Russian layout should produce ё"
+        );
+        assert_eq!(
+            keycode_to_char(49, Modifiers::new(), Some(&layout)),
+            Some(' ')
+        );
+        assert_eq!(
+            keycode_to_char(36, Modifiers::new(), Some(&layout)),
+            Some('\n')
+        );
+        assert_eq!(
+            keycode_to_char(48, Modifiers::new(), Some(&layout)),
+            Some('\t')
+        );
+        assert_eq!(
+            keycode_to_char(51, Modifiers::new(), Some(&layout)),
+            Some('\x08')
+        );
+        assert_ne!(
+            keycode_to_char(0, Modifiers::new(), Some(&layout)),
+            us_keycode_to_char(0, Modifiers::new()),
+            "a cached layout must not be rewritten as the US character"
+        );
     }
 
     #[test]
@@ -3791,6 +4120,7 @@ mod text_burst_eval {
             activity_feed: None,
             context_tx: bounded(1).0,
             clipboard_tx: bounded(1).0,
+            key_layout: Arc::new(ArcSwap::from_pointee(None)),
         };
         let raw = format!(
             "{}alice@example.com 123-45-6789 4111 1111 1111 1111",
