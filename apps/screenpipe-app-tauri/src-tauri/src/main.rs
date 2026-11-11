@@ -477,10 +477,7 @@ macro_rules! define_specta_builder {
 
 fn main() {
     #[cfg(target_os = "macos")]
-    if let Err(error) = screenpipe_engine::native_allocator::prepare_native_heap() {
-        eprintln!("Unable to initialize native allocator: {error}");
-        std::process::exit(1);
-    }
+    screenpipe_engine::native_allocator::prepare_native_heap();
     run_app();
 }
 
