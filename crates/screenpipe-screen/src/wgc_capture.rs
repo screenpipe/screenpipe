@@ -829,6 +829,16 @@ impl PersistentCapture {
             }
             let now = Instant::now();
             if now >= deadline {
+                // WGC emits a frame only when the desktop changed. A live session
+                // that delivered nothing within the timeout is not broken: the
+                // cached texture still shows the current desktop. Serve it instead
+                // of erroring, which made the caller tear the session down and
+                // rebuild it on every idle capture of a static monitor (every
+                // visual-change probe, ~3 s, on each unfocused display). A wedged
+                // stream is still caught by the engine's frozen-stream watchdog.
+                if policy == FrameReadPolicy::Fresh && slot.texture.is_some() {
+                    break;
+                }
                 return Err(anyhow!("no frame received within {:?}", timeout));
             }
             let remaining = deadline.saturating_duration_since(now);
