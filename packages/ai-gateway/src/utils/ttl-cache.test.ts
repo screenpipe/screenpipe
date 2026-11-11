@@ -53,12 +53,13 @@ describe('TtlCache', () => {
     expect(loads).toBe(2);
   });
 
-  it('does not extend a completed result TTL by its upstream wait', async () => {
+  it.each([49, 50, 51])('keeps the freshness boundary after a %ims upstream wait', async (elapsed) => {
     let now = 0;
     const cache = new TtlCache<number>({ maxEntries: 2, now: () => now, ttlForValue: () => 50 });
-    expect(await cache.getOrLoad('user', async () => { now = 50; return 1; })).toBe(1);
-    expect(await cache.getOrLoad('user', async () => 2)).toBe(2);
-    expect(await cache.getOrLoad('user', async () => 3)).toBe(2);
+    expect(await cache.getOrLoad('user', async () => { now = elapsed; return 1; })).toBe(1);
+    const expected = elapsed < 50 ? 1 : 2;
+    expect(await cache.getOrLoad('user', async () => 2)).toBe(expected);
+    expect(await cache.getOrLoad('user', async () => 3)).toBe(expected);
   });
 
   it('does not retain values rejected by the TTL policy', async () => {
