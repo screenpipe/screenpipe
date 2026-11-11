@@ -473,7 +473,7 @@ pub mod privacy_exports;
 pub mod privacy_release;
 pub use focused::{FocusedAction, FocusedInterval, FocusedMedia, FocusedPhase, FocusedRecording};
 mod starred;
-pub use starred::StarredSession;
+pub use starred::{StarredSession, StarredSessionChange};
 mod outputs;
 mod search;
 mod semantic;

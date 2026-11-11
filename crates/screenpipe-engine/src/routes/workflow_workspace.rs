@@ -56,7 +56,7 @@ pub(crate) async fn context(
     let catalog = read_catalog(&source).await?;
     let ws = workspace::state(&catalog);
     Ok(Json(
-        json!({"task":query.task,"ready":workspace::ready(&ws,&query.task),"canFinish":workspace::can_finish(&ws),"workspace":ws,
+        json!({"task":query.task,"ready":workspace::ready(&ws,&query.task),"canFinish":workspace::can_finish(&ws),"workspace":ws,"starredSources":workspace::starred_queue(&ws, &super::starred::stamp(chrono::Utc::now())),
         "catalogRevision":catalog["revision"].as_u64().unwrap_or(0),
         "receiptRevision":ws["receipts"][&query.task]["revision"].as_u64().unwrap_or(0)}),
     ))
@@ -222,6 +222,11 @@ pub(crate) async fn update(
     }
     let previous = read_catalog(&source).await?;
     let mut ws = workspace::state(&previous);
+    let mut source_decisions = previous
+        .get("starredDiscoveryDecisions")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    workspace::archive_starred(&mut ws, &mut source_decisions);
     let receipt = if action == "pause" {
         // A model may finish its own work, but only the owner can stop the group.
         if perms.0.is_some() {
@@ -245,14 +250,109 @@ pub(crate) async fn update(
                 "This update was stopped. Resume from Workflows or wait for the next daily update.",
             ));
         }
+        if !ws["starredIntake"].is_object() {
+            ws["starredIntake"] = json!({"sources":{}});
+        }
+        for (id, source) in source_decisions
+            .as_object()
+            .into_iter()
+            .flat_map(|s| s.iter())
+        {
+            if ws["starredIntake"]["sources"][id].is_null() {
+                ws["starredIntake"]["sources"][id] = source.clone();
+            }
+        }
+        workspace::archive_starred(&mut ws, &mut source_decisions);
         workspace::start(&mut ws, &previous);
+        let after = ws["starredIntake"]["after"].as_i64().unwrap_or(0);
+        let pending: Vec<_> = ws["starredIntake"]["sources"]
+            .as_object()
+            .into_iter()
+            .flat_map(|s| s.values())
+            .filter(|s| s["revision"] != s["processedRevision"])
+            .filter_map(|s| s["id"].as_str())
+            .map(str::to_owned)
+            .collect();
+        let rows = state
+            .db
+            .starred_sessions_for_discovery(after, &json!(pending).to_string(), 100)
+            .await
+            .map_err(|e| {
+                tracing::error!(error=%e, "workflow starred intake failed");
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not read starred sources.",
+                )
+            })?;
+        // A missing source was deleted or expired. Do not investigate stale metadata.
+        for id in &pending {
+            if !rows.iter().any(|s| &s.id == id) {
+                ws["starredIntake"]["sources"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(id);
+                source_decisions.as_object_mut().unwrap().remove(id);
+            }
+        }
+        // Restore prior source ownership/decisions when an edited source returns,
+        // including the other intervals of the same Capture demonstration.
+        for source in source_decisions
+            .as_object()
+            .into_iter()
+            .flat_map(|s| s.values())
+        {
+            if rows.iter().any(|row| {
+                source["id"] == row.id
+                    || row
+                        .recording_id
+                        .as_ref()
+                        .is_some_and(|g| source["recording_id"] == *g)
+            }) {
+                let id = source["id"].as_str().unwrap();
+                if ws["starredIntake"]["sources"][id].is_null() {
+                    if !ws["starredIntake"].is_object() {
+                        ws["starredIntake"] = json!({"sources":{}});
+                    }
+                    ws["starredIntake"]["sources"][id] = source.clone();
+                }
+            }
+        }
+        let has_more = rows.iter().filter(|s| s.sequence > after).count() == 100;
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|s| serde_json::to_value(s).expect("starred source serializes"))
+            .collect();
+        workspace::intake_starred(
+            &mut ws,
+            &rows,
+            has_more,
+            &super::starred::stamp(chrono::Utc::now()),
+            state
+                .history_access
+                .cutoff(chrono::Utc::now())
+                .map(super::starred::stamp)
+                .as_deref(),
+        );
+
         json!({"revision":workspace::revision(&ws),"cycle":ws["cycle"]})
     } else {
         let change = serde_json::from_value(body.clone())
             .map_err(|_| error(StatusCode::BAD_REQUEST, "Invalid workspace change."))?;
         workspace::apply(&mut ws, task, &change).map_err(|e| error(StatusCode::CONFLICT, &e))?
     };
+    workspace::project_starred(
+        &mut ws,
+        &mut source_decisions,
+        &super::starred::stamp(chrono::Utc::now()),
+    );
+    if serde_json::to_vec(&ws).map_or(true, |data| data.len() > 2_000_000) {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "Workspace is full. Resolve current drafts before loading more sources.",
+        ));
+    }
     let mut next = previous.clone();
+    next["starredDiscoveryDecisions"] = source_decisions;
     next["agentWorkspace"] = ws.clone();
     super::workflow_catalog::persist(&source, &previous, &next).await?;
     notify_ready(&ws, task);

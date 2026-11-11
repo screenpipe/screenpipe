@@ -1288,8 +1288,9 @@ async fn starred_upgrade_restores_older_hybrid_search_and_preserves_recordings()
     // Reproduce a generation converted before starred sessions shipped. Only
     // mutate this disposable fixture, through its existing serialized writer.
     db.execute_raw_sql_write(
-        "DROP TABLE starred_sessions;
-         DELETE FROM _sqlx_migrations WHERE version=20261002190000;",
+        "DROP TABLE focused_starred_intervals;
+         DROP TABLE starred_sessions;
+         DELETE FROM _sqlx_migrations WHERE version IN (20261002190000,20261111180000);",
     )
     .await
     .unwrap();
@@ -1718,8 +1719,9 @@ async fn pending_sqlx_migration_rolls_back_and_retries_on_compressed_storage() {
     let before = db.frame_payloads(&[1], Projection::All).await.unwrap();
     // Fail the second statement of the pending migration, after CREATE TABLE.
     db.execute_raw_sql_write(
-        "DROP TABLE starred_sessions;
-         DELETE FROM _sqlx_migrations WHERE version=20261002190000;
+        "DROP TABLE focused_starred_intervals;
+         DROP TABLE starred_sessions;
+         DELETE FROM _sqlx_migrations WHERE version IN (20261002190000,20261111180000);
          CREATE INDEX idx_starred_sessions_start_end ON tags(name);",
     )
     .await

@@ -7,6 +7,7 @@ import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { localFetch } from "@/lib/api";
 
 export interface StarredSession {
+  name?: string | null;
   id: string;
   start: string;
   end: string;

@@ -43,7 +43,7 @@ export function FocusedRecordingPanel(p: FocusedRecordingPanelProps) {
     <section ref={stage} tabIndex={-1} aria-label="Focused recording" className="space-y-3 rounded-lg bg-black p-3 text-xs text-white/90">
       <div className="flex items-center gap-1.5 pr-6 font-medium">
         <Star className="h-3.5 w-3.5 shrink-0 fill-current" aria-hidden="true" />
-        <span>{p.phase === "recording" ? "Recording workflow" : p.phase === "paused" ? "Recording paused" : p.phase === "delete-confirm" ? "Delete recording?" : submitted ? "Workflow submitted" : "Recording summary"}</span>
+        <span>{p.phase === "recording" ? "Recording workflow" : p.phase === "paused" ? "Recording paused" : p.phase === "delete-confirm" ? "Delete recording?" : submitted ? "Recording saved locally" : "Recording summary"}</span>
         <span className="ml-auto font-normal tabular-nums text-white/60" aria-label="Captured duration">{time(p.seconds)}</span>
       </div>
       <label className="block space-y-1 text-white/60">
@@ -73,12 +73,12 @@ export function FocusedRecordingPanel(p: FocusedRecordingPanelProps) {
             <div className="flex justify-between gap-2"><dt>Screen</dt><dd>{p.media.screenFrames > 0 ? `${p.media.screenFrames} captured frames` : "No screen captured"}</dd></div>
             <div className="flex justify-between gap-2"><dt>Audio</dt><dd>{(p.media.audioSeconds > 0 || (p.media.audioChunks ?? 0) > 0) ? time(p.media.audioSeconds) : "No audio captured"}</dd></div>
           </dl>
-          {!p.name.trim() && <p className="text-white/60">Enter a workflow name to submit.</p>}
+          {!p.name.trim() && <p className="text-white/60">Enter a workflow name to save.</p>}
           <div className="flex justify-between gap-2">
             <button className="rounded px-1 py-1.5 text-white/60 hover:text-white focus-visible:outline disabled:opacity-50" disabled={p.busy} onClick={p.onDelete}>Delete</button>
             <div className="flex gap-1">
               <button className={action} disabled={p.busy} onClick={p.onResume}>Resume</button>
-              <button className={`${action} border-white/70 bg-white text-black hover:bg-white/90`} disabled={p.busy || !p.name.trim()} onClick={p.onSubmit}>{p.busy ? "Submitting…" : "Submit"}</button>
+              <button className={`${action} border-white/70 bg-white text-black hover:bg-white/90`} disabled={p.busy || !p.name.trim()} onClick={p.onSubmit}>{p.busy ? "Saving…" : "Save"}</button>
             </div>
           </div>
         </>
@@ -94,7 +94,7 @@ export function FocusedRecordingPanel(p: FocusedRecordingPanelProps) {
       )}
       {submitted && (
         <>
-          <p role="status" className="text-white/60">Workflow submitted</p>
+          <p role="status" className="text-white/60">Recording saved locally</p>
           <div className="flex justify-between gap-2">
             <button className="rounded px-1 py-1.5 text-white/60 hover:text-white focus-visible:outline" onClick={p.onClose}>Close</button>
             <button className={action} onClick={p.onNew}>New workflow</button>

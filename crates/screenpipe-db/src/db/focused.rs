@@ -382,6 +382,30 @@ impl DatabaseManager {
         sqlx::query("INSERT INTO focused_recordings(id,phase,created_at,revision,body,current_slot) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET phase=excluded.phase,revision=excluded.revision,body=excluded.body,current_slot=excluded.current_slot")
             .bind(&next.id).bind(phase).bind(next.created_at).bind(next.revision).bind(body).bind(current_slot)
             .execute(&mut **tx.conn()).await?;
+        // Local Save is an atomic handoff to the incumbent starred path.
+        // Preserve each pause/resume interval; never star the bounding envelope.
+        if next.phase == FocusedPhase::Submitted {
+            for (index, interval) in next.intervals.iter().enumerate() {
+                let Some(end) = interval.end.filter(|end| *end > interval.start) else {
+                    continue;
+                };
+                let stamp = |ms| {
+                    chrono::DateTime::from_timestamp_millis(ms)
+                        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+                        .ok_or_else(|| protocol("Invalid capture interval"))
+                };
+                let existing: Option<String> = sqlx::query_scalar("SELECT session_id FROM focused_starred_intervals WHERE recording_id=?1 AND interval_index=?2")
+                    .bind(&next.id).bind(index as i64).fetch_optional(&mut **tx.conn()).await?;
+                if existing.is_none() {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    sqlx::query("INSERT INTO starred_sessions(id,start,end,hd_requested,revision,name) VALUES(?1,?2,?3,0,1,NULLIF(?4,''))")
+                        .bind(&id).bind(stamp(interval.start)?).bind(stamp(end)?).bind(&next.name)
+                        .execute(&mut **tx.conn()).await?;
+                    sqlx::query("INSERT INTO focused_starred_intervals(recording_id,interval_index,session_id) VALUES(?1,?2,?3)")
+                        .bind(&next.id).bind(index as i64).bind(id).execute(&mut **tx.conn()).await?;
+                }
+            }
+        }
         if next.phase != FocusedPhase::Deleted {
             sqlx::query("INSERT INTO focused_recording_preferences(singleton,voice_enabled) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET voice_enabled=excluded.voice_enabled WHERE voice_enabled<>excluded.voice_enabled")
                 .bind(next.voice_enabled).execute(&mut **tx.conn()).await?;
@@ -401,6 +425,60 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn local_save_projects_pause_intervals_once_without_the_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            dir.path().join("projection.db").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let mut session = FocusedRecording::new("fixture".into(), 1000, false);
+        session
+            .apply(
+                FocusedAction::Rename {
+                    name: "Fixture job".into(),
+                },
+                1000,
+            )
+            .unwrap();
+        session.apply(FocusedAction::Pause, 2000).unwrap();
+        session.apply(FocusedAction::Resume, 5000).unwrap();
+        session.apply(FocusedAction::Finish, 6000).unwrap();
+        session.apply(FocusedAction::Submit, 6000).unwrap();
+        assert!(db.save_focused_recording(&mut session, 0).await.unwrap());
+        let rows = db
+            .list_starred_sessions("1970", "2100", 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|s| s.name.as_deref() == Some("Fixture job")));
+        assert_eq!(
+            db.starred_timestamps(&[
+                "1970-01-01T00:00:01.500Z".into(),
+                "1970-01-01T00:00:03.000Z".into(),
+                "1970-01-01T00:00:05.500Z".into()
+            ])
+            .await
+            .unwrap(),
+            vec![true, false, true]
+        );
+        let ids: Vec<_> = rows.iter().map(|s| s.id.clone()).collect();
+        assert!(db.save_focused_recording(&mut session, 0).await.unwrap());
+        assert_eq!(
+            db.list_starred_sessions("1970", "2100", 100, 0)
+                .await
+                .unwrap()
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            ids
+        );
+    }
 
     #[test]
     fn pause_finish_and_resume_preserve_the_same_capture_without_review_time() {

@@ -322,14 +322,6 @@ pub(crate) async fn act(
             "Recording changed in another window. Reload before continuing.",
         ));
     }
-    // Submission must be backed by a durable receipt from the selected host.
-    // No local UI action can manufacture successful remote submission.
-    if matches!(input.action, FocusedAction::Submit) {
-        return Err(error(
-            StatusCode::CONFLICT,
-            "Workflow submission is not configured.",
-        ));
-    }
     if matches!(input.action, FocusedAction::Resume) {
         capture_available(&state).await?;
     }
@@ -383,6 +375,11 @@ pub(crate) async fn act(
             StatusCode::CONFLICT,
             "Recording changed. Reload before continuing.",
         ));
+    }
+    if session.phase == FocusedPhase::Submitted {
+        state
+            .starred_revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     if session.phase == FocusedPhase::Recording {
         state

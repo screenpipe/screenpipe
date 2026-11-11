@@ -84,12 +84,12 @@ it("Escape cancels delete confirmation before it can dismiss the native panel", 
   fireEvent.click(await screen.findByRole("button",{name:"Delete"}));
   expect(screen.getByText("Delete recording?")).toBeVisible();
   fireEvent.keyDown(screen.getByRole("region",{name:"Focused recording"}),{key:"Escape"});
-  expect(screen.getByRole("button",{name:"Submit"})).toBeVisible();
+  expect(screen.getByRole("button",{name:"Save"})).toBeVisible();
   expect(mocks.hide).not.toHaveBeenCalled();
 });
 it("never dismisses an unsent summary after five idle seconds", async () => {
   mocks.fetch.mockResolvedValue({ok:true,json:async()=>({...fixture(),phase:"summary",intervals:[],media:{screenFrames:0,audioSeconds:0,audioChunks:0}})});
-  render(<Page />); await screen.findByRole("button",{name:"Submit"});
+  render(<Page />); await screen.findByRole("button",{name:"Save"});
   vi.useFakeTimers(); await act(async()=>{await vi.advanceTimersByTimeAsync(60000);});
   expect(mocks.hide).not.toHaveBeenCalled();
 });

@@ -19,7 +19,7 @@ it("requires explicit deletion and Keep recording returns to the frozen summary"
  expect(screen.getByText("Delete recording?")).toBeVisible();
  expect(mocks.recorder.act).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"Keep recording"}));
- expect(screen.getByRole("button",{name:"Submit"})).toBeVisible();
+ expect(screen.getByRole("button",{name:"Save"})).toBeVisible();
  expect(mocks.recorder.act).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"Delete"}));
  fireEvent.click(screen.getByRole("button",{name:"Delete"}));

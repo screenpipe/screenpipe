@@ -52,7 +52,7 @@ pub use db::{
     DeleteTimeRangeResult, FocusedAction, FocusedInterval, FocusedMedia, FocusedPhase,
     FocusedRecording, ImmediateTx, NewMeetingTranscriptSegment, SemanticActor, SemanticActorAlias,
     SemanticActorReference, SemanticAttachResult, SemanticCleanupResult, SemanticContextQuery,
-    SemanticFrameContext, SemanticProjectionWriteResult, StarredSession,
+    SemanticFrameContext, SemanticProjectionWriteResult, StarredSession, StarredSessionChange,
     MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_ROOM_CHANGED,
     MEETING_END_REASON_SHUTDOWN,
 };

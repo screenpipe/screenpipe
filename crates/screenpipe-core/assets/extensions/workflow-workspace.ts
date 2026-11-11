@@ -32,7 +32,7 @@ export default function (pi: ExtensionAPI) {
   const task = process.env.SCREENPIPE_PIPE_NAME || "";
   if (!tasks.includes(task)) return;
   const actions = ["context", "checkpoint", "handoff", "finish"];
-  if (task === "workflow-discover") actions.push("start", "propose");
+  if (task === "workflow-discover") actions.push("start", "propose", "source_decision");
   if (task === "workflow-maintain") actions.push("propose");
   if (task === "workflow-review") actions.push("reject", "publish");
   pi.registerTool({
@@ -45,6 +45,8 @@ export default function (pi: ExtensionAPI) {
         expected_revision: {type:"integer", description:"Required for every write except start. Copy revision from the latest context or remaining state."},
         catalog_revision: {type:"integer", description:"Required for publish and Review finish. Copy catalogRevision from the latest context or remaining state."},
         draft_id: {type:"string", description:"For context, read this draft in full; for writes, the owned draft to change."},
+        source_session_id: {type:"string", description:"For a starred proposal or source_decision, copy the first eligible starredSources id."},
+        source_revision: {type:"integer", description:"Copy that starred source revision. Source processing is atomic with the draft or decision."},
         workflow_id: {type:"string", description:"With context, read one existing catalog workflow in full."},
         assignee: {type:"string", enum: tasks},
         payload: {type:"object", description:"For propose or handoff: research notes are valid, including a candidate title, source addresses, observed actions and unanswered questions. You do not need a finished procedure to hand off reconnaissance. Handoff replaces the draft payload. Only publish requires ONE complete workflow object matching outputContract, not an outer catalog object, including description and stages with procedure/evidence; omit payload to publish the stored draft. note never changes the payload."},
@@ -96,6 +98,7 @@ export default function (pi: ExtensionAPI) {
           } else {
             result = {task,ready:state.ready,canFinish:state.canFinish,revision:ws.revision,catalogRevision:state.catalogRevision,
               historyStart:catalog.historyStart,
+              starredSources:state.starredSources ?? [], starredIntake:ws.starredIntake,
               cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes,checkpoints:ws.cycle.checkpoints},
               drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,publicationRetry:d.publicationRetry,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
               workflows:catalog.workflows.map(workflowIndex),

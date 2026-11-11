@@ -35,6 +35,7 @@ pub(crate) fn stamp(t: DateTime<Utc>) -> String {
 #[derive(OaSchema, Serialize)]
 pub(crate) struct StarredSession {
     pub id: String,
+    pub name: Option<String>,
     pub start: String,
     pub end: String,
     pub hd_requested: bool,
@@ -45,6 +46,7 @@ impl From<screenpipe_db::StarredSession> for StarredSession {
     fn from(s: screenpipe_db::StarredSession) -> Self {
         Self {
             id: s.id,
+            name: s.name,
             start: s.start,
             end: s.end,
             hd_requested: s.hd_requested,
@@ -126,6 +128,7 @@ pub(crate) async fn list(
 #[derive(OaSchema, Deserialize)]
 pub(crate) struct SaveSession {
     pub id: String,
+    pub name: Option<String>,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     #[serde(default)]
@@ -135,6 +138,15 @@ pub(crate) struct SaveSession {
     pub revision: i64,
 }
 fn validate(s: &SaveSession, now: DateTime<Utc>) -> Result<(), Error> {
+    if s.name
+        .as_ref()
+        .is_some_and(|name| name.chars().count() > 200)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Use a segment name of 200 characters or fewer.",
+        ));
+    }
     if uuid::Uuid::parse_str(&s.id).is_err() || s.revision < 0 || s.revision == i64::MAX {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -191,16 +203,20 @@ pub(crate) async fn save(
         s.start != stamp(request.start)
             || s.end != stamp(request.end)
             || s.hd_requested != request.hd_requested
+            || request.name.as_ref().is_some_and(|name| {
+                s.name.as_deref() != (!name.is_empty()).then_some(name.as_str())
+            })
     });
     if !state
         .db
-        .save_starred_session(
+        .save_named_starred_session(
             &request.id,
             &stamp(request.start),
             &stamp(request.end),
             request.hd_requested,
             request.revision,
             &stamp(now),
+            request.name.as_deref(),
         )
         .await
         .map_err(database_error)?
@@ -245,6 +261,7 @@ mod tests {
             end: now + chrono::Duration::minutes(15),
             hd_requested: false,
             revision: 0,
+            name: None,
         };
         assert!(validate(&s, now).is_ok());
         s.end = now;

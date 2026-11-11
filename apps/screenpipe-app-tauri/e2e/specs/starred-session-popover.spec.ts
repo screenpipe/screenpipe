@@ -97,7 +97,7 @@ describe("starred session popover", function () {
     await $("button=Resume").waitForDisplayed({ timeout: t(15_000) });
     expect((await readSession()).id).toBe(started.id);
     await $("button=Finish").click();
-    await $("button=Submit").waitForDisplayed({ timeout: t(15_000) });
+    await $("button=Save").waitForDisplayed({ timeout: t(15_000) });
     expect((await readSession()).phase).toBe("summary");
     await $('[aria-label="Close session controls"]').click();
     await browser.waitUntil(async () => !(await visible("starred-sessions")), {

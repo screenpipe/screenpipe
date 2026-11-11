@@ -80,6 +80,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn focused_save_hands_off_local_starred_segments_once() {
+        let (app, db) = setup_test_app().await;
+        let now = Utc::now().timestamp_millis();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut recording = screenpipe_db::FocusedRecording::new(id.clone(), now - 60000, false);
+        recording
+            .apply(
+                screenpipe_db::FocusedAction::Rename {
+                    name: "Fixture workflow".into(),
+                },
+                now - 60000,
+            )
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Pause, now - 50000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Resume, now - 20000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Finish, now - 10000)
+            .unwrap();
+        assert!(db.save_focused_recording(&mut recording, 0).await.unwrap());
+        let body = serde_json::json!({"action":"submit","revision":recording.revision,"requestId":uuid::Uuid::new_v4().to_string()});
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/focused-recordings/{id}/action"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let saved: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(saved["phase"], "submitted");
+        }
+        let sessions = db
+            .list_starred_sessions("1970", "2100", 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions
+            .iter()
+            .all(|s| s.name.as_deref() == Some("Fixture workflow")));
+        let sources = db
+            .starred_sessions_for_discovery(0, "[]", 100)
+            .await
+            .unwrap();
+        assert_eq!(sources.len(), 2);
+        assert!(sources
+            .iter()
+            .all(|s| s.recording_id.as_deref() == Some(id.as_str())));
+    }
+
+    #[tokio::test]
     async fn starred_search_paginates_union_and_summary_includes_empty_sessions() {
         let (app, db) = setup_test_app().await;
         let base = Utc::now() - Duration::hours(2);
@@ -298,7 +360,7 @@ mod tests {
                 .unwrap();
         assert_eq!(before["data"][0]["starred"], false);
         let id = uuid::Uuid::new_v4().to_string();
-        let mut body = serde_json::json!({"id":id,"start":start,"end":end,"revision":0});
+        let mut body = serde_json::json!({"id":id,"start":start,"end":end,"revision":0,"name":"Fixture reconciliation"});
         let make_request = |body: &serde_json::Value| {
             Request::builder()
                 .method("POST")
@@ -366,6 +428,7 @@ mod tests {
             StatusCode::CONFLICT
         );
         body["revision"] = serde_json::json!(1);
+        body.as_object_mut().unwrap().remove("name");
         assert_eq!(
             app.clone()
                 .oneshot(make_request(&body))
@@ -388,6 +451,7 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(value["data"][0]["revision"], 2);
+        assert_eq!(value["data"][0]["name"], "Fixture reconciliation");
     }
 
     #[cfg(unix)]

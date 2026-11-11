@@ -39,7 +39,7 @@ it("shows supplied captured media, allows summary recovery, and rejects empty na
   render(<FocusedRecordingPanel {...props} />);
   expect(screen.getByText("No screen captured")).toBeVisible();
   expect(screen.getByText("No audio captured")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   expect(props.onDelete).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "Resume" }));
@@ -49,10 +49,10 @@ it("retains summary actions after a submit error and blocks duplicate requests w
   const props = fixture({ phase: "summary", error: "Could not submit. Try again." });
   const view = render(<FocusedRecordingPanel {...props} />);
   expect(screen.getByRole("alert")).toHaveTextContent("Could not submit");
-  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(props.onSubmit).toHaveBeenCalledOnce();
   view.rerender(<FocusedRecordingPanel {...props} busy />);
-  expect(screen.getByRole("button", { name: "Submitting…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
 });
@@ -65,7 +65,7 @@ it("offers explicit Delete and Keep recording actions in confirmation", () => {
 it("makes the submitted name read-only and offers Close and New workflow", () => {
   const props = fixture({ phase: "submitted" }); render(<FocusedRecordingPanel {...props} />);
   expect(screen.getByRole("textbox", { name: "Workflow name" })).toHaveAttribute("readonly");
-  expect(screen.getByRole("status")).toHaveTextContent("Workflow submitted");
+  expect(screen.getByRole("status")).toHaveTextContent("Recording saved locally");
   expect(screen.getByRole("region", { name: "Focused recording" })).toHaveFocus();
   fireEvent.click(screen.getByRole("button", { name: "New workflow" }));
   expect(props.onNew).toHaveBeenCalledOnce();

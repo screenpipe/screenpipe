@@ -70,9 +70,167 @@ pub fn can_finish(ws: &Value) -> bool {
         && !TASKS.iter().any(|task| assigned(ws, task))
 }
 
+/// Intake state is local catalog metadata, independent of enterprise sync.
+/// The scan cursor advances only with a durable pending-source snapshot. A
+/// source is processed only in the same write as its draft or explicit decision.
+pub fn intake_starred(
+    ws: &mut Value,
+    rows: &[Value],
+    has_more: bool,
+    now: &str,
+    cutoff: Option<&str>,
+) {
+    if !ws["starredIntake"].is_object() {
+        ws["starredIntake"] = json!({"after":0,"sources":{}});
+    }
+    if let Some(sources) = ws["starredIntake"]["sources"].as_object_mut() {
+        sources.retain(|_, s| cutoff.is_none_or(|c| s["start"].as_str().is_some_and(|v| v >= c)));
+    }
+    for row in rows {
+        let Some(id) = row["id"].as_str() else {
+            continue;
+        };
+        let after = ws["starredIntake"]["after"].as_i64().unwrap_or(0);
+        ws["starredIntake"]["after"] = json!(after.max(row["sequence"].as_i64().unwrap_or(0)));
+        if cutoff.is_some_and(|c| row["start"].as_str().is_none_or(|v| v < c)) {
+            continue;
+        }
+        let old = ws["starredIntake"]["sources"][id].clone();
+        if old["revision"] != row["revision"] {
+            let mut next = row.clone();
+            next["processedRevision"] = old["processedRevision"].clone();
+            next["draftId"] = old["draftId"].clone();
+            next["decision"] = old["decision"].clone();
+            next["lastDraft"] = old["lastDraft"].clone();
+            ws["starredIntake"]["sources"][id] = next;
+        }
+    }
+    ws["starredIntake"]["hasMore"] = json!(has_more);
+    ws["starredIntake"]["checkedAt"] = json!(now);
+    ws["revision"] = json!(revision(ws) + 1);
+}
+
+/// Keep completed source decisions outside the bounded working drafts. New
+/// revisions restore this association; no completed source becomes a new input.
+pub fn archive_starred(ws: &mut Value, ledger: &mut Value) {
+    if !ledger.is_object() {
+        *ledger = json!({});
+    }
+    let completed: Vec<_> = ws["starredIntake"]["sources"]
+        .as_object()
+        .into_iter()
+        .flat_map(|s| s.iter())
+        .filter(|(_, s)| {
+            s["processedRevision"] == s["revision"]
+                && s["draftId"]
+                    .as_str()
+                    .is_none_or(|id| ws["drafts"][id]["status"] != "open")
+        })
+        .map(|(id, s)| (id.clone(), s.clone()))
+        .collect();
+    for (id, mut source) in completed {
+        if let Some(draft) = source["draftId"]
+            .as_str()
+            .map(|id| ws["drafts"][id].clone())
+            .filter(|d| !d.is_null())
+        {
+            source["lastDraft"] = json!({"id":draft["id"],"status":draft["status"],"decision":draft["decision"],"receipt":draft["receipt"]});
+        }
+        ledger[&id] = source;
+        ws["starredIntake"]["sources"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&id);
+    }
+}
+
+/// Bound active context, not intake admission. The catalog retains the complete
+/// local source ledger so a large backlog can drain without filling drafts.
+pub fn project_starred(ws: &mut Value, ledger: &mut Value, now: &str) {
+    archive_starred(ws, ledger);
+    for (id, source) in ws["starredIntake"]["sources"]
+        .as_object()
+        .into_iter()
+        .flat_map(|s| s.iter())
+    {
+        ledger[id] = source.clone();
+    }
+    ws["starredIntake"]["sources"] = ledger.clone();
+    archive_starred(ws, ledger);
+    let queue = starred_queue(ws, now);
+    let mut selected = serde_json::Map::new();
+    for source in queue.iter().take(50) {
+        for part in source["segments"]
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![source.clone()])
+        {
+            selected.insert(part["id"].as_str().unwrap().to_owned(), part);
+        }
+    }
+    // Assigned drafts already carry their complete source snapshots. Active
+    // sources remain in the ledger and are refreshed on the next start.
+    ws["starredIntake"]["sources"] = Value::Object(selected);
+    ws["starredIntake"]["hasPending"] = json!(queue.len() > 50);
+}
+
+pub fn starred_queue(ws: &Value, now: &str) -> Vec<Value> {
+    let mut rows: Vec<_> = ws["starredIntake"]["sources"]
+        .as_object()
+        .into_iter()
+        .flat_map(|s| s.values())
+        .filter(|s| {
+            s["revision"] != s["processedRevision"]
+                && s["end"].as_str().is_some_and(|end| end <= now)
+        })
+        .filter(|s| {
+            s["draftId"]
+                .as_str()
+                .is_none_or(|id| ws["drafts"][id]["status"] != "open")
+        })
+        .cloned()
+        .collect();
+    rows.sort_by_key(|s| {
+        (
+            s["name"].as_str().is_none_or(|n| n.trim().is_empty()),
+            s["sequence"].as_i64().unwrap_or(0),
+            s["id"].as_str().unwrap_or_default().to_owned(),
+        )
+    });
+    let all = ws["starredIntake"]["sources"].as_object();
+    let mut groups = std::collections::HashSet::new();
+    rows.retain_mut(|row| {
+        let Some(group) = row["recording_id"].as_str().map(str::to_owned) else {
+            return true;
+        };
+        if all.into_iter().flat_map(|s| s.values()).any(|s| {
+            s["recording_id"] == group
+                && s["revision"] != s["processedRevision"]
+                && s["end"].as_str().is_none_or(|end| end > now)
+        }) {
+            return false;
+        }
+        if !groups.insert(group.clone()) {
+            return false;
+        }
+        row["segments"] = json!(all
+            .into_iter()
+            .flat_map(|s| s.values())
+            .filter(|s| s["recording_id"] == group)
+            .cloned()
+            .collect::<Vec<_>>());
+        true
+    });
+    rows
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Change {
     pub action: String,
+    #[serde(default)]
+    pub source_session_id: Option<String>,
+    #[serde(default)]
+    pub source_revision: Option<i64>,
     pub expected_revision: u64,
     #[serde(default)]
     pub draft_id: Option<String>,
@@ -131,6 +289,20 @@ pub fn start(ws: &mut Value, catalog: &Value) {
         .unwrap_or(now - Duration::days(7))
         .max(now - Duration::days(90));
     ws["cycle"] = json!({"id":uuid::Uuid::new_v4().to_string(),"status":"running", "start":start.to_rfc3339(),"end":now.to_rfc3339(),"finished":{},"changes":{"created":0,"updated":0}});
+    let decisions: Vec<_> = ws["starredIntake"]["sources"]
+        .as_object()
+        .into_iter()
+        .flat_map(|s| s.iter())
+        .filter_map(|(id, source)| {
+            source["draftId"]
+                .as_str()
+                .map(|draft| (id.clone(), ws["drafts"][draft].clone()))
+        })
+        .filter(|(_, draft)| !draft.is_null())
+        .collect();
+    for (id, draft) in decisions {
+        ws["starredIntake"]["sources"][&id]["lastDraft"] = json!({"id":draft["id"],"status":draft["status"],"decision":draft["decision"],"receipt":draft["receipt"],"sourceRevision":draft["sourceSession"]["revision"]});
+    }
     // Completed drafts remain in the last catalog backup. Keep pending drafts on resume.
     ws["drafts"] = json!({});
     ws["revision"] = json!(revision(ws) + 1);
@@ -153,7 +325,48 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
     }
     let rev = revision(ws) + 1;
     let mut id = change.draft_id.clone();
+    let queue = starred_queue(
+        ws,
+        &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    );
+    let new_draft = change
+        .draft_id
+        .as_ref()
+        .is_none_or(|id| ws["drafts"][id].is_null());
+    if task == TASKS[0]
+        && ws["starredIntake"]["hasMore"] == true
+        && matches!(change.action.as_str(), "propose" | "source_decision")
+        && new_draft
+    {
+        return Err(
+            "Read remaining starred intake pages with start before prioritizing candidates.".into(),
+        );
+    }
+    let source = if let Some(source_id) = &change.source_session_id {
+        if task != TASKS[0] || !matches!(change.action.as_str(), "propose" | "source_decision") {
+            return Err(
+                "Only Discover can resolve a pending source with a proposal or decision.".into(),
+            );
+        }
+        let row = queue.first().filter(|s| s["id"] == *source_id && s["revision"].as_i64() == change.source_revision)
+            .ok_or("Investigate the first eligible source at its current revision. Read context again.")?;
+        Some(row.clone())
+    } else {
+        if change.source_revision.is_some() || change.action == "source_decision" {
+            return Err("source_session_id and source_revision are required together.".into());
+        }
+        if task == TASKS[0] && change.action == "propose" && new_draft && !queue.is_empty() {
+            return Err("Investigate pending starred sources before background candidates.".into());
+        }
+        None
+    };
     match change.action.as_str() {
+        "source_decision" => {
+            if change.payload.is_some() || change.assignee.is_some() || change.draft_id.is_some() {
+                return Err("A source decision records only its evidence note.".into());
+            }
+        }
+
         "checkpoint" => {
             if change.draft_id.is_some() || change.payload.is_some() || change.assignee.is_some() {
                 return Err("Checkpoint saves only a research note. Use propose or handoff to change a draft.".into());
@@ -210,8 +423,12 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             if history.len() > 30 {
                 history.remove(0);
             }
+            let source_session = old.get("sourceSession").cloned();
             let publication_failure = old.get("publicationRetry").cloned();
             ws["drafts"][&key] = json!({"id":key,"status":"open","version":rev,"assignee":assignee,"payload":payload,"history":history});
+            if let Some(source) = source_session {
+                ws["drafts"][&key]["sourceSession"] = source;
+            }
             if let Some(failure) = publication_failure {
                 ws["drafts"][&key]["publicationRetry"] = failure;
             }
@@ -234,11 +451,23 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             ws["drafts"][key]["decision"] = json!(change.note);
         }
         "finish" => {
+            if task == TASKS[0]
+                && (!queue.is_empty()
+                    || ws["starredIntake"]["hasMore"] == true
+                    || ws["starredIntake"]["hasPending"] == true)
+                && ws["drafts"].as_object().map_or(0, |d| d.len()) < 200
+            {
+                return Err("Resolve eligible starred sources and read remaining intake pages before finishing.".into());
+            }
+
             if assigned(ws, task) {
                 return Err("Resolve or hand off your open drafts before finishing.".into());
             }
             if task == TASKS[2] {
                 return Err("Review finishes through the atomic catalog commit.".into());
+            }
+            if task == TASKS[0] && !queue.is_empty() {
+                ws["cycle"]["deferredStarredSources"] = json!(queue.len());
             }
             ws["cycle"]["finished"][task] = json!(true);
             ws["cycle"]["notes"][task] = json!(change.note);
@@ -252,6 +481,21 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         || serde_json::to_vec(ws).map_err(|e| e.to_string())?.len() > 2_000_000
     {
         return Err("Workspace is full. Finish the current drafts before proposing more.".into());
+    }
+    if let Some(source) = source {
+        let segments = source["segments"]
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![source.clone()]);
+        for segment in &segments {
+            let entry = &mut ws["starredIntake"]["sources"][segment["id"].as_str().unwrap()];
+            entry["processedRevision"] = segment["revision"].clone();
+            entry["decision"] = json!(change.note);
+            entry["draftId"] = json!(id);
+        }
+        if let Some(id) = &id {
+            ws["drafts"][id]["sourceSession"] = source;
+        }
     }
     ws["revision"] = json!(rev);
     ws["receipts"][task] =
@@ -401,6 +645,161 @@ pub fn validate_publication(raw: &Value, normalized: &Value) -> Result<(), Strin
 mod tests {
     use super::*;
     #[test]
+    fn large_intake_remains_durable_outside_the_working_context() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let mut ledger = json!({});
+        let rows: Vec<_> = (0..6000).map(|n|json!({"id":format!("source-{n}"),"sequence":n+1,"revision":1,"start":"2026-10-01T10:00:00.000Z","end":"2026-10-01T11:00:00.000Z","name":"x".repeat(200)})).collect();
+        intake_starred(&mut ws, &rows, false, "2026-10-02T00:00:00.000Z", None);
+        project_starred(&mut ws, &mut ledger, "2026-10-02T00:00:00.000Z");
+        assert_eq!(ledger.as_object().unwrap().len(), 6000);
+        assert_eq!(
+            ws["starredIntake"]["sources"].as_object().unwrap().len(),
+            50
+        );
+        assert!(serde_json::to_vec(&ws).unwrap().len() < 100_000);
+        for _ in 0..51 {
+            let queue = starred_queue(&ws, "2026-10-02T00:00:00.000Z");
+            let mut decision = change("source_decision", &ws, None, None);
+            decision.payload = None;
+            decision.source_session_id = queue[0]["id"].as_str().map(str::to_owned);
+            decision.source_revision = Some(1);
+            apply(&mut ws, TASKS[0], &decision).unwrap();
+            project_starred(&mut ws, &mut ledger, "2026-10-02T00:00:00.000Z");
+        }
+        assert_eq!(
+            ledger
+                .as_object()
+                .unwrap()
+                .values()
+                .filter(|s| s["processedRevision"] == 1)
+                .count(),
+            51
+        );
+        assert_eq!(ws["starredIntake"]["hasPending"], true);
+        let finish = change("finish", &ws, None, None);
+        assert!(apply(&mut ws, TASKS[0], &finish).is_err());
+    }
+
+    #[test]
+    fn source_decisions_archive_without_reopening_and_capacity_defers_pending() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let source = json!({"id":"source","sequence":1,"revision":1,"start":"2026-10-01T10:00:00.000Z","end":"2026-10-01T11:00:00.000Z","name":"Fixture"});
+        intake_starred(&mut ws, &[source], false, "2026-10-02T00:00:00.000Z", None);
+        let mut decision = change("source_decision", &ws, None, None);
+        decision.payload = None;
+        decision.source_session_id = Some("source".into());
+        decision.source_revision = Some(1);
+        apply(&mut ws, TASKS[0], &decision).unwrap();
+        let mut ledger = json!({});
+        archive_starred(&mut ws, &mut ledger);
+        assert_eq!(ledger["source"]["processedRevision"], 1);
+        assert_eq!(ws["starredIntake"]["sources"], json!({}));
+        let mut edited = ledger["source"].clone();
+        edited["revision"] = json!(2);
+        edited["sequence"] = json!(2);
+        ws["starredIntake"]["sources"]["source"] = ledger["source"].clone();
+        intake_starred(&mut ws, &[edited], false, "2026-10-02T00:00:00.000Z", None);
+        assert_eq!(starred_queue(&ws, "2026-10-02T00:00:00.000Z").len(), 1);
+        for n in 0..200 {
+            ws["drafts"][format!("done-{n}")] = json!({"status":"rejected"});
+        }
+        let finish = change("finish", &ws, None, None);
+        apply(&mut ws, TASKS[0], &finish).unwrap();
+        assert_eq!(ws["cycle"]["deferredStarredSources"], 1);
+        assert_eq!(
+            ws["starredIntake"]["sources"]["source"]["processedRevision"],
+            1
+        );
+    }
+
+    #[test]
+    fn priority_waits_for_all_pages_and_groups_one_resumed_demonstration() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let row = |n, group: Option<&str>, name: Option<&str>| json!({"sequence":n,"id":format!("part-{n}"),"revision":1,"start":"2026-10-01T10:00:00.000Z","end":"2026-10-01T11:00:00.000Z","recording_id":group,"name":name});
+        intake_starred(
+            &mut ws,
+            &[row(1, None, None)],
+            true,
+            "2026-10-02T00:00:00.000Z",
+            None,
+        );
+        let mut proposal = change("propose", &ws, None, Some(TASKS[1]));
+        proposal.source_session_id = Some("part-1".into());
+        proposal.source_revision = Some(1);
+        assert!(apply(&mut ws, TASKS[0], &proposal).is_err());
+        intake_starred(
+            &mut ws,
+            &[
+                row(2, Some("capture"), Some("Demonstration")),
+                row(3, Some("capture"), Some("Demonstration")),
+            ],
+            false,
+            "2026-10-02T00:00:00.000Z",
+            None,
+        );
+        let queue = starred_queue(&ws, "2026-10-02T00:00:00.000Z");
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0]["id"], "part-2");
+        assert_eq!(queue[0]["segments"].as_array().unwrap().len(), 2);
+        proposal.expected_revision = revision(&ws);
+        proposal.source_session_id = Some("part-2".into());
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(ws["starredIntake"]["sources"]["part-3"]["draftId"], id);
+        let handoff = change("handoff", &ws, Some(id.clone()), Some(TASKS[2]));
+        apply(&mut ws, TASKS[1], &handoff).unwrap();
+        assert_eq!(
+            ws["drafts"][&id]["sourceSession"]["recording_id"],
+            "capture"
+        );
+        assert!(ws["drafts"][&id]["payload"]["recurrence"].is_null());
+        assert!(ws["drafts"][&id]["receipt"].is_null());
+        assert_eq!(ws["drafts"][&id]["status"], "open");
+    }
+
+    #[test]
+    fn starred_intake_survives_restart_expiry_late_names_and_handoffs() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let rows: Vec<Value> = (1..=15).map(|n| json!({"sequence":n,"id":format!("source-{n}"),"revision":1,"start":"2026-10-01T10:00:00.000Z","end":"2026-10-01T11:00:00.000Z","name":if n == 15 { Some("Fixture job") } else { None }})).collect();
+        intake_starred(&mut ws, &rows, false, "2026-10-01T10:30:00.000Z", None);
+        assert!(starred_queue(&ws, "2026-10-01T10:30:00.000Z").is_empty());
+        let mut ws: Value = serde_json::from_slice(&serde_json::to_vec(&ws).unwrap()).unwrap();
+        let queue = starred_queue(&ws, "2026-10-01T11:00:00.000Z");
+        assert_eq!(queue.len(), 15);
+        assert_eq!(queue[0]["id"], "source-15");
+        let mut proposal = change("propose", &ws, None, Some(TASKS[1]));
+        proposal.source_session_id = Some("source-15".into());
+        proposal.source_revision = Some(1);
+        let result = apply(&mut ws, TASKS[0], &proposal).unwrap();
+        let id = result["draft_id"].as_str().unwrap().to_owned();
+        assert_eq!(ws["starredIntake"]["sources"]["source-15"]["draftId"], id);
+        proposal.expected_revision = revision(&ws);
+        assert!(apply(&mut ws, TASKS[0], &proposal).is_err());
+        let late = json!({"sequence":16,"id":"source-1","revision":2,"start":"2026-09-01T10:00:00.000Z","end":"2026-09-01T11:00:00.000Z","name":"Late fixture"});
+        intake_starred(
+            &mut ws,
+            &[late.clone()],
+            false,
+            "2026-10-02T00:00:00.000Z",
+            None,
+        );
+        intake_starred(&mut ws, &[late], false, "2026-10-02T00:00:00.000Z", None);
+        assert_eq!(
+            starred_queue(&ws, "2026-10-02T00:00:00.000Z")[0]["id"],
+            "source-1"
+        );
+        assert_eq!(ws["starredIntake"]["after"], 16);
+        assert_eq!(ws["drafts"].as_object().unwrap().len(), 1);
+        assert!(ws["checkedThrough"].is_null());
+    }
+
+    #[test]
     fn checkpoint_survives_restart_without_completing_coverage() {
         let mut ws = empty();
         start(&mut ws, &json!({}));
@@ -517,6 +916,8 @@ mod tests {
     fn change(action: &str, ws: &Value, id: Option<String>, assignee: Option<&str>) -> Change {
         Change {
             action: action.into(),
+            source_session_id: None,
+            source_revision: None,
             expected_revision: revision(ws),
             draft_id: id,
             assignee: assignee.map(str::to_owned),

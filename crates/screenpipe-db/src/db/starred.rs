@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct StarredSession {
     pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
     pub start: String,
     pub end: String,
     pub hd_requested: bool,
@@ -15,6 +17,17 @@ pub struct StarredSession {
     /// Recorded audio chunks whose start falls in this interval. Does not
     /// promise that the underlying media has survived retention/deletion.
     pub has_audio: bool,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct StarredSessionChange {
+    pub sequence: i64,
+    pub recording_id: Option<String>,
+    pub id: String,
+    pub start: String,
+    pub end: String,
+    pub name: Option<String>,
+    pub revision: i64,
 }
 
 impl DatabaseManager {
@@ -28,6 +41,19 @@ impl DatabaseManager {
     ) -> Result<Vec<(i64, String, String, String, bool, i64, String)>, SqlxError> {
         sqlx::query_as("SELECT c.sequence, s.id, s.start, s.end, s.hd_requested, s.revision, c.timestamp FROM _starred_session_sync c JOIN starred_sessions s ON s.id = c.session_id WHERE c.sequence > ?1 AND s.start >= ?2 ORDER BY c.sequence LIMIT ?3")
             .bind(after).bind(since).bind(limit)
+            .fetch_all(&mut *self.acquire_read().await?).await
+    }
+
+    /// Local discovery has its own cursor. Pending active intervals are reread
+    /// even without a write, so timer expiry cannot strand a source.
+    pub async fn starred_sessions_for_discovery(
+        &self,
+        after: i64,
+        pending_ids: &str,
+        limit: u32,
+    ) -> Result<Vec<StarredSessionChange>, SqlxError> {
+        sqlx::query_as("WITH page AS (SELECT sequence FROM _starred_session_sync WHERE sequence > ?1 ORDER BY sequence LIMIT ?3) SELECT CASE WHEN c.sequence IN (SELECT sequence FROM page) THEN c.sequence ELSE MIN(c.sequence,?1) END AS sequence,m.recording_id,s.id,s.start,s.end,s.name,s.revision FROM _starred_session_sync c JOIN starred_sessions s ON s.id=c.session_id LEFT JOIN focused_starred_intervals m ON m.session_id=s.id WHERE c.sequence IN (SELECT sequence FROM page) OR s.id IN (SELECT value FROM json_each(?2)) ORDER BY sequence")
+            .bind(after).bind(pending_ids).bind(limit)
             .fetch_all(&mut *self.acquire_read().await?).await
     }
 
@@ -81,15 +107,35 @@ impl DatabaseManager {
         revision: i64,
         now: &str,
     ) -> Result<bool, SqlxError> {
+        self.save_named_starred_session(id, start, end, hd, revision, now, None)
+            .await
+    }
+
+    /// Omitted names preserve the current value; an explicit empty name clears it.
+    pub async fn save_named_starred_session(
+        &self,
+        id: &str,
+        start: &str,
+        end: &str,
+        hd: bool,
+        revision: i64,
+        now: &str,
+        name: Option<&str>,
+    ) -> Result<bool, SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
-        let previous: Option<(String, String, bool, i64)> = sqlx::query_as(
-            "SELECT start, end, hd_requested, revision FROM starred_sessions WHERE id = ?1",
+        let previous: Option<(String, String, bool, i64, Option<String>)> = sqlx::query_as(
+            "SELECT start, end, hd_requested, revision, name FROM starred_sessions WHERE id = ?1",
         )
         .bind(id)
         .fetch_optional(&mut **tx.conn())
         .await?;
-        if let Some((a, b, h, r)) = &previous {
-            if a == start && b == end && *h == hd && (*r == revision || *r == revision + 1) {
+        if let Some((a, b, h, r, n)) = &previous {
+            if a == start
+                && b == end
+                && *h == hd
+                && name.is_none_or(|v| n.as_deref() == (!v.is_empty()).then_some(v))
+                && (*r == revision || *r == revision + 1)
+            {
                 tx.commit().await?;
                 return Ok(true);
             }
@@ -106,8 +152,8 @@ impl DatabaseManager {
                 return Ok(false);
             }
         }
-        sqlx::query("INSERT INTO starred_sessions(id,start,end,hd_requested,revision) VALUES (?1,?2,?3,?4,1) ON CONFLICT(id) DO UPDATE SET start=excluded.start,end=excluded.end,hd_requested=excluded.hd_requested,revision=starred_sessions.revision+1")
-            .bind(id).bind(start).bind(end).bind(hd).execute(&mut **tx.conn()).await?;
+        sqlx::query("INSERT INTO starred_sessions(id,start,end,hd_requested,revision,name) VALUES (?1,?2,?3,?4,1,NULLIF(?5,'')) ON CONFLICT(id) DO UPDATE SET start=excluded.start,end=excluded.end,hd_requested=excluded.hd_requested,name=CASE WHEN ?5 IS NULL THEN starred_sessions.name ELSE NULLIF(?5,'') END,revision=starred_sessions.revision+1")
+            .bind(id).bind(start).bind(end).bind(hd).bind(name).execute(&mut **tx.conn()).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -127,6 +173,138 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn discovery_pages_late_names_and_pending_do_not_skip_unread_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("intake.db");
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let a = "2026-10-01T10:00:00.000Z";
+        let b = "2026-10-01T10:10:00.000Z";
+        for n in 0..15 {
+            assert!(db
+                .save_starred_session(&format!("fixture-{n}"), a, b, false, 0, b)
+                .await
+                .unwrap());
+        }
+        let first = db
+            .starred_sessions_for_discovery(0, "[]", 10)
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 10);
+        let after = first.last().unwrap().sequence;
+        // A pending source edited beyond the next page may be refreshed, but
+        // must not move the scan cursor beyond unread changes.
+        assert!(db
+            .save_named_starred_session("fixture-0", a, b, false, 1, b, Some("Late fixture"))
+            .await
+            .unwrap());
+        let second = db
+            .starred_sessions_for_discovery(after, r#"["fixture-0"]"#, 2)
+            .await
+            .unwrap();
+        assert_eq!(second.len(), 3);
+        assert_eq!(second.iter().map(|s| s.sequence).max(), Some(after + 2));
+        assert_eq!(
+            second
+                .iter()
+                .find(|s| s.id == "fixture-0")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Late fixture")
+        );
+        db.close().await;
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let rest = db
+            .starred_sessions_for_discovery(after + 2, "[]", 10)
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 4);
+        assert_eq!(rest.last().unwrap().id, "fixture-0");
+        assert!(db
+            .starred_sessions_for_sync(after, b, 100)
+            .await
+            .unwrap()
+            .is_empty());
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn names_preserve_old_clients_and_participate_in_revision_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            dir.path().join("names.db").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let a = "2026-10-01T10:00:00.000Z";
+        let b = "2026-10-01T10:10:00.000Z";
+        assert!(db
+            .save_named_starred_session("fixture", a, b, false, 0, b, Some("Reconcile fixtures"))
+            .await
+            .unwrap());
+        assert!(db
+            .save_starred_session("fixture", a, b, false, 1, b)
+            .await
+            .unwrap());
+        assert_eq!(
+            db.get_starred_session("fixture")
+                .await
+                .unwrap()
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Reconcile fixtures")
+        );
+        assert!(db
+            .save_named_starred_session("fixture", a, b, false, 1, b, Some("Review fixtures"))
+            .await
+            .unwrap());
+        assert!(db
+            .save_named_starred_session("fixture", a, b, false, 1, b, Some("Review fixtures"))
+            .await
+            .unwrap());
+        assert!(!db
+            .save_named_starred_session("fixture", a, b, false, 1, b, Some("Stale"))
+            .await
+            .unwrap());
+        let row = db.get_starred_session("fixture").await.unwrap().unwrap();
+        assert_eq!(row.revision, 2);
+        assert!(db
+            .save_named_starred_session("fixture", a, b, false, 2, b, Some(""))
+            .await
+            .unwrap());
+        assert_eq!(
+            db.get_starred_session("fixture")
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            None
+        );
+        // Discovery reads changes, including late names, without sync's date filter.
+        let changes = db
+            .starred_sessions_for_discovery(0, "[]", 100)
+            .await
+            .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].revision, 3);
+        let sync = db.starred_sessions_for_sync(0, a, 100).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&sync[0])
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            7
+        );
+    }
+
     #[tokio::test]
     async fn starred_sync_pages_survive_edits_retries_and_restart() {
         for hybrid in [false, true] {

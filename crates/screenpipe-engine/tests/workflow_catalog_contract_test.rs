@@ -281,6 +281,8 @@ async fn publication_outage_preserves_a_retryable_draft(
     workspace::start(&mut ws, &catalog);
     let payload = json!({"title":"Prepare project status report","description":"Review captured work","stages":[]});
     let proposal = workspace::Change {
+        source_session_id: None,
+        source_revision: None,
         action: "propose".into(),
         expected_revision: workspace::revision(&ws),
         draft_id: None,
@@ -325,4 +327,104 @@ async fn publication_outage_preserves_a_retryable_draft(
     assert_eq!(rejected.status(), StatusCode::CONFLICT);
     let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
     assert_eq!(unchanged, after);
+}
+
+#[tokio::test]
+async fn starred_discovery_intake_is_local_durable_and_access_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        DatabaseManager::new(
+            dir.path().join("intake.db").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap(),
+    );
+    let audio = Arc::new(
+        AudioManagerBuilder::new()
+            .is_disabled(true)
+            .output_path(dir.path().join("audio"))
+            .build(db.clone())
+            .await
+            .unwrap(),
+    );
+    let mut server = SCServer::new(
+        db.clone(),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        dir.path().to_path_buf(),
+        true,
+        true,
+        audio,
+        false,
+        "balanced".into(),
+    );
+    server.workflow_catalog_dir = Some(dir.path().join("workflows"));
+    server.api_auth = true;
+    server.api_auth_key = Some("fixture-key".into());
+    let policy = server.history_access.clone();
+    let router = server.try_create_router().await.unwrap();
+    let a = "2026-10-01T10:00:00.000Z";
+    let b = "2026-10-01T11:00:00.000Z";
+    for n in 0..15 {
+        db.save_starred_session(&format!("fixture-{n}"), a, b, false, 0, b)
+            .await
+            .unwrap();
+    }
+    // A late name changes neither scheduling preferences nor sync's date policy.
+    db.save_named_starred_session(
+        "fixture-14",
+        a,
+        b,
+        false,
+        1,
+        b,
+        Some("Fixture investigation"),
+    )
+    .await
+    .unwrap();
+    assert!(db
+        .starred_sessions_for_sync(0, "2026-11-01", 100)
+        .await
+        .unwrap()
+        .is_empty());
+    let path = "/workflows/workspace?task=workflow-discover";
+    assert_eq!(request(&router, path, None).await.0, StatusCode::FORBIDDEN);
+    let (_, before) = request(&router, path, Some("fixture-key")).await;
+    assert!(before["workspace"]["cycle"].is_null());
+    assert_eq!(before["starredSources"], json!([]));
+    let post = |body: Value| {
+        router.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows/workspace")
+                .header("Authorization", "Bearer fixture-key")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        post(json!({"action":"start","task":"workflow-discover"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let (_, context) = request(&router, path, Some("fixture-key")).await;
+    assert_eq!(context["starredSources"].as_array().unwrap().len(), 15);
+    assert_eq!(context["starredSources"][0]["id"], "fixture-14");
+    assert_eq!(post(json!({"action":"source_decision","task":"workflow-discover","source_session_id":"fixture-14","source_revision":2,"expected_revision":context["workspace"]["revision"],"note":"Inspected fixture: insufficient captured steps."})).await.unwrap().status(), StatusCode::OK);
+    let restarted = server.try_create_router().await.unwrap();
+    let (_, restored) = request(&restarted, path, Some("fixture-key")).await;
+    assert_eq!(restored["starredSources"].as_array().unwrap().len(), 14);
+    assert_eq!(
+        restored["workspace"]["starredIntake"]["sources"]["fixture-14"],
+        Value::Null
+    );
+    assert_eq!(restored["workspace"]["drafts"], json!({}));
+    policy.set_last_24_hours(true);
+    assert_eq!(
+        request(&restarted, path, Some("fixture-key")).await.0,
+        StatusCode::FORBIDDEN
+    );
 }
