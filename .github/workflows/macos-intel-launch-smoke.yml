@@ -191,7 +191,7 @@ jobs:
           # compiling screenpipe-audio's native dependency graph a second time.
           CARGO_TARGET_DIR: apps/screenpipe-app-tauri/src-tauri/target
         run: |
-          cargo test -p screenpipe-audio --lib \
+          cargo test -p screenpipe-audio --profile debug-dev --lib \
             meeting_processes::platform::runtime_smoke::repeated_input_process_snapshots_do_not_crash \
             -- --exact --nocapture
 
@@ -212,7 +212,7 @@ jobs:
             exit 1
           fi
 
-          cargo test -p screenpipe-engine --lib --no-default-features \
+          cargo test -p screenpipe-engine --profile debug-dev --lib --no-default-features \
             meeting_watcher::ui_scan::macos::runtime_smoke \
             -- --nocapture
 
