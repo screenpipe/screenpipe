@@ -597,7 +597,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "unit",
-      "notes": "Subprocess coverage verifies the one-time pre-runtime exec preserves PID and test arguments, sets the uncached native-heap default, and respects explicit launcher settings."
+      "notes": "Subprocess coverage verifies PID, argv0 and argument preservation; scoped injected defaults and explicit overrides in children; a separate one-shot marker and repeat-call safety; nonfatal bootstrap errors and SIGPIPE restoration."
     },
     {
       "id": "engine-telemetry-observability",

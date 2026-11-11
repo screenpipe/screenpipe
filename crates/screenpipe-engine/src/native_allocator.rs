@@ -3,17 +3,32 @@
 
 //! Configure native allocation retention before starting a runtime or recorder.
 
-/// Disable libmalloc's large-allocation cache unless the launcher supplied an
-/// explicit policy. XZM's pressure-relief callback is a no-op; freed CoreML
-/// compilation buffers otherwise remain resident alongside the Rust heap.
-///
-/// libmalloc reads this option during process initialization, before `main`.
-/// Setting it here alone is too late: replace this process once, preserving its
-/// PID, executable, arguments and inherited environment. The replacement sees
-/// the option and returns without exec, before any recording has started.
-/// If lookup or exec fails, warn and continue recording with allocator defaults.
+const BOOTSTRAP_MARKER: &str = "SCREENPIPE_NATIVE_HEAP_BOOTSTRAPPED";
+
+/// Disable native large-allocation retention before starting runtime threads.
+/// libmalloc reads this policy before main, so direct starts re-exec once.
+/// Launch Services supplies the policy and marker together. Once initialized,
+/// remove only our injected setting so unrelated children retain their defaults;
+/// explicit caller policies remain inherited. Lookup/exec failures are nonfatal.
 #[cfg(target_os = "macos")]
 pub fn prepare_native_heap() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PREPARED: AtomicBool = AtomicBool::new(false);
+    if PREPARED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if std::env::var_os(BOOTSTRAP_MARKER).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        match std::env::var_os("MallocLargeCache").as_deref() {
+            Some(policy) if policy == std::ffi::OsStr::new("0") => {
+                // Initialization is complete. Do this before starting threads.
+                std::env::remove_var("MallocLargeCache");
+            }
+            None => eprintln!("Native allocator policy was removed by the launcher; continuing with allocator defaults"),
+            _ => {} // Preserve an explicit replacement policy.
+        }
+        std::env::remove_var(BOOTSTRAP_MARKER);
+        return;
+    }
     if std::env::var_os("MallocLargeCache").is_some() {
         return;
     }
@@ -31,9 +46,15 @@ fn prepare_native_heap_for_executable(executable: std::io::Result<std::path::Pat
             return Err(std::io::Error::last_os_error());
         }
         let previous = unsafe { previous.assume_init() };
-        let error = std::process::Command::new(executable)
+        let error = std::process::Command::new(&executable)
+            .arg0(
+                std::env::args_os()
+                    .next()
+                    .unwrap_or_else(|| executable.as_os_str().to_owned()),
+            )
             .args(std::env::args_os().skip(1))
             .env("MallocLargeCache", "0")
+            .env(BOOTSTRAP_MARKER, "1")
             .exec();
         if unsafe { libc::sigaction(libc::SIGPIPE, &previous, std::ptr::null_mut()) } != 0 {
             eprintln!(
@@ -50,6 +71,7 @@ fn prepare_native_heap_for_executable(executable: std::io::Result<std::path::Pat
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use std::os::unix::process::CommandExt;
     fn assert_startup_can_continue<T: std::process::Termination>(start: impl FnOnce() -> T) {
         assert_eq!(
             start().report(),
@@ -106,8 +128,9 @@ mod tests {
             .unwrap();
         assert!(
             output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
@@ -116,20 +139,55 @@ mod tests {
         const CHILD: &str = "SCREENPIPE_NATIVE_ALLOCATOR_TEST_CHILD";
         if let Ok(expected) = std::env::var(CHILD) {
             super::prepare_native_heap();
-            assert_eq!(std::env::var("MallocLargeCache").unwrap(), expected);
+            // Repeated calls must not re-exec after removing our injected env.
+            super::prepare_native_heap();
+            assert_eq!(
+                std::env::args_os().next().unwrap(),
+                "screenpipe-native-heap-test"
+            );
+            assert!(std::env::var_os(super::BOOTSTRAP_MARKER).is_none());
+            let policy = std::env::var("MallocLargeCache").ok();
+            assert_eq!(
+                policy.as_deref(),
+                (expected != "unset").then_some(expected.as_str())
+            );
+            let child = std::process::Command::new("/usr/bin/printenv")
+                .arg("MallocLargeCache")
+                .output()
+                .unwrap();
+            if expected == "unset" {
+                assert!(
+                    !child.status.success(),
+                    "injected policy leaked into external child"
+                );
+            } else {
+                assert!(child.status.success());
+                assert_eq!(String::from_utf8(child.stdout).unwrap().trim(), expected);
+            }
             println!("native_allocator_pid={}", std::process::id());
             return;
         }
-        for policy in [None, Some("0"), Some("1")] {
+        // Direct start, caller overrides, Launch Services and a stripped policy.
+        for (policy, marked, expected) in [
+            (None, false, "unset"),
+            (Some("0"), false, "0"),
+            (Some("1"), false, "1"),
+            (Some("0"), true, "unset"),
+            (None, true, "unset"),
+            (Some("1"), true, "1"),
+        ] {
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-            command.args([
+            command.arg0("screenpipe-native-heap-test").args([
                 "--exact",
                 "native_allocator::tests::startup_preserves_pid_arguments_and_explicit_allocator_policy",
-                "--nocapture",
-                "--test-threads=1",
-            ]).env(CHILD, policy.unwrap_or("0")).env_remove("MallocLargeCache");
+                "--nocapture", "--test-threads=1",
+            ]).env(CHILD, expected).env_remove("MallocLargeCache")
+                .env_remove(super::BOOTSTRAP_MARKER);
             if let Some(policy) = policy {
                 command.env("MallocLargeCache", policy);
+            }
+            if marked {
+                command.env(super::BOOTSTRAP_MARKER, "1");
             }
             let child = command
                 .stdout(std::process::Stdio::piped())
@@ -140,7 +198,8 @@ mod tests {
             let result = child.wait_with_output().unwrap();
             assert!(
                 result.status.success(),
-                "{}",
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&result.stdout),
                 String::from_utf8_lossy(&result.stderr)
             );
             assert!(String::from_utf8_lossy(&result.stdout)

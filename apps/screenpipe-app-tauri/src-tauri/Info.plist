@@ -10,6 +10,8 @@
 	<dict>
 		<key>MallocLargeCache</key>
 		<string>0</string>
+		<key>SCREENPIPE_NATIVE_HEAP_BOOTSTRAPPED</key>
+		<string>1</string>
 		<key>SCREENPIPE_DEV_USE_PROD_DATA</key>
 		<string>1</string>
 	</dict>
