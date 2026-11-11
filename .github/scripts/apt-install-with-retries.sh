@@ -10,21 +10,22 @@ readonly install_timeout_seconds="${SCREENPIPE_APT_INSTALL_TIMEOUT_SECONDS:-600}
 readonly update_attempts="${SCREENPIPE_APT_UPDATE_ATTEMPTS:-3}"
 readonly install_attempts="${SCREENPIPE_APT_INSTALL_ATTEMPTS:-2}"
 
-rewrite_azure_mirror() {
+rewrite_ubuntu_mirrors() {
   local source
   local -a sources=(
     /etc/apt/sources.list
     /etc/apt/apt-mirrors.txt
+    /etc/apt/apt-mirrors-security.txt
     /etc/apt/sources.list.d/*.list
     /etc/apt/sources.list.d/*.sources
   )
 
   for source in "${sources[@]}"; do
     [ -f "$source" ] || continue
-    if sudo grep -q 'azure\.archive\.ubuntu\.com' "$source"; then
-      echo "replacing the stalled Azure Ubuntu mirror in $source"
-      sudo sed -i \
-        's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+    if sudo grep -Eq '(azure\.archive|archive|security)\.ubuntu\.com' "$source"; then
+      echo "using the signed Ubuntu archive mirror outside the Canonical DNS outage in $source"
+      sudo sed -i -E \
+        's@https?://(azure\.archive|archive|security)\.ubuntu\.com/ubuntu/?@https://mirrors.edge.kernel.org/ubuntu/@g' \
         "$source"
     fi
   done
@@ -79,6 +80,6 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-rewrite_azure_mirror
+rewrite_ubuntu_mirrors
 retry_apt update "$update_timeout_seconds" "$update_attempts" update -qq
 retry_apt install "$install_timeout_seconds" "$install_attempts" install -y "$@"
