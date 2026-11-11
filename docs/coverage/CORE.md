@@ -8,11 +8,11 @@ confidence, and criticality.
 - Manifest: `docs/coverage/core-engine-map.json`
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y, screenpipe-fs
 - Mapped suites: 38
-- Mapped Rust files: 412
-- Active test blocks: 4003
-- Ignored/manual test blocks: 197
-- Declared test blocks: 4200
-- Weighted coverage points: 3299.5
+- Mapped Rust files: 414
+- Active test blocks: 4031
+- Ignored/manual test blocks: 198
+- Declared test blocks: 4229
+- Weighted coverage points: 3313.2
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ are explicitly enabled in a runtime lane.
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 34 | 3839 | 174 | 3226.1 | 21 | 11 | 100% |
-| macos | 33 | 3883 | 158 | 3221.8 | 22 | 11 | 100% |
-| linux | 30 | 3417 | 149 | 2844.4 | 20 | 11 | 100% |
+| windows | 34 | 3867 | 175 | 3239.8 | 21 | 11 | 100% |
+| macos | 33 | 3911 | 159 | 3235.5 | 22 | 11 | 100% |
+| linux | 30 | 3445 | 150 | 2858.1 | 20 | 11 | 100% |
 
 ## Crate Summary
 
@@ -35,7 +35,7 @@ are explicitly enabled in a runtime lane.
 | screenpipe-db | 6 | 69 | 31 | 652 | 35 | 618.8 | 9 |
 | screenpipe-sqlite-coordinator | 1 | 0 | 3 | 27 | 0 | 27.0 | 2 |
 | screenpipe-audio | 8 | 29 | 54 | 703 | 56 | 614.9 | 5 |
-| screenpipe-screen | 6 | 9 | 23 | 302 | 10 | 270.4 | 4 |
+| screenpipe-screen | 6 | 9 | 25 | 330 | 11 | 284.1 | 4 |
 | screenpipe-a11y | 4 | 2 | 34 | 406 | 43 | 295.9 | 3 |
 | screenpipe-fs | 1 | 0 | 1 | 3 | 0 | 3.0 | 3 |
 
@@ -83,7 +83,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | timeline | 4 suites / 1293 active / 52 ignored / 1065.9 pts | 4 suites / 1293 active / 52 ignored / 1065.9 pts | 4 suites / 1293 active / 52 ignored / 1065.9 pts |
 | transcription | 7 suites / 902 active / 53 ignored / 705.0 pts | 6 suites / 896 active / 53 ignored / 700.8 pts | 6 suites / 896 active / 53 ignored / 700.8 pts |
 | ui-events | 4 suites / 840 active / 34 ignored / 637.3 pts | 3 suites / 771 active / 5 ignored / 589.0 pts | 3 suites / 771 active / 5 ignored / 589.0 pts |
-| vision-capture | 6 suites / 611 active / 33 ignored / 484.9 pts | 6 suites / 604 active / 33 ignored / 482.7 pts | 5 suites / 595 active / 32 ignored / 473.7 pts |
+| vision-capture | 6 suites / 639 active / 34 ignored / 498.6 pts | 6 suites / 632 active / 34 ignored / 496.4 pts | 5 suites / 623 active / 33 ignored / 487.4 pts |
 
 ## Critical Flow Matrix
 
@@ -154,7 +154,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | screen-capture-windowing | screenpipe-screen | windows, macos, linux | vision-capture, timeline, performance, privacy | capture-ocr-pipeline, timeline-streaming, privacy-and-redaction, performance-liveness | high | strong | mixed | 18 | 217 | 1 | Window filtering, empty-window regressions, retry policy, URL timing, monitor cache, OCR cache, snapshots, and image comparison. |
 | screen-custom-ocr | screenpipe-screen | windows, macos, linux | ocr | capture-ocr-pipeline | medium | conditional | manual | 1 | 0 | 2 | Custom OCR tests are ignored by default and only contribute when explicitly run. |
 | screen-macos-ocr | screenpipe-screen | macos | ocr, vision-capture | capture-ocr-pipeline | high | strong | mixed | 2 | 9 | 1 | Apple Vision OCR source/unit coverage and fixture OCR assertions. |
-| screen-monitor-platform | screenpipe-screen | windows, macos, linux | vision-capture | capture-ocr-pipeline | medium | partial | unit | 5 | 42 | 5 | Per-OS monitor enumeration (Windows, macOS, Wayland/portal on Linux) and the persistent Windows.Graphics.Capture session. Each file is cfg-gated and only executes on its target OS. |
+| screen-monitor-platform | screenpipe-screen | windows, macos, linux | vision-capture | capture-ocr-pipeline | medium | partial | unit | 7 | 70 | 6 | Per-OS monitor enumeration (Windows, macOS, Wayland/portal on Linux) and the persistent Windows.Graphics.Capture session. Each file is cfg-gated and only executes on its target OS. |
 | screen-windows-ocr | screenpipe-screen | windows | ocr, vision-capture | capture-ocr-pipeline | high | partial | integration | 3 | 16 | 1 | Windows OCR fixture and STA-pool regression tests, portable bounded-worker tests, plus an ignored continuous-capture probe that requires a live desktop. Native OCR tests require an installed English recognizer. |
 | sqlite-coordinator-durable-quarantine | screenpipe-sqlite-coordinator | windows, macos, linux | database, engine-lifecycle | engine-health-lifecycle, performance-liveness | high | strong | unit | 3 | 27 | 0 | Process-wide single-writer gates and manager ownership, SQLite runtime pinning, pending incident markers, fresh integrity verification, confirmed-damage quarantine, file-identity guarded admission, and crash-journal recovery. |
 
@@ -547,7 +547,9 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | screen-capture-windowing | screenpipe-screen | src/metrics.rs | source | 17 | 0 | 17 |
 | screen-windows-ocr | screenpipe-screen | src/microsoft.rs | source | 10 | 0 | 10 |
 | screen-capture-windowing | screenpipe-screen | src/monitor.rs | source | 5 | 0 | 5 |
-| screen-monitor-platform | screenpipe-screen | src/monitor/linux_portal.rs | source | 5 | 0 | 5 |
+| screen-monitor-platform | screenpipe-screen | src/monitor/linux_portal_dbus_tests.rs | source | 1 | 1 | 2 |
+| screen-monitor-platform | screenpipe-screen | src/monitor/linux_portal_token.rs | source | 15 | 0 | 15 |
+| screen-monitor-platform | screenpipe-screen | src/monitor/linux_portal.rs | source | 17 | 0 | 17 |
 | screen-monitor-platform | screenpipe-screen | src/monitor/linux_wayland.rs | source | 5 | 0 | 5 |
 | screen-monitor-platform | screenpipe-screen | src/monitor/macos.rs | source | 22 | 2 | 24 |
 | screen-monitor-platform | screenpipe-screen | src/monitor/windows.rs | source | 2 | 1 | 3 |

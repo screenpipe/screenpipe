@@ -1228,6 +1228,8 @@
       "crate": "screenpipe-screen",
       "files": [
         "src/monitor/linux_portal.rs",
+        "src/monitor/linux_portal_dbus_tests.rs",
+        "src/monitor/linux_portal_token.rs",
         "src/monitor/linux_wayland.rs",
         "src/monitor/macos.rs",
         "src/monitor/windows.rs",
