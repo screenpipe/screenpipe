@@ -242,6 +242,8 @@ jobs:
             exit 1
           fi
 
+          # Extraction creates owner-only directories; match release repacking.
+          chmod -R a+rX squashfs-root
           ARCH=x86_64 /tmp/appimagetool squashfs-root "${appimage}"
           rm -rf squashfs-root
           echo "APPIMAGE=${appimage}" >> "$GITHUB_ENV"
