@@ -58,7 +58,8 @@ jobs:
   test-frontend:
     name: Vitest + bun:test + typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Includes a cold screenpipe-core build for the Pi runtime eval.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: apps/screenpipe-app-tauri
@@ -112,6 +113,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      - name: Prepare Ubuntu package mirror
+        run: .github/scripts/apt-install-with-retries.sh --no-install-recommends ca-certificates
       - name: Install desktop and browser-test dependencies
         run: |
           cd apps/screenpipe-app-tauri
