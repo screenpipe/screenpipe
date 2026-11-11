@@ -64,6 +64,15 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
   });
 };
 
+const logOnboardingState = async (phase: string, requestedStep: string) => {
+  try {
+    const state = await invokeOrThrow("get_onboarding_status");
+    console.log("[onboarding diagnostic]", { phase, requestedStep, state });
+  } catch (error) {
+    console.warn("[onboarding diagnostic]", { phase, requestedStep, error: String(error) });
+  }
+};
+
 /**
  * Drive the setup flow to a specific slide without a real login round-trip.
  *
@@ -85,10 +94,12 @@ const gotoSlide = async (step: string) => {
   // Save only after the old window is gone: its permission/engine effects can
   // still advance and overwrite the requested step while it is closing.
   await invokeOrThrow("set_onboarding_step", { step });
+  await logOnboardingState("step persisted before reopen", step);
   await showWindow("Onboarding");
   await waitForWindowHandle("onboarding", t(20_000));
   await browser.switchToWindow("onboarding");
   await waitForWindowUrl("/onboarding", undefined, t(20_000));
+  await logOnboardingState("window reopened", step);
 };
 
 /**
@@ -264,19 +275,55 @@ const seedFreeOnboardingUser = async () => {
  * time out on a slide the user can plainly see.
  */
 const waitForTestId = async (testId: string, timeout = 20_000) => {
-  await browser.waitUntil(
-    async () =>
-      Boolean(
-        await browser.execute(
-          (id: string) => !!document.querySelector(`[data-testid="${id}"]`),
-          testId,
+  try {
+    await browser.waitUntil(
+      async () =>
+        Boolean(
+          await browser.execute(
+            (id: string) => !!document.querySelector(`[data-testid="${id}"]`),
+            testId,
+          ),
         ),
-      ),
-    {
-      timeout: t(timeout),
-      timeoutMsg: `[data-testid="${testId}"] never appeared`,
-    },
-  );
+      {
+        timeout: t(timeout),
+        timeoutMsg: `[data-testid="${testId}"] never appeared`,
+      },
+    );
+  } catch (error) {
+    // Keep the original assertion failure even if the document has navigated
+    // to hosted checkout, where local Tauri store access is correctly denied.
+    try {
+      const documentState = await browser.execute(() => ({
+        url: window.location.href,
+        body: (document.body?.innerText || "").slice(0, 4_000),
+        testIds: Array.from(document.querySelectorAll("[data-testid]"))
+          .slice(0, 100)
+          .map((element) => element.getAttribute("data-testid")),
+      }));
+      console.log("[onboarding diagnostic] missing test ID", { testId, documentState });
+    } catch (diagnosticError) {
+      console.warn("[onboarding diagnostic] document unavailable", String(diagnosticError));
+    }
+    try {
+      const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+        path: join(E2E_DATA_DIR, "store.bin"),
+      });
+      if (rid == null) throw new Error("settings store is not loaded");
+      const onboarding = await invokeOrThrow("plugin:store|get", {
+        rid,
+        key: "onboarding",
+      });
+      console.log("[onboarding diagnostic] persisted onboarding", onboarding);
+    } catch (diagnosticError) {
+      console.warn("[onboarding diagnostic] persisted onboarding unavailable", String(diagnosticError));
+    }
+    try {
+      await saveScreenshot(`onboarding-missing-${testId}-${Date.now()}`);
+    } catch (diagnosticError) {
+      console.warn("[onboarding diagnostic] screenshot unavailable", String(diagnosticError));
+    }
+    throw error;
+  }
   return browser.$(`[data-testid="${testId}"]`);
 };
 
