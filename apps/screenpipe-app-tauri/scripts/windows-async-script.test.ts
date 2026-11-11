@@ -3,6 +3,8 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createContext, runInContext, type Context } from "node:vm";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import {
   installWindowsAsyncScriptTransport,
   type WindowsAsyncScriptDriver,
@@ -158,3 +160,92 @@ test("non-Windows drivers retain their original async command", async () => {
     .toBe("original transport");
   expect(driver.nativeAsyncCalls).toBe(1);
 });
+
+test("real WDIO installs the protocol override and serializes callbacks through synchronous requests", () => {
+  // WDIO runs under Node, and the real config selects its undici dispatcher.
+  // This local W3C server evaluates only fictional scripts in an isolated VM.
+  const result = spawnSync("node", ["--import", "tsx", "--input-type=module", "--eval", `
+    import assert from 'node:assert/strict';
+    import { createServer } from 'node:http';
+    import { createContext, runInContext } from 'node:vm';
+    import { remote } from 'webdriverio';
+    import { config } from './e2e/wdio.conf.ts';
+
+    const elementKey = 'element-6066-11e4-a52e-4f735466cecf';
+    const requests = [];
+    let document = createContext({});
+    const deserialize = value => value && typeof value === 'object' && value[elementKey]
+      ? { textContent: 'fixture element' }
+      : Array.isArray(value) ? value.map(deserialize) : value;
+    const server = createServer(async (req, res) => {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const payload = body ? JSON.parse(body) : {};
+      requests.push({ method: req.method, url: req.url, payload });
+      let value = null;
+      if (req.method === 'POST' && req.url === '/session') {
+        value = { sessionId: 'windows-async-check', capabilities: { browserName: 'chrome' } };
+      } else if (req.method === 'GET' && req.url.endsWith('/window')) {
+        value = 'onboarding';
+      } else if (req.method === 'POST' && req.url.endsWith('/element')) {
+        value = { [elementKey]: 'fixture-element' };
+      } else if (req.method === 'POST' && req.url.endsWith('/execute/sync')) {
+        document.__args = payload.args.map(deserialize);
+        try {
+          value = runInContext('(function() {' + payload.script + '\\n}).apply(null, __args)', document);
+        } catch (error) {
+          res.statusCode = 500;
+          value = { error: 'javascript error', message: error.message };
+        }
+      } else if (req.url.endsWith('/execute/async')) {
+        res.statusCode = 500;
+        value = { error: 'unknown error', message: 'recreated Windows window has no async listener' };
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ value: value === undefined ? null : value }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const browser = await remote({
+        hostname: '127.0.0.1', port: server.address().port, path: '/', logLevel: 'error',
+        connectionRetryCount: 0, connectionRetryTimeout: 5000,
+        capabilities: { browserName: 'chrome' },
+      });
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      globalThis.browser = browser;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        // Only this hook installs the transport; never run app/recording hooks.
+        await config.before();
+      } finally {
+        Object.defineProperty(process, 'platform', platform);
+        delete globalThis.browser;
+      }
+      const element = await browser.$('#fixture');
+      for (let instance = 0; instance < 2; instance++) {
+        document = createContext({});
+        const actual = await browser.executeAsync(function(input, fixture, done) {
+          const read = globalThis.__name(() => fixture.textContent, 'read');
+          Promise.resolve().then(() => done({ input, label: read(), enabled: false }));
+        }, { instance, nested: [null, false] }, element);
+        assert.deepEqual(actual, { input: { instance, nested: [null, false] }, label: 'fixture element', enabled: false });
+        assert.equal(runInContext('Object.keys(globalThis.__SCREENPIPE_E2E_ASYNC_SCRIPTS__).length', document), 0);
+      }
+      assert.equal(requests.filter(request => request.url.endsWith('/execute/async')).length, 0);
+      const starts = requests.filter(request => request.payload.script?.includes('var settle = function'));
+      assert.equal(starts.length, 2);
+      assert.ok(starts.every(request => request.payload.script.includes('webdriverioPolyfill')));
+      assert.ok(starts.every(request => request.payload.args[1][elementKey] === 'fixture-element'));
+      await browser.deleteSession();
+    } finally {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
+  `], {
+    cwd: resolve(import.meta.dir, ".."),
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  expect({ status: result.status, error: result.error?.message }, result.stdout + result.stderr)
+    .toEqual({ status: 0, error: undefined });
+}, 20000);
