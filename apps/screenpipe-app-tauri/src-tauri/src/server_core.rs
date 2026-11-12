@@ -651,7 +651,7 @@ impl ServerCore {
         let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
         resource_reporter.start_monitoring(
             Duration::from_secs(30),
-            Some(screenpipe_engine::telemetry_reporting::DESKTOP_DIAGNOSTIC_REPORT_INTERVAL),
+            Some(screenpipe_engine::telemetry_reporting::RESOURCE_DIAGNOSTIC_REPORT_INTERVAL),
         );
         start_sleep_monitor();
 

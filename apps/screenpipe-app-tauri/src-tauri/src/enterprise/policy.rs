@@ -24,6 +24,30 @@ static RECORDING_AUTHORIZED: AtomicBool = AtomicBool::new(false);
 static IMMUTABLE_DEPLOYMENT_APP_UI_HIDDEN: Lazy<bool> =
     Lazy::new(|| env_hides_app_ui() || bundled_enterprise_config_hides_app_ui());
 static PERSISTED_APP_UI_HIDDEN: Lazy<bool> = Lazy::new(user_enterprise_config_hides_app_ui);
+static DEPLOYMENT_SIMPLIFIED_UI: Lazy<bool> = Lazy::new(|| {
+    std::env::var("SCREENPIPE_ENTERPRISE_UI_MODE").ok().as_deref() == Some("simplified")
+        || bundled_enterprise_config_path().as_deref().is_some_and(config_has_simplified_ui)
+});
+static PERSISTED_SIMPLIFIED_UI: Lazy<bool> = Lazy::new(|| config_has_simplified_ui(&user_enterprise_config_path()));
+
+fn resolve_simplified_ui(full_hidden: bool, deployment: bool, server: Option<bool>, persisted: bool) -> bool {
+    !full_hidden && resolve_app_ui_hidden(deployment, server, persisted)
+}
+
+fn config_has_simplified_ui(path: &Path) -> bool {
+    std::fs::read_to_string(path).ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .is_some_and(|json| json["ui_mode"].as_str() == Some("simplified"))
+}
+
+/// A separate policy from fully hidden deployments: retain the reminder and
+/// starring while all full-app entry points and local pipe runs stay disabled.
+pub fn is_simplified_ui() -> bool {
+    let server = SERVER_POLICY_RECEIVED.load(Ordering::SeqCst).then(|| {
+        HIDDEN_SECTIONS.read().map(|sections| sections.contains("simplified_ui")).unwrap_or(false)
+    });
+    resolve_simplified_ui(full_app_ui_hidden(), *DEPLOYMENT_SIMPLIFIED_UI, server, *PERSISTED_SIMPLIFIED_UI)
+}
 // Tray suppression is a SEPARATE axis from `is_app_ui_hidden()`.
 //
 // Hiding the app UI tears down windows and drops the dock icon but deliberately
@@ -734,6 +758,10 @@ pub fn is_tray_item_hidden(section_id: &str) -> bool {
 /// This intentionally does not hide permission recovery: macOS may still need
 /// to show the raw system permission flow even for a managed background pilot.
 pub fn is_app_ui_hidden() -> bool {
+    full_app_ui_hidden() || is_simplified_ui()
+}
+
+fn full_app_ui_hidden() -> bool {
     let server_policy_hidden = SERVER_POLICY_RECEIVED.load(Ordering::SeqCst).then(|| {
         HIDDEN_SECTIONS
             .read()
@@ -905,6 +933,29 @@ mod tests {
         for value in ["", "0", "false", "visible", "off"] {
             assert!(!truthy(value));
         }
+    }
+
+    #[test]
+    fn simplified_ui_policy_preserves_full_hidden_precedence_and_reverses_live() {
+        assert!(!resolve_simplified_ui(true, true, Some(true), true));
+        assert!(resolve_simplified_ui(false, false, None, true));
+        assert!(!resolve_simplified_ui(false, false, Some(false), true));
+        assert!(resolve_simplified_ui(false, false, Some(true), false));
+        assert!(resolve_simplified_ui(false, true, Some(false), false));
+    }
+
+    #[test]
+    fn simplified_deployment_is_distinct_from_fully_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("enterprise.json");
+        for body in [r#"{}"#, r#"{"ui_mode":"hidden"}"#, "broken"] {
+            std::fs::write(&path, body).unwrap();
+            assert!(!config_has_simplified_ui(&path));
+        }
+        std::fs::write(&path, r#"{"ui_mode":"simplified"}"#).unwrap();
+        assert!(config_has_simplified_ui(&path));
+        assert!(!enterprise_config_hides_app_ui(&path));
+        assert!(!enterprise_config_hides_tray(&path));
     }
 
     #[test]

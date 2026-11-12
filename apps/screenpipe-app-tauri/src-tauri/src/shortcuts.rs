@@ -279,7 +279,9 @@ pub async fn initialize_recording_control_shortcuts(app: &AppHandle) -> Result<(
 ///   This is the one state with no visible pause affordance at all, so it must
 ///   not be left without one.
 pub async fn reconcile_with_enterprise_policy(app: &AppHandle, ui_hidden: bool, tray_hidden: bool) {
-    let result = if ui_hidden && tray_hidden {
+    let result = if crate::enterprise_policy::is_simplified_ui() {
+        initialize_simplified_shortcuts(app).await
+    } else if ui_hidden && tray_hidden {
         info!("shortcuts: hidden UI with suppressed tray, recording controls only");
         initialize_recording_control_shortcuts(app).await
     } else if ui_hidden {
@@ -292,6 +294,18 @@ pub async fn reconcile_with_enterprise_policy(app: &AppHandle, ui_hidden: bool, 
     if let Err(e) = result {
         error!("failed to reconcile global shortcuts: {}", e);
     }
+}
+
+async fn initialize_simplified_shortcuts(app: &AppHandle) -> Result<(), String> {
+    // Native capture controls work without Home's webview event listeners.
+    initialize_recording_control_shortcuts(app).await?;
+    let config = ShortcutConfig::from_store(app).await?;
+    register_shortcut(app, &config.star_session, config.is_disabled("star_session"), |app| {
+        if crate::enterprise_policy::is_simplified_ui() {
+            track_shortcut_used(app, "star_session");
+            let _ = crate::commands::starred_sessions::toggle(app);
+        }
+    }).await
 }
 
 async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(), String> {
