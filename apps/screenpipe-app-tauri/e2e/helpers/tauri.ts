@@ -29,37 +29,72 @@ export async function invoke<T = unknown>(
   cmd: string,
   args?: object,
 ): Promise<InvokeResult<T>> {
-  return (await browser.executeAsync(
-    (
-      command: string,
-      params: object | undefined,
-      done: (r: InvokeResult<unknown>) => void,
-    ) => {
-      const g = globalThis as unknown as {
-        __TAURI__?: {
-          core?: { invoke: (cmd: string, args?: object) => Promise<unknown> };
+  try {
+    return (await browser.executeAsync(
+      (
+        command: string,
+        params: object | undefined,
+        done: (r: InvokeResult<unknown>) => void,
+      ) => {
+        const g = globalThis as unknown as {
+          __TAURI__?: {
+            core?: { invoke: (cmd: string, args?: object) => Promise<unknown> };
+          };
+          __TAURI_INTERNALS__?: {
+            invoke: (cmd: string, args?: object) => Promise<unknown>;
+          };
         };
-        __TAURI_INTERNALS__?: {
-          invoke: (cmd: string, args?: object) => Promise<unknown>;
-        };
-      };
-      const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
-      if (!inv) {
-        done({ ok: false, error: "Tauri invoke not available in this context" });
-        return;
+        const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
+        if (!inv) {
+          done({ ok: false, error: "Tauri invoke not available in this context" });
+          return;
+        }
+        void inv(command, params)
+          .then((value) => done({ ok: true, value }))
+          .catch((e: unknown) =>
+            done({
+              ok: false,
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          );
+      },
+      cmd,
+      args,
+    )) as InvokeResult<T>;
+  } catch (error) {
+    // A navigation can destroy its caller's Windows async result registry.
+    // Never repeat the native command: verify the known destination instead.
+    const target = (args as { window?: { Home?: { page?: unknown } } } | undefined)
+      ?.window?.Home;
+    if (
+      process.platform !== "win32" ||
+      cmd !== "show_window" ||
+      !target ||
+      !(target.page === null || typeof target.page === "string") ||
+      !(error instanceof Error) ||
+      !error.message.includes("async script document was replaced before completion")
+    ) {
+      throw error;
+    }
+    const page = target.page;
+    await browser.waitUntil(async () => {
+      try {
+        if (!(await browser.getWindowHandles()).includes("home")) return false;
+        await browser.switchToWindow("home");
+        const url = new URL(await browser.getUrl());
+        return url.pathname === "/home" &&
+          (page === null || url.searchParams.get("section") === page);
+      } catch {
+        // Only retry these read-only postcondition checks while Home settles.
+        return false;
       }
-      void inv(command, params)
-        .then((value) => done({ ok: true, value }))
-        .catch((e: unknown) =>
-          done({
-            ok: false,
-            error: e instanceof Error ? e.message : String(e),
-          }),
-        );
-    },
-    cmd,
-    args,
-  )) as InvokeResult<T>;
+    }, {
+      timeout: 10_000,
+      interval: 250,
+      timeoutMsg: `show_window callback was lost and Home did not reach /home${page === null ? "" : `?section=${page}`}`,
+    });
+    return { ok: true };
+  }
 }
 
 export async function invokeOrThrow<T = unknown>(

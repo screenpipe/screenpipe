@@ -21,6 +21,7 @@ import { invokeOrThrow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
 import { paidAccountFixture, paidAccountResponse } from "../helpers/account-fixtures.js";
+import { openBrainSection, assertEvidenceFreshnessTitle } from "../helpers/brain-view.js";
 
 interface LocalApiConfig {
   key: string | null;
@@ -720,9 +721,7 @@ describe("Brain Live Views", function () {
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
 
-      const brainNav = await $("[data-testid=nav-brain]");
-      await brainNav.waitForExist({ timeout: t(10_000) });
-      await brainNav.click();
+      await openBrainSection();
       await waitForTestId("section-brain", 15_000);
       const selector = await waitForTestId(
         "overview-dashboard-selector",
@@ -736,7 +735,7 @@ describe("Brain Live Views", function () {
       const deleteClicked = await browser.execute(() => {
         const item = Array.from(
           document.querySelectorAll<HTMLElement>("[role='menuitem']"),
-        ).find((candidate) => candidate.textContent?.trim() === "delete");
+        ).find((candidate) => candidate.textContent?.trim() === "Delete");
         item?.click();
         return Boolean(item);
       });
@@ -842,7 +841,7 @@ describe("Brain Live Views", function () {
       expect(await $("[data-testid='overview-apply-ai']").getText()).toContain(
         "create dashboard",
       );
-      expect(await $("button=add your first Block").isExisting()).toBe(false);
+      expect(await $("button=Add your first Block").isExisting()).toBe(false);
       const reviewScreenshot = await saveScreenshot(
         "brain-template-generated-review",
       );
@@ -965,11 +964,10 @@ describe("Brain Live Views", function () {
       const pipesNav = await waitForTestId("nav-pipes", 10_000);
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
-      const brainNav = await waitForTestId("nav-brain", 10_000);
-      await brainNav.click();
+      await openBrainSection();
       await waitForTestId("section-brain", 15_000);
       await selectDashboard(emptyViewId);
-      await $("button=add your first Block").waitForDisplayed({
+      await $("button=Add your first Block").waitForDisplayed({
         timeout: t(10_000),
       });
 
@@ -1011,7 +1009,7 @@ describe("Brain Live Views", function () {
               document.querySelectorAll("button"),
             ).some(
               (button) =>
-                button.textContent?.trim() === "add your first Block" &&
+                button.textContent?.trim() === "Add your first Block" &&
                 isVisible(button),
             ),
             visibleBlockIds: Array.from(
@@ -1181,8 +1179,7 @@ describe("Brain Live Views", function () {
       const pipesNav = await waitForTestId("nav-pipes", 10_000);
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
-      const brainNav = await waitForTestId("nav-brain", 10_000);
-      await brainNav.click();
+      await openBrainSection();
       await waitForTestId("section-brain", 15_000);
       await selectDashboard("process-map");
       const chatsDir = await invokeOrThrow<string>("get_chats_dir");
@@ -1559,11 +1556,8 @@ describe("Brain Live Views", function () {
     await setCssWindowSize(1440, 900);
 
     const timeRange = await waitForTestId("overview-time-range", 10_000);
-    // Freshness reads "Updated <newest> · oldest <oldest> · N waiting" since
-    // #6003 gave bound tasks a cadence. Assert the prefix, not a relative time.
-    expect((await timeRange.getAttribute("title"))?.toLowerCase()).toContain(
-      "updated ",
-    );
+    // Data age and source-check age must remain separate, even after a refresh.
+    assertEvidenceFreshnessTitle(await timeRange.getAttribute("title"));
     expect(await $("[data-testid='overview-data-status']").isExisting()).toBe(
       false,
     );
@@ -1847,9 +1841,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       "overview-time-range",
       10_000,
     );
-    expect(
-      (await timeRangeFreshness.getAttribute("title"))?.toLowerCase(),
-    ).toContain("updated ");
+    assertEvidenceFreshnessTitle(await timeRangeFreshness.getAttribute("title"));
     for (const size of SUPPORTED_WINDOW_SIZES) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);
@@ -1997,7 +1989,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(layout!.clippedControls).toEqual([]);
     }
     await setCssWindowSize(1440, 900);
-    const collapseSidebar = await $("[aria-label='collapse sidebar']");
+    const collapseSidebar = await $("[aria-label='Collapse sidebar']");
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();
     }
@@ -2040,7 +2032,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     const refresh = await waitForTestId("overview-refresh-data", 10_000);
     await refresh.click();
     await browser.waitUntil(
-      async () => (await refresh.getAttribute("aria-label")) === "loading data",
+      async () => (await refresh.getAttribute("aria-label")) === "Loading data",
       { timeout: t(10_000) },
     );
     expect(await dashboardSelector.isEnabled()).toBe(true);
@@ -2076,7 +2068,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     );
     expect(existsSync(fixedEditorScreenshot)).toBe(true);
 
-    const cancelFixedEditor = await $("button=cancel");
+    const cancelFixedEditor = await $("button=Cancel");
     await cancelFixedEditor.click();
     await selectDashboard(SELECTABLE_VIEW_ID);
 
@@ -2380,15 +2372,14 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(existsSync(canvasScreenshot)).toBe(true);
     }
 
-    const expandSidebar = await $("[aria-label='expand sidebar']");
+    const expandSidebar = await $("[aria-label='Expand sidebar']");
     if (await expandSidebar.isExisting()) {
       await expandSidebar.click();
     }
     const pipesNav = await waitForTestId("nav-pipes", 10_000);
     await pipesNav.click();
     await waitForTestId("section-pipes", 15_000);
-    const restoredBrainNav = await waitForTestId("nav-brain", 10_000);
-    await restoredBrainNav.click();
+    await openBrainSection();
     await waitForTestId("section-brain", 15_000);
     await waitForTestId("overview-dashboard-selector", 10_000);
     await selectDashboard(SELECTABLE_VIEW_ID);

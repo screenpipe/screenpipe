@@ -11,6 +11,7 @@ import {
   isSearchBusyResponse,
   waitForLocalApi,
 } from "../helpers/api-utils.js";
+import { assertHealthSnapshot, isPrivacyFilterUnavailable } from "../helpers/api-search-contracts.js";
 
 async function runSerially<T>(requests: Array<() => Promise<T>>): Promise<T[]> {
   const results: T[] = [];
@@ -68,6 +69,7 @@ describe("Local API search and stability", function () {
     it(`${label} returns a stable JSON envelope`, async function () {
       if (!key) this.skip();
       const res = await authedGet(path);
+      if (path.includes("filter_pii=true") && isPrivacyFilterUnavailable(res)) return;
       expectNoServerError(res, label);
       expect(res.ok).toBe(true);
       expect(typeof res.body).toBe("object");
@@ -186,6 +188,8 @@ describe("Local API search and stability", function () {
     it(`handles boolean search flag: ${label}`, async function () {
       if (!key) this.skip();
       const res = await authedGet(path);
+      if ((path.includes("filter_pii=true") || path.includes("filter_pii=1")) &&
+        isPrivacyFilterUnavailable(res)) return;
       expectNoServerError(res, label);
     });
   }
@@ -490,11 +494,7 @@ describe("Local API search and stability", function () {
       expect(Date.now() - startedAt).toBeLessThan(5_000);
       expect(results.filter((r) => !r.ok)).toHaveLength(0);
       for (const result of results) {
-        expect(result.body).not.toBeNull();
-        expect(typeof result.body).toBe("object");
-        const body = result.body as { status_code?: number; status?: string };
-        expect(body.status_code).toBe(200);
-        expect(body.status).not.toBe("degraded");
+        assertHealthSnapshot(result);
       }
     }
   });

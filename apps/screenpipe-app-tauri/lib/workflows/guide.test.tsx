@@ -356,7 +356,10 @@ describe("guide editor", () => {
     const revoke = vi.fn();
     URL.revokeObjectURL = revoke;
     const platform = { ...host(), loadScreenshot };
-    const view = render(<WorkflowGuide workflow={workflow} platform={platform} close={() => {}} />);
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<WorkflowGuide workflow={workflow} platform={platform} close={() => {}} />);
+    });
     await waitFor(() => expect(screen.getByRole("img", { name: "Source for Collect sources" })).toHaveAttribute("src", "blob:original-source"));
     expect(loadScreenshot).toHaveBeenCalledWith(1, expect.any(AbortSignal));
     expect(platform.save).not.toHaveBeenCalled();

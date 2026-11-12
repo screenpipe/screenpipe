@@ -11,6 +11,7 @@ import {
   E2E_SEED_FLAGS,
 } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
+import { waitForLocalApi } from "../helpers/api-utils.js";
 import {
   closeWindow,
   invokeOrThrow,
@@ -292,6 +293,9 @@ async function callActivitySummaryThroughMcp(
         expect(statSync(runnerConfig).mode & 0o777).toBe(0o600);
       }
 
+      // Config setup can finish before the recording engine starts listening.
+      // Keep the real MCP/auth assertion, after its local dependency is ready.
+      await waitForLocalApi(api.port);
       const result = (await callActivitySummaryThroughMcp(
         cursor.mcpServers.screenpipe,
       )) as { isError?: boolean; content?: Array<{ text?: string }> };
