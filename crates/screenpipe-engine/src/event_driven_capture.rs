@@ -1220,7 +1220,6 @@ pub(crate) async fn event_driven_capture_loop(
                 screenshot_disabled,
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
-                true,  // focus unknown at startup — controller defaults to Active
                 &mut last_screenshot_focus_pid,
             ),
         )
@@ -2121,10 +2120,6 @@ pub(crate) async fn event_driven_capture_loop(
                         screenshot_disabled,
                         hd_active,
                         in_meeting,
-                        // AX pairing requires confirmed focus ownership.
-                        // CaptureState::Active is broader: it also covers
-                        // hysteresis and unknown/stale focus fallbacks.
-                        focus_controller.hosts_focus_for_monitor(&monitor),
                         &mut last_screenshot_focus_pid,
                     ),
                 )
@@ -3166,6 +3161,53 @@ async fn redacted_focus_check(
     redacted_focus_decision(filters, focus, pixels_only_permitted)
 }
 
+fn focused_window_is_on_monitor(
+    window: Option<screenpipe_a11y::ElementBounds>,
+    monitor: &TreeWalkerConfig,
+) -> bool {
+    let Some(window) = window else { return false };
+    if ![window.x, window.y, window.width, window.height]
+        .iter()
+        .all(|value| value.is_finite())
+        || window.width <= 0.0
+        || window.height <= 0.0
+        || monitor.monitor_width <= 0.0
+        || monitor.monitor_height <= 0.0
+    {
+        return false;
+    }
+    // One owning display, even when a window spans displays. Use the same
+    // center convention as the foreground-window scheduling tracker, with
+    // half-open display edges. Never substitute the cursor's position.
+    let x = window.x + window.width / 2.0;
+    let y = window.y + window.height / 2.0;
+    x >= monitor.monitor_x
+        && x < monitor.monitor_x + monitor.monitor_width
+        && y >= monitor.monitor_y
+        && y < monitor.monitor_y + monitor.monitor_height
+}
+
+async fn monitor_hosts_focused_window(config: &TreeWalkerConfig) -> bool {
+    let bounds = tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            screenpipe_a11y::platform::macos::get_focused_window_bounds_fresh()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            screenpipe_a11y::platform::windows::get_focused_window_bounds_fresh()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    focused_window_is_on_monitor(bounds, config)
+}
+
 /// Perform a single event-driven capture.
 ///
 /// When `previous_content_hash` is `Some` and matches the current accessibility
@@ -3187,9 +3229,12 @@ async fn do_capture(
     screenshot_disabled: bool,
     hd_active: bool,
     in_meeting: bool,
-    monitor_hosts_focus: bool,
     #[allow(unused_variables)] last_screenshot_focus_pid: &mut Option<i32>,
 ) -> Result<CaptureOutput> {
+    // Scheduling can use hysteresis, cached notifications, and cursor fallback.
+    // Text admission instead requires fresh focused-window geometry, including
+    // at startup. Unknown ownership permits no text extraction.
+    let mut monitor_hosts_focus = monitor_hosts_focused_window(params.tree_walker_config).await;
     // Only the monitor hosting focus can provide an image in this mode.
     // Avoid taking and then discarding screenshots of the other monitors.
     if params.focused_window_screenshots && !monitor_hosts_focus {
@@ -3518,10 +3563,14 @@ async fn do_capture(
         config.walk_timeout_override = Some(decision.timeout);
     }
 
+    // Focus may have moved while pixels, privacy checks, or budget metadata
+    // were being acquired. Losing ownership cannot promote this capture again.
+    monitor_hosts_focus &= monitor_hosts_focused_window(params.tree_walker_config).await;
+
     // The AX walker returns the one globally focused window. Walking it for a
     // different monitor would both waste work and pair unrelated pixels with
     // that window's tree, identity, and dedup hash. Non-focused monitors use
-    // the screenshot/OCR path below instead.
+    // the screenshot-only path below instead.
     let tree_walk_result = if monitor_hosts_focus && defer_text_extraction {
         // The normal walk checks these filters before any provider request.
         // Preserve that gate when no walk is admitted. URL, ignored popup and
@@ -3564,6 +3613,10 @@ async fn do_capture(
             }
         }
     } else {
+        let _ = params
+            .tree_walker
+            .suspend_with_timeout(Duration::from_millis(250))
+            .await;
         None
     };
 
@@ -3688,6 +3741,18 @@ async fn do_capture(
     } else {
         None
     };
+    // A walk can overlap a display transition (including the same process
+    // moving displays). Discard every text projection before dedup/persistence.
+    monitor_hosts_focus &= monitor_hosts_focused_window(params.tree_walker_config).await;
+    if !monitor_hosts_focus {
+        if tree_snapshot.is_some() {
+            let _ = params
+                .tree_walker
+                .suspend_with_timeout(Duration::from_millis(250))
+                .await;
+        }
+        tree_snapshot = None;
+    }
     #[allow(unused_mut)]
     let mut ax_screenshot_coherent = match (screenshot_focus_pid, ax_focus_pid) {
         (Some(screenshot_pid), Some(ax_pid)) => screenshot_pid == ax_pid,
@@ -3701,7 +3766,7 @@ async fn do_capture(
         ax_screenshot_coherent &= !monitor_hosts_focus
             || (foreground_identity_before.is_some()
                 && foreground_identity_before == foreground_identity_after);
-        if !ax_screenshot_coherent {
+        if monitor_hosts_focus && !ax_screenshot_coherent {
             debug!(
                 before = ?foreground_identity_before,
                 after = ?foreground_identity_after,
@@ -4005,7 +4070,7 @@ async fn do_capture(
     };
     if let Some(sender) = params.semantic_tx {
         match tree_snapshot {
-            Some(snapshot) if ax_screenshot_coherent => {
+            Some(snapshot) if monitor_hosts_focus && ax_screenshot_coherent => {
                 let _ = sender.submit(SemanticProjectionJob::from_capture(
                     result.frame_id,
                     result.captured_at,
@@ -4388,6 +4453,50 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_ownership_requires_fresh_window_geometry_and_tracks_display_transitions() {
+        use screenpipe_a11y::ElementBounds;
+        let left = TreeWalkerConfig {
+            monitor_x: -1920.0,
+            monitor_y: 0.0,
+            monitor_width: 1920.0,
+            monitor_height: 1080.0,
+            ..Default::default()
+        };
+        let right = TreeWalkerConfig {
+            monitor_x: 0.0,
+            ..left.clone()
+        };
+        let window = |x| {
+            Some(ElementBounds {
+                x,
+                y: 50.0,
+                width: 800.0,
+                height: 600.0,
+            })
+        };
+        // Startup/unknown focus cannot use Active scheduling as ownership.
+        for monitor in [&left, &right] {
+            assert!(!focused_window_is_on_monitor(None, monitor));
+            assert!(!focused_window_is_on_monitor(window(f64::NAN), monitor));
+        }
+        assert!(focused_window_is_on_monitor(window(-1000.0), &left));
+        assert!(!focused_window_is_on_monitor(window(-1000.0), &right));
+        assert!(!focused_window_is_on_monitor(window(100.0), &left));
+        assert!(focused_window_is_on_monitor(window(100.0), &right));
+        // A straddling window's center lies exactly on the seam: one owner.
+        assert!(!focused_window_is_on_monitor(window(-400.0), &left));
+        assert!(focused_window_is_on_monitor(window(-400.0), &right));
+        assert!(!focused_window_is_on_monitor(window(3000.0), &right));
+        let invalid = Some(ElementBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 600.0,
+        });
+        assert!(!focused_window_is_on_monitor(invalid, &right));
+    }
 
     #[test]
     fn redacted_focus_rejections_cannot_fall_through_unknown_monitor_capture() {

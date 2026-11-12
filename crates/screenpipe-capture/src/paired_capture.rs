@@ -178,9 +178,10 @@ pub struct CaptureContext<'a> {
     /// Whether the captured monitor is the one hosting the focused window.
     /// This is a capture-source boundary: only that monitor may pair its
     /// screenshot with the globally focused accessibility tree and focused
-    /// app/window identity. Other monitors use screenshot OCR with unknown
-    /// metadata. Callers without per-monitor focus knowledge should pass
-    /// `true` only when capturing a single monitor.
+    /// app/window identity or extract/reuse OCR text. Other and unknown-focus
+    /// monitors retain permitted screenshots without text. Callers must confirm
+    /// focused-window ownership at the capture boundary, never infer it from
+    /// scheduling state or the number of monitors.
     pub monitor_hosts_focus: bool,
     /// Whether the focused accessibility snapshot was collected under the
     /// same stable process identity as these pixels. When false, the AX data
@@ -379,6 +380,7 @@ async fn paired_capture_inner(
         || browser_url.map(is_meeting_url).unwrap_or(false);
     let meeting_trigger = ctx.in_meeting && meeting_matched && ctx.monitor_hosts_focus;
     let wants_ocr = !defer_text_extraction
+        && ctx.monitor_hosts_focus
         && !ctx.screenshot_disabled
         && (app_prefers_ocr || meeting_trigger || !has_accessibility_text || a11y_is_thin_generic);
 
@@ -2070,83 +2072,131 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_focused_monitor_gets_gated_ocr_on_its_own_pixels() {
-        // Multi-monitor: a second monitor receives the globally focused
-        // window's AX result, but its pixels show unrelated content. The
-        // capture boundary must discard both that tree and its identity,
-        // then OCR the second monitor's own screenshot.
+    async fn non_focused_monitor_keeps_pixels_without_any_text_or_element_reference() {
         let tmp = TempDir::new().unwrap();
         let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .unwrap();
-        // Thin a11y text (in-call meeting chrome is typically <100 chars).
-        let snap = make_snap(vec![AccessibilityTreeNode {
-            role: "AXStaticText".into(),
-            text: "Leave meeting".into(),
-            depth: 0,
-            bounds: None,
-            ..Default::default()
-        }]);
-        let make_ctx = |image| CaptureContext {
+        let snap = rich_meeting_snap();
+        let mut ctx = CaptureContext {
             db: &db,
             snapshot_writer: &snapshot_writer,
-            image,
+            image: strokes_image(),
             captured_at: Utc::now(),
             monitor_id: 1,
             device_name: "monitor_2",
             app_name: Some("zoom.us"),
             window_name: Some("Zoom Meeting"),
-            browser_url: None,
-            document_path: None,
+            browser_url: Some("https://example.com/private"),
+            document_path: Some("/private/document"),
             focused: true,
             capture_trigger: "visual_change",
             use_pii_removal: false,
             languages: vec![],
             elements_ref_frame_id: None,
             screenshot_disabled: false,
-            in_meeting: true,
-            monitor_hosts_focus: false,
+            in_meeting: false,
+            monitor_hosts_focus: true,
             ax_screenshot_coherent: true,
             focused_window_bounds: None,
         };
-        let mut gate = OcrGate::new();
-        // Text on this monitor: first sighting OCRs it.
-        let ctx = make_ctx(strokes_image_at(50, 100));
-        let result = paired_capture(&ctx, Some(&snap), Some(&mut gate))
+        // Establish a real focused frame with elements that must not leak
+        // through a reference when this display subsequently loses focus.
+        let focused = paired_capture(&ctx, Some(&snap), None).await.unwrap();
+        assert_eq!(focused.text_source.as_deref(), Some("accessibility"));
+        assert!(!db
+            .get_frame_elements(focused.frame_id, None)
             .await
-            .unwrap();
-        assert!(
-            result.ocr_duration_ms.is_some(),
-            "new text on a non-focused monitor must be OCR'd"
-        );
-        assert!(result.app_name.is_none());
-        assert!(result.window_name.is_none());
-        assert!(result.browser_url.is_none());
-        assert_ne!(result.accessibility_text.as_deref(), Some("Leave meeting"));
-        assert_ne!(result.content_hash, Some(snap.content_hash as i64));
-        // Content changes (a second text line appears): the union crop's
-        // pixels differ → OCR again. This is the coverage the old
-        // fingerprint gate starved. (Note: purely MOVED text is skipped by
-        // design — the union crop follows it and its pixels are identical.)
-        let mut canvas = image::RgbImage::from_pixel(400, 300, image::Rgb([235, 235, 235]));
-        for (y0, strokes) in [(100u32, 10u32), (200, 6)] {
-            for s in 0..strokes {
-                let sx = 50 + s * 7;
-                for dy in 0..12 {
-                    for dx in 0..3 {
-                        canvas.put_pixel(sx + dx, y0 + dy, image::Rgb([10, 10, 10]));
-                    }
+            .unwrap()
+            .is_empty());
+        ctx.elements_ref_frame_id = Some(focused.frame_id);
+        ctx.monitor_hosts_focus = false;
+        ctx.in_meeting = true;
+
+        let regions = detect_text_regions(&ctx.image);
+        let union = union_region(&regions, UNION_PAD_PX, 400, 300).unwrap();
+        let signature =
+            image_pixel_signature(
+                &ctx.image
+                    .crop_imm(union.x, union.y, union.width, union.height),
+            );
+        let mut cached_gate = OcrGate::new();
+        assert_eq!(cached_gate.observe("unknown", signature), OcrDecision::Ocr);
+        cached_gate.ocr_indexed("unknown", "cached background secret", "[]");
+        let mut empty_gate = OcrGate::new();
+        // Cover a stale cache, a new gate, no gate, absent AX, and text-only
+        // pause mode. The first case would have reused OCR before this fix.
+        for (gate, with_tree, screenshot_disabled) in [
+            (Some(&mut cached_gate), true, false),
+            (Some(&mut empty_gate), true, false),
+            (None, true, false),
+            (None, false, false),
+            (None, true, true),
+        ] {
+            ctx.captured_at += chrono::Duration::seconds(1);
+            ctx.screenshot_disabled = screenshot_disabled;
+            let result = paired_capture(&ctx, with_tree.then_some(&snap), gate)
+                .await
+                .unwrap();
+            assert_eq!(result.ocr_duration_ms, None);
+            assert_eq!(result.ocr_gate_decision, None);
+            assert_eq!(result.ocr_gate_detect_duration, None);
+            assert!(!result.ocr_cache_hit);
+            assert_eq!(result.accessibility_text, None);
+            assert_eq!(result.text_source, None);
+            assert_eq!(result.content_hash, None);
+            assert_eq!(result.app_name, None);
+            assert_eq!(result.window_name, None);
+            assert_eq!(result.browser_url, None);
+            assert_eq!(
+                db.get_frame_accessibility_data(result.frame_id)
+                    .await
+                    .unwrap(),
+                (None, None)
+            );
+            assert!(db
+                .get_frame_elements(result.frame_id, None)
+                .await
+                .unwrap()
+                .is_empty());
+            let stored = db.query_raw_sql(&format!(
+                "SELECT full_text, text_json, accessibility_text, accessibility_tree_json, text_source, document_path, browser_url, app_name, window_name, content_hash, simhash, elements_ref_frame_id, focused FROM frames WHERE id = {}",
+                result.frame_id,
+            )).await.unwrap();
+            let row = stored[0].as_object().unwrap();
+            for (column, value) in row {
+                if column == "focused" {
+                    assert_eq!(*value, serde_json::json!(0));
+                } else {
+                    assert!(
+                        value.is_null(),
+                        "background column {column} retained {value}"
+                    );
                 }
             }
+            if screenshot_disabled {
+                assert!(result.snapshot_path.is_empty());
+            } else {
+                assert!(std::path::Path::new(&result.snapshot_path).is_file());
+                assert_eq!(
+                    db.get_frame(result.frame_id).await.unwrap().unwrap().0,
+                    result.snapshot_path
+                );
+            }
         }
-        let ctx2 = make_ctx(Arc::new(DynamicImage::ImageRgb8(canvas)));
-        let result2 = paired_capture(&ctx2, Some(&snap), Some(&mut gate))
-            .await
-            .unwrap();
-        assert!(
-            result2.ocr_duration_ms.is_some(),
-            "changed content on a non-focused monitor must re-OCR"
+        // Returning focus restores the normal text path; no global disable or
+        // destructive OCR-cache reset is needed.
+        ctx.monitor_hosts_focus = true;
+        ctx.screenshot_disabled = false;
+        ctx.in_meeting = false;
+        ctx.elements_ref_frame_id = None;
+        let restored = paired_capture(&ctx, Some(&snap), None).await.unwrap();
+        assert_eq!(restored.text_source.as_deref(), Some("accessibility"));
+        assert_eq!(restored.accessibility_text, focused.accessibility_text);
+        assert_eq!(
+            cached_gate.indexed_text("unknown"),
+            Some(("cached background secret", "[]"))
         );
     }
 

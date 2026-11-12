@@ -2073,6 +2073,30 @@ pub struct ForegroundWindowIdentity {
     pub title: String,
 }
 
+/// Read foreground geometry without UIA, text extraction, or a cursor fallback.
+pub fn get_focused_window_bounds_fresh() -> Option<crate::events::ElementBounds> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() || is_transient_shell_window(hwnd) {
+            return None;
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect).ok()?;
+        if GetForegroundWindow() != hwnd {
+            return None;
+        }
+        Some(crate::events::ElementBounds {
+            x: rect.left as f64,
+            y: rect.top as f64,
+            width: rect.right as f64 - rect.left as f64,
+            height: rect.bottom as f64 - rect.top as f64,
+        })
+    }
+}
+
 pub fn get_foreground_window_identity_fresh() -> Option<ForegroundWindowIdentity> {
     unsafe {
         let hwnd = GetForegroundWindow();

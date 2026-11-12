@@ -2529,6 +2529,22 @@ fn get_string_attr(elem: &ax::UiElement, attr: &ax::Attr) -> Option<String> {
     })
 }
 
+/// Read only the focused window's geometry, without walking or extracting text.
+/// Cursor location and notification caches are not evidence of window ownership.
+pub fn get_focused_window_bounds_fresh() -> Option<ElementBounds> {
+    ensure_global_ax_timeout();
+    let pid = get_focused_pid_fresh()?;
+    let app = ax::UiElement::with_app_pid(pid);
+    let focused = app.attr_value(ax::attr::focused_window()).ok()?;
+    if focused.get_type_id() != ax::UiElement::type_id() {
+        return None;
+    }
+    // Safety: the AX type was checked above and `focused` retains the element.
+    let window: &ax::UiElement = unsafe { std::mem::transmute(&*focused) };
+    let bounds = get_element_bounds(window)?;
+    (get_focused_pid_fresh() == Some(pid)).then_some(bounds)
+}
+
 fn get_focused_window_title(pid: i32) -> Option<String> {
     let app = ax::UiElement::with_app_pid(pid);
 
