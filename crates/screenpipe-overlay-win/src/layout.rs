@@ -301,7 +301,7 @@ pub fn compute(state: &OverlayState) -> Layout {
     match state.health {
         Health::Failure => layout.hit.extend(failure_hits(state, primary, s)),
         Health::Normal if state.shows_dock() => {
-            let (cells, dividers) = dock_cells(primary, s);
+            let (cells, dividers) = dock_cells(primary, s, state.simplified_ui);
             layout.hit.extend(cells.iter().copied());
             layout.dock_cells = cells;
             layout.dock_dividers = dividers;
@@ -323,24 +323,25 @@ enum Block {
 
 /// Four icon buttons, the audio meter, and the rightmost brand control — the
 /// dock from `dockView` in shortcut_reminder.swift.
-fn dock_cells(dock: Rect, s: f32) -> (Vec<(Control, Rect)>, Vec<Rect>) {
+fn dock_cells(dock: Rect, s: f32, simplified: bool) -> (Vec<(Control, Rect)>, Vec<Rect>) {
     let divider_w = 1.0f32.max(s.round());
-    let icon_controls = [
+    let full_controls = [
         Control::Search,
         Control::Chat,
         Control::Star,
         Control::Timeline,
     ];
+    let icon_controls = if simplified { &[Control::Star][..] } else { &full_controls[..] };
     // Audio is a status cell, not a button, but it still highlights on hover.
     let usable = dock.w - divider_w * 2.0;
     // Six cells: four icons, the meter, and brand. The meter gets the same
     // share as an icon so the row reads as evenly spaced.
-    let cell_w = usable / 6.0;
+    let cell_w = usable / (icon_controls.len() + 2) as f32;
 
     let mut cells = Vec::new();
     let mut dividers = Vec::new();
     let mut x = dock.x;
-    for c in icon_controls {
+    for &c in icon_controls {
         cells.push((c, Rect::new(x, dock.y, cell_w, dock.h)));
         x += cell_w;
     }
@@ -886,5 +887,17 @@ mod tests {
         assert!(l.is_in_corridor(0.5, 0.5), "but it is not an exit either");
         assert!(!l.is_in_corridor(-1.0, gap_y), "outside the box is an exit");
         assert!(!l.is_in_corridor(gap_x, l.window.bottom() + 1.0));
+    }
+}
+
+#[cfg(test)]
+mod simplified_tests {
+    use super::*;
+    #[test]
+    fn simplified_cells_have_no_hidden_click_targets() {
+        let (cells, dividers) = dock_cells(Rect::new(0.0, 0.0, 192.0, 30.0), 1.0, true);
+        assert_eq!(cells.iter().map(|(control, _)| *control).collect::<Vec<_>>(), vec![Control::Star, Control::Audio, Control::Brand]);
+        let width: f32 = cells.iter().map(|(_, rect)| rect.w).sum::<f32>() + dividers.iter().map(|rect| rect.w).sum::<f32>();
+        assert!((width - 192.0).abs() < 0.01);
     }
 }

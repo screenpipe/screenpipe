@@ -102,6 +102,7 @@ func starredMinutesLeft(until: Int64, now: TimeInterval) -> Int {
 // MARK: - Metrics data pushed from Rust
 
 final class OverlayMetrics: ObservableObject {
+    @Published var simplifiedUI: Bool = false
     @Published var starredActive: Bool = false
     @Published var starredMinutesRemaining: Int = 0
     @Published var audioActive: Bool = false
@@ -593,7 +594,8 @@ private let kBaseNotificationW: CGFloat = 340
 private let kBaseNotificationH: CGFloat = 34
 private let kRestingOpacity: Double = 0.50
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["search", "chat", "star", "timeline", "audio", "brand"]
+private var gSimplifiedUI = false
+private var kDockControls: [String] { gSimplifiedUI ? ["star", "audio", "brand"] : ["search", "chat", "star", "timeline", "audio", "brand"] }
 
 /// Convert configured shortcuts to one stable, compact macOS glyph order.
 /// Settings historically stored both `Super+Control+…` and
@@ -1257,7 +1259,7 @@ struct ShortcutReminderView: View {
         ZStack(alignment: .topTrailing) {
             CollapsedAppIconButton(
                 scale: collapsedScale,
-                action: { onAction("open_timeline") }
+                action: { onAction(metrics.simplifiedUI ? "open_starred_sessions" : "open_timeline") }
             )
             .frame(width: kBaseCollapsedW * collapsedScale, height: kBaseCollapsedH * collapsedScale)
             .background(
@@ -1304,20 +1306,24 @@ struct ShortcutReminderView: View {
 
     private var dockView: some View {
         HStack(spacing: 0) {
+            if !metrics.simplifiedUI {
             DockIconButton(icon: "magnifyingglass", active: metrics.hoveredControl == "search", scale: scale) {
                 onAction("open_search")
             }
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
+            }
             DockIconButton(icon: metrics.starredActive ? "star.fill" : "star", active: metrics.hoveredControl == "star", scale: scale, caption: metrics.starredActive ? "\(metrics.starredMinutesRemaining)m" : nil) {
                 onAction("open_starred_sessions")
             }
             .accessibilityLabel(metrics.starredActive ? uiText("{minutes} min left · click to end", ["minutes": String(metrics.starredMinutesRemaining)]) : uiText("Star a work session"))
+            if !metrics.simplifiedUI {
             DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
                 onAction("open_timeline")
             }
 
+            }
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
 
             DockStatusCell(active: metrics.hoveredControl == "audio") {
@@ -1332,7 +1338,7 @@ struct ShortcutReminderView: View {
                 meetingActive: metrics.meetingActive,
                 scale: scale
             ) {
-                onAction("open_timeline")
+                onAction(metrics.simplifiedUI ? "open_starred_sessions" : "open_timeline")
             }
         }
         .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
@@ -2530,6 +2536,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         // Expects shortcut labels, size, and optional authenticated API URLs from Rust.
         guard let data = json.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        gSimplifiedUI = dict["simplifiedUI"] == "true"
+        metrics.simplifiedUI = gSimplifiedUI
         if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
@@ -3616,8 +3624,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             keyEquivalent: ""
         )
         settings.target = self
-        settings.isEnabled = true
-        menu.addItem(settings)
+        settings.isEnabled = !gSimplifiedUI
+        if !gSimplifiedUI { menu.addItem(settings) }
 
         menu.popUp(
             positioning: nil,

@@ -1890,9 +1890,8 @@ async fn main() {
             // saved snoozes/preferences and the bounded re-show of the smaller
             // cross-platform design. Skip when the timeline itself is unavailable.
             if onboarding_store.is_completed
-                && !app_ui_hidden
-                && !headless_startup
-                && !store.recording.disable_timeline
+                && (crate::enterprise_policy::is_simplified_ui()
+                    || (!app_ui_hidden && !headless_startup && !store.recording.disable_timeline))
             {
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -2461,8 +2460,8 @@ async fn main() {
                 // no way to stop capture at all — and then the start/stop hotkeys
                 // are registered and routed natively, because the usual
                 // `shortcut-*-recording` emits have no webview listener here.
-                if crate::enterprise_policy::is_tray_hidden() {
-                    info!("enterprise: hidden UI and tray suppressed, registering recording control shortcuts only");
+                if crate::enterprise_policy::is_tray_hidden() || crate::enterprise_policy::is_simplified_ui() {
+                    info!("enterprise: registering native recording and simplified controls");
                     let app_handle_clone = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         crate::shortcuts::reconcile_with_enterprise_policy(

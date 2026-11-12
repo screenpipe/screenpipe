@@ -109,7 +109,7 @@ fn flush_transcript_on_reexpand(
 /// Show the same two-choice brand context menu as the macOS overlay. Returning
 /// the selected app action keeps presentation inside the Win32 window while
 /// preserving the cross-platform callback contract.
-unsafe fn show_brand_context_menu(hwnd: HWND) -> Option<String> {
+unsafe fn show_brand_context_menu(hwnd: HWND, simplified: bool) -> Option<String> {
     let menu = CreatePopupMenu().ok()?;
     let result = (|| {
         AppendMenuW(
@@ -119,6 +119,7 @@ unsafe fn show_brand_context_menu(hwnd: HWND) -> Option<String> {
             w!("Hide for 1 hour"),
         )
         .ok()?;
+        if !simplified {
         AppendMenuW(menu, MF_SEPARATOR, 0, w!("")).ok()?;
         AppendMenuW(
             menu,
@@ -127,6 +128,7 @@ unsafe fn show_brand_context_menu(hwnd: HWND) -> Option<String> {
             w!("Settings..."),
         )
         .ok()?;
+        }
 
         let mut point = POINT::default();
         GetCursorPos(&mut point).ok()?;
@@ -1482,7 +1484,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 let is_brand = ctx_of(hwnd)
                     .is_some_and(|ctx| ctx.layout.hit_test(x, y) == Some(Control::Brand));
                 let action = if is_brand {
-                    show_brand_context_menu(hwnd)
+                    show_brand_context_menu(hwnd, ctx_of(hwnd).is_some_and(|ctx| ctx.state.simplified_ui))
                 } else {
                     None
                 };

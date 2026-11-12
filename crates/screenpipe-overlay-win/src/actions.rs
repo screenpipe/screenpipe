@@ -23,6 +23,13 @@ pub const BRAND_CONTEXT_MENU_OPEN_SETTINGS: usize = 2;
 /// report — either because it is a status cell rather than a button, or because
 /// the overlay handles it itself and the app has no business hearing about it.
 pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
+    if state.simplified_ui {
+        match control {
+            Control::Pill | Control::Brand => return Some("open_starred_sessions".into()),
+            Control::Search | Control::Chat | Control::Timeline | Control::Settings | Control::TranscriptOpenNote => return None,
+            _ => {}
+        }
+    }
     let fixed = match control {
         // Clicking the resting chip opens the timeline: the dock owns the other
         // destinations, but at rest the pill needs one obvious thing to do.
@@ -208,5 +215,21 @@ mod tests {
             let json = serde_json::to_string(&anchor).unwrap();
             assert_eq!(json.trim_matches('"'), anchor_slug(anchor));
         }
+    }
+}
+
+#[cfg(test)]
+mod simplified_tests {
+    use super::*;
+    #[test]
+    fn simplified_reminder_only_opens_starring() {
+        let state = OverlayState { simplified_ui: true, ..Default::default() };
+        for control in [Control::Pill, Control::Brand, Control::Star] {
+            assert_eq!(action_for(&state, control).as_deref(), Some("open_starred_sessions"));
+        }
+        for control in [Control::Search, Control::Chat, Control::Timeline, Control::Settings, Control::TranscriptOpenNote] {
+            assert_eq!(action_for(&state, control), None);
+        }
+        assert_eq!(action_for(&state, Control::RestartRecording).as_deref(), Some("restart_recording"));
     }
 }

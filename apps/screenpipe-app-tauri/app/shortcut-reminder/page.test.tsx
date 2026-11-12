@@ -959,3 +959,50 @@ it("shows remaining minutes in the star button and updates the active disclosure
   expect(screen.getByRole("button", { name: "Starred work sessions" })).not.toHaveTextContent("59m");
   cleanup();
 });
+
+
+describe("simplified enterprise reminder", () => {
+  beforeEach(() => {
+    cleanup();
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.meetingOverlayState.active = false;
+    mocks.platform.isLoading = false;
+    mocks.listen.mockClear();
+    mocks.listen.mockResolvedValue(vi.fn());
+    mocks.storeGet.mockResolvedValue(undefined);
+    mocks.showWindow.mockClear();
+    mocks.toggleStarredSessions.mockClear();
+    mocks.toggleStarredSessions.mockResolvedValue({ status: "ok", data: null });
+  });
+
+  it("keeps starring and status while removing full-app controls at launch", async () => {
+    window.history.replaceState({}, "", "/shortcut-reminder?simplified=true");
+    try {
+      render(<ShortcutReminderPage />);
+      fireEvent.mouseEnter(await screen.findByTitle("Starred work sessions"));
+      expect(screen.queryByTitle("Open search")).toBeNull();
+      expect(screen.queryByTitle("Open chat")).toBeNull();
+      expect(screen.queryByTitle("Open timeline")).toBeNull();
+      expect(screen.getByTitle("Microphone capture status")).toBeVisible();
+      fireEvent.click(screen.getByTitle("Starred work sessions"));
+      await waitFor(() => expect(mocks.toggleStarredSessions).toHaveBeenCalledTimes(1));
+      expect(mocks.showWindow).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
+  it("applies a live policy update to an existing reminder", async () => {
+    render(<ShortcutReminderPage />);
+    fireEvent.mouseEnter(await screen.findByTitle("Open timeline"));
+    expect(screen.getByTitle("Open search")).toBeVisible();
+    const listener = mocks.listen.mock.calls.find(([name]) => name === "shortcut-reminder-update")?.[1];
+    expect(listener).toBeTypeOf("function");
+    await act(async () => listener({ payload: JSON.stringify({ simplifiedUI: "true" }) }));
+    fireEvent.mouseEnter(await screen.findByTitle("Starred work sessions"));
+    expect(screen.queryByTitle("Open search")).toBeNull();
+    expect(screen.queryByTitle("Open chat")).toBeNull();
+    cleanup();
+  });
+});
