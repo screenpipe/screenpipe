@@ -2078,7 +2078,14 @@ mod tests {
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .unwrap();
-        let snap = rich_meeting_snap();
+        let mut snap = rich_meeting_snap();
+        snap.nodes[0].on_screen = Some(true);
+        snap.nodes[0].bounds = Some(screenpipe_a11y::tree::NodeBounds {
+            left: 0.1,
+            top: 0.1,
+            width: 0.8,
+            height: 0.1,
+        });
         let mut ctx = CaptureContext {
             db: &db,
             snapshot_writer: &snapshot_writer,
@@ -2105,6 +2112,12 @@ mod tests {
         // through a reference when this display subsequently loses focus.
         let focused = paired_capture(&ctx, Some(&snap), None).await.unwrap();
         assert_eq!(focused.text_source.as_deref(), Some("accessibility"));
+        // Element projection is asynchronous. Seed the reference target
+        // durably so this check cannot race its background projection.
+        db.execute_raw_sql_write(&format!(
+            "INSERT INTO elements (frame_id, source, role, text) VALUES ({}, 'accessibility', 'AXStaticText', 'reference secret')",
+            focused.frame_id,
+        )).await.unwrap();
         assert!(!db
             .get_frame_elements(focused.frame_id, None)
             .await
