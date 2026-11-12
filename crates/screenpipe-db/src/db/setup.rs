@@ -360,7 +360,7 @@ impl DatabaseManager {
             } else {
                 config.read_pool_min
             })
-            .acquire_timeout(Duration::from_secs(5));
+            .acquire_timeout(Duration::from_secs(10));
         // An unpublished index has no readers yet. Defer their connections
         // until schema construction is complete, rather than letting their
         // initialization overlap its DDL and checkpoints. The published
