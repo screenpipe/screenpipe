@@ -206,7 +206,14 @@ fn primary_size(state: &OverlayState, s: f32) -> (f32, f32) {
         Health::Recovered => (HEALTH_RECOVERED_W * s, BASE_HEALTH_H * s),
         Health::Normal => {
             if expanded {
-                (BASE_EXPANDED_W * s, BASE_DOCK_H * s)
+                (
+                    (if state.simplified_ui {
+                        96.0
+                    } else {
+                        BASE_EXPANDED_W
+                    }) * s,
+                    BASE_DOCK_H * s,
+                )
             } else {
                 // The collapsed chip scales more gently than the dock: at rest
                 // the overlay should stay out of the way even at "large".
@@ -899,6 +906,17 @@ mod simplified_tests {
     use super::*;
     #[test]
     fn simplified_cells_have_no_hidden_click_targets() {
+        let state = OverlayState {
+            simplified_ui: true,
+            force_expanded: true,
+            ..Default::default()
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            assert_eq!(
+                primary_size(&state, scale),
+                (96.0 * scale, BASE_DOCK_H * scale)
+            );
+        }
         let (cells, dividers) = dock_cells(Rect::new(0.0, 0.0, 192.0, 30.0), 1.0, true);
         assert_eq!(
             cells

@@ -75,6 +75,7 @@ const DEFAULT_SHORTCUTS = {
 
 const COLLAPSED_SIZE = { width: 22, height: 16 };
 const EXPANDED_SIZE = { width: 192, height: 62 };
+const SIMPLIFIED_EXPANDED_SIZE = { width: 96, height: 62 };
 const SETTINGS_MENU_SIZE = { width: 164, height: 96 };
 const INCIDENT_SIZE = { width: 160, height: 40 };
 const MEETING_SIZE = { width: 320, height: 160 };
@@ -408,7 +409,7 @@ export default function ShortcutReminderPage() {
     } else if (settingsOpen) {
       resizeOverlay(SETTINGS_MENU_SIZE);
     } else if (expanded) {
-      resizeOverlay(EXPANDED_SIZE);
+      resizeOverlay(simplifiedUI ? SIMPLIFIED_EXPANDED_SIZE : EXPANDED_SIZE);
     } else {
       resizeOverlay(COLLAPSED_SIZE);
     }
@@ -420,6 +421,7 @@ export default function ShortcutReminderPage() {
     meetingOverlay.active,
     resizeOverlay,
     settingsOpen,
+    simplifiedUI,
   ]);
 
   const openStarPanel = useCallback(async () => {

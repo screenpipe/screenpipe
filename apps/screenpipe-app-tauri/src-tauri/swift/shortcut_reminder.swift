@@ -580,7 +580,10 @@ private let kBaseCollapsedW: CGFloat = 22
 private let kBaseCollapsedH: CGFloat = 16
 private let kBaseHealthH: CGFloat = 18
 private let kBaseCollapsedCornerRadius: CGFloat = 8
-private let kBaseExpandedW: CGFloat = 192
+func overlayExpandedWidth(simplified: Bool) -> CGFloat {
+    simplified ? 96 : 192
+}
+private var kBaseExpandedW: CGFloat { overlayExpandedWidth(simplified: gSimplifiedUI) }
 private let kBaseExpandedH: CGFloat = 62
 private let kBaseDockH: CGFloat = 30
 private let kBaseDisclosureH: CGFloat = 26
@@ -896,10 +899,11 @@ func overlayHoverRect(
     expanded: Bool,
     disclosureDown: Bool,
     horizontal: OverlayHorizontal,
-    scale: CGFloat
+    scale: CGFloat,
+    simplified: Bool? = nil
 ) -> NSRect {
     let collapsedScale = 1 + (scale - 1) * 0.2
-    let width = expanded ? kBaseExpandedW * scale : kBaseCollapsedW * collapsedScale
+    let width = expanded ? overlayExpandedWidth(simplified: simplified ?? gSimplifiedUI) * scale : kBaseCollapsedW * collapsedScale
     let height = expanded ? kBaseDockH * scale : kBaseCollapsedH * collapsedScale
     let x: CGFloat
     switch horizontal {
@@ -1297,7 +1301,7 @@ struct ShortcutReminderView: View {
                 dockView
             }
         }
-        .frame(width: kBaseExpandedW * scale, height: kBaseExpandedH * scale)
+        .frame(width: overlayExpandedWidth(simplified: metrics.simplifiedUI) * scale, height: kBaseExpandedH * scale)
     }
 
     private var disclosureView: some View {
@@ -1341,7 +1345,7 @@ struct ShortcutReminderView: View {
                 onAction(metrics.simplifiedUI ? "open_starred_sessions" : "open_timeline")
             }
         }
-        .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
+        .frame(width: overlayExpandedWidth(simplified: metrics.simplifiedUI) * scale, height: kBaseDockH * scale)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: s(8)))
         .overlay(RoundedRectangle(cornerRadius: s(8)).stroke(.white.opacity(0.42), lineWidth: 1))
@@ -2051,10 +2055,11 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [self] in
             isVisible = true
             let prevScale = gOverlayScale
+            let prevSimplifiedUI = gSimplifiedUI
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
             }
-            if panel == nil || prevScale != gOverlayScale {
+            if panel == nil || prevScale != gOverlayScale || prevSimplifiedUI != gSimplifiedUI {
                 dismissOverlayNotification()
                 hideDragStage()
                 isDraggingPill = false

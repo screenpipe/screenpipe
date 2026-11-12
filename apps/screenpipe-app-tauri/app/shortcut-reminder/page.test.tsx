@@ -980,6 +980,7 @@ describe("simplified enterprise reminder", () => {
     try {
       render(<ShortcutReminderPage />);
       fireEvent.mouseEnter(await screen.findByTitle("Starred work sessions"));
+      await waitFor(() => expect(mocks.setSize).toHaveBeenCalledWith(expect.objectContaining({ width: 96, height: 62 })));
       expect(screen.queryByTitle("Open search")).toBeNull();
       expect(screen.queryByTitle("Open chat")).toBeNull();
       expect(screen.queryByTitle("Open timeline")).toBeNull();
