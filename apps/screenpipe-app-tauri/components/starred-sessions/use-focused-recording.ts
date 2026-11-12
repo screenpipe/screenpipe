@@ -16,15 +16,23 @@ type Action = "pause" | "resume" | "finish" | "submit" | "delete" | "heartbeat";
 class RecordingRequestError extends Error { constructor(message: string, public status: number) { super(message); } }
 async function request(path: string, init?: RequestInit) {
   const controller = new AbortController();
+  let rejectReadiness!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_, reject) => { rejectReadiness = reject; });
+  const onAbort = () => rejectReadiness(controller.signal.reason);
+  controller.signal.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     // Persisted settings can replace the port even after the native key loads.
-    await refreshApiConfig();
+    // Native IPC cannot observe fetch's signal; keep its wait inside our budget.
+    await Promise.race([refreshApiConfig(), aborted]);
     const response = await localFetch(path, { ...init, signal: controller.signal });
     const value = await response.json();
     if (!response.ok) throw new RecordingRequestError(value.error || "Could not save this recording. Try again.", response.status);
     return value;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener("abort", onAbort);
+  }
 }
 const json = (value: unknown): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) });
 
