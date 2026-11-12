@@ -19,8 +19,40 @@ import { applyResolvedModelLimits } from "@/lib/model-metadata";
 
 const GENERATION_TIMEOUT_MS = 90_000;
 const PROJECT_DIR = "pi-live-views";
+const LIVE_VIEW_TOOL = "screenpipe_live_view";
 const PROPOSE_TOOL = "screenpipe_live_view_propose";
 const READ_ACTIONS = new Set(["get", "list", "pipes", "values"]);
+
+/**
+ * The tool id behind an ACP title.
+ *
+ * Raw Pi sends `screenpipe_live_view`. Cursor and Copilot send
+ * `mcp__screenpipe-tools__screenpipe_live_view`. Both are the same tool.
+ * A human title such as "Read /a/b.ts" is a native agent step, not an MCP tool.
+ */
+export function liveViewToolIdentity(title: string | null | undefined): string | null {
+  const trimmed = title?.trim() ?? "";
+  if (!trimmed) return null;
+  let bare = trimmed;
+  const separator = "__";
+  const serverSplit = trimmed.indexOf(separator);
+  if (serverSplit !== -1) {
+    if (trimmed.slice(0, serverSplit) !== "mcp") return null;
+    const rest = trimmed.slice(serverSplit + separator.length);
+    const toolSplit = rest.indexOf(separator);
+    if (toolSplit === -1) return null;
+    bare = rest.slice(toolSplit + separator.length);
+  }
+  bare = bare.trim();
+  if (!bare || /\s/u.test(bare)) return null;
+  return bare.toLowerCase().replaceAll("_", "-");
+}
+
+function sameLiveViewTool(title: string | undefined, expected: string): boolean {
+  const actual = liveViewToolIdentity(title);
+  const wanted = liveViewToolIdentity(expected);
+  return actual !== null && actual === wanted;
+}
 const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
   "list.v1",
@@ -453,16 +485,17 @@ async function runGeneration(
     const event = envelope.event;
     if (event.type === "agent_start") options.onPhase?.("working");
     if (event.type === "tool_execution_start") {
-      if (event.toolName === PROPOSE_TOOL) {
+      if (sameLiveViewTool(event.toolName, PROPOSE_TOOL)) {
         const args = asRecord(event.args);
         if (args && event.toolCallId)
           pendingProposals.set(event.toolCallId, args);
         options.onPhase?.("reviewing");
         return;
       }
-      if (event.toolName !== "screenpipe_live_view") {
-        fail("Live View editor tried to use an unrelated tool");
-        void commands.piStop(sessionId);
+      if (!sameLiveViewTool(event.toolName, LIVE_VIEW_TOOL)) {
+        // Cursor announces its own steps (Shell, Skill, Read) before the
+        // Live View tools. The ACP runtime already refuses those. Stopping
+        // here used to kill dashboard creation on the first announcement.
         return;
       }
       if (!READ_ACTIONS.has(String(event.args?.action))) {
