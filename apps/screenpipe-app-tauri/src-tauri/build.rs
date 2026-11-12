@@ -839,7 +839,7 @@ fn build_wer_dump_helper() {
     let target = std::env::var("TARGET").unwrap();
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let helper_target_dir =
-        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wer-dump-helper-target");
+        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wer-target");
 
     let status = std::process::Command::new(&cargo)
         .current_dir(manifest_dir.join("wer-dump-helper"))
