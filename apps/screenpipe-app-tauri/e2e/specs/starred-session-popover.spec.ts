@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { authHeaders, getLocalApiConfig, waitForLocalApi } from "../helpers/api-utils.js";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
-import { WORKFLOW_NAME_SELECTOR } from "../helpers/focused-recording-controls.js";
+import { STAR_ENTRY_SELECTOR, WORKFLOW_NAME_SELECTOR } from "../helpers/focused-recording-controls.js";
 import { invokeOrThrow, waitForWindowHandle } from "../helpers/tauri.js";
 import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 
@@ -212,8 +212,12 @@ describe("starred session popover", function () {
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
     if ((await browser.getWindowHandles()).includes("shortcut-reminder")) {
       await browser.switchToWindow("shortcut-reminder");
-      await $('[data-testid="shortcut-reminder-root"]').moveTo();
-      await $('[aria-label="Starred work sessions"]').click();
+      const reminder = await $('[data-testid="shortcut-reminder-root"]');
+      await reminder.waitForDisplayed({ timeout: t(15_000) });
+      await reminder.moveTo();
+      const starEntry = await $(STAR_ENTRY_SELECTOR);
+      await starEntry.waitForDisplayed({ timeout: t(15_000) });
+      await starEntry.click();
     } else {
       await invokeOrThrow("toggle_starred_sessions");
     }

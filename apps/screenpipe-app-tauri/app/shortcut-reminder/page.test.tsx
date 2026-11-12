@@ -13,6 +13,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ShortcutReminderPage from "./page";
 import { formatShortcut } from "./format-shortcut";
+import { STAR_ENTRY_SELECTOR } from "../../e2e/helpers/focused-recording-controls";
 
 const mocks = vi.hoisted(() => ({
   starred: { active: undefined as undefined | { end: string }, now: 0 },
@@ -942,12 +943,20 @@ describe("cross-platform star controls", () => {
 });
 
 it("keeps legacy minutes visible while the star opens recording controls", async () => {
+  mocks.toggleStarredSessions.mockClear();
+  mocks.listen.mockResolvedValue(vi.fn());
+  mocks.storeGet.mockResolvedValue(undefined);
+  mocks.availableMonitors.mockResolvedValue([DISPLAY]);
+  mocks.currentMonitor.mockResolvedValue(DISPLAY);
   mocks.meetingOverlayState.active = false;
   mocks.getRecordingHealthState.mockResolvedValue("normal");
   mocks.starred = { active: { end: new Date(3600000).toISOString() }, now: 59000 };
   const view = render(<ShortcutReminderPage />);
   fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
   const star = await screen.findByRole("button", { name: "Open recording controls" });
+  expect(view.container.querySelector(STAR_ENTRY_SELECTOR)).toBe(star);
+  fireEvent.click(view.container.querySelector(STAR_ENTRY_SELECTOR)!);
+  await waitFor(() => expect(mocks.toggleStarredSessions).toHaveBeenCalledTimes(1));
   expect(star).toHaveTextContent("60m");
   fireEvent.mouseEnter(star);
   expect((await screen.findAllByText("Open recording controls", { exact: false })).length).toBeGreaterThan(0);
@@ -957,5 +966,8 @@ it("keeps legacy minutes visible while the star opens recording controls", async
   mocks.starred.active = undefined;
   view.rerender(<ShortcutReminderPage />);
   expect(screen.getByRole("button", { name: "Starred work sessions" })).not.toHaveTextContent("59m");
+  expect(view.container.querySelector(STAR_ENTRY_SELECTOR)).toBe(screen.getByRole("button", { name: "Starred work sessions" }));
+  fireEvent.click(view.container.querySelector(STAR_ENTRY_SELECTOR)!);
+  await waitFor(() => expect(mocks.toggleStarredSessions).toHaveBeenCalledTimes(2));
   cleanup();
 });
