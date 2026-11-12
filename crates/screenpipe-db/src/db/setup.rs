@@ -994,7 +994,7 @@ impl DatabaseManager {
         // Acquire the write semaphore — this is where serialization happens.
         // Writers queue here in Rust (zero overhead) instead of each holding
         // a pool connection during SQLite's busy_timeout.
-        let permit = match tokio::time::timeout(
+        let mut permit = match tokio::time::timeout(
             Duration::from_secs(10),
             Arc::clone(&self.write_semaphore).acquire_owned(),
         )
@@ -1005,7 +1005,7 @@ impl DatabaseManager {
             Err(_) => return Err(sqlx::Error::PoolTimedOut),
         };
 
-        let admission = match &self.storage {
+        let mut admission = match &self.storage {
             Some(storage) => Some(Arc::clone(&storage.gate).lock_owned().await),
             None => None,
         };
@@ -1036,22 +1036,36 @@ impl DatabaseManager {
                     Ok(Err(e)) => return Err(e),
                     Err(_) => return Err(sqlx::Error::PoolTimedOut),
                 };
-            match sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-                Ok(_) => {
-                    return Ok(ImmediateTx {
-                        conn: Some(conn),
-                        committed: false,
-                        _write_permit: Some(permit),
-                        _admission: admission,
-                        hard_fault_reporter: self.hard_fault_reporter(),
-                    })
-                }
-                Err(e) if crate::sqlite_error::is_sqlite_hard_fault(&e) => {
+            // Raw BEGIN runs on SQLx's SQLite thread even if this future is
+            // cancelled. Own the connection and permit before submitting it so
+            // ImmediateTx::drop retains admission through the queued rollback.
+            let mut tx = ImmediateTx {
+                conn: Some(conn),
+                committed: false,
+                _write_permit: Some(permit),
+                _admission: admission,
+                hard_fault_reporter: self.hard_fault_reporter(),
+            };
+            let error = match sqlx::query("BEGIN IMMEDIATE")
+                .execute(&mut **tx.conn())
+                .await
+            {
+                Ok(_) => return Ok(tx),
+                Err(error) => error,
+            };
+            // BEGIN returned an error: preserve the existing explicit retry and
+            // connection-recovery paths instead of scheduling a second rollback.
+            tx.committed = true;
+            conn = tx.conn.take().unwrap();
+            permit = tx._write_permit.take().unwrap();
+            admission = tx._admission.take();
+            match error {
+                e if crate::sqlite_error::is_sqlite_hard_fault(&e) => {
                     self.report_sqlite_error(&e);
                     let _raw = conn.detach();
                     return Err(e);
                 }
-                Err(e) if Self::is_nested_transaction_error(&e) => {
+                e if Self::is_nested_transaction_error(&e) => {
                     // Connection has a stuck transaction — ROLLBACK it and retry.
                     // Previous approach: detach the connection. Problem: detach
                     // permanently removes the slot from the pool. After ~3 detaches
@@ -1082,7 +1096,7 @@ impl DatabaseManager {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     continue;
                 }
-                Err(e) if attempt < max_retries && Self::is_busy_error(&e) => {
+                e if attempt < max_retries && Self::is_busy_error(&e) => {
                     warn!(
                         "BEGIN IMMEDIATE busy (attempt {}/{}), retrying...",
                         attempt, max_retries
@@ -1091,7 +1105,7 @@ impl DatabaseManager {
                     last_error = Some(e);
                     tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
                 }
-                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                e if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
                     warn!(
                         "BEGIN IMMEDIATE connection error (attempt {}/{}), detaching connection: {}",
                         attempt, max_retries, e
@@ -1104,7 +1118,7 @@ impl DatabaseManager {
                     }
                     return Err(e);
                 }
-                Err(e) => return Err(e),
+                e => return Err(e),
             }
         }
         // All retries exhausted
@@ -1186,6 +1200,79 @@ mod shutdown_tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn cancelled_begin_keeps_writer_admission_until_sqlite_rolls_back() {
+        static ENTERED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+        unsafe extern "C" fn busy(_: *mut std::ffi::c_void, attempt: i32) -> i32 {
+            ENTERED.notify_one();
+            std::thread::sleep(Duration::from_millis(1));
+            i32::from(attempt < 5_000)
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cancelled-begin.sqlite");
+        let database = Arc::new(
+            DatabaseManager::new(
+                path.to_str().unwrap(),
+                DbConfig {
+                    write_pool_max: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap(),
+        );
+        let mut writer = database.write_pool.acquire().await.unwrap();
+        {
+            let mut handle = writer.lock_handle().await.unwrap();
+            // Observe SQLite actually waiting in BEGIN, rather than guessing
+            // whether the cancelled async task submitted its statement yet.
+            unsafe {
+                libsqlite3_sys::sqlite3_busy_handler(
+                    handle.as_raw_handle().as_ptr(),
+                    Some(busy),
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+        writer.return_to_pool().await;
+        let mut blocker = database
+            .write_pool
+            .connect_options()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        let pending = tokio::spawn({
+            let database = database.clone();
+            async move { database.begin_immediate_with_retry().await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), ENTERED.notified())
+            .await
+            .expect("SQLite must enter its busy handler before cancellation");
+        pending.abort();
+        assert!(pending.await.err().unwrap().is_cancelled());
+        let admission_held = database.write_semaphore.available_permits() == 0;
+        sqlx::query("COMMIT").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+        let capture = tokio::time::timeout(
+            Duration::from_secs(10),
+            database.insert_audio_chunk("/after-cancelled-begin.mp4", None),
+        )
+        .await
+        .expect("cancelled BEGIN must not strand the next capture")
+        .expect("the next capture must commit");
+        assert!(database.audio_chunk_exists(capture).await.unwrap());
+        database.close().await;
+        assert!(
+            admission_held,
+            "cancellation must retain writer admission until SQLite finishes and rolls back BEGIN"
+        );
+    }
 
     #[tokio::test]
     async fn startup_rebuilds_missing_speaker_tables_with_current_schema() {
