@@ -116,6 +116,23 @@ pub struct DirectUploadConfig {
     pub pinned_hosts: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ModeResolution {
+    Upload,
+    HostedSupport,
+}
+
+impl ModeResolution {
+    fn check_destination(self) -> Result<(), EnterpriseSyncError> {
+        match self {
+            Self::Upload => check_pinned_upload_destination(),
+            // Support uses the authenticated read posture, never an upload
+            // ticket. A missing archive pin must remain diagnosable.
+            Self::HostedSupport => Ok(()),
+        }
+    }
+}
+
 impl EnterpriseUploadMode {
     /// Resolve the upload mode by asking the control plane what this
     /// license is configured for. Replaces the old env-var bootstrap so
@@ -132,6 +149,21 @@ impl EnterpriseUploadMode {
         license_key: &str,
         ingest_url: &str,
     ) -> Result<Option<Self>, EnterpriseSyncError> {
+        Self::resolve_for(license_key, ingest_url, ModeResolution::Upload).await
+    }
+
+    pub(super) async fn resolve_for_support(
+        license_key: &str,
+        ingest_url: &str,
+    ) -> Result<Option<Self>, EnterpriseSyncError> {
+        Self::resolve_for(license_key, ingest_url, ModeResolution::HostedSupport).await
+    }
+
+    async fn resolve_for(
+        license_key: &str,
+        ingest_url: &str,
+        purpose: ModeResolution,
+    ) -> Result<Option<Self>, EnterpriseSyncError> {
         // Explicit env override — for MDM rollouts and local testing.
         // Only takes effect when set to a non-default value; the empty /
         // default case falls through to server resolution.
@@ -142,7 +174,7 @@ impl EnterpriseUploadMode {
                 && normalized != "hosted_ingest"
                 && normalized != "auto"
             {
-                if let Some(mode) = Self::from_env(ingest_url) {
+                if let Some(mode) = Self::from_env_for(ingest_url, purpose) {
                     tracing::info!(
                         "enterprise sync: upload mode taken from \
                          SCREENPIPE_ENTERPRISE_UPLOAD_MODE env override ({})",
@@ -162,7 +194,7 @@ impl EnterpriseUploadMode {
                     "enterprise sync: server requires write-only customer storage \
                      (plaintext direct upload, no hosted reads)"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectWriteOnly(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -171,7 +203,7 @@ impl EnterpriseUploadMode {
                 tracing::info!(
                     "enterprise sync: server requires readable customer storage for cloud processing"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectReadable(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -183,7 +215,7 @@ impl EnterpriseUploadMode {
                 tracing::info!(
                     "enterprise sync: server requested direct upload → direct_upload_readable"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectReadable(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -205,6 +237,10 @@ impl EnterpriseUploadMode {
     }
 
     pub fn from_env(ingest_url: &str) -> Option<Self> {
+        Self::from_env_for(ingest_url, ModeResolution::Upload)
+    }
+
+    fn from_env_for(ingest_url: &str, purpose: ModeResolution) -> Option<Self> {
         let mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
             .unwrap_or_else(|_| "screenpipe_write".to_string())
             .trim()
@@ -213,7 +249,7 @@ impl EnterpriseUploadMode {
         match mode.as_str() {
             "" | "screenpipe_write" | "hosted_ingest" => Some(Self::HostedIngest),
             "direct_upload_readable" => {
-                if let Err(error) = check_pinned_upload_destination() {
+                if let Err(error) = purpose.check_destination() {
                     warn!(
                         error = %error,
                         "enterprise sync: direct upload configured via MDM mode \
@@ -229,7 +265,7 @@ impl EnterpriseUploadMode {
             // spellings of the strict mode from the encrypted-upload era;
             // both now select plaintext write-only.
             "direct_upload_write_only" | "direct_upload" | "direct_upload_encrypted" => {
-                if let Err(error) = check_pinned_upload_destination() {
+                if let Err(error) = purpose.check_destination() {
                     warn!(
                         error = %error,
                         "enterprise sync: direct upload configured via MDM mode \
