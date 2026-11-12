@@ -330,6 +330,14 @@ jobs:
           Write-Host "PATH appended: $ortLib"
           Write-Host "PATH appended: $openblasBin"
 
+      - name: Prepare ONNX Runtime DLL copy directories
+        shell: pwsh
+        run: |
+          # ort-sys rc.12 copies DLLs to OUT_DIR.ancestors(3) and its examples/deps
+          # children without creating them. Cover Cargo's flat and split layouts.
+          $release = "target/x86_64-pc-windows-msvc/release-dev"
+          New-Item -ItemType Directory -Force -Path "$release/examples", "$release/deps", "$release/build/examples", "$release/build/deps" | Out-Null
+
       - name: Validate complete local API router on Windows
         env:
           RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
