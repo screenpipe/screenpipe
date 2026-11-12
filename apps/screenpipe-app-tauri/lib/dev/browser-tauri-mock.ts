@@ -19,6 +19,7 @@ import type { BrowserDevScenario } from "./browser-engine-mock";
 import { buildProviderErrorPresentation } from "../chat/provider-errors";
 
 export type BrowserDevMode = "mock" | "live";
+const MOCK_ENTERPRISE_LICENSE_KEY = "screenpipe:browser-mock-enterprise-license-key";
 
 type StoreChange = {
   resourceId: number;
@@ -492,7 +493,11 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
   const storePaths = new Map<string, number>();
   const warned = new Set<string>();
   let grokBotConnected = true;
-  let enterpriseLicenseKey: string | null = null;
+  // Match native device-key persistence when a synthetic preview reloads.
+  // Live previews keep their independent in-memory credential behavior.
+  const licenseStorage = options.mode === "mock" && typeof window !== "undefined"
+    ? window.localStorage : null;
+  let enterpriseLicenseKey: string | null = licenseStorage?.getItem(MOCK_ENTERPRISE_LICENSE_KEY) || null;
   let nextResourceId = 1;
   let piExtensionPackages: PiExtensionPackage[] = [];
   let importedSkills = BROWSER_DEV_IMPORTED_SKILLS.map((skill) => ({ ...skill }));
@@ -904,7 +909,9 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
         };
       }
       case "save_enterprise_license_key":
-        enterpriseLicenseKey = String(input.licenseKey ?? "");
+        enterpriseLicenseKey = String(input.licenseKey ?? "") || null;
+        if (enterpriseLicenseKey) licenseStorage?.setItem(MOCK_ENTERPRISE_LICENSE_KEY, enterpriseLicenseKey);
+        else licenseStorage?.removeItem(MOCK_ENTERPRISE_LICENSE_KEY);
         return null;
       case "get_enterprise_license_key":
         return enterpriseLicenseKey;

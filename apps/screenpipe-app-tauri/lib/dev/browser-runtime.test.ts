@@ -28,12 +28,34 @@ describe("browser development runtime", () => {
     expect(live("get_env", { name: "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" })).toBe("");
     expect(mock("get_env", { name: "UNRELATED" })).toBe("");
   });
-  it("retains the enterprise fixture key across policy refreshes without sharing it between runtimes", () => {
-    const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
-    expect(invoke("get_enterprise_license_key", {})).toBeNull();
-    invoke("save_enterprise_license_key", { licenseKey: "ENT-TEST-TEST-TEST-TEST" });
-    expect(invoke("get_enterprise_license_key", {})).toBe("ENT-TEST-TEST-TEST-TEST");
-    expect(createBrowserIpcMock({ mode: "mock", apiPort: 3030 })("get_enterprise_license_key", {})).toBeNull();
+  it("retains a mock device key across document reloads, and clears it explicitly without sharing browser contexts", () => {
+    const storage = () => {
+      const values = new Map<string, string>();
+      return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+    };
+    const previous = Object.getOwnPropertyDescriptor(window, "localStorage");
+    try {
+      Object.defineProperty(window, "localStorage", { configurable: true, value: storage() });
+      const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+      expect(invoke("get_enterprise_license_key", {})).toBeNull();
+      invoke("save_enterprise_license_key", { licenseKey: "ENT-TEST-TEST-TEST-TEST" });
+      const reloaded = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+      expect(reloaded("get_enterprise_license_key", {})).toBe("ENT-TEST-TEST-TEST-TEST");
+      const live = createBrowserIpcMock({ mode: "live", apiPort: 3030 });
+      expect(live("get_enterprise_license_key", {})).toBeNull();
+      live("save_enterprise_license_key", { licenseKey: "ENT-TEST-LIVE-FIXTURE" });
+      expect(live("get_enterprise_license_key", {})).toBe("ENT-TEST-LIVE-FIXTURE");
+      expect(createBrowserIpcMock({ mode: "live", apiPort: 3030 })("get_enterprise_license_key", {})).toBeNull();
+      expect(createBrowserIpcMock({ mode: "mock", apiPort: 3030 })("get_enterprise_license_key", {})).toBe("ENT-TEST-TEST-TEST-TEST");
+      reloaded("save_enterprise_license_key", { licenseKey: "" });
+      expect(createBrowserIpcMock({ mode: "mock", apiPort: 3030 })("get_enterprise_license_key", {})).toBeNull();
+      reloaded("save_enterprise_license_key", { licenseKey: "ENT-TEST-TEST-TEST-TEST" });
+      Object.defineProperty(window, "localStorage", { configurable: true, value: storage() });
+      expect(createBrowserIpcMock({ mode: "mock", apiPort: 3030 })("get_enterprise_license_key", {})).toBeNull();
+    } finally {
+      if (previous) Object.defineProperty(window, "localStorage", previous);
+      else Reflect.deleteProperty(window, "localStorage");
+    }
   });
   it("provides a stateful Tauri store", async () => {
     const onStoreChange = vi.fn();

@@ -47,6 +47,9 @@ try {
   await page.getByRole('group', {name: 'Switch workspace', exact: true}).getByRole('button', {name: 'Memory', exact: true}).click();
   await page.getByRole('group', { name: 'Switch workspace', exact: true }).waitFor();
   assert.equal(await page.getByRole('heading', { name: 'Collect sources', exact: true }).isVisible(), false);
+  // The denied-cloud scenario starts from an unauthenticated device. A reload
+  // now correctly retains the earlier mock activation, just as native does.
+  await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('save_enterprise_license_key', { licenseKey: '' }));
   await authenticate('/home?mode=workflows&cloudWorkflowState=error');
   await page.getByRole('button', { name: 'Keep local processing', exact: true }).click();
   await page.getByRole('heading', { name: 'Cloud workflows unavailable', exact: true }).waitFor();
