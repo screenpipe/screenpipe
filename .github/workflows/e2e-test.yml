@@ -244,7 +244,7 @@ jobs:
     # on the very first ort::api() call. Tauri's bundle step does this for
     # release builds (see tauri.windows.conf.json resourcesMap), but
     # `--no-bundle` skips it.
-    - name: Stage ONNX Runtime DLLs next to test binary
+    - name: Stage ONNX and OpenBLAS runtime DLLs next to test binary
       shell: pwsh
       run: |
         $src = "${{ github.workspace }}/ort-system-lib/lib"
@@ -277,6 +277,18 @@ jobs:
           if ($_.Length -eq 0) {
             throw "Staged DLL is 0 bytes: $($_.Name) — source likely corrupt"
           }
+          Write-Host "$($_.Name)  $($_.Length) bytes"
+        }
+        # qwen3-asr directly imports libopenblas.dll before main. Match the
+        # Windows bundle's openblas/bin/*.dll resources in this no-bundle lane,
+        # including the package's companion runtime DLLs.
+        $openblasBin = Join-Path $env:OPENBLAS_PATH "bin"
+        if (-not (Test-Path (Join-Path $openblasBin "libopenblas.dll"))) {
+          throw "Required OpenBLAS runtime DLL not found in $openblasBin"
+        }
+        Get-ChildItem -Path $openblasBin -Filter "*.dll" -ErrorAction Stop | ForEach-Object {
+          if ($_.Length -eq 0) { throw "OpenBLAS runtime DLL is 0 bytes: $($_.Name)" }
+          [System.IO.File]::Copy($_.FullName, (Join-Path $dst $_.Name), $true)
           Write-Host "$($_.Name)  $($_.Length) bytes"
         }
 
