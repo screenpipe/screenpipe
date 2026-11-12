@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useFocusedRecording } from "./use-focused-recording";
 import { unfinishedFocusedSession } from "../../e2e/helpers/focused-recording-controls";
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), start: vi.fn(), stop: vi.fn(), flush: vi.fn() }));
-vi.mock("@/lib/api", () => ({ ensureApiReady: async () => {}, localFetch: mocks.fetch }));
+vi.mock("@/lib/api", () => ({ refreshApiConfig: async () => {}, localFetch: mocks.fetch }));
 vi.mock("@/lib/hooks/use-tauri-event", () => ({ useTauriEvent: () => {} }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => {}) }));
 vi.mock("./focused-narration", () => ({ FocusedNarration: class { start = mocks.start; stop = mocks.stop; flush = mocks.flush; } }));

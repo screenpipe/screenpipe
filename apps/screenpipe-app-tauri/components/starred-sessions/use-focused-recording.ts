@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
-import { ensureApiReady, localFetch } from "@/lib/api";
+import { refreshApiConfig, localFetch } from "@/lib/api";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { FocusedNarration } from "./focused-narration";
 
@@ -18,8 +18,8 @@ async function request(path: string, init?: RequestInit) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    // A cold panel can mount before native port/auth configuration arrives.
-    await ensureApiReady();
+    // Persisted settings can replace the port even after the native key loads.
+    await refreshApiConfig();
     const response = await localFetch(path, { ...init, signal: controller.signal });
     const value = await response.json();
     if (!response.ok) throw new RecordingRequestError(value.error || "Could not save this recording. Try again.", response.status);

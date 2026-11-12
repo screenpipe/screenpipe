@@ -31,7 +31,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     outerSize: async () => ({ width: 616, height: 600 }),
   }),
 }));
-vi.mock("@/lib/api", () => ({ ensureApiReady: async () => {}, localFetch: mocks.fetch }));
+vi.mock("@/lib/api", () => ({ refreshApiConfig: async () => {}, localFetch: mocks.fetch }));
 vi.mock("@/lib/hooks/use-tauri-event", () => ({
   useTauriEvent: (name: string, callback: typeof mocks.visibility) => {
     if (name === "starred-sessions-visibility") mocks.visibility = callback;
