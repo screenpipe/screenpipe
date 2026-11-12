@@ -254,6 +254,7 @@ async function answerAgentAction(
 ): Promise<void> {
   await waitForAgentAction(kind);
   const selector = agentActionSelector(kind);
+  const actionLabel = label.trim().toLowerCase();
   await browser.waitUntil(async () => browser.execute(
     (input: { selector: string; label: string }) => {
       const card = document.querySelector(input.selector);
@@ -262,13 +263,13 @@ async function answerAgentAction(
           // Sign-in method buttons nest a title and a description span, so
           // their textContent is "<title><description>". Match the label as a
           // prefix so those and single-line buttons ("not now") both resolve.
-          const text = candidate.textContent?.trim() ?? "";
+          const text = candidate.textContent?.trim().toLowerCase() ?? "";
           return text === input.label || text.startsWith(input.label);
         },
       ) as HTMLButtonElement | undefined;
       return Boolean(button && !button.disabled);
     },
-    { selector, label },
+    { selector, label: actionLabel },
   ), {
     timeout: t(10_000),
     interval: 100,
@@ -282,14 +283,14 @@ async function answerAgentAction(
           // Sign-in method buttons nest a title and a description span, so
           // their textContent is "<title><description>". Match the label as a
           // prefix so those and single-line buttons ("not now") both resolve.
-          const text = candidate.textContent?.trim() ?? "";
+          const text = candidate.textContent?.trim().toLowerCase() ?? "";
           return text === input.label || text.startsWith(input.label);
         },
       ) as HTMLButtonElement | undefined;
       button?.click();
       return Boolean(button);
     },
-    { selector, label },
+    { selector, label: actionLabel },
   );
   expect(clicked).toBe(true);
   try {
@@ -1090,7 +1091,7 @@ describe("ACP backend", function () {
     const failureRows = await failureWidget.$$('[data-testid="tool-activity-item"]');
     expect(failureRows).toHaveLength(2);
     expect(await failureRows[0].getText()).toContain("3 queries");
-    expect(await failureRows[1].getText()).toContain("failed");
+    expect(await failureRows[1].getText()).toContain("Failed");
     const failureScreenshot = await saveScreenshot("acp-repeated-tools-failure");
     expect(existsSync(failureScreenshot)).toBe(true);
 
