@@ -1276,6 +1276,45 @@ mod tests {
         clear_monitor_lookup_cache();
     }
 
+    /// Native, read-only: enumerate this Mac's real displays through both
+    /// backends and check the fallback identity resolves to the SCK one.
+    /// Needs Screen Recording for ScreenCaptureKit; captures nothing.
+    /// `cargo test -p screenpipe-screen --lib native_backends_share_focus_identity -- --ignored --nocapture`
+    #[test]
+    #[ignore = "native: needs real displays and Screen Recording permission"]
+    fn native_backends_share_focus_identity() {
+        let _guard = lock_lookup_cache_tests();
+        clear_monitor_lookup_cache();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        // Production path: the monitor watcher's enumeration fills the
+        // topology that focus resolution reads.
+        let sck = runtime
+            .block_on(list_monitors_detailed())
+            .expect("ScreenCaptureKit enumeration (Screen Recording permission?)");
+        let cg = enumerate_xcap_monitors().expect("CoreGraphics enumeration");
+        assert!(!sck.is_empty(), "no displays");
+
+        for fallback in &cg {
+            let Some(primary) = sck.iter().find(|m| m.id() == fallback.id()) else {
+                continue;
+            };
+            println!(
+                "display {}: sck={} cg={} focus(cg)={}",
+                fallback.id(),
+                primary.stable_id(),
+                fallback.stable_id(),
+                focus_stable_id(fallback)
+            );
+            assert_eq!(focus_stable_id(fallback), primary.stable_id());
+            assert_eq!(focus_stable_id(primary), primary.stable_id());
+        }
+        clear_monitor_lookup_cache();
+    }
+
     fn read_focus_monitor_cache() -> Vec<SafeMonitor> {
         tokio::runtime::Builder::new_current_thread()
             .build()
