@@ -5,7 +5,7 @@
 /**
  * Real-app regression for the hosted-AI usage-limit recovery path.
  *
- * A local OpenAI-compatible provider returns the exact structured 429 contracts
+ * The loopback hosted gateway returns the exact structured 429 contracts
  * used by the gateway across the self-serve plan ladder. Each request travels
  * through Pi and the real foreground event bus, proving desktop renders a
  * concise failure message and a neutral primary recovery action without
@@ -24,6 +24,7 @@ const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 const CHAT_FILE = join(CHATS_DIR, `${CHAT_ID}.json`);
 const PROMPT = "E2E trigger structured hosted AI usage rejection";
 const piConversation = new PiConversationHarness(CHAT_ID);
+let gatewayControl: URL;
 const UPGRADE_CASES = [
   {
     currentPlan: "free",
@@ -159,6 +160,12 @@ describe("Hosted AI usage-limit upgrade recovery", function () {
 
   before(async function () {
     if (process.platform !== "darwin") this.skip();
+    const gatewayUrl = process.env.SCREENPIPE_E2E_AI_GATEWAY_URL;
+    const gatewayToken = process.env.SCREENPIPE_E2E_LOCAL_AI_GATEWAY_TOKEN;
+    if (!gatewayUrl || !gatewayToken) {
+      throw new Error("usage-limit test requires the local hosted-AI gateway");
+    }
+    gatewayControl = new URL("/__e2e/usage-limit", gatewayUrl);
     rmSync(CHAT_FILE, { force: true });
     const updatedAt = writeActiveConversation();
     await waitForAppReady();
@@ -174,18 +181,22 @@ describe("Hosted AI usage-limit upgrade recovery", function () {
       console.error("cost-limit E2E home startup diagnostic", diagnostic);
       throw error;
     }
-    await piConversation.initialize();
-    await piConversation.configureAppPreset();
-    // Start this exact conversation through the local provider explicitly.
-    // Relying on the foreground hook's auto-start races the initial default
-    // preset snapshot on a cold app boot.
-    await piConversation.restartPi();
+    await piConversation.initializeHostedGateway();
+    await piConversation.configureAppPreset("screenpipe-cloud");
     await loadConversation(updatedAt);
+    await piConversation.restartHostedGateway(gatewayToken);
   });
 
   after(async () => {
-    await piConversation.dispose();
-    rmSync(CHAT_FILE, { force: true });
+    try {
+      if (gatewayControl) {
+        const cleared = await fetch(gatewayControl, { method: "DELETE" });
+        if (!cleared.ok) throw new Error("usage-limit gateway fixture did not clear");
+      }
+    } finally {
+      await piConversation.dispose();
+      rmSync(CHAT_FILE, { force: true });
+    }
   });
 
   it("shows a neutral primary action for every server-backed upgrade plan", async () => {
@@ -198,25 +209,42 @@ describe("Hosted AI usage-limit upgrade recovery", function () {
       target.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS = true;
     });
 
-    for (const [index, upgradeCase] of UPGRADE_CASES.entries()) {
-      piConversation.setGatewayErrorResponse({
-        error: JSON.stringify({
-          error: "daily_limit_exceeded",
-          message:
-            "You've used your daily AI allowance. Background scheduled tasks share this allowance.",
-          resets_at: "2026-08-02T00:00:00.000Z",
-          plan: upgradeCase.currentPlan,
-          required_plan: upgradeCase.requiredPlan,
-          upgrade_url: upgradeCase.upgradeUrl,
-          can_buy_credits: false,
-          byok_supported: true,
+    for (const upgradeCase of UPGRADE_CASES) {
+      const prompt = `${PROMPT}: ${upgradeCase.currentPlan}`;
+      const configured = await fetch(gatewayControl, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          response: {
+            error: JSON.stringify({
+              error: "daily_limit_exceeded",
+              message:
+                "You've used your daily AI allowance. Background scheduled tasks share this allowance.",
+              resets_at: "2026-08-02T00:00:00.000Z",
+              plan: upgradeCase.currentPlan,
+              required_plan: upgradeCase.requiredPlan,
+              upgrade_url: upgradeCase.upgradeUrl,
+              can_buy_credits: false,
+              byok_supported: true,
+            }),
+          },
         }),
       });
+      expect(configured.status).toBe(204);
 
-      await submitComposer(`${PROMPT}: ${upgradeCase.currentPlan}`);
-      await piConversation.waitForRequestCount(
-        index + 1,
-        `${upgradeCase.currentPlan} usage-limit request`,
+      await submitComposer(prompt);
+      await browser.waitUntil(
+        async () => {
+          const state = await (await fetch(gatewayControl)).json() as {
+            matchedRequests: number;
+          };
+          return state.matchedRequests > 0;
+        },
+        {
+          timeout: t(20_000),
+          interval: 100,
+          timeoutMsg: `${upgradeCase.currentPlan} hosted usage-limit request did not reach gateway`,
+        },
       );
 
       const banner = await $('[data-testid="cost-limit-upgrade-banner"]');

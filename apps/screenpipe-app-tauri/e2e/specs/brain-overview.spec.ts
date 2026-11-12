@@ -2391,9 +2391,9 @@ Refresh the assigned Live View output targets from source-backed activity.
     )) as string;
     expect(editorText).toContain("Arrange your Live View");
     expect(editorText).toContain("Drag Blocks to move them");
-    expect(editorText).toContain("ADD BLOCK");
-    expect(editorText).toContain("DONE");
-    expect(editorText).toContain("TIME WINDOW");
+    await $("[data-testid='overview-add-card']").waitForDisplayed({ timeout: t(10_000) });
+    await $("[data-testid='overview-save']").waitForDisplayed({ timeout: t(10_000) });
+    expect(editorText).toContain("Time window");
     const editorScreenshot = await saveScreenshot(
       "brain-overview-selectable-layout-editor",
     );

@@ -323,7 +323,7 @@ describe("Selected response side chat", function () {
       }),
     );
     expect(await $('[data-testid="chat-title"]').getText()).toBe(
-      "temporary side chat",
+      "Temporary side chat",
     );
 
     await browser.execute(

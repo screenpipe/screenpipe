@@ -16,6 +16,7 @@ import {
 } from "../helpers/app-launcher.js";
 import { openHomeWindow, reloadAndWaitForHome, t, waitForAppReady } from "../helpers/test-utils.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
+import { invokeOrThrow } from "../helpers/tauri.js";
 
 const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 const CODEX_ID = "e2e-agent-sidebar-codex";
@@ -248,7 +249,9 @@ function writeImportedConversation(
   harness: "terminal" | "cursor" | "github-copilot" | "screenpipe" = "terminal",
   assistantContent = "Fixture reply",
 ): void {
-  const now = Date.now() + offsetMs;
+  // Keep the owned visual scenario ahead of prior specs within the eight-row
+  // Recents cap. Preserve unrelated history instead of clearing the chat store.
+  const now = Date.now() + 2 * 60 * 60_000 + offsetMs;
   fixtureIds.add(id);
   mkdirSync(CHATS_DIR, { recursive: true });
   writeFileSync(
@@ -273,7 +276,12 @@ function writeImportedConversation(
   );
 }
 
-function cleanup(): void {
+async function cleanup(): Promise<void> {
+  // Opening imported history warms a native Pi session. The app survives WDIO
+  // retries, so deleting JSON alone leaves the next attempt attached to it.
+  for (const sessionId of fixtureIds) {
+    await invokeOrThrow("pi_stop", { sessionId });
+  }
   for (const path of liveTranscriptPaths) {
     rmSync(path, { force: true });
   }
@@ -331,7 +339,7 @@ describe("unified recents sidebar", function () {
   this.timeout(120_000);
 
   before(async () => {
-    cleanup();
+    await cleanup();
     writeImportedConversation(CODEX_ID, "Investigate recurring support chats", "codex", 2_000);
     writeImportedConversation(CLAUDE_ID, "Synthesize customer feedback", "claude-code", 1_000);
     await waitForAppReady();
@@ -340,7 +348,7 @@ describe("unified recents sidebar", function () {
   });
 
   after(async () => {
-    cleanup();
+    await cleanup();
   });
 
   it("streams Codex and Claude without false unread dots or reloading", async () => {
@@ -452,7 +460,7 @@ describe("unified recents sidebar", function () {
 
     // Restore the sparse fixture before the visual/provenance scenario. The
     // reload happens only after both live-update assertions have passed.
-    cleanup();
+    await cleanup();
     writeImportedConversation(CODEX_ID, "Investigate recurring support chats", "codex", 2_000);
     writeImportedConversation(CLAUDE_ID, "Synthesize customer feedback", "claude-code", 1_000);
     await reloadFixture();
@@ -474,7 +482,7 @@ describe("unified recents sidebar", function () {
 
     await saveScreenshot("chat-agent-activity-sidebar-light");
 
-    cleanup();
+    await cleanup();
     const mixedTitles = [
       "Ship Windows capture recovery",
       "Summarize enterprise interviews",
@@ -509,7 +517,7 @@ describe("unified recents sidebar", function () {
     expect(mixedRows.length).toBe(10);
     await saveScreenshot("chat-agent-activity-sidebar-crowded-mixed");
 
-    cleanup();
+    await cleanup();
     writeImportedConversation(
       `${FIXTURE_PREFIX}codex-heavy-pinned`,
       "Customer voice synthesis",
@@ -555,7 +563,7 @@ describe("unified recents sidebar", function () {
   });
 
   it("shows Claude structured output compactly and reveals readable JSON", async () => {
-    cleanup();
+    await cleanup();
     writeImportedConversation(
       STRUCTURED_CLAUDE_ID,
       "Build activity timeline for Screenpipe API",

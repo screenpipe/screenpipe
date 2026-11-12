@@ -111,6 +111,12 @@ async function emitTauri(event: string, payload: unknown): Promise<void> {
 }
 
 async function loadConversation(id: string): Promise<void> {
+  // Like selecting the current sidebar row, request its transcript even when
+  // reload has restored the foreground id before the messages are hydrated.
+  await emitTauri("chat-load-conversation", {
+    conversationId: id,
+    targetWindow: "home",
+  });
   await browser.waitUntil(
     async () => {
       const isReady =

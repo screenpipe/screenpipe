@@ -1144,6 +1144,28 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
             })
             .sum()
     }
+    let file_allocations = |root: &std::path::Path| {
+        let root = std::fs::canonicalize(root).unwrap();
+        screenpipe_db::storage::inventory(&root)
+            .unwrap()
+            .into_iter()
+            .map(|path| {
+                let metadata = std::fs::metadata(&path).unwrap();
+                #[cfg(unix)]
+                let allocated = {
+                    use std::os::unix::fs::MetadataExt;
+                    Some(metadata.blocks() * 512)
+                };
+                #[cfg(not(unix))]
+                let allocated = None::<u64>;
+                (
+                    path.strip_prefix(&root).unwrap().to_path_buf(),
+                    metadata.len(),
+                    allocated,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db.sqlite");
     let source = DatabaseManager::new(path.to_str().unwrap(), Default::default())
@@ -1151,7 +1173,9 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
         .unwrap();
     let payload = format!("{{\"value\":\"{}\"}}", "x".repeat(1024 * 1024));
     let mut tx = source.begin_immediate_with_retry().await.unwrap();
-    for id in 1..=64 {
+    // Keep the percentage checks meaningful with filesystem allocation reservations.
+    // The separate extra-space limit stays fixed as the source workload grows.
+    for id in 1..=128 {
         sqlx::query("INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(?,'2026-09-11T12:00:00Z','streamed history',?)")
             .bind(id).bind(&payload).execute(&mut **tx.conn()).await.unwrap();
     }
@@ -1164,8 +1188,19 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
     sqlx::query("INSERT INTO elements(id,frame_id,source,role,properties,parent_id) VALUES(1,1,'accessibility','AXText',?,2)")
         .bind(&payload).execute(&mut **tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
-    let (busy, logged, checkpointed) = source.wal_checkpoint().await.unwrap();
-    assert_eq!((busy, logged), (0, checkpointed));
+    // Exclude a checkpointed WAL that migration preflight can remove later.
+    // Its allocated bytes must not inflate the source-data savings baseline.
+    {
+        let writer = source.coordinated_writer();
+        let permit = writer.lock().await.unwrap();
+        let mut conn = permit.pool().acquire().await.unwrap();
+        let checkpoint: (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(checkpoint, (0, 0, 0));
+        conn.close().await.unwrap();
+    }
     source.close().await;
     let original = std::fs::metadata(&path).unwrap();
     let mut options = MigrationOptions::default();
@@ -1176,6 +1211,7 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
     let headroom = 48 * 1024 * 1024;
     assert!(original.len() > headroom);
     let original_allocated = bytes(root.path());
+    let original_files = file_allocations(root.path());
     let done = Arc::new(AtomicBool::new(false));
     let peak = Arc::new(AtomicU64::new(0));
     let monitor = {
@@ -1211,7 +1247,7 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
     );
     assert_eq!(counts.first().unwrap().0, 0);
     assert!(
-        counts.last().unwrap().1 >= 66,
+        counts.last().unwrap().1 >= 130,
         "frames and elements contribute to the total"
     );
     assert!(counts
@@ -1224,21 +1260,38 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
         "conversion percentage must not pretend to measure verification or activation"
     );
     let peak = peak.load(Ordering::Relaxed);
+    let max_bytes_saved = updates
+        .iter()
+        .map(|update| update.bytes_saved.unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let allocation_diagnostics = format!(
+        "original_allocated={original_allocated} migration_allocated_before={:?} migration_allocated_after={:?} max_bytes_saved={max_bytes_saved} files_before(path,logical,allocated)={original_files:?} files_after(path,logical,allocated)={:?}",
+        report.allocated_before_bytes,
+        report.allocated_after_bytes,
+        file_allocations(root.path()),
+    );
     eprintln!("streaming migration: source={} peak_candidate={} final_index={} parquet={} headroom={headroom}", original.len(), peak, report.index_bytes, report.payload_bytes);
     assert!(
         peak < original_allocated + headroom,
-        "peak {peak} exceeds batch headroom {headroom}"
+        "peak {peak} exceeds batch headroom {headroom}; {allocation_diagnostics}"
     );
-    assert!(updates
-        .iter()
-        .any(|u| u.bytes_saved.unwrap_or(0) > original_allocated / 2));
-    assert!(report.allocated_after_bytes.unwrap() < original.len() / 4);
+    assert!(
+        updates
+            .iter()
+            .any(|u| u.bytes_saved.unwrap_or(0) > original_allocated / 2),
+        "progress must report savings greater than half the original allocation; {allocation_diagnostics}"
+    );
+    assert!(
+        report.allocated_after_bytes.unwrap() < original.len() / 4,
+        "final allocation must be less than a quarter of the original file length; {allocation_diagnostics}"
+    );
     assert!(!path.exists());
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
         .await
         .unwrap();
     assert_eq!(
-        db.frame_payloads(&[1, 64], Projection::All).await.unwrap()[&64]
+        db.frame_payloads(&[1, 128], Projection::All).await.unwrap()[&128]
             .accessibility_tree_json
             .as_deref(),
         Some(payload.as_str())
@@ -1264,7 +1317,7 @@ async fn migration_streams_large_payloads_with_bounded_temporary_space() {
             .unwrap()
             > 0
     );
-    seed(&db, 65, Some("after migration"), None).await;
+    seed(&db, 129, Some("after migration"), None).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT n FROM migration_audit")
             .fetch_one(&db.pool)

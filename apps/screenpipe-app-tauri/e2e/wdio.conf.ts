@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startApp, stopApp, WEBDRIVER_PORT } from './helpers/app-launcher.js';
-import { GatewayRequestProxy } from './helpers/gateway-request-proxy.js';
+import { GatewayRequestProxy, needsLocalGateway } from './helpers/gateway-request-proxy.js';
 import { getReporters, getMochaTimeout } from './helpers/reporter-utils.js';
 import { TestRecorder } from './helpers/test-recorder.js';
 import { installWindowsAsyncScriptTransport, type WindowsAsyncScriptDriver } from './helpers/windows-async-script.js';
@@ -73,10 +73,10 @@ const GATEWAY_INBOUND_REQUESTS_FILE = resolve(
   '.e2e-gateway-inbound-requests.json',
 );
 
-async function startLocalGatewayIfRequested(): Promise<void> {
-  if (process.env.SCREENPIPE_E2E_LOCAL_AI_GATEWAY !== 'true') return;
+async function startLocalGatewayIfRequested(config: { specs?: Array<string | string[]>; spec?: string[] }): Promise<void> {
+  if (!needsLocalGateway(config, process.platform, process.env.SCREENPIPE_E2E_LOCAL_AI_GATEWAY === 'true')) return;
   // Keep the optional cross-workspace test helper outside the default E2E
-  // TypeScript graph. It is loaded only for the dedicated local-gateway lane.
+  // TypeScript graph. Load it for the local-gateway lane or hosted quota fixture.
   const gatewayHarnessUrl = pathToFileURL(
     resolve(
       __dirname,
@@ -223,9 +223,9 @@ export const config: TestrunnerConfig = {
   framework: 'mocha',
   reporters: getReporters() as Options.Testrunner['reporters'],
   mochaOpts: { ui: 'bdd', timeout: getMochaTimeout() },
-  onPrepare: async () => {
+  onPrepare: async (config) => {
     console.log('Starting Screenpipe app (WebDriver on port %s)...', WEBDRIVER_PORT);
-    await startLocalGatewayIfRequested();
+    await startLocalGatewayIfRequested(config);
     try {
       await startApp(WEBDRIVER_PORT);
     } catch (error) {

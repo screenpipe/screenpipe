@@ -88,18 +88,21 @@ export class PiConversationHarness {
   }
 
   /**
-   * Point the mounted app at this harness's local provider. Updating the
+   * Select the harness's local provider or the existing local hosted gateway.
+   * Updating the
    * already-loaded Tauri store emits the same cross-window settings event as
    * the real settings UI, so the chat owns Pi startup and keeps its running
    * snapshot in sync.
    */
-  async configureAppPreset(): Promise<void> {
+  async configureAppPreset(
+    provider: "custom" | "screenpipe-cloud" = "custom",
+  ): Promise<void> {
     const preset = {
       id: "screenpipe-e2e",
-      provider: "custom",
-      url: this.baseUrl,
-      model: "screenpipe-e2e",
-      apiKey: "screenpipe-e2e-key",
+      provider,
+      url: provider === "custom" ? this.baseUrl : "",
+      model: provider === "custom" ? "screenpipe-e2e" : "gpt-5.4-mini",
+      apiKey: provider === "custom" ? "screenpipe-e2e-key" : "",
       maxTokens: 64,
       prompt: "Reply briefly for a local E2E test.",
       defaultPreset: true,

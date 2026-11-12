@@ -217,6 +217,9 @@ describe("chat jump to latest", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // Earlier visual specs resize Home. Keep this overflowing-chat scenario
+    // independent of their viewport while retaining the measured overflow check.
+    await browser.setWindowSize(1000, 700);
     await settleFirstRunLearningWindow();
     await waitForChatSeedHooks();
   });
