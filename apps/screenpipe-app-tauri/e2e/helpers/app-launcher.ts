@@ -144,13 +144,16 @@ const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
   (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
 );
 export const E2E_AI_TOOLS_HOME = resolve(E2E_DATA_DIR, 'ai-tools-home');
-export const E2E_BUN_PATH = resolve(
-  APP_ROOT,
-  'src-tauri',
-  'target',
-  'debug-dev',
-  process.platform === 'win32' ? 'bun.exe' : 'bun',
-);
+// Linux --no-bundle builds retain pre_build.js's baseline sidecar in src-tauri.
+export const E2E_BUN_PATH = process.platform === 'linux'
+  ? resolve(APP_ROOT, 'src-tauri', 'bun-x86_64-unknown-linux-gnu')
+  : resolve(
+    APP_ROOT,
+    'src-tauri',
+    'target',
+    'debug-dev',
+    process.platform === 'win32' ? 'bun.exe' : 'bun',
+  );
 
 export function getAppPath(): string {
   // Disposable macOS guests run the same E2E binary inside a TCC-granted app.
