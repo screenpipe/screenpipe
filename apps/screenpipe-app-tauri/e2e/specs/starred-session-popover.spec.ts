@@ -216,6 +216,11 @@ describe("starred session popover", function () {
       const reminder = await $('[data-testid="shortcut-reminder-root"]');
       await reminder.waitForDisplayed({ timeout: t(15_000) });
       await reminder.moveTo();
+      // Match the established tiny-window hover fallback in the native journey.
+      await browser.execute(() => {
+        document.querySelector<HTMLElement>('[data-testid="shortcut-reminder-root"]')
+          ?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      });
       const starEntry = await $(STAR_ENTRY_SELECTOR);
       await starEntry.waitForDisplayed({ timeout: t(15_000) });
       await starEntry.click();

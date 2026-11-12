@@ -637,6 +637,19 @@ jobs:
     - name: Setup audio
       run: .github/scripts/setup_audio.sh
 
+    - name: Verify named Capture saves through starred sessions
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        export XDG_RUNTIME_DIR=/run/user/$(id -u)
+        export XDG_CONFIG_HOME="$HOME/.config"
+        export XDG_DATA_HOME="$HOME/.local/share"
+        export XDG_CACHE_HOME="$HOME/.cache"
+        export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+        export DISPLAY=:99
+        export RECORD_VIDEO=1
+        bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
+
     - name: Run E2E Tests
       shell: bash
       working-directory: ./apps/screenpipe-app-tauri
@@ -653,7 +666,6 @@ jobs:
         bun run test:e2e:onboarding-background-ai-tools
         bun run test:e2e:onboarding-first-run
         rm -rf ./e2e/results
-        bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
         bun run test:e2e
 
     - name: Generate E2E Coverage Report
