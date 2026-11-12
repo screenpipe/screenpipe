@@ -287,7 +287,7 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       env:
         RECORD_VIDEO: "true"
-      run: bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
+      run: bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts --specFileRetries 0
 
     - name: Run E2E Tests
       shell: pwsh
@@ -648,7 +648,7 @@ jobs:
         export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
         export DISPLAY=:99
         export RECORD_VIDEO=1
-        bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
+        bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts --specFileRetries 0
 
     - name: Run E2E Tests
       shell: bash
