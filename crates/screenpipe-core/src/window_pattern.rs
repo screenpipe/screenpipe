@@ -20,10 +20,11 @@
 //! "Slack::"           → equivalent to legacy "Slack"
 //! ```
 //!
-//! Known localized app names also match across languages: `notepad` and
-//! `メモ帳` are equivalent in either app names or window titles, for both
-//! ignore and include lists. This is an explicit alias, not general translation;
-//! other filter terms and phrases retain literal substring semantics.
+//! Notepad names match across English, Mandarin Chinese, Hindi, Spanish,
+//! Arabic, French, Bengali, Portuguese, Indonesian and Japanese, plus Urdu.
+//! The aliases apply in app names and window titles for ignore/include lists.
+//! English and Indonesian share `notepad`. Other applications, filter terms
+//! and phrases retain literal substring semantics.
 //!
 //! For include lists, scoped entries create a per-app whitelist: if an app
 //! has any scoped include rule, only matching titles pass; apps with no
@@ -31,11 +32,30 @@
 //! the foot-gun where adding `Slack::#engineering` to includes would
 //! accidentally block every other app.
 
+// Explicit Notepad aliases; independent of the current OS locale. This lets
+// saved filters work across language changes and mixed-language browser titles.
+// Microsoft documents the zh-CN, es-ES, ar-SA, fr-FR, pt-BR and ja-JP names at
+// https://support.microsoft.com/{locale}/windows/apps/help-in-notepad .
+// Hindi, Bengali and Urdu include the requested transliteration fixtures;
+// they are matching aliases, not a claim about every Windows title-bar locale.
+const NOTEPAD_ALIASES: &[&str] = &[
+    "notepad",        // English, Indonesian
+    "记事本",         // Mandarin Chinese (Simplified)
+    "नोटपैड",          // Hindi
+    "bloc de notas",  // Spanish
+    "المفكرة",        // Arabic
+    "bloc-notes",     // French
+    "নোটপ্যাড",         // Bengali
+    "bloco de notas", // Portuguese
+    "نوٹ پیڈ",        // Urdu
+    "メモ帳",         // Japanese
+];
+
 /// Match a literal substring, with explicit aliases for known localized app names.
 ///
 /// Keep this deterministic and local: arbitrary titles (including file names and
 /// privacy terms) must not be machine-translated. Only a complete filter term
-/// in a verified alias group expands; phrases and unknown names remain literal.
+/// in the alias group expands; phrases and unknown names remain literal.
 /// Both arguments are lowercase. This runs in capture loops, so it must not
 /// allocate or query the OS/network. The same operation serves app and title
 /// matching, including scoped include targeting.
@@ -43,13 +63,10 @@ fn contains_with_aliases(text_lc: &str, pattern_lc: &str) -> bool {
     if text_lc.contains(pattern_lc) {
         return true;
     }
-    // Windows Notepad's English/Japanese names. Match both on every locale so
-    // a saved rule remains valid when the system language changes.
-    match pattern_lc {
-        "notepad" => text_lc.contains("メモ帳"),
-        "メモ帳" => text_lc.contains("notepad"),
-        _ => false,
-    }
+    NOTEPAD_ALIASES.contains(&pattern_lc)
+        && NOTEPAD_ALIASES
+            .iter()
+            .any(|alias| *alias != pattern_lc && text_lc.contains(alias))
 }
 
 /// Parsed form of an ignore/include pattern.
@@ -342,6 +359,103 @@ mod tests {
         let mixed = WindowPattern::parse_list(&["メモ帳".to_string(), "notepad::work".to_string()]);
         assert!(!passes_includes(&mixed, "メモ帳", "private.txt"));
         assert!(passes_includes(&mixed, "メモ帳", "work.txt"));
+    }
+
+    // Notepad aliases for the ten requested language fixtures, plus Japanese.
+    // English and Indonesian share the same name. These are matching fixtures;
+    // they do not claim native Windows title-bar verification for every locale.
+    const SUPPORTED_NOTEPAD_NAMES: &[&str] = &[
+        "Notepad",
+        "记事本",
+        "नोटपैड",
+        "Bloc de notas",
+        "المفكرة",
+        "Bloc-notes",
+        "নোটপ্যাড",
+        "Bloco de notas",
+        "نوٹ پیڈ",
+        "メモ帳",
+    ];
+
+    #[test]
+    fn localized_notepad_all_supported_names_match_apps_and_browser_titles() {
+        for filter in SUPPORTED_NOTEPAD_NAMES {
+            let patterns = WindowPattern::parse_list(&[filter.to_uppercase()]);
+            for name in SUPPORTED_NOTEPAD_NAMES {
+                let app = name.to_lowercase();
+                let title = format!("{app} - search");
+                assert!(
+                    passes_includes(&patterns, &app, "work.txt"),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    passes_includes(&patterns, "chrome", &title),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    matches_any(&patterns, &app, "work.txt"),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    matches_any(&patterns, "chrome", &title),
+                    "{filter} -> {name}"
+                );
+            }
+            assert!(!passes_includes(&patterns, "chrome", "unrelated search"));
+            assert!(!matches_any(&patterns, "chrome", "unrelated search"));
+            // Only a complete filter component expands to the alias group.
+            let phrase = WindowPattern::parse_list(&[format!("{filter} private")]);
+            assert!(!matches_any(&phrase, "chrome", "notepad - search"));
+        }
+    }
+
+    #[test]
+    fn localized_notepad_all_supported_scopes_preserve_title_restrictions() {
+        for filter in SUPPORTED_NOTEPAD_NAMES {
+            let scoped = WindowPattern::parse_list(&[format!("{filter}::work")]);
+            let mixed =
+                WindowPattern::parse_list(&["notepad".to_string(), format!("{filter}::work")]);
+            for name in SUPPORTED_NOTEPAD_NAMES {
+                let app = name.to_lowercase();
+                assert!(
+                    passes_includes(&scoped, &app, "work.txt"),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    !passes_includes(&scoped, &app, "private.txt"),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    !passes_includes(&mixed, &app, "private.txt"),
+                    "{filter} -> {name}"
+                );
+                assert!(matches_any(&scoped, &app, "work.txt"));
+                assert!(!matches_any(&scoped, &app, "private.txt"));
+            }
+            assert!(passes_includes(&scoped, "chrome", "unrelated"));
+            assert!(!matches_any(&scoped, "chrome", "work.txt"));
+        }
+    }
+
+    #[test]
+    fn localized_notepad_all_supported_scoped_titles_match_aliases() {
+        for filter in SUPPORTED_NOTEPAD_NAMES {
+            let patterns = WindowPattern::parse_list(&[format!("chrome::{filter}")]);
+            for name in SUPPORTED_NOTEPAD_NAMES {
+                let title = format!("{} - search", name.to_lowercase());
+                assert!(
+                    passes_includes(&patterns, "chrome", &title),
+                    "{filter} -> {name}"
+                );
+                assert!(
+                    matches_any(&patterns, "chrome", &title),
+                    "{filter} -> {name}"
+                );
+                assert!(!matches_any(&patterns, "firefox", &title));
+            }
+            assert!(!passes_includes(&patterns, "chrome", "private banking"));
+            assert!(!matches_any(&patterns, "chrome", "private banking"));
+        }
     }
 
     // --- Legacy behavior preservation -----------------------------------
