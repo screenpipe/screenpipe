@@ -104,7 +104,7 @@ async function tuneUserFetchMock(delayMs: number, email: string): Promise<void> 
       const orig = window.fetch.bind(window);
       w.__E2E_ORIG_FETCH = orig;
       w.__E2E_USER_CALLS = 0;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string"
             ? input
@@ -217,7 +217,7 @@ async function block401InPeerWindows(): Promise<void> {
         const w = window as unknown as Record<string, unknown>;
         const orig = (w.__E2E_ORIG_FETCH as typeof window.fetch) || window.fetch.bind(window);
         if (!w.__E2E_ORIG_FETCH) w.__E2E_ORIG_FETCH = orig;
-        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           const url =
             typeof input === "string" ? input : (input as Request)?.url ?? String(input);
           if (url.includes("/api/user")) {

@@ -273,7 +273,7 @@ async function seedEntitledAccount() {
       const startedAt = performance.now();
       delete document.documentElement.dataset.e2eSettingsWriteFinishedAt;
       const originalFetch = window.fetch.bind(window);
-      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string"
             ? input

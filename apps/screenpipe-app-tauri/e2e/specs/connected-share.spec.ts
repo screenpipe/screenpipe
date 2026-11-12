@@ -69,7 +69,7 @@ async function installShareFixture(
           headers: { "Content-Type": "application/json" },
         });
 
-      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const raw =
           typeof input === "string"
             ? input

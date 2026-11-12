@@ -91,7 +91,7 @@ async function patchFetch(email: string): Promise<void> {
     if (w.__E2E_SUB_FETCH_PATCHED) return;
     const orig = window.fetch.bind(window);
     w.__E2E_SUB_ORIG_FETCH = orig;
-    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
         typeof input === "string" ? input : (input as Request)?.url ?? String(input);
       if (url.includes("/api/user")) {

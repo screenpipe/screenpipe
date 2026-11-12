@@ -322,7 +322,7 @@ describe("meeting summary recovery controls", function () {
         };
         const original = window.fetch.bind(window);
         ownedWindow.__meetingSummaryRecoveryFetch = original;
-        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
           if (url.includes(`/meetings/${targetMeetingId}/summary-status`)) {
             const fallbackStatus: SummaryStatusFixture = {

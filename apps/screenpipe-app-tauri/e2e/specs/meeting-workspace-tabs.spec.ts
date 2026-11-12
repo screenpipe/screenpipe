@@ -350,7 +350,7 @@ describe("meeting workspace tabs and responsive layout", function () {
     );
     await browser.waitUntil(
       async () =>
-        (await $$('[data-testid="transcript-row"][data-final="false"]'))
+        (await $$('[data-testid="transcript-row"][data-final="false"]').getElements())
           .length === 0,
       {
         timeout: t(5_000),
@@ -592,7 +592,7 @@ describe("meeting workspace tabs and responsive layout", function () {
       'button[aria-label="follow live transcript"]',
     );
     await browser.execute(
-      (element: HTMLButtonElement) => element.click(),
+      (element: HTMLElement) => element.click(),
       currentFollowLive,
     );
     await browser.waitUntil(

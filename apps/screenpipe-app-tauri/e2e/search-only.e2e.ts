@@ -134,7 +134,7 @@ for (let cycle = 0; cycle < 2; cycle++) {
     "/capture/hd/start",
     "/pipes/example/run",
   ]) {
-    const res = await fetch(api + route, {
+    const res: Response = await fetch(api + route, {
       method: "POST",
       headers,
       body: "{}",

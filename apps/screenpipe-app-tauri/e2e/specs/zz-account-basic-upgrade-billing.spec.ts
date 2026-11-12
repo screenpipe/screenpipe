@@ -87,7 +87,7 @@ async function patchBillingFlowMocks(email: string): Promise<void> {
     if (!w.__E2E_BASIC_FETCH_PATCHED) {
       const origFetch = window.fetch.bind(window);
       w.__E2E_BASIC_ORIG_FETCH = origFetch;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : (input as Request)?.url ?? String(input);
         if (url.includes("/api/user")) {

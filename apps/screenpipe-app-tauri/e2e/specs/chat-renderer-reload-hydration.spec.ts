@@ -169,7 +169,7 @@ async function installConnectionFetchCounter(): Promise<void> {
     };
     if (!globals.__e2eOriginalFetch) {
       globals.__e2eOriginalFetch = window.fetch.bind(window);
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const rawUrl =
           typeof input === "string"
             ? input

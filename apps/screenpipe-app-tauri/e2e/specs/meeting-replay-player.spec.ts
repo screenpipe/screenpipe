@@ -288,7 +288,7 @@ describe("historical meeting silent replay player", function () {
     // of blanking the player with "no screen images available". Driven through
     // the thumbnail scrubber, which already seeked correctly before the fix,
     // so this isolates the blanking bug from the dead-slider bug below.
-    await pressSlider(scrubber, 0);
+    await pressSlider(await scrubber.getElement(), 0);
     await browser.waitUntil(
       async () => (await scrubber.getAttribute("aria-valuenow")) === "0",
       {
@@ -310,7 +310,7 @@ describe("historical meeting silent replay player", function () {
     // bare progressbar with no seek handling, so pressing it did nothing at
     // any position. It is a real slider now - pressing its middle seeks to
     // ~50% of the meeting.
-    await pressSlider(progress, 0.5);
+    await pressSlider(await progress.getElement(), 0.5);
     await browser.waitUntil(
       async () => {
         const now = Number(await scrubber.getAttribute("aria-valuenow"));

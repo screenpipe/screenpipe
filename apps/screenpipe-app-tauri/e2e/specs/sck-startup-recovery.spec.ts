@@ -54,20 +54,19 @@ describe("ScreenCaptureKit startup recovery", function () {
     const cleanupTransientApp = spawnTransientForegroundApp();
 
     try {
-      let latestHealth: HealthBody | null = null;
-      await browser.waitUntil(
+      const latestHealth = await browser.waitUntil(
         async () => {
           const response = await fetchJson(
             `http://127.0.0.1:${cfg.port}/health`,
             authHeaders(cfg.key),
           );
-          latestHealth = response.body as HealthBody;
+          const health = response.body as HealthBody;
           return (
             response.ok &&
-            latestHealth.frame_status === "ok" &&
-            (latestHealth.pipeline?.capture_attempts ?? 0) > 0 &&
-            (latestHealth.pipeline?.frames_db_written ?? 0) > 0
-          );
+            health.frame_status === "ok" &&
+            (health.pipeline?.capture_attempts ?? 0) > 0 &&
+            (health.pipeline?.frames_db_written ?? 0) > 0
+          ) ? health : false;
         },
         {
           timeout: t(75_000),

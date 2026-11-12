@@ -648,7 +648,7 @@ describe('Settings sections', () => {
     await browser.execute(() => {
       const orig = window.fetch.bind(window);
       (window as any).__origFetch = orig;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).includes('/health')) {
           return Promise.resolve(new Response('{}', { status: 503 }));
         }

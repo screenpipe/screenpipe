@@ -135,7 +135,7 @@ async function patchFetchForCloudSubscribedAppDeniedUser(): Promise<void> {
     if (w.__E2E_APP_DENIED_PATCHED) return;
     const orig = window.fetch.bind(window);
     w.__E2E_APP_DENIED_ORIG_FETCH = orig;
-    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
         typeof input === "string"
           ? input

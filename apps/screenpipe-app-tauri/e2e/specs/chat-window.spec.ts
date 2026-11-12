@@ -156,13 +156,12 @@ describe("Chat window", function () {
     await browser.switchToWindow(CHAT_HANDLE);
     await waitForWindowUrl("/chat", undefined, t(15_000));
 
-    let floatingChatId: string | null = null;
-    await browser.waitUntil(
+    const floatingChatId = await browser.waitUntil(
       async () => {
-        floatingChatId = (await browser.execute(
+        const id = (await browser.execute(
           () => (window as any).__e2eForegroundReady ?? null,
         )) as string | null;
-        return Boolean(floatingChatId);
+        return id || false;
       },
       {
         timeout: t(15_000),
@@ -172,7 +171,7 @@ describe("Chat window", function () {
     );
     expect(initialHomeTabs).not.toContain(floatingChatId);
 
-    writeCrossWindowChat(floatingChatId as string);
+    writeCrossWindowChat(floatingChatId);
     await emitTauri("chat-current-session", { id: floatingChatId });
     await emitTauri("chat-conversation-saved", {
       id: floatingChatId,
@@ -187,13 +186,13 @@ describe("Chat window", function () {
     });
 
     const homeTabs = await openHomeChatIds();
-    const screenshotName = homeTabs.includes(floatingChatId as string)
+    const screenshotName = homeTabs.includes(floatingChatId)
       ? "chat-window-home-tab-isolation-before"
       : "chat-window-home-tab-isolation-after";
     const filepath = await saveScreenshot(screenshotName);
     expect(existsSync(filepath)).toBe(true);
 
-    if (homeTabs.includes(floatingChatId as string)) {
+    if (homeTabs.includes(floatingChatId)) {
       throw new Error(
         `BUG REPRODUCED: floating chat ${floatingChatId} leaked into Home's tab set (${homeTabs.join(", ")})`,
       );

@@ -248,7 +248,7 @@ async function mockPipeActivityApi(): Promise<void> {
     testWindow.__pipeLatestCompletedId = 12;
     const originalFetch = testWindow.__pipeSidebarOriginalFetch ?? window.fetch.bind(window);
     testWindow.__pipeSidebarOriginalFetch = originalFetch;
-    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : (input as Request)?.url ?? String(input);
       const parsedUrl = new URL(url, window.location.href);
       const executionDetailPrefix =

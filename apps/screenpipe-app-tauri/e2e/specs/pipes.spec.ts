@@ -65,7 +65,7 @@ async function waitForDiscoverGrid(timeout = t(20_000)): Promise<boolean> {
   try {
     await browser.waitUntil(
       async () => {
-        const buttons = await $$('[data-testid="pipe-install-btn"]');
+        const buttons = await $$('[data-testid="pipe-install-btn"]').getElements();
         return buttons.length > 0;
       },
       { timeout, timeoutMsg: 'Discover tab: no pipe-install-btn appeared (store grid not loaded)' }
@@ -182,7 +182,7 @@ describe.skip('Pipes: discover → install → play', function () {
     await browser.execute(() => {
       const orig = window.fetch.bind(window);
       (window as any).__origFetch = orig;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).includes('/pipes/store/install')) {
           return Promise.resolve(
             new Response(JSON.stringify({ error: 'store unavailable (e2e simulated)' }), {

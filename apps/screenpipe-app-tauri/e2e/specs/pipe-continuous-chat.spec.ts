@@ -284,7 +284,7 @@ describe("Pipes: continue in one chat", function () {
       const global = window as any;
       global.__e2eOriginalFetch = window.fetch.bind(window);
       global.__e2eFailHistorySave = true;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const body = typeof init?.body === "string" ? init.body : "";
         if (
           global.__e2eFailHistorySave &&

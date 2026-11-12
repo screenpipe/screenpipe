@@ -9,6 +9,7 @@
     "resolveJsonModule": true,
     "types": [
       "node",
+      "bun",
       "mocha",
       "@wdio/globals/types"
     ],
