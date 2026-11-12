@@ -599,20 +599,17 @@ describe("ACP backend", function () {
       label?: string;
     }>;
     const values = options.map((option) => option.value);
-    // The whole picker comes from the static catalog (lib/acp/agents.json) in
-    // file order, with the custom entry appended last (acpAdapterInfo falls
-    // back to it).
+    // Offer the enabled catalog entries in file order, with the custom entry
+    // last. Disabled agents remain readable for existing presets, not new choices.
     expect(values).toEqual([
       "pi-acp",
       "codex-acp",
       "claude-acp",
-      "opencode",
       "cursor",
       "github-copilot-cli",
-      "kimi",
       "custom",
     ]);
-    expect(options.map((option) => option.label)).toContain("Another ACP agent");
+    expect(options.map((option) => option.label)).toContain("Agent command");
     const boundaries = await $('[data-testid="acp-boundaries"]');
     await boundaries.waitForDisplayed({ timeout: t(10_000) });
     const body = await boundaries.getText();
