@@ -331,7 +331,11 @@ fn dock_cells(dock: Rect, s: f32, simplified: bool) -> (Vec<(Control, Rect)>, Ve
         Control::Star,
         Control::Timeline,
     ];
-    let icon_controls = if simplified { &[Control::Star][..] } else { &full_controls[..] };
+    let icon_controls = if simplified {
+        &[Control::Star][..]
+    } else {
+        &full_controls[..]
+    };
     // Audio is a status cell, not a button, but it still highlights on hover.
     let usable = dock.w - divider_w * 2.0;
     // Six cells: four icons, the meter, and brand. The meter gets the same
@@ -896,8 +900,15 @@ mod simplified_tests {
     #[test]
     fn simplified_cells_have_no_hidden_click_targets() {
         let (cells, dividers) = dock_cells(Rect::new(0.0, 0.0, 192.0, 30.0), 1.0, true);
-        assert_eq!(cells.iter().map(|(control, _)| *control).collect::<Vec<_>>(), vec![Control::Star, Control::Audio, Control::Brand]);
-        let width: f32 = cells.iter().map(|(_, rect)| rect.w).sum::<f32>() + dividers.iter().map(|rect| rect.w).sum::<f32>();
+        assert_eq!(
+            cells
+                .iter()
+                .map(|(control, _)| *control)
+                .collect::<Vec<_>>(),
+            vec![Control::Star, Control::Audio, Control::Brand]
+        );
+        let width: f32 = cells.iter().map(|(_, rect)| rect.w).sum::<f32>()
+            + dividers.iter().map(|rect| rect.w).sum::<f32>();
         assert!((width - 192.0).abs() < 0.01);
     }
 }

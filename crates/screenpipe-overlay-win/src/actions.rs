@@ -26,7 +26,11 @@ pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
     if state.simplified_ui {
         match control {
             Control::Pill | Control::Brand => return Some("open_starred_sessions".into()),
-            Control::Search | Control::Chat | Control::Timeline | Control::Settings | Control::TranscriptOpenNote => return None,
+            Control::Search
+            | Control::Chat
+            | Control::Timeline
+            | Control::Settings
+            | Control::TranscriptOpenNote => return None,
             _ => {}
         }
     }
@@ -223,13 +227,28 @@ mod simplified_tests {
     use super::*;
     #[test]
     fn simplified_reminder_only_opens_starring() {
-        let state = OverlayState { simplified_ui: true, ..Default::default() };
+        let state = OverlayState {
+            simplified_ui: true,
+            ..Default::default()
+        };
         for control in [Control::Pill, Control::Brand, Control::Star] {
-            assert_eq!(action_for(&state, control).as_deref(), Some("open_starred_sessions"));
+            assert_eq!(
+                action_for(&state, control).as_deref(),
+                Some("open_starred_sessions")
+            );
         }
-        for control in [Control::Search, Control::Chat, Control::Timeline, Control::Settings, Control::TranscriptOpenNote] {
+        for control in [
+            Control::Search,
+            Control::Chat,
+            Control::Timeline,
+            Control::Settings,
+            Control::TranscriptOpenNote,
+        ] {
             assert_eq!(action_for(&state, control), None);
         }
-        assert_eq!(action_for(&state, Control::RestartRecording).as_deref(), Some("restart_recording"));
+        assert_eq!(
+            action_for(&state, Control::RestartRecording).as_deref(),
+            Some("restart_recording")
+        );
     }
 }

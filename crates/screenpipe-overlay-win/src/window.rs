@@ -120,14 +120,14 @@ unsafe fn show_brand_context_menu(hwnd: HWND, simplified: bool) -> Option<String
         )
         .ok()?;
         if !simplified {
-        AppendMenuW(menu, MF_SEPARATOR, 0, w!("")).ok()?;
-        AppendMenuW(
-            menu,
-            MF_STRING,
-            BRAND_CONTEXT_MENU_OPEN_SETTINGS,
-            w!("Settings..."),
-        )
-        .ok()?;
+            AppendMenuW(menu, MF_SEPARATOR, 0, w!("")).ok()?;
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                BRAND_CONTEXT_MENU_OPEN_SETTINGS,
+                w!("Settings..."),
+            )
+            .ok()?;
         }
 
         let mut point = POINT::default();
@@ -1484,7 +1484,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 let is_brand = ctx_of(hwnd)
                     .is_some_and(|ctx| ctx.layout.hit_test(x, y) == Some(Control::Brand));
                 let action = if is_brand {
-                    show_brand_context_menu(hwnd, ctx_of(hwnd).is_some_and(|ctx| ctx.state.simplified_ui))
+                    show_brand_context_menu(
+                        hwnd,
+                        ctx_of(hwnd).is_some_and(|ctx| ctx.state.simplified_ui),
+                    )
                 } else {
                     None
                 };
