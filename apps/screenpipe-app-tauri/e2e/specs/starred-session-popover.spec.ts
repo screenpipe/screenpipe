@@ -3,7 +3,7 @@
 
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { authHeaders, getLocalApiConfig, waitForLocalApi } from "../helpers/api-utils.js";
+import { authHeaders, fetchJson, getLocalApiConfig } from "../helpers/api-utils.js";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
 import { STAR_ENTRY_SELECTOR, WORKFLOW_NAME_SELECTOR, unfinishedFocusedSession } from "../helpers/focused-recording-controls.js";
@@ -118,8 +118,21 @@ describe("starred session popover", function () {
           try {
             await invokeOrThrow("set_cloud_token", { token: restoreToken });
           } finally {
-            await invokeOrThrow("spawn_screenpipe", { overrideArgs: null });
-            await waitForLocalApi((await getLocalApiConfig()).port);
+            const config = await getLocalApiConfig();
+            await browser.waitUntil(async () => {
+              const health = await fetchJson(
+                `http://127.0.0.1:${config.port}/health`, authHeaders(config.key),
+              );
+              if (health.ok) return true;
+              // Token restoration schedules a lifecycle check. A concurrent
+              // spawn can be a successful no-op, so reassert only this
+              // idempotent start intent until the real API is healthy.
+              await invokeOrThrow("spawn_screenpipe", { overrideArgs: null });
+              return false;
+            }, {
+              timeout: t(30_000), interval: 500,
+              timeoutMsg: "restored fixture server did not become healthy",
+            });
           }
         }
       }
