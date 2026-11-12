@@ -825,7 +825,7 @@ export default function ShortcutReminderPage() {
             cursor: "grab",
             WebkitAppRegion: "no-drag",
           } as React.CSSProperties}
-          title={ui(simplifiedUI ? "Starred work sessions" : "Open timeline")}
+          title={simplifiedUI ? ui("Starred work sessions") : ui("Open timeline")}
         >
           <span
             aria-hidden="true"
@@ -966,7 +966,7 @@ export default function ShortcutReminderPage() {
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <button
           title={ui("Screenpipe — right-click for options")}
-          aria-label={ui(simplifiedUI ? "Starred work sessions" : "Screenpipe — open timeline; right-click for options")}
+          aria-label={simplifiedUI ? ui("Starred work sessions") : ui("Screenpipe — open timeline; right-click for options")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("brand")}
