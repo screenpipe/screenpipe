@@ -167,6 +167,7 @@ pub struct TranscriptItem {
 /// a frame is always internally consistent — no half-applied update can paint.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct OverlayState {
+    pub simplified_ui: bool,
     pub size: OverlaySize,
     pub anchor: Anchor,
     pub health: Health,

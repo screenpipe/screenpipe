@@ -102,6 +102,7 @@ func starredMinutesLeft(until: Int64, now: TimeInterval) -> Int {
 // MARK: - Metrics data pushed from Rust
 
 final class OverlayMetrics: ObservableObject {
+    @Published var simplifiedUI: Bool = false
     @Published var starredActive: Bool = false
     @Published var starredMinutesRemaining: Int = 0
     @Published var audioActive: Bool = false
@@ -579,7 +580,10 @@ private let kBaseCollapsedW: CGFloat = 22
 private let kBaseCollapsedH: CGFloat = 16
 private let kBaseHealthH: CGFloat = 18
 private let kBaseCollapsedCornerRadius: CGFloat = 8
-private let kBaseExpandedW: CGFloat = 192
+func overlayExpandedWidth(simplified: Bool) -> CGFloat {
+    simplified ? 96 : 192
+}
+private var kBaseExpandedW: CGFloat { overlayExpandedWidth(simplified: gSimplifiedUI) }
 private let kBaseExpandedH: CGFloat = 62
 private let kBaseDockH: CGFloat = 30
 private let kBaseDisclosureH: CGFloat = 26
@@ -593,7 +597,8 @@ private let kBaseNotificationW: CGFloat = 340
 private let kBaseNotificationH: CGFloat = 34
 private let kRestingOpacity: Double = 0.50
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["search", "chat", "star", "timeline", "audio", "brand"]
+private var gSimplifiedUI = false
+private var kDockControls: [String] { gSimplifiedUI ? ["star", "audio", "brand"] : ["search", "chat", "star", "timeline", "audio", "brand"] }
 
 /// Convert configured shortcuts to one stable, compact macOS glyph order.
 /// Settings historically stored both `Super+Control+…` and
@@ -894,10 +899,11 @@ func overlayHoverRect(
     expanded: Bool,
     disclosureDown: Bool,
     horizontal: OverlayHorizontal,
-    scale: CGFloat
+    scale: CGFloat,
+    simplified: Bool? = nil
 ) -> NSRect {
     let collapsedScale = 1 + (scale - 1) * 0.2
-    let width = expanded ? kBaseExpandedW * scale : kBaseCollapsedW * collapsedScale
+    let width = expanded ? overlayExpandedWidth(simplified: simplified ?? gSimplifiedUI) * scale : kBaseCollapsedW * collapsedScale
     let height = expanded ? kBaseDockH * scale : kBaseCollapsedH * collapsedScale
     let x: CGFloat
     switch horizontal {
@@ -1257,7 +1263,7 @@ struct ShortcutReminderView: View {
         ZStack(alignment: .topTrailing) {
             CollapsedAppIconButton(
                 scale: collapsedScale,
-                action: { onAction("open_timeline") }
+                action: { onAction(metrics.simplifiedUI ? "open_starred_sessions" : "open_timeline") }
             )
             .frame(width: kBaseCollapsedW * collapsedScale, height: kBaseCollapsedH * collapsedScale)
             .background(
@@ -1295,7 +1301,7 @@ struct ShortcutReminderView: View {
                 dockView
             }
         }
-        .frame(width: kBaseExpandedW * scale, height: kBaseExpandedH * scale)
+        .frame(width: overlayExpandedWidth(simplified: metrics.simplifiedUI) * scale, height: kBaseExpandedH * scale)
     }
 
     private var disclosureView: some View {
@@ -1304,20 +1310,24 @@ struct ShortcutReminderView: View {
 
     private var dockView: some View {
         HStack(spacing: 0) {
+            if !metrics.simplifiedUI {
             DockIconButton(icon: "magnifyingglass", active: metrics.hoveredControl == "search", scale: scale) {
                 onAction("open_search")
             }
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
+            }
             DockIconButton(icon: metrics.starredActive ? "star.fill" : "star", active: metrics.hoveredControl == "star", scale: scale, caption: metrics.starredActive ? "\(metrics.starredMinutesRemaining)m" : nil) {
                 onAction("open_starred_sessions")
             }
             .accessibilityLabel(metrics.starredActive ? uiText("{minutes} min left · click to end", ["minutes": String(metrics.starredMinutesRemaining)]) : uiText("Star a work session"))
+            if !metrics.simplifiedUI {
             DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
                 onAction("open_timeline")
             }
 
+            }
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
 
             DockStatusCell(active: metrics.hoveredControl == "audio") {
@@ -1332,10 +1342,10 @@ struct ShortcutReminderView: View {
                 meetingActive: metrics.meetingActive,
                 scale: scale
             ) {
-                onAction("open_timeline")
+                onAction(metrics.simplifiedUI ? "open_starred_sessions" : "open_timeline")
             }
         }
-        .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
+        .frame(width: overlayExpandedWidth(simplified: metrics.simplifiedUI) * scale, height: kBaseDockH * scale)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: s(8)))
         .overlay(RoundedRectangle(cornerRadius: s(8)).stroke(.white.opacity(0.42), lineWidth: 1))
@@ -2045,10 +2055,11 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [self] in
             isVisible = true
             let prevScale = gOverlayScale
+            let prevSimplifiedUI = gSimplifiedUI
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
             }
-            if panel == nil || prevScale != gOverlayScale {
+            if panel == nil || prevScale != gOverlayScale || prevSimplifiedUI != gSimplifiedUI {
                 dismissOverlayNotification()
                 hideDragStage()
                 isDraggingPill = false
@@ -2530,6 +2541,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         // Expects shortcut labels, size, and optional authenticated API URLs from Rust.
         guard let data = json.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        gSimplifiedUI = dict["simplifiedUI"] == "true"
+        metrics.simplifiedUI = gSimplifiedUI
         if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
@@ -3616,8 +3629,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             keyEquivalent: ""
         )
         settings.target = self
-        settings.isEnabled = true
-        menu.addItem(settings)
+        settings.isEnabled = !gSimplifiedUI
+        if !gSimplifiedUI { menu.addItem(settings) }
 
         menu.popUp(
             positioning: nil,

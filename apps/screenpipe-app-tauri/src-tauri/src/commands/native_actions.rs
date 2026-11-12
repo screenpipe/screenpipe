@@ -1420,6 +1420,10 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
         .to_string_lossy()
         .to_string();
     info!("native shortcut action: {}", action);
+    if crate::enterprise_policy::is_simplified_ui()
+        && matches!(action.as_str(), "open_timeline" | "open_chat" | "open_search" | "open_settings" | "open_overlay_settings") {
+        return;
+    }
 
     // Notifications the pill rendered itself run the same dispatch as the
     // standalone panel, on the same thread the panel callback uses.
