@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { FocusedRecordingPanel, type FocusedRecordingPanelProps } from "./focused-recording-panel";
+import { WORKFLOW_NAME_SELECTOR } from "../../e2e/helpers/focused-recording-controls";
 
 afterEach(cleanup);
 function fixture(patch: Partial<FocusedRecordingPanelProps> = {}) {
@@ -25,6 +26,14 @@ it("permits naming during immediate capture and exposes the recording actions", 
   fireEvent.click(screen.getByRole("button", { name: "Pause" }));
   fireEvent.click(screen.getByRole("button", { name: "Finish" }));
   expect(props.onPause).toHaveBeenCalledOnce(); expect(props.onFinish).toHaveBeenCalledOnce();
+});
+it("lets the native popover fixture select the accessible workflow name input", () => {
+  const props = fixture();
+  const { container } = render(<FocusedRecordingPanel {...props} />);
+  const input = container.querySelector(WORKFLOW_NAME_SELECTOR);
+  expect(input).toBe(screen.getByRole("textbox", { name: "Workflow name" }));
+  fireEvent.change(input!, { target: { value: "Name from the native fixture" } });
+  expect(props.onNameChange).toHaveBeenCalledWith("Name from the native fixture");
 });
 it("never displays a hot microphone while paused, even if the host has a stale hot flag", () => {
   const props = fixture({ phase: "paused" }); render(<FocusedRecordingPanel {...props} />);

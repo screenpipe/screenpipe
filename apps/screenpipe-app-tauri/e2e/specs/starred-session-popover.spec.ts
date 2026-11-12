@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { authHeaders, getLocalApiConfig, waitForLocalApi } from "../helpers/api-utils.js";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
+import { WORKFLOW_NAME_SELECTOR } from "../helpers/focused-recording-controls.js";
 import { invokeOrThrow, waitForWindowHandle } from "../helpers/tauri.js";
 import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 
@@ -222,6 +223,10 @@ describe("starred session popover", function () {
     }, { timeout: t(10_000), interval: 100, timeoutMsg: "star did not create its focused recording" });
     await waitForWindowHandle("starred-sessions", t(20_000));
     await browser.switchToWindow("starred-sessions");
+    // A native handle exists before the first WebView has mounted its state
+    // and visibility listeners. Load the controls before exercising retention.
+    await $("button=Pause").waitForDisplayed({ timeout: t(30_000) });
+    await $(WORKFLOW_NAME_SELECTOR).waitForEnabled({ timeout: t(15_000) });
     // Keep the retained picker as the IPC context while closing Home in this
     // isolated fixture. Reopening must not recreate or reveal Home.
     if ((await browser.getWindowHandles()).includes("home")) {
@@ -235,7 +240,10 @@ describe("starred session popover", function () {
     expect(await $("button=Start").isExisting()).toBe(false);
     const started = (await readSession())!;
     expect(started.phase).toBe("recording");
-    await $('[aria-label="Workflow name"]').setValue("Review an invoice");
+    const workflowName = await $(WORKFLOW_NAME_SELECTOR);
+    await workflowName.waitForDisplayed({ timeout: t(15_000) });
+    await workflowName.waitForEnabled({ timeout: t(15_000) });
+    await workflowName.setValue("Review an invoice");
     await $("button=Pause").click();
     await $("button=Resume").waitForDisplayed({ timeout: t(15_000) });
     const paused = (await readSession())!;
@@ -269,6 +277,7 @@ describe("starred session popover", function () {
       expect(data.some((item) => item.name === "Review an invoice" && Date.parse(item.start) === interval.start && Date.parse(item.end) === interval.end)).toBe(true);
     }
     ownedFocusedId = undefined;
+    await $("button=Close").click();
     await browser.waitUntil(async () => !(await visible("starred-sessions")), {
       timeout: t(5000),
     });
