@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { firstRunAccountFixture } from "../helpers/onboarding-first-run-account.js";
+import { settleGrantedPermissionStep } from "../helpers/onboarding-first-run-flow.js";
 import {
   closeWindow,
   invokeOrThrow,
@@ -83,6 +84,26 @@ const logOnboardingState = async (phase: string, requestedStep: string) => {
  * dependencies. Same shape as screen-recording-restart.spec.ts.
  */
 const gotoSlide = async (step: string) => {
+  // A granted permission step advances itself. Let its pending native cursor
+  // write and render transition finish before replacing that cursor below.
+  if ((await browser.getWindowHandles()).includes("onboarding")) {
+    await browser.switchToWindow("onboarding");
+    await settleGrantedPermissionStep({
+      isMounted: async () => await browser.execute(() => !!document.querySelector('[data-testid="permission-wheel"]')),
+      requiredGrantsComplete: async () => {
+        const checks = ["check_screen_recording_permission"];
+        if (process.platform === "darwin") checks.push("check_accessibility_permission_cmd");
+        if (!seedFlags.includes("no-recording") && !seedFlags.includes("no-audio")) checks.push("check_microphone_permission");
+        const statuses = await Promise.all(checks.map((command) => invokeOrThrow<string | boolean>(command)));
+        return statuses.every((status) => status === "granted" || status === "notNeeded" || status === true);
+      },
+      waitForUnmount: async () => {
+        await browser.waitUntil(async () => await browser.execute(() => !document.querySelector('[data-testid="permission-wheel"]')), {
+          timeout: t(15_000), interval: 100, timeoutMsg: "granted permission advance did not settle before restoring another setup step",
+        });
+      },
+    });
+  }
   // Destroy and recreate rather than just showing: showWindow on a live
   // window only focuses it, so the mount-time restore effect never re-runs
   // and the flow stays on whatever slide it was already displaying.

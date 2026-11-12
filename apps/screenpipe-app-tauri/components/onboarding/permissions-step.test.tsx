@@ -11,6 +11,8 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
+import { settleGrantedPermissionStep } from "../../e2e/helpers/onboarding-first-run-flow";
 
 const mocks = vi.hoisted(() => ({
   settings: { disableAudio: false },
@@ -168,6 +170,43 @@ describe("onboarding permission wheel", () => {
     view.unmount();
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("settles a granted permission advance before the fixture writes another saved step", async () => {
+    mocks.settings.disableAudio = true;
+    mocks.checkScreenRecordingPermission.mockResolvedValue("granted");
+    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
+    let release!: () => void;
+    const nativeAdvance = new Promise<void>(resolve => { release = resolve; });
+    const writes: string[] = [];
+    let advancing = false;
+    function Flow() {
+      const [permissions, setPermissions] = useState(true);
+      return permissions ? <PermissionsStep handleNextSlide={async () => {
+        advancing = true;
+        await nativeAdvance;
+        writes.push("timeline");
+        setPermissions(false);
+      }} /> : <div>Timeline</div>;
+    }
+    render(<Flow />);
+    await waitFor(() => expect(advancing).toBe(true));
+    const grantsComplete = vi.fn(async () => true);
+    const nextSavedStep = settleGrantedPermissionStep({
+      isMounted: async () => screen.queryByTestId("permission-wheel") !== null,
+      requiredGrantsComplete: grantsComplete,
+      waitForUnmount: async () => {
+        await waitFor(() => expect(screen.queryByTestId("permission-wheel")).toBeNull());
+      },
+    }).then(() => { writes.push("acquisition"); });
+    try {
+      await waitFor(() => expect(grantsComplete).toHaveBeenCalled());
+    } finally {
+      release();
+    }
+    await nextSavedStep;
+    await waitFor(() => expect(screen.queryByTestId("permission-wheel")).toBeNull());
+    expect(writes).toEqual(["timeline", "acquisition"]);
   });
 
   it("coalesces interval ticks instead of overlapping permission polls", async () => {
