@@ -108,10 +108,21 @@ describe("ACP onboarding UX", () => {
 
   it("shows the ownership split beside the agent picker", async () => {
     await openHomeWindow();
+    const navSettings = await $('[data-testid="nav-settings"]');
+    await navSettings.waitForExist({ timeout: t(10_000) });
+    await navSettings.click();
+    const navAi = await $('[data-testid="settings-nav-ai"]');
+    await navAi.waitForExist({ timeout: t(10_000) });
+    await navAi.click();
+    const createPreset = await $('button*=Create Preset');
+    const createFirstPreset = await $('button*=Create Your First Preset');
+    const createButton = (await createPreset.isExisting()) ? createPreset : createFirstPreset;
+    await createButton.waitForExist({ timeout: t(10_000) });
+    await createButton.click();
 
-    const codingAgentCard = await $('//*[normalize-space()="Coding agent"]');
-    await codingAgentCard.waitForExist({ timeout: t(15_000) });
-    await codingAgentCard.click();
+    const codexCard = await $('[role="button"][aria-label="Codex"]');
+    await codexCard.waitForExist({ timeout: t(15_000) });
+    await codexCard.click();
 
     const picker = await $("#acpAgent");
     await picker.waitForExist({ timeout: t(10_000) });

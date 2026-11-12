@@ -20,6 +20,7 @@ import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import { invokeOrThrow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
+import { paidAccountFixture, paidAccountResponse } from "../helpers/account-fixtures.js";
 
 interface LocalApiConfig {
   key: string | null;
@@ -265,8 +266,9 @@ async function seedEntitledAccount() {
     { timeout: t(8_000), timeoutMsg: "Home window handle did not appear" },
   );
   await browser.switchToWindow(homeHandle as string);
+  const account = paidAccountFixture("brain-canvas");
   const writeStartedAt = (await browser.execute(
-    (key: string, eventName: string) => {
+    (key: string, eventName: string, accountJson: string, responseJson: string) => {
       const startedAt = performance.now();
       delete document.documentElement.dataset.e2eSettingsWriteFinishedAt;
       const originalFetch = window.fetch.bind(window);
@@ -279,41 +281,20 @@ async function seedEntitledAccount() {
               : input.url;
         if (new URL(url, window.location.href).pathname === "/api/user") {
           return new Response(
-            JSON.stringify({
-              id: "e2e-brain-canvas-user",
-              email: "e2e-brain-canvas@screenpipe.test",
-              token: "e2e-brain-canvas-token",
-              app_entitled: true,
-              subscription_plan: "standard",
-            }),
+            responseJson,
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }
         return originalFetch(input, init);
       };
-      const checkedAt = new Date().toISOString();
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          id: "e2e-brain-canvas-user",
-          email: "e2e-brain-canvas@screenpipe.test",
-          token: "e2e-brain-canvas-token",
-          app_entitled: true,
-          subscription_plan: "standard",
-          entitlement: {
-            active: true,
-            plan: "standard",
-            source: "subscription",
-            checked_at: checkedAt,
-            features: { app: true, cloud: false },
-          },
-        }),
-      );
+      localStorage.setItem(key, accountJson);
       window.dispatchEvent(new Event(eventName));
       return startedAt;
     },
     E2E_ACCOUNT_USER_KEY,
     E2E_ACCOUNT_USER_EVENT,
+    JSON.stringify(account),
+    JSON.stringify(paidAccountResponse(account)),
   )) as number;
   await browser.waitUntil(
     async () =>

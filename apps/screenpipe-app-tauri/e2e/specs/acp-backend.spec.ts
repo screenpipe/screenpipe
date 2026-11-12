@@ -314,7 +314,7 @@ async function answerAgentAction(
 
 async function startAcp(
   sessionId: string,
-  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal" | "subagent" | "metadata" | "resume",
+  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal" | "subagent" | "metadata" | "repeated-tools" | "resume",
   env: Record<string, string> = {},
   userToken: string | null = null,
   resumeSessionId: string | null = null,
@@ -583,9 +583,9 @@ describe("ACP backend", function () {
     await createButton.waitForExist({ timeout: t(10_000) });
     await createButton.click();
 
-    const codingAgentCard = await $('//*[normalize-space()="Coding agent"]');
-    await codingAgentCard.waitForExist({ timeout: t(10_000) });
-    await codingAgentCard.click();
+    const codexCard = await $('[role="button"][aria-label="Codex"]');
+    await codexCard.waitForExist({ timeout: t(10_000) });
+    await codexCard.click();
 
     const selector = await $("#acpAgent");
     await selector.waitForExist({ timeout: t(10_000) });
@@ -613,8 +613,11 @@ describe("ACP backend", function () {
       "custom",
     ]);
     expect(options.map((option) => option.label)).toContain("Another ACP agent");
-    const body = (await browser.execute(() => document.body.innerText)) as string;
-    expect(body).toContain("Your existing sign-in and agent settings stay in that app.");
+    const boundaries = await $('[data-testid="acp-boundaries"]');
+    await boundaries.waitForDisplayed({ timeout: t(10_000) });
+    const body = await boundaries.getText();
+    expect(body).toContain("You sign in to Codex itself.");
+    expect(body).toContain("not passed to Codex");
   });
 
   it("uses the official Rust ACP SDK for stream, plan, tool, permission, and cancel", async () => {
@@ -945,12 +948,12 @@ describe("ACP backend", function () {
       },
     );
 
-    const widgets = await $$('[data-testid="tool-activity-widget"]');
+    const widgets = await $$('[data-testid="tool-activity-widget"]').getElements();
     expect(widgets.length).toBeGreaterThan(0);
     const widget = widgets[widgets.length - 1];
     const list = await widget.$('[data-testid="tool-activity-list"]');
     await list.waitForExist({ timeout: t(10_000) });
-    const rows = await widget.$$('[data-testid="tool-activity-item"]');
+    const rows = await widget.$$('[data-testid="tool-activity-item"]').getElements();
     expect(rows).toHaveLength(2);
     const listText = await list.getText();
     expect(listText).toContain("Searched your history");
@@ -1004,14 +1007,14 @@ describe("ACP backend", function () {
 
     const latestWidget = async (expectedCount: number) => {
       await browser.waitUntil(
-        async () => (await $$('[data-testid="tool-activity-widget"]')).length >= expectedCount,
+        async () => (await $$('[data-testid="tool-activity-widget"]').getElements()).length >= expectedCount,
         {
           timeout: t(10_000),
           interval: 100,
           timeoutMsg: `expected ${expectedCount} Claude tool activity widgets`,
         },
       );
-      const widgets = await $$('[data-testid="tool-activity-widget"]');
+      const widgets = await $$('[data-testid="tool-activity-widget"]').getElements();
       return widgets[widgets.length - 1];
     };
 
@@ -1019,7 +1022,7 @@ describe("ACP backend", function () {
     const list = await widget.$('[data-testid="tool-activity-list"]');
     await list.waitForExist({ timeout: t(10_000) });
 
-    const compactRows = await widget.$$('[data-testid="tool-activity-item"]');
+    const compactRows = await widget.$$('[data-testid="tool-activity-item"]').getElements();
     expect(compactRows).toHaveLength(1);
     expect(await compactRows[0].getText()).toContain("Searched recordings");
     expect(await compactRows[0].getText()).toContain("25 queries");
@@ -1028,7 +1031,7 @@ describe("ACP backend", function () {
 
     await compactRows[0].click();
     await browser.waitUntil(
-      async () => (await widget.$$('[data-testid="tool-activity-item"]')).length === 26,
+      async () => (await widget.$$('[data-testid="tool-activity-item"]').getElements()).length === 26,
       {
         timeout: t(5_000),
         interval: 100,
@@ -1038,7 +1041,7 @@ describe("ACP backend", function () {
     // Let the parent rail finish its disclosure transition before opening a
     // nested query, keeping the visual proof deterministic in WebKit.
     await browser.pause(350);
-    const detailedRows = await widget.$$('[data-testid="tool-activity-item"]');
+    const detailedRows = await widget.$$('[data-testid="tool-activity-item"]').getElements();
     await detailedRows[1].click();
     expect(await widget.getText()).toContain("2026-08-01T00:00:00Z");
     await browser.pause(350);

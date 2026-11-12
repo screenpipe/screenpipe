@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
 import {
+  act,
   render,
   screen,
   fireEvent,
@@ -481,7 +482,7 @@ describe("SOP assistant and web editor", () => {
       signal = s;
       return new Promise<Guide>(() => {});
     });
-    render(<GuideChat edit={edit} />);
+    await act(async () => { render(<GuideChat edit={edit} />); });
     expect(screen.queryByRole("region", { name: "SOP assistant" })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Ask Screenpipe" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Make it shorter" } });

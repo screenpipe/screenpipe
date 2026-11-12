@@ -40,6 +40,7 @@ import {
   waitForWindowHandle,
 } from "../helpers/tauri.js";
 import { t, waitForAppReady } from "../helpers/test-utils.js";
+import { paidAccountFixture } from "../helpers/account-fixtures.js";
 
 const seedFlags = E2E_SEED_FLAGS.split(",")
   .map((flag) => flag.trim().toLowerCase())
@@ -146,25 +147,8 @@ const openHomeWith = async (
   await waitForWindowHandle("home", t(20_000));
   await browser.switchToWindow("home");
   await browser.execute(
-    (accountKey: string, learningKey: string, learningValue: string) => {
-      const checkedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        accountKey,
-        JSON.stringify({
-          id: "e2e-first-run-user",
-          email: "e2e-first-run@screenpipe.test",
-          token: "e2e-first-run-token",
-          app_entitled: true,
-          subscription_plan: "standard",
-          entitlement: {
-            active: true,
-            plan: "standard",
-            source: "subscription",
-            checked_at: checkedAt,
-            features: { app: true, cloud: false },
-          },
-        }),
-      );
+    (accountKey: string, learningKey: string, learningValue: string, accountJson: string) => {
+      window.localStorage.setItem(accountKey, accountJson);
       window.localStorage.setItem(learningKey, learningValue);
       // Set both before navigating so the fresh mount reads them on boot.
       window.location.href = "/home?section=home";
@@ -172,6 +156,7 @@ const openHomeWith = async (
     E2E_ACCOUNT_USER_KEY,
     LEARNING_STORAGE_KEY,
     JSON.stringify(state),
+    JSON.stringify(paidAccountFixture("first-run")),
   );
   await browser.waitUntil(
     async () => (await browser.getUrl()).includes("section=home"),

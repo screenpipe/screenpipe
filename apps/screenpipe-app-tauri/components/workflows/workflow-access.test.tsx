@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkflowsApp } from "@screenpipe/workflows-ui";
@@ -32,6 +32,7 @@ beforeEach(() => {
 afterEach(cleanup);
 function mount() {
   const platform = createFixtureWorkflowsPlatform();
+  const accessChanges = vi.fn();
   const job = { id: "workflow-discover:1", cycleId: "cycle", status: "processing" as const };
   platform.managesAnalysis = true;
   platform.loadCapturedWork = vi.fn().mockResolvedValue(null);
@@ -41,15 +42,19 @@ function mount() {
   function App() {
     const [reason, setReason] = useState<string | undefined>("Checking workflow access…");
     const [requested, setRequested] = useState(false);
+    const accessChanged = useCallback((next: string | undefined) => {
+      accessChanges(next);
+      setReason(next);
+    }, []);
     return <WorkflowsApp platform={platform} storageKey={null} analysisUnavailableReason={reason} onAnalysisUnavailable={() => setRequested(true)}
-      toolbarAccessory={<WorkflowAccess active requested={requested} onRequestChange={setRequested} onAccessChange={setReason} />} />;
+      toolbarAccessory={<WorkflowAccess active requested={requested} onRequestChange={setRequested} onAccessChange={accessChanged} />} />;
   }
   render(<App />);
-  return platform;
+  return { platform, accessChanges };
 }
 
 it("routes build through explicit schedule setup, then starts and tracks the agent after opt-in", async () => {
-  const platform = mount();
+  const { platform, accessChanges } = mount();
   const build = await screen.findByRole("button", { name: /Build my workflow catalog/ });
   await waitFor(() => expect(screen.getByRole("switch", { name: "Automatic updates" })).toBeEnabled());
   fireEvent.click(build);
@@ -61,13 +66,14 @@ it("routes build through explicit schedule setup, then starts and tracks the age
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(state.enable).toHaveBeenCalledOnce();
   expect(screen.getByRole("switch", { name: "Automatic updates" })).toBeChecked();
+  await waitFor(() => expect(accessChanges).toHaveBeenLastCalledWith(undefined));
   const runtime = await platform.ensureRuntime();
   let releaseRuntime!: () => void;
   platform.ensureRuntime = vi.fn(() => new Promise<typeof runtime>(resolve => {
     releaseRuntime = () => resolve(runtime);
   }));
   await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
-  expect(platform.ensureRuntime).toHaveBeenCalledOnce();
+  await waitFor(() => expect(platform.ensureRuntime).toHaveBeenCalledOnce());
   expect(platform.startAnalysisJob).not.toHaveBeenCalled();
   await act(async () => releaseRuntime());
   await waitFor(() => expect(platform.startAnalysisJob).toHaveBeenCalledOnce());
@@ -76,7 +82,7 @@ it("routes build through explicit schedule setup, then starts and tracks the age
 });
 
 it("allows cancelling setup and opening it again without enabling or starting work", async () => {
-  const platform = mount();
+  const { platform } = mount();
   const build = await screen.findByRole("button", { name: /Build my workflow catalog/ });
   await waitFor(() => expect(screen.getByRole("switch", { name: "Automatic updates" })).toBeEnabled());
   fireEvent.click(build);
