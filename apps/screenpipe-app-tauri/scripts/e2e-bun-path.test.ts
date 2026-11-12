@@ -18,24 +18,26 @@ for (const statement of source.statements) {
   }
 }
 if (!initializer) throw new Error("E2E launcher does not export its Bun path");
-const actualPath = (appRoot: string, platform: string): string => runInNewContext(
-  ts.transpile(`(${initializer!.getText(source)})`), { APP_ROOT: appRoot, process: { platform }, resolve },
+const actualPath = (appRoot: string, platform: string, arch = "x64", releaseTarget?: string): string => runInNewContext(
+  ts.transpile(`(${initializer!.getText(source)})`), { APP_ROOT: appRoot, process: { platform, arch, env: { SCREENPIPE_RELEASE_TARGET: releaseTarget } }, resolve },
 );
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-for (const [platform, relativePath] of [
-  ["linux", "src-tauri/bun-x86_64-unknown-linux-gnu"],
-  ["win32", "src-tauri/target/debug-dev/bun.exe"],
-  ["darwin", "src-tauri/target/debug-dev/bun"],
+for (const [platform, arch, releaseTarget, relativePath] of [
+  ["linux", "x64", undefined, "src-tauri/bun-x86_64-unknown-linux-gnu"],
+  ["win32", "x64", undefined, "src-tauri/target/debug-dev/bun.exe"],
+  ["darwin", "arm64", undefined, "src-tauri/bun-aarch64-apple-darwin"],
+  ["darwin", "x64", undefined, "src-tauri/bun-x86_64-apple-darwin"],
+  ["darwin", "arm64", "x86_64-apple-darwin", "src-tauri/bun-x86_64-apple-darwin"],
 ] as const) {
-  test(`${platform} MCP configuration launches its staged Bun without a PATH fallback`, () => {
+  test(`${platform}/${arch}${releaseTarget ? ` targeting ${releaseTarget}` : ""} MCP configuration launches its staged Bun without a PATH fallback`, () => {
     const root = mkdtempSync(resolve(tmpdir(), "screenpipe-bun-fixture-")); roots.push(root);
     const sidecar = resolve(root, relativePath);
     mkdirSync(dirname(sidecar), { recursive: true });
     copyFileSync(process.execPath, sidecar);
     chmodSync(sidecar, 0o755);
-    const version = execFileSync(actualPath(root, platform), ["--version"], { encoding: "utf8", env: { ...process.env, PATH: "" } });
+    const version = execFileSync(actualPath(root, platform, arch, releaseTarget), ["--version"], { encoding: "utf8", env: { ...process.env, PATH: "" } });
     expect(version.trim()).toBe(Bun.version);
   });
 }

@@ -144,9 +144,12 @@ const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
   (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
 );
 export const E2E_AI_TOOLS_HOME = resolve(E2E_DATA_DIR, 'ai-tools-home');
-// Linux --no-bundle builds retain pre_build.js's baseline sidecar in src-tauri.
+// --no-bundle keeps Linux/macOS sidecars in src-tauri. Match pre_build.js's
+// selected release target, which can differ from the macOS runner architecture.
 export const E2E_BUN_PATH = process.platform === 'linux'
   ? resolve(APP_ROOT, 'src-tauri', 'bun-x86_64-unknown-linux-gnu')
+  : process.platform === 'darwin'
+  ? resolve(APP_ROOT, 'src-tauri', `bun-${process.env.SCREENPIPE_RELEASE_TARGET || (process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin')}`)
   : resolve(
     APP_ROOT,
     'src-tauri',
