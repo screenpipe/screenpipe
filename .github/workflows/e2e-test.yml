@@ -282,6 +282,13 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       run: bun run test:e2e:onboarding-first-run
 
+    - name: Verify named Capture saves through starred sessions
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      env:
+        RECORD_VIDEO: "true"
+      run: bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
+
     - name: Run E2E Tests
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri
@@ -289,8 +296,6 @@ jobs:
         RECORD_VIDEO: "true"
       run: |
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
-        bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         bun run test:e2e
 
     - name: Run Windows Core Recording E2E
