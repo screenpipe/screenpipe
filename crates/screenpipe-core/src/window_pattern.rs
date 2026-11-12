@@ -20,11 +20,37 @@
 //! "Slack::"           → equivalent to legacy "Slack"
 //! ```
 //!
+//! Known localized app names also match across languages: `notepad` and
+//! `メモ帳` are equivalent in either app names or window titles, for both
+//! ignore and include lists. This is an explicit alias, not general translation;
+//! other filter terms and phrases retain literal substring semantics.
+//!
 //! For include lists, scoped entries create a per-app whitelist: if an app
 //! has any scoped include rule, only matching titles pass; apps with no
 //! scoped rule fall back to the legacy global include semantics. This avoids
 //! the foot-gun where adding `Slack::#engineering` to includes would
 //! accidentally block every other app.
+
+/// Match a literal substring, with explicit aliases for known localized app names.
+///
+/// Keep this deterministic and local: arbitrary titles (including file names and
+/// privacy terms) must not be machine-translated. Only a complete filter term
+/// in a verified alias group expands; phrases and unknown names remain literal.
+/// Both arguments are lowercase. This runs in capture loops, so it must not
+/// allocate or query the OS/network. The same operation serves app and title
+/// matching, including scoped include targeting.
+fn contains_with_aliases(text_lc: &str, pattern_lc: &str) -> bool {
+    if text_lc.contains(pattern_lc) {
+        return true;
+    }
+    // Windows Notepad's English/Japanese names. Match both on every locale so
+    // a saved rule remains valid when the system language changes.
+    match pattern_lc {
+        "notepad" => text_lc.contains("メモ帳"),
+        "メモ帳" => text_lc.contains("notepad"),
+        _ => false,
+    }
+}
 
 /// Parsed form of an ignore/include pattern.
 ///
@@ -81,19 +107,20 @@ impl WindowPattern {
     pub fn matches(&self, app_lc: &str, title_lc: &str) -> bool {
         match &self.app {
             Some(app_constraint) => {
-                if !app_lc.contains(app_constraint.as_str()) {
+                if !contains_with_aliases(app_lc, app_constraint) {
                     return false;
                 }
                 if self.title.is_empty() {
                     return true;
                 }
-                title_lc.contains(self.title.as_str())
+                contains_with_aliases(title_lc, &self.title)
             }
             None => {
                 if self.title.is_empty() {
                     return false;
                 }
-                app_lc.contains(self.title.as_str()) || title_lc.contains(self.title.as_str())
+                contains_with_aliases(app_lc, &self.title)
+                    || contains_with_aliases(title_lc, &self.title)
             }
         }
     }
@@ -130,10 +157,10 @@ pub fn passes_includes(patterns: &[WindowPattern], app_lc: &str, title_lc: &str)
     for p in patterns {
         match &p.app {
             Some(app_constraint) => {
-                if app_lc.contains(app_constraint.as_str()) {
+                if contains_with_aliases(app_lc, app_constraint) {
                     has_app_scoped = true;
                     if !app_scoped_matched
-                        && (p.title.is_empty() || title_lc.contains(p.title.as_str()))
+                        && (p.title.is_empty() || contains_with_aliases(title_lc, &p.title))
                     {
                         app_scoped_matched = true;
                     }
@@ -142,7 +169,8 @@ pub fn passes_includes(patterns: &[WindowPattern], app_lc: &str, title_lc: &str)
             None => {
                 has_global = true;
                 if !global_matched
-                    && (app_lc.contains(p.title.as_str()) || title_lc.contains(p.title.as_str()))
+                    && (contains_with_aliases(app_lc, &p.title)
+                        || contains_with_aliases(title_lc, &p.title))
                 {
                     global_matched = true;
                 }
@@ -231,6 +259,89 @@ mod tests {
         let patterns = WindowPattern::parse_list(&raw);
         assert_eq!(patterns.len(), 1);
         assert_eq!(patterns[0].title, "slack");
+    }
+
+    #[test]
+    fn localized_notepad_includes_native_app_and_english_browser_title() {
+        for filter in ["notepad", "メモ帳"] {
+            let patterns = WindowPattern::parse_list(&[filter.to_string()]);
+            for (app, title) in [
+                ("メモ帳", "無題 - メモ帳"),
+                ("notepad", "untitled - notepad"),
+                ("chrome", "notepad - google search"),
+                ("chrome", "メモ帳 - google 検索"),
+            ] {
+                assert!(
+                    passes_includes(&patterns, app, title),
+                    "{filter}: {app}/{title}"
+                );
+            }
+            assert!(!passes_includes(&patterns, "chrome", "unrelated search"));
+        }
+    }
+
+    #[test]
+    fn localized_notepad_exclusions_match_both_languages() {
+        for filter in ["notepad", "メモ帳"] {
+            let patterns = WindowPattern::parse_list(&[filter.to_string()]);
+            for (app, title) in [
+                ("メモ帳", "無題"),
+                ("notepad", "untitled"),
+                ("chrome", "notepad - google search"),
+                ("chrome", "メモ帳 - google 検索"),
+            ] {
+                assert!(
+                    matches_any(&patterns, app, title),
+                    "{filter}: {app}/{title}"
+                );
+            }
+            assert!(!matches_any(&patterns, "chrome", "unrelated search"));
+        }
+    }
+
+    #[test]
+    fn localized_scoped_includes_keep_per_app_title_restrictions() {
+        for filter in ["notepad::work", "メモ帳::work"] {
+            let patterns = WindowPattern::parse_list(&[filter.to_string()]);
+            for app in ["notepad", "メモ帳"] {
+                assert!(passes_includes(&patterns, app, "work.txt"));
+                assert!(!passes_includes(&patterns, app, "private.txt"));
+                assert!(matches_any(&patterns, app, "work.txt"));
+            }
+            assert!(passes_includes(&patterns, "chrome", "unrelated"));
+            assert!(!matches_any(&patterns, "chrome", "work.txt"));
+        }
+    }
+
+    #[test]
+    fn localized_aliases_do_not_translate_arbitrary_phrases_or_partial_names() {
+        for (filter, title) in [
+            ("note", "メモ帳"),
+            ("メモ", "notepad"),
+            ("notepad private", "メモ帳 private"),
+            ("メモ帳 private", "notepad private"),
+            ("private", "非公開"),
+        ] {
+            assert!(
+                !legacy(filter).matches("chrome", title),
+                "{filter}: {title}"
+            );
+        }
+        assert!(legacy("private").matches("chrome", "private browsing"));
+    }
+
+    #[test]
+    fn localized_scoped_title_and_ignore_precedence() {
+        let includes = WindowPattern::parse_list(&["chrome::notepad".to_string()]);
+        let ignores = WindowPattern::parse_list(&["chrome::メモ帳".to_string()]);
+        assert!(passes_includes(&includes, "chrome", "メモ帳 - google 検索"));
+        assert!(matches_any(&ignores, "chrome", "notepad - google search"));
+        assert!(!passes_includes(&includes, "chrome", "private banking"));
+        // Adding an unrestricted legacy include must not bypass the localized
+        // app's scoped whitelist.
+        let mixed = WindowPattern::parse_list(&["メモ帳".to_string(), "notepad::work".to_string()]);
+        assert!(!passes_includes(&mixed, "メモ帳", "private.txt"));
+        assert!(passes_includes(&mixed, "メモ帳", "work.txt"));
     }
 
     // --- Legacy behavior preservation -----------------------------------
