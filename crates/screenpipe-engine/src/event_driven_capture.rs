@@ -4466,6 +4466,84 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    #[ignore = "requires SCREENPIPE_ISOLATED_VM_TEST=1 in a disposable logged-in Windows VM"]
+    async fn isolated_vm_focused_monitor_matches_capture_backend_and_unknown_fails_closed() {
+        use windows::core::PCWSTR;
+        use windows::Win32::System::StationsAndDesktops::{
+            CloseDesktop, CreateDesktopW, GetThreadDesktop, SetThreadDesktop, DESKTOP_CONTROL_FLAGS,
+        };
+        use windows::Win32::System::Threading::GetCurrentThreadId;
+
+        assert_eq!(
+            std::env::var("SCREENPIPE_ISOLATED_VM_TEST").as_deref(),
+            Ok("1"),
+            "requires SCREENPIPE_ISOLATED_VM_TEST=1 in a disposable logged-in Windows VM"
+        );
+
+        let focused_monitor =
+            screenpipe_a11y::platform::windows::get_focused_window_monitor_fresh()
+                .expect("the isolated VM console must have a real foreground window");
+        let monitors = list_monitors().await;
+        assert!(
+            !monitors.is_empty(),
+            "the capture backend found no displays"
+        );
+        println!(
+            "foreground_monitor_id={focused_monitor}; capture_monitors={:?}",
+            monitors
+                .iter()
+                .map(|monitor| (
+                    monitor.id(),
+                    monitor.x(),
+                    monitor.y(),
+                    monitor.width(),
+                    monitor.height()
+                ))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            monitors.iter().any(|monitor| monitor.id() == focused_monitor),
+            "foreground HMONITOR id {focused_monitor} must equal a SafeMonitor id; capture ids: {:?}",
+            monitors.iter().map(SafeMonitor::id).collect::<Vec<_>>()
+        );
+
+        let private_desktop_result = std::thread::spawn(|| unsafe {
+            let original_desktop = GetThreadDesktop(GetCurrentThreadId())?;
+            let name: Vec<u16> =
+                format!("screenpipe-focused-monitor-test-{}\0", std::process::id())
+                    .encode_utf16()
+                    .collect();
+            let desktop = CreateDesktopW(
+                PCWSTR(name.as_ptr()),
+                PCWSTR::null(),
+                None,
+                DESKTOP_CONTROL_FLAGS(0),
+                0x01ff,
+                None,
+            )?;
+            SetThreadDesktop(desktop)?;
+            let focused = screenpipe_a11y::platform::windows::get_focused_window_monitor_fresh();
+            SetThreadDesktop(original_desktop)?;
+            CloseDesktop(desktop)?;
+            Ok::<_, windows::core::Error>(focused)
+        })
+        .join()
+        .expect("private-desktop test thread panicked")
+        .expect("private desktop Win32 calls failed");
+        assert_eq!(
+            private_desktop_result, None,
+            "a private inactive desktop must fail closed without a foreground window"
+        );
+        println!("private_inactive_desktop_focused_monitor={private_desktop_result:?}");
+        assert_eq!(
+            screenpipe_a11y::platform::windows::get_focused_window_monitor_fresh(),
+            Some(focused_monitor),
+            "the original console foreground query must still work after the private desktop probe"
+        );
+    }
+
     #[test]
     fn text_ownership_requires_fresh_window_geometry_and_tracks_display_transitions() {
         use screenpipe_a11y::ElementBounds;

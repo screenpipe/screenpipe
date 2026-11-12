@@ -5,13 +5,20 @@
 
 ## Result
 
-The focused-display text boundary passed the local Windows unit/regression
-suites and a production-default engine compile. Review found no acceptance
-blocker in the resumed four-file implementation. Text ownership is sampled
-from uncached actual focused-window geometry before pixels/metadata, before an
-AX walk, and after an AX walk. Scheduling remains independent and may retain
-its cursor fallback, but it cannot authorize AX, OCR detection/recognition,
-OCR-cache reuse, semantic projection, element references, or focused metadata.
+The corrected focused-display text boundary passed the required Windows
+unit/regression suites, a production-default engine compile, and an opt-in
+native acceptance that executes the production
+`get_focused_window_monitor_fresh` helper. The corrected implementation was
+resumed at `0ffcd74120c668b2c91048f3e3c0207ec867fd65`; the validation test and
+this final report are committed immediately after it on
+`codex/focused-display-text`.
+
+On Windows, text ownership is sampled from the uncached actual foreground
+`HWND` through `MonitorFromWindow(MONITOR_DEFAULTTONULL)`, confirmed against a
+fresh `GetForegroundWindow`, and compared directly to `SafeMonitor.id`.
+Scheduling remains independent and may retain its cursor fallback, but it
+cannot authorize AX, OCR detection/recognition, OCR-cache reuse, semantic
+projection, element references, focused metadata, or UI-event frame links.
 
 ```text
 before: background pixels -> no AX -> gated OCR/cache -> text
@@ -29,45 +36,62 @@ are empty as applicable without weakening the screenshot durability checks.
 
 ## Local commands and results
 
+- `cargo check -p screenpipe-engine --lib --profile debug-dev`
+  - PASS, exit 0: production default-feature engine library compiled.
 - `cargo test -p screenpipe-capture --lib --profile debug-dev`
   - PASS: 47 passed, 0 failed, 1 ignored.
 - `cargo test -p screenpipe-engine --lib --profile debug-dev event_driven_capture::tests`
-  - PASS on retry: 104 passed, 0 failed, 0 ignored, 1666 filtered out.
-  - The first attempt stopped before engine compilation when `ort-sys` lost its
-    CDN connection while extracting `onnxruntime.lib` (`Peer disconnected`).
-    The unchanged exact retry recovered the artifact and passed.
+  - PASS, exit 0: 104 passed, 0 failed, 1 ignored, 1666 filtered out.
+- `$env:SCREENPIPE_ISOLATED_VM_TEST='1'; cargo test -p screenpipe-engine --lib
+  --profile debug-dev
+  isolated_vm_focused_monitor_matches_capture_backend_and_unknown_fails_closed
+  -- --ignored --nocapture`
+  - PASS, exit 0: 1 passed, 0 failed, 1770 filtered out.
+  - `foreground_monitor_id=65537`
+  - `capture_monitors=[(65537, 0, 0, 1024, 768)]`
+  - `private_inactive_desktop_focused_monitor=None`
 - `cargo test -p screenpipe-engine --lib --profile debug-dev focus_aware_controller::tests`
-  - PASS: 15 passed, 0 failed, 0 ignored, 1755 filtered out.
-- `cargo check -p screenpipe-engine --lib --profile debug-dev`
-  - PASS: default engine features, non-test library target.
+  - Carried from the prior Windows run: 15 passed, 0 failed. Its source and
+    inputs are unchanged by the corrected source and validation commit.
 - `git diff --check`
   - PASS.
 
-The macOS host capture result remains separately reported as 46/47 before the
-fixture correction. Its rerun and host engine tests are pending; this Windows
-evidence does not report them as passed.
+Separate host evidence, not Windows proof: macOS capture passed 47/47,
+event-driven capture passed 104/104, focus controller passed 15/15, and the
+final frame-linker suite passed 13/13.
 
 ## Native Windows evidence and limits
 
-The prepared console exposed one actual display: `DISPLAY1`, origin `(0,0)`,
-size `1024x768`. A disposable Notepad app window was queried through the same
-real Win32 sequence used by the new production API:
+The prepared console exposed one actual display, origin `(0,0)`, size
+`1024x768`. The guarded Rust test executed the actual production helper against
+the console's real foreground window. Its returned native monitor handle
+representation, `65537`, exactly matched the capture backend's `SafeMonitor.id`.
+It then attached a test thread to a newly created private inactive desktop;
+the production helper returned `None`, the thread switched back, closed only
+its test-owned desktop, and the original console query still returned `65537`.
+The test is ignored by default and asserts
+`SCREENPIPE_ISOLATED_VM_TEST=1`, so ordinary hosts cannot launch or run this
+native fixture.
 
-```text
-GetForegroundWindow -> GetWindowRect -> GetForegroundWindow
-sampled hwnd: 131828
-stable across query: true
-rect: x=52 y=52 width=768 height=519
-```
+The earlier `GetWindowRect` probe is retained only as historical evidence that
+Notepad could own the guest foreground; it is not proof of the corrected
+HMONITOR helper. The current native test supersedes that geometry probe.
 
-The modern Notepad host reused one foreground window across two launches.
-Separate encoded WinForms fixtures did not materialize in this prepared
-console, so native focus movement and absent/unknown foreground were not
-claimed. With only one enumerated display, cursor-on-another-display behavior
-and actual two-display ownership were not tested. Controlled real-engine
-`do_capture`/DB execution and a UI demonstration were also unavailable; the DB
-proof is the backend capture regression above. No customer sign-in, customer
-machine, or operator RDP was used.
+The file-backed SQLite capture regression proves the remaining boundary. A
+focused capture retains text; a background capture retains its permitted JPEG
+and frame row while skipping OCR detect/run/cache and AX work and clearing text
+columns, metadata, elements, semantic projections, and frame-link attachment;
+returning focus restores focused text. The event-driven suite additionally
+proves only focused paired results reach `FrameLinker` and background results
+clear `last_frame_id`.
+
+Only one physical/runtime display was enumerated. No actual two-display
+transition, cursor-on-another-display behavior, hotplug, or DPI-mixed topology
+was tested; no simulated geometry or synthetic image is claimed as native
+multi-display proof. The private desktop result proves native per-desktop
+unknown-focus behavior, not a display transition. No customer sign-in,
+customer machine, operator RDP, virtual display driver, or image rebuild was
+used.
 
 ## Historical intent and scope
 
