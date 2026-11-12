@@ -290,6 +290,7 @@ jobs:
       run: |
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         bun run test:e2e
 
     - name: Run Windows Core Recording E2E
