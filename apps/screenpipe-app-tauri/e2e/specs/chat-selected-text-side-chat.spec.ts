@@ -213,7 +213,7 @@ describe("Selected response side chat", function () {
   it("adds a selection to the current composer without sending", async () => {
     await selectAssistantText(SELECTED_TEXT);
     await saveScreenshot("chat-selected-text-actions");
-    await $("button=add to chat").click();
+    await $("button=Add to chat").click();
 
     const composer = await $(COMPOSER_SELECTOR);
     await browser.waitUntil(
@@ -237,7 +237,7 @@ describe("Selected response side chat", function () {
 
   it("opens an unsent editable side chat while keeping the source visible", async () => {
     await selectAssistantText(SELECTED_TEXT);
-    await $("button=ask in side chat").click();
+    await $("button=Ask in side chat").click();
 
     await browser.waitUntil(
       async () => {
@@ -363,8 +363,8 @@ describe("Selected response side chat", function () {
 
   it("does not allow a side chat inside a side chat", async () => {
     await selectAssistantText(TEMPORARY_ANSWER);
-    expect(await $("button=add to chat").isDisplayed()).toBe(true);
-    expect(await $("button=ask in side chat").isExisting()).toBe(false);
+    expect(await $("button=Add to chat").isDisplayed()).toBe(true);
+    expect(await $("button=Ask in side chat").isExisting()).toBe(false);
     await browser.keys(["Escape"]);
   });
 
@@ -379,7 +379,7 @@ describe("Selected response side chat", function () {
     });
 
     await selectAssistantText(SELECTED_TEXT);
-    await $("button=ask in side chat").click();
+    await $("button=Ask in side chat").click();
     await browser.waitUntil(
       async () => {
         const id = await readForeground();
@@ -430,7 +430,7 @@ describe("Selected response side chat", function () {
 
   it("drops the temporary chat while preserving source history after a renderer reload", async () => {
     await selectAssistantText(SELECTED_TEXT);
-    await $("button=ask in side chat").click();
+    await $("button=Ask in side chat").click();
     const previousSideChatId = sideChatId;
     await browser.waitUntil(
       async () => {

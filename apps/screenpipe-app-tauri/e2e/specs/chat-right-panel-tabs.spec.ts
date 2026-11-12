@@ -146,7 +146,7 @@ describe("Chat right-panel tabs", function () {
     await closeTab("charlie.md");
     await waitForActiveTab("alpha.md");
 
-    const toggle = await $('button[aria-label="Toggle side panel"]');
+    const toggle = await $('button[aria-label="Toggle right sidebar"]');
     await toggle.click();
     await browser.waitUntil(
       async () =>
