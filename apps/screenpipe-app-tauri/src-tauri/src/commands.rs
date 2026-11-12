@@ -74,6 +74,20 @@ mod tests {
     };
 
     #[test]
+    fn simplified_ui_cache_round_trips_without_becoming_fully_hidden() {
+        let mut json = serde_json::json!({"hide_app": true, "org": "example"}).as_object().unwrap().clone();
+        super::update_enterprise_ui_cache(&mut json, true, true);
+        assert_eq!(json["ui_mode"], "simplified");
+        assert_eq!(json["hide_app"], false);
+        assert_eq!(json["org"], "example");
+        super::update_enterprise_ui_cache(&mut json, true, false);
+        assert!(!json.contains_key("ui_mode"));
+        assert_eq!(json["hide_app"], true);
+        super::update_enterprise_ui_cache(&mut json, false, false);
+        assert_eq!(json["hide_app"], false);
+    }
+
+    #[test]
     fn shortcut_reminder_star_hint_tracks_registered_settings() {
         let mut settings = crate::store::SettingsStore::default();
         let default_shortcut = settings.star_session_shortcut.clone();
@@ -1051,12 +1065,22 @@ pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
 /// We only ever touch the user-writable file; a bundled MDM `enterprise.json`
 /// (checked first at boot) keeps precedence. To avoid littering consumer
 /// machines we skip writing a `false` when there's nothing to clear.
+fn update_enterprise_ui_cache(json: &mut serde_json::Map<String, serde_json::Value>, hidden: bool, simplified: bool) {
+    if simplified {
+        json.insert("ui_mode".into(), serde_json::json!("simplified"));
+    } else if json.get("ui_mode").and_then(|value| value.as_str()) == Some("simplified") {
+        json.remove("ui_mode");
+    }
+    if (hidden && !simplified) || json.contains_key("hide_app") {
+        json.insert("hide_app".into(), serde_json::json!(hidden && !simplified));
+    }
+}
+
 fn persist_enterprise_hide_app(hidden: bool) {
+    let simplified = crate::enterprise_policy::is_simplified_ui();
     let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
     match crate::enterprise_config_file::update(&path, |json| {
-        if hidden || json.contains_key("hide_app") {
-            json.insert("hide_app".to_string(), serde_json::Value::Bool(hidden));
-        }
+        update_enterprise_ui_cache(json, hidden, simplified);
         Ok(())
     }) {
         Ok(true) => info!(
@@ -3347,6 +3371,7 @@ fn shortcut_reminder_payload(
     settings: &crate::store::SettingsStore,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
+    map.insert("simplifiedUI".into(), serde_json::json!(crate::enterprise_policy::is_simplified_ui().to_string()));
     map.insert(
         "overlay".to_string(),
         serde_json::Value::String(shortcut_reminder_label(
@@ -3462,7 +3487,7 @@ pub(crate) async fn maybe_show_shortcut_reminder_on_startup(
     let mut store = crate::store::SettingsStore::get(&app_handle)?.unwrap_or_default();
     let now_unix = chrono::Utc::now().timestamp();
     if shortcut_overlay_hidden_by_choice(
-        store.show_shortcut_overlay,
+        store.show_shortcut_overlay || crate::enterprise_policy::is_simplified_ui(),
         store.shortcut_overlay_snoozed_until,
         now_unix,
     ) {
@@ -3510,7 +3535,7 @@ pub async fn show_shortcut_reminder(
     let mut store = crate::store::SettingsStore::get(&app_handle)?.unwrap_or_default();
     let now_unix = chrono::Utc::now().timestamp();
     if shortcut_overlay_hidden_by_choice(
-        store.show_shortcut_overlay,
+        store.show_shortcut_overlay || crate::enterprise_policy::is_simplified_ui(),
         store.shortcut_overlay_snoozed_until,
         now_unix,
     ) {
@@ -3565,7 +3590,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
     let store = crate::store::SettingsStore::get(&app_handle)
         .unwrap_or_default()
         .unwrap_or_default();
-    if respect_timeline_disabled && store.recording.disable_timeline {
+    if respect_timeline_disabled && store.recording.disable_timeline && !crate::enterprise_policy::is_simplified_ui() {
         info!("timeline disabled: skipping shortcut reminder overlay");
         return Ok(());
     }
@@ -3733,7 +3758,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
     let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         label,
-        tauri::WebviewUrl::App("shortcut-reminder".into()),
+        tauri::WebviewUrl::App(format!("shortcut-reminder?simplified={}", crate::enterprise_policy::is_simplified_ui()).into()),
     )
     .title("")
     .inner_size(window_width, window_height)

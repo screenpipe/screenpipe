@@ -77,6 +77,7 @@ const DEFAULT_SHORTCUTS = {
 
 const COLLAPSED_SIZE = { width: 22, height: 16 };
 const EXPANDED_SIZE = { width: 192, height: 62 };
+const SIMPLIFIED_EXPANDED_SIZE = { width: 96, height: 62 };
 const SETTINGS_MENU_SIZE = { width: 164, height: 96 };
 const INCIDENT_SIZE = { width: 160, height: 40 };
 const MEETING_SIZE = { width: 320, height: 160 };
@@ -110,6 +111,7 @@ export default function ShortcutReminderPage() {
   // id simply stops matching.
   const [hoverMeetingId, setHoverMeetingId] = useState<number | null>(null);
   const [pinnedMeetingId, setPinnedMeetingId] = useState<number | null>(null);
+  const [simplifiedUI, setSimplifiedUI] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("simplified") === "true");
   const [expanded, setExpanded] = useState(false);
   const [starError, setStarError] = useState(false);
   const starredSessions = useStarredSessions();
@@ -282,7 +284,8 @@ export default function ShortcutReminderPage() {
 
   useEffect(() => {
     // Listen for explicit shortcut-reminder-update event (from Rust side)
-    const unlistenShortcut = listen<string>("shortcut-reminder-update", () => {
+    const unlistenShortcut = listen<string>("shortcut-reminder-update", (event) => {
+      try { setSimplifiedUI(JSON.parse(event.payload).simplifiedUI === "true"); } catch { /* Legacy label-only update. */ }
       setExpanded(false);
       setHoveredControl(null);
       setHoverMeetingId(null);
@@ -422,7 +425,7 @@ export default function ShortcutReminderPage() {
     } else if (settingsOpen) {
       resizeOverlay(SETTINGS_MENU_SIZE);
     } else if (expanded) {
-      resizeOverlay(EXPANDED_SIZE);
+      resizeOverlay(simplifiedUI ? SIMPLIFIED_EXPANDED_SIZE : EXPANDED_SIZE);
     } else {
       resizeOverlay(COLLAPSED_SIZE);
     }
@@ -434,6 +437,7 @@ export default function ShortcutReminderPage() {
     meetingOverlay.active,
     resizeOverlay,
     settingsOpen,
+    simplifiedUI,
   ]);
 
   const openStarPanel = useCallback(async () => {
@@ -805,6 +809,7 @@ export default function ShortcutReminderPage() {
 
   const openTimeline = guardDragClick((e: React.MouseEvent) => {
     e.stopPropagation();
+    if (simplifiedUI) { void openStarPanel(); return; }
     void commands.showWindow("Main");
     posthog.capture("shortcut_reminder_timeline_clicked");
   });
@@ -836,7 +841,7 @@ export default function ShortcutReminderPage() {
             cursor: "grab",
             WebkitAppRegion: "no-drag",
           } as React.CSSProperties}
-          title={ui("Open timeline")}
+          title={simplifiedUI ? ui("Starred work sessions") : ui("Open timeline")}
         >
           <span
             aria-hidden="true"
@@ -904,6 +909,7 @@ export default function ShortcutReminderPage() {
           cursor: "grab",
         }}
       >
+        {!simplifiedUI && <>
         <button
           title={ui("Open search")}
           className={dockButtonClass}
@@ -934,6 +940,7 @@ export default function ShortcutReminderPage() {
         >
           <MessageCircle style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
+        </>}
         <button
           title={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
           aria-label={starredActive ? ui("Open recording controls") : ui("Starred work sessions")}
@@ -950,7 +957,7 @@ export default function ShortcutReminderPage() {
             {!focusedUntil && starredMinutes > 0 && <span className="font-mono tabular-nums leading-none" style={{ fontSize: `${7 * overlayScale}px` }}>{starredMinutes}m</span>}
           </span>
         </button>
-        <button
+        {!simplifiedUI && <button
           title={ui("Open timeline")}
           className={dockButtonClass}
           style={dockButtonStyle}
@@ -960,7 +967,7 @@ export default function ShortcutReminderPage() {
           onClick={openTimeline}
         >
           <PanelLeft style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
-        </button>
+        </button>}
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <div
           title={ui("Microphone capture status")}
@@ -975,7 +982,7 @@ export default function ShortcutReminderPage() {
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <button
           title={ui("Screenpipe — right-click for options")}
-          aria-label={ui("Screenpipe — open timeline; right-click for options")}
+          aria-label={simplifiedUI ? ui("Starred work sessions") : ui("Screenpipe — open timeline; right-click for options")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("brand")}
@@ -985,7 +992,7 @@ export default function ShortcutReminderPage() {
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setSettingsOpen(true);
+            if (!simplifiedUI) setSettingsOpen(true);
           }}
         >
           <span
