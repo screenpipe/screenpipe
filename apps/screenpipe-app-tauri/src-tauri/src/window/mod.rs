@@ -468,9 +468,11 @@ pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
     // Both axes are packed into the key: the admin can suppress the tray while
     // leaving windows visible, so keying only on `hidden` would miss a tray-only
     // flip entirely. 0 = both visible, 1 = app UI hidden, 2 = tray hidden,
-    // 3 = both hidden. -1 = unknown (first call).
+    // 3 = both hidden. Bit 4 distinguishes simplified from fully hidden.
+    // -1 = unknown (first call).
     static LAST_APPLIED: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
-    let next = (if hidden { 1 } else { 0 }) | (if tray_hidden { 2 } else { 0 });
+    let next = (if hidden { 1 } else { 0 }) | (if tray_hidden { 2 } else { 0 })
+        | (if crate::enterprise_policy::is_simplified_ui() { 4 } else { 0 });
     if LAST_APPLIED.swap(next, std::sync::atomic::Ordering::SeqCst) == next {
         return;
     }
@@ -520,6 +522,10 @@ pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
     // when the pause affordance changed: a policy that suppresses the tray after
     // launch must still leave a working pause control, and relaxing it must put
     // the normal shortcut set back.
+    // Teardown reconciles after unregistering, avoiding a registration race.
+    if hidden {
+        return;
+    }
     let app_for_shortcuts = app.clone();
     let (ui_hidden, tray_hidden) = (hidden, tray_hidden);
     tauri::async_runtime::spawn(async move {

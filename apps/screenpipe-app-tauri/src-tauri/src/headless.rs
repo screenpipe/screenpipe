@@ -123,7 +123,9 @@ pub fn request_enter(app: AppHandle) {
 pub async fn enter(app: AppHandle) -> Result<(), String> {
     mark_dormant(&app);
 
-    let _ = crate::commands::hide_shortcut_reminder(app.clone()).await;
+    if !crate::enterprise_policy::is_simplified_ui() {
+        let _ = crate::commands::hide_shortcut_reminder(app.clone()).await;
+    }
     tokio::task::yield_now().await;
     let app_for_main = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -133,6 +135,12 @@ pub async fn enter(app: AppHandle) -> Result<(), String> {
         Ok(()) => rx.await.map_err(|e| e.to_string()).and_then(|r| r),
         Err(error) => Err(error.to_string()),
     };
+    if result.is_ok() && crate::enterprise_policy::is_app_ui_hidden() {
+        crate::shortcuts::reconcile_with_enterprise_policy(&app, true, crate::enterprise_policy::is_tray_hidden()).await;
+        if crate::enterprise_policy::is_simplified_ui() {
+            let _ = crate::commands::maybe_show_shortcut_reminder_on_startup(app.clone()).await;
+        }
+    }
     if result.is_err() {
         UI_DORMANT.store(false, Ordering::SeqCst);
     }
@@ -196,7 +204,8 @@ fn enter_on_main_thread(app: &AppHandle) -> Result<(), String> {
     // dormancy continues preserving those recovery surfaces.
     let preserve = |label: &str| {
         !crate::search_only::is_active()
-            && preserve_window_during_dormancy(label, onboarding_completed)
+            && (preserve_window_during_dormancy(label, onboarding_completed)
+                || (crate::enterprise_policy::is_simplified_ui() && label == "shortcut-reminder"))
     };
     let mut windows: Vec<_> = app.webview_windows().into_iter().collect();
     windows.sort_by_key(|(label, _)| label == "home");
