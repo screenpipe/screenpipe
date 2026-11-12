@@ -206,6 +206,9 @@ pub struct CaptureContext<'a> {
 pub struct PairedCaptureResult {
     /// Database frame ID
     pub frame_id: i64,
+    /// Matches the stored focus flag. Only these frames may anchor focused UI
+    /// events; screenshot-only background frames must not inherit event text.
+    pub focused: bool,
     /// Path to the JPEG snapshot on disk
     pub snapshot_path: String,
     /// Accessibility text (if available)
@@ -795,6 +798,7 @@ async fn paired_capture_inner(
 
     Ok(PairedCaptureResult {
         frame_id,
+        focused: ctx.focused && ctx.monitor_hosts_focus,
         snapshot_path: snapshot_path_str,
         accessibility_text,
         text_source: text_source.map(String::from),
@@ -2075,9 +2079,12 @@ mod tests {
     async fn non_focused_monitor_keeps_pixels_without_any_text_or_element_reference() {
         let tmp = TempDir::new().unwrap();
         let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
-        let db = DatabaseManager::new("sqlite::memory:", Default::default())
-            .await
-            .unwrap();
+        let db = DatabaseManager::new(
+            tmp.path().join("capture.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let mut snap = rich_meeting_snap();
         snap.nodes[0].on_screen = Some(true);
         snap.nodes[0].bounds = Some(screenpipe_a11y::tree::NodeBounds {
@@ -2111,6 +2118,7 @@ mod tests {
         // Establish a real focused frame with elements that must not leak
         // through a reference when this display subsequently loses focus.
         let focused = paired_capture(&ctx, Some(&snap), None).await.unwrap();
+        assert!(focused.focused);
         assert_eq!(focused.text_source.as_deref(), Some("accessibility"));
         // Element projection is asynchronous. Seed the reference target
         // durably so this check cannot race its background projection.
@@ -2152,6 +2160,10 @@ mod tests {
             let result = paired_capture(&ctx, with_tree.then_some(&snap), gate)
                 .await
                 .unwrap();
+            assert!(
+                !result.focused,
+                "background frames must not anchor UI event text"
+            );
             assert_eq!(result.ocr_duration_ms, None);
             assert_eq!(result.ocr_gate_decision, None);
             assert_eq!(result.ocr_gate_detect_duration, None);

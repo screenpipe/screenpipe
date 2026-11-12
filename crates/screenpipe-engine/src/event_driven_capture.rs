@@ -1137,9 +1137,9 @@ pub(crate) async fn event_driven_capture_loop(
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
     let mut last_screenshot_focus_pid: Option<i32> = None;
-    // Last frame_id that was successfully written to the DB. Used to link
-    // events to a frame even when content-dedup skips the capture — the
-    // screen looks the same, so reusing the last frame is semantically correct.
+    // Last confirmed focused frame available to anchor UI events when a
+    // capture is deduped or debounced. Screenshot-only captures clear this
+    // reference so their pixels cannot inherit focused-event text.
     let mut last_frame_id: Option<i64> = None;
     // Track last successful DB write time — dedup is bypassed after 30s
     // to guarantee the timeline always has periodic entries
@@ -1237,7 +1237,8 @@ pub(crate) async fn event_driven_capture_loop(
                 }
                 if let Some(ref result) = output.result {
                     last_content_hash = result.content_hash;
-                    last_frame_id = Some(result.frame_id);
+                    // Only confirmed focused frames may anchor UI-event text.
+                    last_frame_id = result.focused.then_some(result.frame_id);
                     last_db_write = Instant::now();
                     // Update elements cache for this device (first frame = anchor)
                     if let Some(hash) = result.content_hash {
@@ -2182,7 +2183,10 @@ pub(crate) async fn event_driven_capture_loop(
                             }
                             // Full capture — update hash, metrics, cache
                             last_content_hash = result.content_hash;
-                            last_frame_id = Some(result.frame_id);
+                            // Clear the event anchor when ownership is lost so
+                            // debounce/dedup paths cannot attach event text to a
+                            // screenshot-only background frame.
+                            last_frame_id = result.focused.then_some(result.frame_id);
                             last_db_write = Instant::now();
 
                             // Update elements cache: only when we inserted new elements
@@ -2225,7 +2229,7 @@ pub(crate) async fn event_driven_capture_loop(
                             // correlation ids attached — internal-only
                             // triggers (Idle, VisualChange, startup Manual)
                             // have nothing to pair.
-                            if !correlation_ids.is_empty() {
+                            if result.focused && !correlation_ids.is_empty() {
                                 if let Some(ref linker) = linker_tx {
                                     let _ = linker.try_send(
                                         crate::frame_linker_actor::LinkerMessage::FrameCaptured(
@@ -2294,7 +2298,8 @@ pub(crate) async fn event_driven_capture_loop(
                                         ),
                                     );
                                 } else {
-                                    // No frame ever captured yet — just drop the ids.
+                                    // No focused anchor here; another monitor may
+                                    // still match these shared correlation IDs.
                                     correlation_ids.clear();
                                 }
                             }
@@ -2387,8 +2392,8 @@ pub(crate) async fn event_driven_capture_loop(
                 );
                 // Debounce within min_capture_interval_ms. The events
                 // belong to the previous frame visually (screen is the
-                // same), so link them to `last_frame_id` if we have one;
-                // otherwise tell the linker to release them.
+                // same), so link them to the last focused frame if available.
+                // Without one, leave shared IDs for the owning monitor.
                 if !correlation_ids.is_empty() {
                     if let (Some(ref linker), Some(fid)) = (&linker_tx, last_frame_id) {
                         let _ = linker.try_send(
@@ -2400,11 +2405,7 @@ pub(crate) async fn event_driven_capture_loop(
                             ),
                         );
                     } else {
-                        report_triggers_dropped(
-                            linker_tx.as_ref(),
-                            std::mem::take(&mut correlation_ids),
-                            crate::frame_linker::DropReason::Other,
-                        );
+                        correlation_ids.clear();
                     }
                 }
             }
@@ -3161,6 +3162,7 @@ async fn redacted_focus_check(
     redacted_focus_decision(filters, focus, pixels_only_permitted)
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn focused_window_is_on_monitor(
     window: Option<screenpipe_a11y::ElementBounds>,
     monitor: &TreeWalkerConfig,
@@ -3187,25 +3189,34 @@ fn focused_window_is_on_monitor(
         && y < monitor.monitor_y + monitor.monitor_height
 }
 
-async fn monitor_hosts_focused_window(config: &TreeWalkerConfig) -> bool {
-    let bounds = tokio::task::spawn_blocking(|| {
-        #[cfg(target_os = "macos")]
-        {
-            screenpipe_a11y::platform::macos::get_focused_window_bounds_fresh()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            screenpipe_a11y::platform::windows::get_focused_window_bounds_fresh()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            None
-        }
-    })
-    .await
-    .ok()
-    .flatten();
-    focused_window_is_on_monitor(bounds, config)
+async fn monitor_hosts_focused_window(params: &CaptureParams<'_>) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        tokio::task::spawn_blocking(
+            screenpipe_a11y::platform::windows::get_focused_window_monitor_fresh,
+        )
+        .await
+        .ok()
+        .flatten()
+            == Some(params.monitor_id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let bounds = tokio::task::spawn_blocking(|| {
+            #[cfg(target_os = "macos")]
+            {
+                screenpipe_a11y::platform::macos::get_focused_window_bounds_fresh()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                None
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        focused_window_is_on_monitor(bounds, params.tree_walker_config)
+    }
 }
 
 /// Perform a single event-driven capture.
@@ -3234,7 +3245,7 @@ async fn do_capture(
     // Scheduling can use hysteresis, cached notifications, and cursor fallback.
     // Text admission instead requires fresh focused-window geometry, including
     // at startup. Unknown ownership permits no text extraction.
-    let mut monitor_hosts_focus = monitor_hosts_focused_window(params.tree_walker_config).await;
+    let mut monitor_hosts_focus = monitor_hosts_focused_window(params).await;
     // Only the monitor hosting focus can provide an image in this mode.
     // Avoid taking and then discarding screenshots of the other monitors.
     if params.focused_window_screenshots && !monitor_hosts_focus {
@@ -3498,6 +3509,11 @@ async fn do_capture(
     } else {
         None
     };
+    // Focus may have moved while pixels, privacy checks, or metadata were
+    // acquired. Recheck before text-work budgets as well as the AX walk, so a
+    // stale focused app cannot throttle an otherwise permitted pixel-only frame.
+    // Losing ownership cannot promote this capture again.
+    monitor_hosts_focus = monitor_hosts_focus && monitor_hosts_focused_window(params).await;
     let trigger_app = if monitor_hosts_focus {
         capture_gate_app_name(trigger, lightweight_focused_metadata.as_ref())
     } else {
@@ -3562,10 +3578,6 @@ async fn do_capture(
         config.max_nodes_override = Some(decision.max_nodes);
         config.walk_timeout_override = Some(decision.timeout);
     }
-
-    // Focus may have moved while pixels, privacy checks, or budget metadata
-    // were being acquired. Losing ownership cannot promote this capture again.
-    monitor_hosts_focus &= monitor_hosts_focused_window(params.tree_walker_config).await;
 
     // The AX walker returns the one globally focused window. Walking it for a
     // different monitor would both waste work and pair unrelated pixels with
@@ -3743,7 +3755,7 @@ async fn do_capture(
     };
     // A walk can overlap a display transition (including the same process
     // moving displays). Discard every text projection before dedup/persistence.
-    monitor_hosts_focus &= monitor_hosts_focused_window(params.tree_walker_config).await;
+    monitor_hosts_focus = monitor_hosts_focus && monitor_hosts_focused_window(params).await;
     if !monitor_hosts_focus {
         if tree_snapshot.is_some() {
             let _ = params
@@ -4670,6 +4682,7 @@ mod tests {
     ) -> PairedCaptureResult {
         PairedCaptureResult {
             frame_id: 1,
+            focused: true,
             snapshot_path: String::new(),
             accessibility_text: None,
             text_source: None,
