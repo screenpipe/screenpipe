@@ -214,6 +214,14 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-next-v2-
 
+    - name: Prepare ONNX Runtime DLL copy directories
+      shell: pwsh
+      run: |
+        # ort-sys rc.12 copies DLLs to OUT_DIR.ancestors(3) and its examples/deps
+        # children without creating them. Cover Cargo's flat and split layouts.
+        $ortTargetProfile = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/target/debug-dev"
+        New-Item -ItemType Directory -Force -Path "$ortTargetProfile/examples", "$ortTargetProfile/deps", "$ortTargetProfile/build/examples", "$ortTargetProfile/build/deps" | Out-Null
+
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
