@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { authHeaders, getLocalApiConfig, waitForLocalApi } from "../helpers/api-utils.js";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
-import { STAR_ENTRY_SELECTOR, WORKFLOW_NAME_SELECTOR } from "../helpers/focused-recording-controls.js";
+import { STAR_ENTRY_SELECTOR, WORKFLOW_NAME_SELECTOR, unfinishedFocusedSession } from "../helpers/focused-recording-controls.js";
 import { invokeOrThrow, waitForWindowHandle } from "../helpers/tauri.js";
 import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 
@@ -77,7 +77,7 @@ describe("starred session popover", function () {
         let session = await current.json() as FocusedSession | null;
         // Only this attempt's draft is disposable. A different active draft
         // belongs to another action and must remain untouched.
-        if (session?.id === ownedFocusedId) {
+        if (session?.id === ownedFocusedId && unfinishedFocusedSession(session)) {
           for (const action of session.phase === "summary" ? ["delete"] : ["finish", "delete"]) {
             const response = await fetch(`${base}/focused-recordings/${ownedFocusedId}/action`, {
               method: "POST", headers,
@@ -208,7 +208,8 @@ describe("starred session popover", function () {
       expect(response.ok).toBe(true);
       return await response.json() as FocusedSession | null;
     };
-    expect(await readSession()).toBeNull();
+    const previousFocused = await readSession();
+    expect(unfinishedFocusedSession(previousFocused)).toBe(false);
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
     if ((await browser.getWindowHandles()).includes("shortcut-reminder")) {
       await browser.switchToWindow("shortcut-reminder");
@@ -222,14 +223,20 @@ describe("starred session popover", function () {
       await invokeOrThrow("toggle_starred_sessions");
     }
     await browser.waitUntil(async () => {
-      ownedFocusedId = (await readSession())?.id;
+      const session = await readSession();
+      ownedFocusedId = session?.phase === "recording" && session.id !== previousFocused?.id ? session.id : undefined;
       return Boolean(ownedFocusedId);
     }, { timeout: t(10_000), interval: 100, timeoutMsg: "star did not create its focused recording" });
     await waitForWindowHandle("starred-sessions", t(20_000));
     await browser.switchToWindow("starred-sessions");
     // A native handle exists before the first WebView has mounted its state
     // and visibility listeners. Load the controls before exercising retention.
-    await $("button=Pause").waitForDisplayed({ timeout: t(30_000) });
+    try {
+      await $("button=Pause").waitForDisplayed({ timeout: t(30_000) });
+    } catch (error) {
+      const state = await browser.execute(() => ({ path: location.pathname, ready: document.readyState, text: document.body.innerText.slice(0, 1500), hidden: document.querySelector('[role="dialog"]')?.parentElement?.hidden }));
+      throw new Error(`Initial focused controls did not render; nativeVisible=${await visible("starred-sessions")}; phase=${(await readSession())?.phase}; document=${JSON.stringify(state)}`, { cause: error });
+    }
     await $(WORKFLOW_NAME_SELECTOR).waitForEnabled({ timeout: t(15_000) });
     // Keep the retained picker as the IPC context while closing Home in this
     // isolated fixture. Reopening must not recreate or reveal Home.
@@ -267,9 +274,15 @@ describe("starred session popover", function () {
     const summary = (await readSession())!;
     expect(summary.phase).toBe("summary");
     await $("button=Save").click();
-    await browser.waitUntil(async () => (await readSession()) === null, {
-      timeout: t(15_000), interval: 100, timeoutMsg: "Save did not retire the focused recording draft",
+    await browser.waitUntil(async () => {
+      const saved = await readSession();
+      return saved?.id === started.id && saved.phase === "submitted";
+    }, {
+      timeout: t(15_000), interval: 100, timeoutMsg: "Save did not persist the local submitted receipt",
     });
+    const receipt = (await readSession())!;
+    expect(receipt.name).toBe("Review an invoice");
+    expect(receipt.intervals).toEqual(summary.intervals);
     const params = new URLSearchParams({
       start_time: new Date(summary.intervals[0].start).toISOString(),
       end_time: new Date(summary.intervals.at(-1)!.end! + 1).toISOString(), limit: "20",
@@ -285,6 +298,8 @@ describe("starred session popover", function () {
     await browser.waitUntil(async () => !(await visible("starred-sessions")), {
       timeout: t(5000),
     });
+    expect((await readSession())?.id).toBe(started.id);
+    expect((await readSession())?.phase).toBe("submitted");
     await invokeOrThrow("hide_shortcut_reminder");
   });
 });

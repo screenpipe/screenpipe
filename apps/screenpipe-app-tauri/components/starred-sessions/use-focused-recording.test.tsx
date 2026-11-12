@@ -3,8 +3,9 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useFocusedRecording } from "./use-focused-recording";
+import { unfinishedFocusedSession } from "../../e2e/helpers/focused-recording-controls";
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), start: vi.fn(), stop: vi.fn(), flush: vi.fn() }));
-vi.mock("@/lib/api", () => ({ localFetch: mocks.fetch }));
+vi.mock("@/lib/api", () => ({ ensureApiReady: async () => {}, localFetch: mocks.fetch }));
 vi.mock("@/lib/hooks/use-tauri-event", () => ({ useTauriEvent: () => {} }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => {}) }));
 vi.mock("./focused-narration", () => ({ FocusedNarration: class { start = mocks.start; stop = mocks.stop; flush = mocks.flush; } }));
@@ -27,6 +28,27 @@ beforeEach(() => {
   });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+it("retains the submitted receipt until an explicit new workflow replaces it", async () => {
+  session = { ...session, phase: "submitted", intervals: [{ ...session.intervals[0], end: Date.now() }] };
+  const receipt = structuredClone(session);
+  mocks.fetch.mockImplementation(async (path, init) => {
+    if (path === "/focused-recordings/start" && init?.method === "POST") {
+      session = { ...session, id: JSON.parse(init.body).id, name: "", phase: "recording", revision: 1, intervals: [] };
+    }
+    return { ok: true, json: async () => session };
+  });
+  const hook = renderHook(() => useFocusedRecording(options));
+  await waitFor(() => expect(hook.result.current.session?.phase).toBe("submitted"));
+  expect(hook.result.current.session).toEqual(receipt);
+  expect(unfinishedFocusedSession(hook.result.current.session)).toBe(false);
+  expect(mocks.fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  await act(async () => { await hook.result.current.newWorkflow(); });
+  expect(hook.result.current.session?.id).not.toBe(receipt.id);
+  expect(hook.result.current.session?.phase).toBe("recording");
+  expect(unfinishedFocusedSession(hook.result.current.session)).toBe(true);
+  expect(mocks.fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([path]) => path)).toEqual(["/focused-recordings/start"]);
+  expect(receipt.phase).toBe("submitted");
+});
 it("reopens the running session without starting a second capture or delaying it for a name", async () => {
   const hook = renderHook(() => useFocusedRecording(options));
   await waitFor(() => expect(hook.result.current.session?.id).toBe("fixture"));
