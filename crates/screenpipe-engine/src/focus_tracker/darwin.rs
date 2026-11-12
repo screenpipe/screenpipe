@@ -109,8 +109,14 @@ fn inside_desktop_union(rects: &[MonitorRect], x: f64, y: f64) -> bool {
     }
     let min_x = rects.iter().map(|r| r.x).fold(f64::INFINITY, f64::min);
     let min_y = rects.iter().map(|r| r.y).fold(f64::INFINITY, f64::min);
-    let max_x = rects.iter().map(|r| r.x + r.w).fold(f64::NEG_INFINITY, f64::max);
-    let max_y = rects.iter().map(|r| r.y + r.h).fold(f64::NEG_INFINITY, f64::max);
+    let max_x = rects
+        .iter()
+        .map(|r| r.x + r.w)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = rects
+        .iter()
+        .map(|r| r.y + r.h)
+        .fold(f64::NEG_INFINITY, f64::max);
     x >= min_x && x < max_x && y >= min_y && y < max_y
 }
 
@@ -768,7 +774,10 @@ mod tests {
                     _ => false,
                 }
             };
-        assert!(saw_unknown, "Unknown must be emitted on unresolvable geometry");
+        assert!(
+            saw_unknown,
+            "Unknown must be emitted on unresolvable geometry"
+        );
     }
 
     /// A cursor point fully outside the desktop union (geometry gone) must
