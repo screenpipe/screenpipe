@@ -4,6 +4,7 @@
 
 const AUTH_PREFIX = 'screenpipe.ai-gateway-auth ';
 const ROUTE_PREFIX = 'screenpipe.ai-gateway-route ';
+const AUTH_STAGE_PREFIX = 'screenpipe.ai-gateway-auth-stage ';
 const MAX_BATCH = 500;
 const SUCCESS_SAMPLE_RATE = 0.02;
 
@@ -52,10 +53,11 @@ export interface AiGatewayAuditEvent {
 	suspicious: false;
 	schema_version: 1;
 	event_id: string;
-	status_code: number;
+	status_code?: number;
 	method: string;
 	path: string;
 	worker_outcome: string;
+	auth_stage?: string;
 	actor_ref?: string;
 	tier?: string;
 	usage_tier?: string;
@@ -144,18 +146,19 @@ function requestPath(value: unknown): string | undefined {
 }
 
 export function normalizeTailItem(item: TailItem): AiGatewayAuditEvent | null {
-	if (item.scriptName !== 'ai-proxy' || !item.event?.request || !item.event.response) return null;
-	const status = statusCode(item.event.response.status);
+	if (item.scriptName !== 'ai-proxy' || !item.event?.request) return null;
+	const status = statusCode(item.event.response?.status);
 	const method = token(item.event.request.method, 12)?.toUpperCase();
 	const path = requestPath(item.event.request.url);
 	const workerOutcome = token(item.outcome, 40) ?? 'unknown';
-	if (status === undefined || !method || !path) return null;
+	if (!method || !path || (status === undefined && (item.event.response || workerOutcome === 'ok'))) return null;
 
 	const logs = Array.isArray(item.logs) ? item.logs : [];
 	const auth = prefixedPayload(logs, AUTH_PREFIX) ?? {};
 	const route = prefixedPayload(logs, ROUTE_PREFIX) ?? {};
 	const admission = structuredPayload(logs, 'hosted AI admission rejected') ?? {};
-	const failed = status >= 400 || workerOutcome !== 'ok';
+	const authStage = prefixedPayload([...logs].reverse(), AUTH_STAGE_PREFIX);
+	const failed = (status ?? 0) >= 400 || workerOutcome !== 'ok';
 	const actorRef = typeof auth.actor_ref === 'string' && /^[a-f0-9]{64}$/.test(auth.actor_ref)
 		? auth.actor_ref
 		: undefined;
@@ -174,9 +177,9 @@ export function normalizeTailItem(item: TailItem): AiGatewayAuditEvent | null {
 		service: 'ai-gateway',
 		action: 'api_request',
 		outcome: failed ? 'failure' : 'success',
-		severity: status >= 500 || workerOutcome === 'exception'
+		severity: (status ?? 0) >= 500 || workerOutcome !== 'ok'
 			? 'error'
-			: status >= 400 || workerOutcome !== 'ok'
+			: (status ?? 0) >= 400
 				? 'warning'
 				: 'info',
 		suspicious: false,
@@ -186,6 +189,7 @@ export function normalizeTailItem(item: TailItem): AiGatewayAuditEvent | null {
 		method,
 		path,
 		worker_outcome: workerOutcome,
+		auth_stage: actorRef ? 'complete' : token(authStage?.stage, 40),
 		actor_ref: actorRef,
 		tier: token(auth.tier, 40) ?? token(admission.tier, 40),
 		usage_tier: token(auth.usage_tier, 40),
@@ -217,7 +221,7 @@ function stableSample(key: string): number {
 }
 
 export function shouldKeepAuditEvent(event: AiGatewayAuditEvent): boolean {
-	if (event.outcome === 'failure' || event.status_code >= 400 || event.admission_gate) return true;
+	if (event.outcome === 'failure' || (event.status_code ?? 0) >= 400 || event.admission_gate) return true;
 	return stableSample(event.event_id) < SUCCESS_SAMPLE_RATE;
 }
 
