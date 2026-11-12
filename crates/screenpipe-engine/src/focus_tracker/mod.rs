@@ -42,8 +42,14 @@ impl MonitorIdentity {
         Self::new(id, None)
     }
 
+    /// Identity of `monitor` as focus resolution sees it. On macOS this reads
+    /// the last-known topology rather than the possibly older handle a capture
+    /// loop holds, so tracker and loop compare the same description (#7678).
     pub fn from_monitor(monitor: &screenpipe_screen::monitor::SafeMonitor) -> Self {
-        Self::new(monitor.id(), Some(monitor.stable_id()))
+        Self::new(
+            monitor.id(),
+            Some(screenpipe_screen::monitor::focus_stable_id(monitor)),
+        )
     }
 
     pub fn matches(&self, other: &Self) -> bool {
