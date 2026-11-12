@@ -17,7 +17,9 @@ import type { AgentEventEnvelope } from "@/lib/events/types";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import { applyResolvedModelLimits } from "@/lib/model-metadata";
 
-const GENERATION_TIMEOUT_MS = 90_000;
+// Cursor spends the first minute discovering tools. 90s expired while it was
+// still reading source, before screenpipe_live_view_propose existed on MCP.
+const GENERATION_TIMEOUT_MS = 180_000;
 const PROJECT_DIR = "pi-live-views";
 const LIVE_VIEW_TOOL = "screenpipe_live_view";
 const PROPOSE_TOOL = "screenpipe_live_view_propose";
@@ -27,8 +29,10 @@ const READ_ACTIONS = new Set(["get", "list", "pipes", "values"]);
  * The tool id behind an ACP title.
  *
  * Raw Pi sends `screenpipe_live_view`. Cursor and Copilot send
- * `mcp__screenpipe-tools__screenpipe_live_view`. Both are the same tool.
- * A human title such as "Read /a/b.ts" is a native agent step, not an MCP tool.
+ * `mcp__screenpipe-tools__screenpipe_live_view`. Cursor's permission id is
+ * `screenpipe-tools-screenpipe_live_view`, and the tool card title is
+ * `screenpipe-tools: screenpipe_live_view`. All of these are the same tool.
+ * A human title such as "Read /a/b.ts" is a native agent step.
  */
 export function liveViewToolIdentity(title: string | null | undefined): string | null {
   const trimmed = title?.trim() ?? "";
@@ -42,17 +46,48 @@ export function liveViewToolIdentity(title: string | null | undefined): string |
     const toolSplit = rest.indexOf(separator);
     if (toolSplit === -1) return null;
     bare = rest.slice(toolSplit + separator.length);
+  } else {
+    const cursorServer = "screenpipe-tools-";
+    if (bare.startsWith(cursorServer)) bare = bare.slice(cursorServer.length);
+    // Cursor's tool card is `${server}: ${tool}`. The space used to make the
+    // whole title look like a native step, so the proposal was dropped.
+    const labeled = bare.split(": ");
+    bare = labeled[labeled.length - 1] ?? bare;
   }
   bare = bare.trim();
   if (!bare || /\s/u.test(bare)) return null;
   return bare.toLowerCase().replaceAll("_", "-");
 }
 
-function sameLiveViewTool(title: string | undefined, expected: string): boolean {
-  const actual = liveViewToolIdentity(title);
-  const wanted = liveViewToolIdentity(expected);
-  return actual !== null && actual === wanted;
+function liveViewInvocation(
+  toolName: string | undefined,
+  args: unknown,
+): { identity: string; args: Record<string, unknown> } | null {
+  const record = asRecord(args);
+  const readTool = liveViewToolIdentity(LIVE_VIEW_TOOL);
+  const proposeTool = liveViewToolIdentity(PROPOSE_TOOL);
+  const isLiveView = (identity: string | null): identity is string =>
+    identity !== null && (identity === readTool || identity === proposeTool);
+  // Cursor's ACP rawInput is `{providerIdentifier, toolName, args}`. The card
+  // title is only "screenpipe-tools: <tool>", so the proposal lives in args.
+  const innerName =
+    typeof record?.toolName === "string"
+      ? record.toolName
+      : typeof record?.name === "string"
+        ? record.name
+        : null;
+  const inner = liveViewToolIdentity(innerName);
+  if (isLiveView(inner)) {
+    return {
+      identity: inner,
+      args: asRecord(record?.arguments) ?? asRecord(record?.args) ?? {},
+    };
+  }
+  const direct = liveViewToolIdentity(toolName);
+  if (isLiveView(direct)) return { identity: direct, args: record ?? {} };
+  return null;
 }
+
 const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
   "list.v1",
@@ -368,6 +403,8 @@ Find scheduled tasks with screenpipe_live_view action=pipes and a short query. B
 
   return `Design a Screenpipe Live View change for the user to review, then submit it with screenpipe_live_view_propose. The app applies nothing until the user accepts, so never call action=save.
 
+screenpipe_live_view and screenpipe_live_view_propose are already registered. Do not read files, search source code, or load skills.
+
 ${scopeInstruction}
 
 Work in this order:
@@ -485,20 +522,19 @@ async function runGeneration(
     const event = envelope.event;
     if (event.type === "agent_start") options.onPhase?.("working");
     if (event.type === "tool_execution_start") {
-      if (sameLiveViewTool(event.toolName, PROPOSE_TOOL)) {
-        const args = asRecord(event.args);
-        if (args && event.toolCallId)
-          pendingProposals.set(event.toolCallId, args);
-        options.onPhase?.("reviewing");
-        return;
-      }
-      if (!sameLiveViewTool(event.toolName, LIVE_VIEW_TOOL)) {
+      const call = liveViewInvocation(event.toolName, event.args);
+      if (!call) {
         // Cursor announces its own steps (Shell, Skill, Read) before the
         // Live View tools. The ACP runtime already refuses those. Stopping
         // here used to kill dashboard creation on the first announcement.
         return;
       }
-      if (!READ_ACTIONS.has(String(event.args?.action))) {
+      if (call.identity === liveViewToolIdentity(PROPOSE_TOOL)) {
+        if (event.toolCallId) pendingProposals.set(event.toolCallId, call.args);
+        options.onPhase?.("reviewing");
+        return;
+      }
+      if (!READ_ACTIONS.has(String(call.args.action))) {
         fail("Live View editor tried to change data before review");
         void commands.piStop(sessionId);
         return;
@@ -508,10 +544,18 @@ async function runGeneration(
     // the model's retry signal, not a change to apply.
     if (event.type === "tool_execution_end" && event.toolCallId) {
       const pending = pendingProposals.get(event.toolCallId);
-      if (pending) {
-        pendingProposals.delete(event.toolCallId);
-        if (event.isError !== true) proposal = pending;
+      if (pending) pendingProposals.delete(event.toolCallId);
+      if (event.isError === true) return;
+      // Cursor opens the card before the arguments exist, then delivers the
+      // real tool name and payload on the completion update. The start event
+      // is then "screenpipe-tools: tool" with empty args, so the proposal has
+      // to be read from this end event.
+      const finished = liveViewInvocation(event.toolName, event.args);
+      if (finished?.identity === liveViewToolIdentity(PROPOSE_TOOL)) {
+        proposal = finished.args;
+        return;
       }
+      if (pending) proposal = pending;
     }
     if (event.type === "agent_end") {
       if (!proposal) {

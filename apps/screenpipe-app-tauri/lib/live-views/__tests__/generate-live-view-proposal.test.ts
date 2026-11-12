@@ -192,6 +192,55 @@ describe("live view proposal handoff", () => {
     ).rejects.toThrow("tried to change data before review");
   });
 
+  it("reads the proposal from Cursor's completion event when the card opened empty", async () => {
+    const result = await run(() => {
+      emit({
+        type: "tool_execution_start",
+        toolName: "screenpipe-tools: tool",
+        toolCallId: "call-1",
+        args: {},
+      });
+      emit({
+        type: "tool_execution_end",
+        toolName: "screenpipe-tools: screenpipe_live_view_propose",
+        toolCallId: "call-1",
+        args: {
+          providerIdentifier: "screenpipe-tools",
+          toolName: "screenpipe_live_view_propose",
+          args: validProposal,
+        },
+      });
+      emit({ type: "agent_end" });
+    });
+
+    expect(result.blocks[0].component).toBe("table.v1");
+  });
+
+  it("accepts Cursor's hyphenated permission title for the live view tools", async () => {
+    const result = await run(() => {
+      emit({
+        type: "tool_execution_start",
+        toolName: "screenpipe-tools-screenpipe_live_view",
+        toolCallId: "read-1",
+        args: { action: "pipes" },
+      });
+      emit({
+        type: "tool_execution_start",
+        toolName: "CallDynamicTool",
+        toolCallId: "call-1",
+        args: {
+          namespace: "screenpipe-tools",
+          toolName: "screenpipe_live_view_propose",
+          arguments: validProposal,
+        },
+      });
+      emit({ type: "tool_execution_end", toolCallId: "call-1" });
+      emit({ type: "agent_end" });
+    });
+
+    expect(result.blocks[0].component).toBe("table.v1");
+  });
+
   it("accepts the Cursor wire name for the live view tools", async () => {
     const result = await run(() => {
       emit({

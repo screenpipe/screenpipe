@@ -337,6 +337,196 @@ function requireViewId(viewId) {
   return viewId.trim();
 }
 
+// The desktop Live View editor watches screenpipe_live_view_propose. Cursor
+// and Copilot never load the Pi extension that registers that tool, so the
+// same contract has to exist on this MCP server or the editor times out while
+// the agent searches the filesystem for it.
+const LIVE_VIEW_COMPONENTS = [
+  "metric.v1",
+  "list.v1",
+  "bar-chart.v1",
+  "line-chart.v1",
+  "table.v1",
+  "timeline.v1",
+  "markdown.v1",
+];
+const LIVE_VIEW_TIME_RANGES = ["today", "24h", "7d", "30d"];
+const LIVE_VIEW_WIDTHS = [3, 6, 12];
+const MAX_PIPE_RESULTS = 24;
+const MAX_PIPE_DESCRIPTION_CHARS = 240;
+const MAX_VALUE_BLOCKS = 12;
+const MAX_VALUE_PREVIEW_CHARS = 600;
+
+const liveViewBlockSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "Stable Block id. Reuse the existing id when updating a Block." },
+    title: { type: "string", description: "Short Block heading." },
+    intent: {
+      type: "string",
+      description: "The source-backed calculation this Block asks its task for, including how missing evidence is handled.",
+    },
+    component: { type: "string", enum: LIVE_VIEW_COMPONENTS },
+    width: { type: "integer", description: "Grid width in columns: 3, 6, or 12." },
+    pipeName: {
+      type: ["string", "null"],
+      description: "Installed scheduled task that fills this Block, or null. Find it with screenpipe_live_view action=pipes.",
+    },
+  },
+  required: ["title", "intent", "component", "width"],
+  additionalProperties: false,
+};
+
+function searchWords(value) {
+  return [
+    ...new Set(
+      String(value)
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length >= 3),
+    ),
+  ];
+}
+
+async function searchInstalledPipes(query) {
+  const res = await fetch(`${apiBase()}/pipes`, { method: "GET", headers: authHeaders() });
+  const body = await liveViewJson(res);
+  const raw = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+  const pipes = raw.flatMap((entry) => {
+    const config = entry?.config ?? entry;
+    const name = typeof config?.name === "string" ? config.name : entry?.id;
+    if (typeof name !== "string" || !name.trim()) return [];
+    const description =
+      typeof config?.description === "string"
+        ? config.description
+        : typeof config?.config?.description === "string"
+          ? config.config.description
+          : "";
+    return [
+      {
+        name: name.trim(),
+        description: description.slice(0, MAX_PIPE_DESCRIPTION_CHARS),
+        enabled: entry?.enabled === true || config?.enabled === true,
+      },
+    ];
+  });
+  const words = typeof query === "string" ? searchWords(query) : [];
+  if (words.length === 0) return pipes.slice(0, MAX_PIPE_RESULTS);
+  const matched = pipes.filter((pipe) => {
+    const haystack = `${pipe.name} ${pipe.description}`.toLowerCase();
+    return words.some((word) => haystack.includes(word));
+  });
+  return (matched.length > 0 ? matched : pipes).slice(0, MAX_PIPE_RESULTS);
+}
+
+function valuePreview(value) {
+  const payload = value && typeof value === "object" ? (value.payload ?? value) : null;
+  if (payload == null) return { hasValue: false, preview: null };
+  const text = JSON.stringify(payload);
+  if (typeof text !== "string") return { hasValue: false, preview: null };
+  return {
+    hasValue: true,
+    preview: text.length > MAX_VALUE_PREVIEW_CHARS ? `${text.slice(0, MAX_VALUE_PREVIEW_CHARS)}…` : text,
+  };
+}
+
+async function liveViewValues(viewId, blockId) {
+  const res = await fetch(`${apiBase()}/live-views`, { method: "GET", headers: authHeaders() });
+  const views = await liveViewJson(res);
+  const view = (Array.isArray(views) ? views : []).find((entry) => entry?.id === viewId);
+  if (!view) throw new Error(`Live View "${viewId}" was not found`);
+  const slots = Array.isArray(view.slots) ? view.slots : Array.isArray(view.blocks) ? view.blocks : [];
+  const wanted =
+    typeof blockId === "string" && blockId.trim()
+      ? slots.filter((slot) => slot?.id === blockId.trim())
+      : slots;
+  if (typeof blockId === "string" && blockId.trim() && wanted.length === 0) {
+    throw new Error(`Block "${blockId}" was not found in "${viewId}"`);
+  }
+  return {
+    viewId,
+    blocks: wanted.slice(0, MAX_VALUE_BLOCKS).map((slot) => {
+      const preview = valuePreview(slot?.value);
+      return {
+        id: slot?.id ?? null,
+        title: slot?.title ?? null,
+        component: slot?.component ?? slot?.kind ?? null,
+        pipeName: slot?.binding?.pipeName ?? slot?.source?.pipeName ?? null,
+        hasValue: preview.hasValue,
+        renders: preview.preview,
+      };
+    }),
+  };
+}
+
+function validateLiveViewProposal(params) {
+  const problems = [];
+  const hasBlocks = Array.isArray(params?.blocks) && params.blocks.length > 0;
+  const hasOperations = Array.isArray(params?.operations) && params.operations.length > 0;
+  if (hasBlocks === hasOperations) {
+    problems.push(
+      hasBlocks
+        ? "Send either blocks (new dashboard) or operations (edit), not both."
+        : "Send blocks for a new dashboard, or operations for an edit. Both were empty.",
+    );
+  }
+  const checkBlock = (block, where) => {
+    if (!block || typeof block !== "object") {
+      problems.push(`${where}: block object is required`);
+      return;
+    }
+    if (!LIVE_VIEW_COMPONENTS.includes(block.component)) {
+      problems.push(`${where}: component "${block.component}" is not one of ${LIVE_VIEW_COMPONENTS.join(", ")}`);
+    }
+    if (!LIVE_VIEW_WIDTHS.includes(block.width)) problems.push(`${where}: width must be 3, 6, or 12`);
+    if (typeof block.title !== "string" || !block.title.trim()) problems.push(`${where}: title is required`);
+    if (typeof block.intent !== "string" || !block.intent.trim()) problems.push(`${where}: intent is required`);
+  };
+  if (hasBlocks) {
+    params.blocks.forEach((block, index) => checkBlock(block, `blocks[${index}]`));
+    if (params.timeRange && !LIVE_VIEW_TIME_RANGES.includes(params.timeRange)) {
+      problems.push(`timeRange "${params.timeRange}" is not one of ${LIVE_VIEW_TIME_RANGES.join(", ")}`);
+    }
+  }
+  if (hasOperations) {
+    params.operations.forEach((operation, index) => {
+      const where = `operations[${index}]`;
+      const op = operation?.op;
+      if (op === "add") {
+        checkBlock(operation.block, where);
+        return;
+      }
+      if (op === "update") {
+        if (typeof operation.blockId !== "string" || !operation.blockId.trim()) {
+          problems.push(`${where}: blockId is required for update`);
+        }
+        if (!operation.block || typeof operation.block !== "object") {
+          problems.push(`${where}: block with the changed fields is required`);
+          return;
+        }
+        if (operation.block.component !== undefined && !LIVE_VIEW_COMPONENTS.includes(operation.block.component)) {
+          problems.push(`${where}: component "${operation.block.component}" is not one of ${LIVE_VIEW_COMPONENTS.join(", ")}`);
+        }
+        if (operation.block.width !== undefined && !LIVE_VIEW_WIDTHS.includes(operation.block.width)) {
+          problems.push(`${where}: width must be 3, 6, or 12`);
+        }
+        return;
+      }
+      if (op === "remove") {
+        if (typeof operation.blockId !== "string" || !operation.blockId.trim()) {
+          problems.push(`${where}: blockId is required for remove`);
+        }
+        return;
+      }
+      problems.push(`${where}: op must be add, update, or remove`);
+    });
+  }
+  if (typeof params?.note !== "string" || !params.note.trim()) {
+    problems.push("note is required and must say what visibly changes");
+  }
+  return problems;
+}
+
 // Validate and shape the save payload the same way the Pi extension does: a
 // revision of 0 means "create" (expectedRevision null), any other value is the
 // optimistic-concurrency token that guards against clobbering a newer edit.
@@ -875,6 +1065,105 @@ const TOOLS = [
       }
 
       throw new Error(`unsupported Live View action: ${action || "<missing>"}`);
+    },
+  },
+  {
+    name: "screenpipe_live_view",
+    description:
+      "Read Live Views and scheduled tasks while designing a dashboard. action=list and action=get read a dashboard; action=pipes searches installed scheduled tasks; action=values shows what Blocks currently render. Never save from this tool. Submit the finished design with screenpipe_live_view_propose.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "get", "pipes", "values"],
+          description:
+            "list returns compact dashboard summaries; get returns one definition; pipes searches installed scheduled tasks; values returns what a dashboard's Blocks currently render.",
+        },
+        viewId: { type: "string", description: "Live View id for get and values." },
+        blockId: { type: "string", description: "Optional Block id for values. Omit to see every Block." },
+        query: { type: "string", description: "Search text for pipes. Omit to list recent scheduled tasks." },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const action = String(args?.action ?? "").trim();
+      if (action === "list") {
+        const res = await fetch(`${apiBase()}/live-views/catalog`, { method: "GET", headers: authHeaders() });
+        const body = await liveViewJson(res);
+        const views = Array.isArray(body) ? body : [];
+        return JSON.stringify({
+          views: views.map((view) => ({
+            id: view.id,
+            title: view.title,
+            revision: view.revision,
+            blockCount: view.blockCount,
+          })),
+        });
+      }
+      if (action === "get") {
+        const viewId = requireViewId(args?.viewId);
+        const res = await fetch(`${apiBase()}/live-views/${encodeURIComponent(viewId)}/template`, {
+          method: "GET",
+          headers: authHeaders(),
+        });
+        return JSON.stringify({ view: await liveViewJson(res) });
+      }
+      if (action === "pipes") return JSON.stringify({ pipes: await searchInstalledPipes(args?.query) });
+      if (action === "values") return JSON.stringify(await liveViewValues(requireViewId(args?.viewId), args?.blockId));
+      throw new Error(
+        `unsupported Live View action: ${action || "<missing>"}. Read with list, get, pipes, or values, then call screenpipe_live_view_propose.`,
+      );
+    },
+  },
+  {
+    name: "screenpipe_live_view_propose",
+    description:
+      "Submit a finished Live View design for the user to review. This does not save anything. Call it once, after screenpipe_live_view. Use blocks for a new or replacement dashboard, or operations for a small edit. If this reports problems, fix them and call it again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        note: { type: "string", description: "One sentence telling the user what visibly changes and why." },
+        title: { type: "string", description: "New dashboard title. Create or whole-dashboard replacement only." },
+        timeRange: { type: "string", enum: LIVE_VIEW_TIME_RANGES },
+        timeRangeBehavior: { type: "string", enum: ["selectable", "fixed"] },
+        blocks: {
+          type: "array",
+          description: "Complete Block list for a new dashboard or an explicit whole-dashboard replacement.",
+          items: liveViewBlockSchema,
+        },
+        operations: {
+          type: "array",
+          description: "Targeted edits. Do not send this together with blocks.",
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["add", "update", "remove"] },
+              blockId: { type: "string", description: "Existing Block id. Required for update and remove." },
+              block: liveViewBlockSchema,
+            },
+            required: ["op"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["note"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const problems = validateLiveViewProposal(args ?? {});
+      if (problems.length > 0) {
+        throw new Error(
+          `Proposal rejected. Fix these and call screenpipe_live_view_propose again:\n- ${problems.join("\n- ")}`,
+        );
+      }
+      return JSON.stringify({
+        accepted: true,
+        awaitingUserReview: true,
+        blockCount: Array.isArray(args?.blocks) ? args.blocks.length : undefined,
+        operationCount: Array.isArray(args?.operations) ? args.operations.length : undefined,
+      });
     },
   },
   {
