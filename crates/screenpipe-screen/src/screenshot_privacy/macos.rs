@@ -60,33 +60,41 @@ impl Drop for CancelCaptureOnDrop {
     }
 }
 
-pub(crate) async fn capture_filtered(
+pub(super) async fn capture_filtered(
     monitor: &SafeMonitor,
     filters: &WindowFilters,
     sources: ExclusionSources,
+    excluded_ids: &[u32],
     _fresh: bool,
-) -> anyhow::Result<DynamicImage> {
+) -> anyhow::Result<CapturedPixels> {
     ensure!(
         api::macos_available("14.0"),
         "window-filtered screenshots require macOS 14 or newer"
     );
     let id = monitor.id();
-    capture_with_scene_retries(id, CAPTURE_SLOT.clone(), || {
+    let stream_slot = super::stream::slot(id);
+    let mut lease = super::stream::RequestLease::new(id, stream_slot.clone());
+    let result = capture_with_scene_retries(id, CAPTURE_SLOT.clone(), || {
         let filters = filters.clone();
-        move || async move { capture(id, &filters, sources).await }
+        let stream_slot = stream_slot.clone();
+        let excluded_ids = excluded_ids.to_vec();
+        move || async move { capture(id, &filters, sources, &excluded_ids, &stream_slot).await }
     })
-    .await
+    .await;
+    lease.completed = result.is_ok();
+    result
 }
 
-async fn capture_with_scene_retries<F, J, Fut>(
+async fn capture_with_scene_retries<F, J, Fut, T>(
     monitor_id: u32,
     slot: Arc<CaptureSlot>,
     mut job: F,
-) -> anyhow::Result<DynamicImage>
+) -> anyhow::Result<T>
 where
     F: FnMut() -> J,
     J: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+    Fut: Future<Output = anyhow::Result<T>>,
+    T: Clone + Send + 'static,
 {
     // Each rejected attempt releases its worker before reselection, so a
     // changing display cannot reserve the slot across retries.
@@ -99,13 +107,10 @@ where
 /// A scene transition invalidates the old selection, not permission to capture
 /// the next safe scene. Re-resolve it within the request's existing queue/native
 /// budget. Each completed attempt releases its worker before the next selection.
-async fn retry_scene_changes<F, Fut>(
-    monitor_id: u32,
-    mut capture_job: F,
-) -> anyhow::Result<DynamicImage>
+async fn retry_scene_changes<F, Fut, T>(monitor_id: u32, mut capture_job: F) -> anyhow::Result<T>
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+    Fut: Future<Output = anyhow::Result<T>>,
 {
     let started = Instant::now();
     let mut retries = 0_u64;
@@ -219,14 +224,15 @@ impl WorkerFailure {
 
 // Construct the future on its native worker: ScreenCaptureKit objects must stay
 // on that thread and inside its autorelease pool.
-async fn capture_on_worker<F, Fut>(
+async fn capture_on_worker<F, Fut, T>(
     slot: Arc<CaptureSlot>,
     deadline: Duration,
     capture_job: F,
-) -> anyhow::Result<DynamicImage>
+) -> anyhow::Result<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+    Fut: Future<Output = anyhow::Result<T>>,
+    T: Clone + Send + 'static,
 {
     let permit = tokio::time::timeout(QUEUE_DEADLINE, slot.semaphore.clone().acquire_owned())
         .await
@@ -332,12 +338,24 @@ fn same_dock_coverage(before: Option<&[Surface]>, after: Option<&[Surface]>) -> 
 /// change matters only when it changes the policy used to select the pixels.
 /// Compare with the verdict recorded before capture, not a second evaluation
 /// of the old title against potentially changed native privacy state.
+#[cfg(test)]
 fn validate_scene(
     before: &[Surface],
     allowed: &[bool],
     after: &[Surface],
     filters: &WindowFilters,
     detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
+) -> anyhow::Result<()> {
+    validate_scene_excluding(before, allowed, after, filters, detector, &[])
+}
+
+fn validate_scene_excluding(
+    before: &[Surface],
+    allowed: &[bool],
+    after: &[Surface],
+    filters: &WindowFilters,
+    detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
+    excluded_ids: &[u32],
 ) -> anyhow::Result<()> {
     if before.len() != allowed.len() || !same_composition(before, after) {
         return Err(SceneChanged(
@@ -353,7 +371,10 @@ fn validate_scene(
                 )
                 .into());
             }
-            if *allowed != window_allowed(filters, detector, &after.app, &after.title, after.pid) {
+            if *allowed
+                != (!excluded_ids.contains(&after.id)
+                    && window_allowed(filters, detector, &after.app, &after.title, after.pid))
+            {
                 return Err(SceneChanged("window privacy policy changed during capture").into());
             }
         }
@@ -588,7 +609,9 @@ async fn capture(
     id: u32,
     filters: &WindowFilters,
     sources: ExclusionSources,
-) -> anyhow::Result<DynamicImage> {
+    excluded_ids: &[u32],
+    stream_slot: &Arc<super::stream::Slot>,
+) -> anyhow::Result<CapturedPixels> {
     use super::scene::{self, Rect};
     let detector = sources
         .ignore_incognito_windows
@@ -625,6 +648,7 @@ async fn capture(
         .iter()
         .map(|s| {
             native(s).is_some()
+                && !excluded_ids.contains(&s.id)
                 && !(Some(s.pid) == dock_pid && s.layer == 20 && dock_before.is_none())
                 && window_allowed(filters, detector.as_deref(), &s.app, &s.title, s.pid)
         })
@@ -658,7 +682,9 @@ async fn capture(
     let cap = crate::monitor::sck_capture_max_width() as usize;
     let width = if cap == 0 { nw } else { nw.min(cap) };
     let height = (nh * width / nw).max(1);
+    let mut captured_at = chrono::Utc::now();
     let mut canvas = if selected.is_empty() {
+        super::stream::invalidate(id);
         image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]))
     } else {
         if api::macos_available("14.2") {
@@ -666,7 +692,28 @@ async fn capture(
                 *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
             }));
         }
-        let pixels = take(&filter, width, height, false).await?;
+        let menu_bar = before.iter().zip(&allowed).any(|(s, ok)| {
+            *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
+        });
+        let mut windows: Vec<_> = selected
+            .iter()
+            .map(|w| (w.id(), w.owning_app().map_or(0, |a| a.process_id())))
+            .collect();
+        windows.sort_unstable();
+        let (mut buffer, observed_at) = super::stream::frame(
+            stream_slot,
+            &filter,
+            super::stream::Key {
+                width,
+                height,
+                menu_bar,
+                windows,
+                fps: super::stream::frame_rate(),
+            },
+        )
+        .await?;
+        captured_at = observed_at;
+        let pixels = rgba(&mut buffer)?.into_rgba8();
         let mut canvas =
             image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]));
         scene::overlay_premultiplied(&mut canvas, &pixels, 0, 0, None);
@@ -741,12 +788,13 @@ async fn capture(
     ) {
         return Err(SceneChanged("Dock thumbnail policy changed during capture").into());
     }
-    validate_scene(
+    validate_scene_excluding(
         &before,
         &allowed,
         &snapshot(frame)?,
         filters,
         detector.as_deref(),
+        excluded_ids,
     )?;
     let after = sc::ShareableContent::current()
         .await
@@ -763,7 +811,10 @@ async fn capture(
             }
         }
     }
-    Ok(DynamicImage::ImageRgba8(canvas))
+    Ok(CapturedPixels {
+        image: DynamicImage::ImageRgba8(canvas),
+        captured_at,
+    })
 }
 
 fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
@@ -1046,7 +1097,7 @@ mod tests {
         let slot = Arc::new(CaptureSlot::new());
         let result = tokio::time::timeout(
             QUEUE_DEADLINE + DEADLINE + QUEUE_DEADLINE,
-            capture_with_scene_retries(1, slot.clone(), || {
+            capture_with_scene_retries::<_, _, _, DynamicImage>(1, slot.clone(), || {
                 || {
                     std::future::ready(Err(SceneChanged(
                         "desktop scene changed during privacy capture",
@@ -1104,7 +1155,7 @@ mod tests {
     #[tokio::test]
     async fn scene_reselection_preserves_native_errors() {
         let mut attempts = 0;
-        let error = retry_scene_changes(1, || {
+        let error = retry_scene_changes::<_, _, DynamicImage>(1, || {
             attempts += 1;
             std::future::ready(Err(anyhow!("ScreenCaptureKit stream failed to start")))
         })
@@ -1117,15 +1168,19 @@ mod tests {
     #[tokio::test]
     async fn continuous_scene_changes_respect_existing_deadline_and_recover() {
         let slot = Arc::new(CaptureSlot::new());
-        let first = capture_on_worker(slot.clone(), Duration::from_millis(50), || async {
-            retry_scene_changes(1, || {
-                std::future::ready(Err(SceneChanged(
-                    "desktop scene changed during privacy capture",
-                )
-                .into()))
-            })
-            .await
-        })
+        let first = capture_on_worker::<_, _, DynamicImage>(
+            slot.clone(),
+            Duration::from_millis(50),
+            || async {
+                retry_scene_changes(1, || {
+                    std::future::ready(Err(SceneChanged(
+                        "desktop scene changed during privacy capture",
+                    )
+                    .into()))
+                })
+                .await
+            },
+        )
         .await;
         assert!(first.unwrap_err().to_string().contains("timed out"));
         let next = capture_on_worker(slot, Duration::from_secs(1), || async {
@@ -1276,9 +1331,11 @@ mod tests {
     #[tokio::test]
     async fn privacy_failure_is_returned_and_does_not_poison_next_capture() {
         let slot = Arc::new(CaptureSlot::new());
-        let result = capture_on_worker(slot.clone(), Duration::from_secs(1), || async {
-            Err(anyhow!("desktop scene changed during privacy capture"))
-        })
+        let result = capture_on_worker::<_, _, DynamicImage>(
+            slot.clone(),
+            Duration::from_secs(1),
+            || async { Err(anyhow!("desktop scene changed during privacy capture")) },
+        )
         .await;
         assert_eq!(
             result.unwrap_err().to_string(),

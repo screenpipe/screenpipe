@@ -52,6 +52,7 @@ export const screenSearchIndex: SettingsField[] = [
   { label: msg("Recording quality", {}), keywords: ["fps", "quality"], conditional: true },
   // conditional: hidden when screen recording is off (same gate as Recording quality).
   { label: msg("Capture frequency", {}), keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
+  { label: msg("Screenshot frame rate", {}), keywords: ["fps", "sampling", "capture", "performance"], conditional: true },
   { label: msg("HD recording for meetings", {}), keywords: ["hd", "meeting"] },
   { label: msg("Chinese mirror", {}), keywords: ["china", "mirror"] },
 ];
@@ -62,6 +63,7 @@ export const searchIndex: SettingsField[] = [
   ...screenSearchIndex,
 ];
 import { RecordingDetailCard } from "./recording-detail-card";
+import { ScreenshotFrameRateCard } from "./screenshot-frame-rate-card";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import {
   Select,
@@ -2090,6 +2092,29 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
     }
   }, [settings, updateSettings, debouncedValidateSettings]);
 
+  const handleScreenshotFrameRateChange = useCallback((fps: number) => {
+    let saved = false;
+    void enqueueSettingsWrite(settingsWriteQueueRef.current, async () => {
+      await updateSettings({ screenshotFrameRate: fps });
+      saved = true;
+      const result = await commands.setScreenshotFrameRate(fps);
+      if (result.status === "error") throw new Error(result.error);
+    }).catch((error) => {
+      if (saved) {
+        setPendingChanges(previous => ({ ...previous, screenshotFrameRate: fps }));
+        setHasUnsavedChanges(true);
+      }
+      toast({
+        title: ui("Could not apply screenshot frame rate"),
+        description: saved
+          ? ui("Your preference was saved. Restart recording to apply it.")
+          : ui("Your preference could not be saved. Please try again."),
+        variant: "destructive",
+      });
+      console.error("Screenshot frame-rate update failed", error);
+    });
+  }, [updateSettings, toast, ui]);
+
   const currentPlatform = isMacOS ? "macos" : isWindows ? "windows" : "linux";
   const aecMode = normalizeAecModeForPlatform(
     settings.aecMode ?? "off",
@@ -3927,6 +3952,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {screenshotImagesEnabled && (isMacOS || isWindows) && (
+          <LockedSetting settingKey="screenshotFrameRate">
+            <ScreenshotFrameRateCard
+              value={settings.screenshotFrameRate ?? 2}
+              onChange={handleScreenshotFrameRateChange}
+            />
+          </LockedSetting>
         )}
 
         {/* Capture frequency — guaranteed screenshot cadence. Capture is

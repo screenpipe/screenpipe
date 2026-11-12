@@ -30,7 +30,7 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
-use screenpipe_screen::screenshot_privacy::capture_monitor_image_filtered;
+use screenpipe_screen::screenshot_privacy::capture_monitor_frame_filtered;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use std::collections::HashMap;
 #[cfg(debug_assertions)]
@@ -1457,6 +1457,8 @@ pub(crate) async fn event_driven_capture_loop(
             was_cold = is_cold;
             let accessibility_is_active = matches!(capture_state, CaptureState::Active);
             if should_suspend_on_focus_away(accessibility_was_active, accessibility_is_active) {
+                #[cfg(target_os = "macos")]
+                screenpipe_screen::stream_invalidation::release_screenshot_stream(monitor_id);
                 if let Err(error) = tree_walker
                     .suspend_with_timeout(Duration::from_millis(250))
                     .await
@@ -3318,6 +3320,8 @@ async fn do_capture(
         tokio::time::sleep(CONTEXT_CAPTURE_SETTLE).await;
     }
 
+    #[cfg(target_os = "macos")]
+    let mut native_captured_at = None;
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3330,7 +3334,7 @@ async fn do_capture(
 
         // Resolve positive window surfaces at the capture boundary, after any
         // focus-settle delay. Never substitute monitor pixels on policy failure.
-        match capture_monitor_image_filtered(
+        match capture_monitor_frame_filtered(
             params.monitor,
             &params.window_filters,
             exclusion_sources(params.tree_walker_config),
@@ -3339,12 +3343,16 @@ async fn do_capture(
         )
         .await
         {
-            Ok((image, capture_dur)) => {
+            Ok(frame) => {
                 debug!(
                     "screenshot captured in {:?} for monitor {}",
-                    capture_dur, params.monitor_id
+                    frame.duration, params.monitor_id
                 );
-                image
+                #[cfg(target_os = "macos")]
+                {
+                    native_captured_at = Some(frame.captured_at);
+                }
+                frame.image
             }
             Err(error) if params.window_filters.has_window_patterns() => {
                 debug!("window-filtered screenshot withheld: {error}");
@@ -3354,11 +3362,16 @@ async fn do_capture(
             Err(error) => return Err(error),
         }
     };
-    // Privacy reselection can span a scene transition. Timestamp the returned
-    // pixels rather than the request before settling/retries; the latter can
-    // make a later screenshot appear to coincide with an earlier UI event.
+    // Preserve native stream observation time, including idle confirmation of
+    // unchanged pixels, rather than relabelling cached pixels at return time.
     #[cfg(target_os = "macos")]
-    let captured_at = Utc::now();
+    let captured_at = native_captured_at.unwrap_or_else(Utc::now);
+    #[cfg(target_os = "macos")]
+    if !monitor_hosts_focus {
+        // A sparse background-display screenshot must not leave a 24fps
+        // preview running throughout Warm state. HD has a separate owner.
+        screenpipe_screen::stream_invalidation::release_screenshot_stream(params.monitor_id);
+    }
     // This scalar is the screenshot's app identity. Read it immediately after
     // ScreenCaptureKit returns so no process object travels with the pixels.
     let screenshot_focus_pid = if monitor_hosts_focus && !screenshot_disabled {
