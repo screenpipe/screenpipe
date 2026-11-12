@@ -274,7 +274,9 @@ describe("starred session popover", function () {
     await invokeOrThrow("toggle_starred_sessions");
     await $("button=Resume").waitForDisplayed({ timeout: t(15_000) });
     expect((await readSession())!.id).toBe(started.id);
-    await $("button=Finish").click();
+    const finish = await $("button=Finish");
+    await finish.waitForEnabled({ timeout: t(15_000) });
+    await finish.click();
     await $("button=Save").waitForDisplayed({ timeout: t(15_000) });
     const summary = (await readSession())!;
     expect(summary.phase).toBe("summary");

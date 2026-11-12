@@ -173,7 +173,7 @@ async function expectActiveEmptyState(): Promise<void> {
   const state = await $('[data-testid="chat-turn-status"]');
   await state.waitForDisplayed({ timeout: t(10_000) });
   expect(await state.getText()).toContain("analyzing");
-  expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
+  expect(await $('[aria-label="Stop reply"]').isDisplayed()).toBe(true);
 }
 
 async function expectCompletedTranscript(): Promise<void> {
@@ -187,7 +187,7 @@ async function expectCompletedTranscript(): Promise<void> {
     reverse: true,
     timeout: t(10_000),
   });
-  await $('[aria-label="send message"]').waitForDisplayed({ timeout: t(10_000) });
+  await $('[aria-label="Send message"]').waitForDisplayed({ timeout: t(10_000) });
 }
 
 async function expectSynchronizedActiveTurn(): Promise<void> {
@@ -200,7 +200,7 @@ async function expectSynchronizedActiveTurn(): Promise<void> {
   await $('[data-testid="chat-turn-status"]').waitForDisplayed({
     timeout: t(10_000),
   });
-  expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
+  expect(await $('[aria-label="Stop reply"]').isDisplayed()).toBe(true);
 
   const activeTurn = await browser.execute(() => {
     const read = (window as unknown as {
@@ -223,7 +223,7 @@ async function expectActiveToolState(): Promise<void> {
   const indicator = await summary.$('[data-testid="tool-activity-running-indicator"]');
   await indicator.waitForDisplayed({ timeout: t(10_000) });
   expect((await summary.getText()).toLowerCase()).not.toContain("done");
-  expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
+  expect(await $('[aria-label="Stop reply"]').isDisplayed()).toBe(true);
 }
 
 describe("Cross-window chat transcript sync", function () {

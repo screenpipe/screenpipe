@@ -17,7 +17,7 @@ import {
   t,
 } from "../helpers/test-utils.js";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
 import { paidAccountFixture, paidAccountResponse } from "../helpers/account-fixtures.js";
@@ -716,9 +716,7 @@ describe("Brain Live Views", function () {
       // A WDIO retry reuses the same app process. Leave Brain before opening it
       // so its view state is rebuilt from the now-empty backend instead of
       // retaining the previous attempt's selected dashboard.
-      const pipesNav = await $("[data-testid=nav-pipes]");
-      await pipesNav.waitForExist({ timeout: t(10_000) });
-      await pipesNav.click();
+      await showWindow({ Home: { page: "pipes" } });
       await waitForTestId("section-pipes", 15_000);
 
       await openBrainSection();
@@ -841,7 +839,7 @@ describe("Brain Live Views", function () {
       expect(await $("[data-testid='overview-apply-ai']").getText()).toContain(
         "create dashboard",
       );
-      expect(await $("button=Add your first Block").isExisting()).toBe(false);
+      expect(await $("[data-testid='overview-zero-state']").isExisting()).toBe(false);
       const reviewScreenshot = await saveScreenshot(
         "brain-template-generated-review",
       );
@@ -961,13 +959,12 @@ describe("Brain Live Views", function () {
         },
       });
 
-      const pipesNav = await waitForTestId("nav-pipes", 10_000);
-      await pipesNav.click();
+      await showWindow({ Home: { page: "pipes" } });
       await waitForTestId("section-pipes", 15_000);
       await openBrainSection();
       await waitForTestId("section-brain", 15_000);
       await selectDashboard(emptyViewId);
-      await $("button=Add your first Block").waitForDisplayed({
+      await $("[data-testid='overview-zero-state']").waitForDisplayed({
         timeout: t(10_000),
       });
 
@@ -1005,12 +1002,8 @@ describe("Brain Live Views", function () {
             canvasVisible: isVisible(
               document.querySelector("[data-testid='live-view-canvas']"),
             ),
-            emptyStateVisible: Array.from(
-              document.querySelectorAll("button"),
-            ).some(
-              (button) =>
-                button.textContent?.trim() === "Add your first Block" &&
-                isVisible(button),
+            emptyStateVisible: isVisible(
+              document.querySelector("[data-testid='overview-zero-state']"),
             ),
             visibleBlockIds: Array.from(
               document.querySelectorAll<HTMLElement>(
@@ -1176,8 +1169,7 @@ describe("Brain Live Views", function () {
         },
       });
 
-      const pipesNav = await waitForTestId("nav-pipes", 10_000);
-      await pipesNav.click();
+      await showWindow({ Home: { page: "pipes" } });
       await waitForTestId("section-pipes", 15_000);
       await openBrainSection();
       await waitForTestId("section-brain", 15_000);
@@ -2165,7 +2157,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     await noteTool.click();
     const compactTools = await waitForTestId("canvas-tools-toggle", 10_000);
     expect(await compactTools.getAttribute("aria-label")).toContain(
-      "note tool active",
+      "Note tool active",
     );
     await clickEmptyCanvasSpace();
     const surface = await waitForTestId("live-view-canvas-surface", 10_000);
@@ -2376,8 +2368,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     if (await expandSidebar.isExisting()) {
       await expandSidebar.click();
     }
-    const pipesNav = await waitForTestId("nav-pipes", 10_000);
-    await pipesNav.click();
+    await showWindow({ Home: { page: "pipes" } });
     await waitForTestId("section-pipes", 15_000);
     await openBrainSection();
     await waitForTestId("section-brain", 15_000);

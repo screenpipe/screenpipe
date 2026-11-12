@@ -28,6 +28,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
+import { firstRunAccountFixture } from "../helpers/onboarding-first-run-account.js";
 import {
   closeWindow,
   invokeOrThrow,
@@ -245,25 +246,7 @@ const clearOnboardingUser = async () => {
 
 const seedFreeOnboardingUser = async () => {
   await clearOnboardingUser();
-  const checkedAt = new Date().toISOString();
-  await seedOnboardingUser({
-    id: "e2e-free-user",
-    clerk_id: "e2e-free-user",
-    token: "e2e-free-token",
-    email: "free-user@screenpipe.test",
-    cloud_subscribed: false,
-    app_entitled: false,
-    subscription_plan: "none",
-    entitlement_source: "none",
-    has_payment_method: false,
-    entitlement: {
-      active: false,
-      plan: "none",
-      source: "none",
-      checked_at: checkedAt,
-      features: { app: false, cloud: false },
-    },
-  });
+  await seedOnboardingUser(firstRunAccountFixture("none"));
 };
 
 /**
@@ -499,23 +482,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     // The preceding scenarios install a different synthetic token. Clear
     // it first so changing fixtures exercises a clean account transition.
     await clearOnboardingUser();
-    await seedOnboardingUser({
-      id: "e2e-lifetime-owner",
-      clerk_id: "e2e-lifetime-owner",
-      token: "e2e-lifetime-token",
-      email: "lifetime-owner@screenpipe.test",
-      cloud_subscribed: false,
-      app_entitled: true,
-      subscription_plan: "lifetime",
-      entitlement_source: "lifetime",
-      has_payment_method: false,
-      entitlement: {
-        active: true,
-        plan: "lifetime",
-        source: "lifetime",
-        features: { app: true, cloud: true },
-      },
-    });
+    await seedOnboardingUser(firstRunAccountFixture("lifetime"));
 
     // Simulate an upgrade from a build that had already persisted "plan".
     // Reset the native completion flag before restoring the in-progress step.

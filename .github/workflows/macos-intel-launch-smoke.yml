@@ -97,9 +97,9 @@ jobs:
     # Measured cold (no sccache/rust-cache/sidecar-cache warm yet): the Rust
     # build alone didn't finish in 60min on this runner tier (screenpipe-audio
     # links whisper.cpp/llama.cpp, which is slow to compile from scratch).
-    # Caches populate as this job runs repeatedly, so later runs should be
-    # much faster than this budget suggests.
-    timeout-minutes: 120
+    # A measured cold run spent 89min in Build and another 27min compiling
+    # the CoreAudio smoke test. Leave time for the engine test and real launch.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -207,10 +207,12 @@ jobs:
           # This API is forbidden in the meeting scanner. On Intel it can
           # return an invalid CFString while a process exits, which crashes in
           # CFStringGetLength before Rust can recover.
-          if rg -n 'localized_name\s*\(' crates/screenpipe-engine/src/meeting_watcher/ui_scan/macos.rs; then
-            echo "::error::Meeting UI scanner must use checked libproc names, not NSRunningApplication.localizedName"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import pathlib, re, sys
+          source = pathlib.Path('crates/screenpipe-engine/src/meeting_watcher/ui_scan/macos.rs').read_text()
+          if re.search(r'localized_name\s*\(', source):
+              sys.exit('::error::Meeting UI scanner must use checked libproc names, not NSRunningApplication.localizedName')
+          PY
 
           cargo test -p screenpipe-engine --profile debug-dev --lib --no-default-features \
             meeting_watcher::ui_scan::macos::runtime_smoke \

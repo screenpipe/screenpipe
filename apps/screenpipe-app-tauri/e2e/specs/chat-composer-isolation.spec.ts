@@ -27,7 +27,7 @@
  *   bun run test:e2e -- --spec e2e/specs/chat-composer-isolation.spec.ts
  */
 
-import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
+import { CHAT_COMPOSER_SELECTOR, openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
 // Seed a session record in the chat store before driving the panel.
@@ -70,8 +70,7 @@ const CHAT_A = "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const CHAT_B = "44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const DRAFT_MARKER = "(e2e) yayhooray-COMPOSER-LEAK-PROBE";
 
-const COMPOSER_SELECTOR =
-  'textarea[placeholder*="Ask about your screen"], textarea[placeholder*="Message will be queued"]';
+const COMPOSER_SELECTOR = CHAT_COMPOSER_SELECTOR;
 
 async function emitChatLoad(conversationId: string): Promise<void> {
   await browser.executeAsync(
