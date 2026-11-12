@@ -5,7 +5,9 @@
 import {
 	getTranscriptionDailyCostCap,
 	getTranscriptionGlobalCostCaps,
+	PrivateCostControlError,
 } from './hosted-ai-cost-controls';
+import { getHostedAiPlan } from './hosted-ai-policy';
 import {
 	getGlobalTranscriptionDailyCostOrThrow,
 	getGlobalTranscriptionHourlyCostOrThrow,
@@ -102,11 +104,36 @@ export async function transcriptionGateResponse(
 	authResult: AuthResult,
 	costIdentity: string,
 ): Promise<Response | null> {
+	// Resolve who is asking before touching the ledger. An anonymous caller or
+	// an account whose plan could not be verified has no transcription cap at
+	// all; looking one up threw inside the ledger try below and was reported as
+	// a cost-control outage (#7888), which hid the real reason from both the
+	// client and the Worker logs. Mirror the hosted chat gates instead.
+	if (!getHostedAiPlan(authResult.accountPlan)) {
+		const anonymous = authResult.tier === 'anonymous';
+		console.warn('transcription gate rejected ' + JSON.stringify({
+			reason: anonymous ? 'anonymous' : 'account_plan_unavailable',
+			tier: authResult.tier,
+		}));
+		return addCorsHeaders(createErrorResponse(anonymous ? 401 : 503, JSON.stringify(anonymous
+			? {
+				error: 'authentication_required',
+				message: 'Sign in to use screenpipe cloud transcription. Local transcription still works.',
+			}
+			: {
+				error: 'account_plan_unavailable',
+				message: 'Unable to verify your screenpipe plan. Try again shortly. Local transcription still works.',
+			})));
+	}
+
 	let decision: TranscriptionBudgetDecision;
 	try {
 		decision = await checkTranscriptionBudget(env, costIdentity, authResult.accountPlan);
 	} catch (error) {
-		console.error('transcription cost control unavailable', error);
+		// Both causes fail closed with the same public response, but they need
+		// different fixes, so the log names which one it was (never the value).
+		const reason = error instanceof PrivateCostControlError ? 'invalid_cost_control_config' : 'ledger_unavailable';
+		console.error('transcription cost control unavailable ' + JSON.stringify({ reason }), error);
 		return addCorsHeaders(createErrorResponse(503, JSON.stringify({
 			error: 'cost_control_unavailable',
 			message:

@@ -163,6 +163,53 @@ describe('transcription gate response', () => {
 		expect(await errorPayload(gate!)).toMatchObject({ error: 'cost_control_unavailable' });
 	});
 
+	it('asks anonymous callers to sign in instead of reporting an outage (#7888)', async () => {
+		const gate = await transcriptionGateResponse(
+			dbWithCosts({}),
+			requestWithIp('203.0.113.7'),
+			auth({ tier: 'anonymous', accountPlan: 'unknown' }),
+			'anon-ip:203.0.113.7',
+		);
+		expect(gate?.status).toBe(401);
+		expect(await errorPayload(gate!)).toMatchObject({ error: 'authentication_required' });
+	});
+
+	it('reports an unverifiable plan as such, not as a cost-control outage (#7888)', async () => {
+		const gate = await transcriptionGateResponse(
+			dbWithCosts({}),
+			requestWithIp('203.0.113.7'),
+			auth({ tier: 'logged_in', accountPlan: 'unknown' }),
+			'user_a',
+		);
+		expect(gate?.status).toBe(503);
+		expect(await errorPayload(gate!)).toMatchObject({ error: 'account_plan_unavailable' });
+	});
+
+	it('never reads the ledger for a caller without a verified plan', async () => {
+		const gate = await transcriptionGateResponse(
+			dbWithCosts({}, { fail: true }),
+			requestWithIp('203.0.113.7'),
+			auth({ tier: 'logged_in', accountPlan: 'unknown' }),
+			'user_a',
+		);
+		expect(await errorPayload(gate!)).toMatchObject({ error: 'account_plan_unavailable' });
+	});
+
+	it('still fails closed on invalid private cost controls, and logs that cause', async () => {
+		const env = { ...dbWithCosts({}), MAX_GLOBAL_DAILY_TRANSCRIPTION_COST: '' } as unknown as Env;
+		const logged: string[] = [];
+		const original = console.error;
+		console.error = (...args: unknown[]) => { logged.push(String(args[0])); };
+		try {
+			const gate = await transcriptionGateResponse(env, requestWithIp('203.0.113.7'), auth(), 'user_a');
+			expect(gate?.status).toBe(503);
+			expect(await errorPayload(gate!)).toMatchObject({ error: 'cost_control_unavailable' });
+		} finally {
+			console.error = original;
+		}
+		expect(logged.join('\n')).toContain('invalid_cost_control_config');
+	});
+
 	it('distinguishes an exhausted account from a paused platform', async () => {
 		const accountGate = await transcriptionGateResponse(
 			dbWithCosts({ [transcriptionCostKey('user_a')]: 103 }),
