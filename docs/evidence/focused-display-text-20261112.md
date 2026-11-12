@@ -29,7 +29,7 @@ after:  fresh foreground owner -> AX/OCR/text
 ```
 
 The capture regression covers focused AX, then background capture with a
-populated unknown-app OCR cache, fresh/no/no gate, present/absent tree, and
+populated unknown-app OCR cache, a fresh gate or no gate, present/absent tree, and
 screenshot-disabled mode, followed by restored focus. It asserts the durable
 frame columns, elements, snapshot, metadata, hashes, text source, and reference
 are empty as applicable without weakening the screenshot durability checks.
@@ -77,13 +77,19 @@ The earlier `GetWindowRect` probe is retained only as historical evidence that
 Notepad could own the guest foreground; it is not proof of the corrected
 HMONITOR helper. The current native test supersedes that geometry probe.
 
-The file-backed SQLite capture regression proves the remaining boundary. A
-focused capture retains text; a background capture retains its permitted JPEG
-and frame row while skipping OCR detect/run/cache and AX work and clearing text
-columns, metadata, elements, semantic projections, and frame-link attachment;
-returning focus restores focused text. The event-driven suite additionally
-proves only focused paired results reach `FrameLinker` and background results
-clear `last_frame_id`.
+The file-backed SQLite regression exercises the actual shared persistence
+pipeline with synthetic screenshots and supplied AX observations. It proves
+that focused text is retained and restores on return of focus; background
+captures retain permitted JPEGs and frame rows with no OCR detection/run/cache,
+text columns, tree JSON, metadata, elements, or element references. Their
+returned focus flag is false.
+
+Source inspection of the production engine caller establishes the AX-walk,
+semantic-job and UI-event routing guards: only confirmed ownership admits an
+AX walk or semantic projection, only focused paired results reach the frame
+linker, and background results clear its fallback frame reference. The
+104 engine and 13 host frame-linker tests pass; those counts do not represent a
+live end-to-end recording-engine test of these routing decisions.
 
 Only one physical/runtime display was enumerated. No actual two-display
 transition, cursor-on-another-display behavior, hotplug, or DPI-mixed topology
@@ -98,12 +104,15 @@ used.
 - `1a5a778b5b` in #5060 introduced gated background-monitor OCR.
 - #6018 and squash `1736578525` in #6009 intentionally removed cross-monitor
   AX attribution while retaining background OCR.
-- The new product requirement supersedes only that background OCR expectation.
-  Cross-monitor privacy attribution is retained.
+- The explicit requirement removes background OCR/text fallback while retaining
+  focused-display text and cross-monitor privacy attribution.
+- `b3375db525` introduced the all-capture frame-linking path. Background and
+  unknown-focus frames are now excluded from focused UI-event attachment.
 - The customer-reported Teams CPU correlation is not evidence of a
   monitor-specific or Teams-process cause; no such claim is made.
-- The new native APIs add focused-window geometry queries on capture triggers.
-  No CPU or battery benchmark claim is made.
+- Native ownership queries run on capture triggers: Windows uses foreground
+  monitor handles and macOS uses focused-window geometry. No CPU or battery
+  benchmark claim is made.
 
 No retry/time/count policy was added, and normal diagnostics remain intact.
 Scheduling/change detection, privacy filters, DRM/pause behavior, and
