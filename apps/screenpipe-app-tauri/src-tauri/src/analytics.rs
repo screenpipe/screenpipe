@@ -8,12 +8,26 @@ use screenpipe_engine::telemetry_context::TelemetryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{System, SystemExt};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::interval;
 use tracing::instrument::WithSubscriber;
+
+static TELEMETRY_CONSENT: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_consent(enabled: bool) {
+    TELEMETRY_CONSENT.store(
+        enabled && !screenpipe_engine::analytics::telemetry_disabled_by_env(),
+        Ordering::SeqCst,
+    );
+}
+
+pub(crate) fn consent_enabled() -> bool {
+    TELEMETRY_CONSENT.load(Ordering::SeqCst)
+}
 
 const EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -71,7 +85,7 @@ pub struct AnalyticsManager {
     distinct_id: String,
     email: String,
     interval: Duration,
-    enabled: Arc<Mutex<bool>>,
+    enabled: Arc<AtomicBool>,
     api_host: String,
     local_api_base_url: String,
     local_api_key: Option<String>,
@@ -150,7 +164,7 @@ impl AnalyticsManager {
             distinct_id,
             email,
             interval: Duration::from_secs(interval_hours * 3600),
-            enabled: Arc::new(Mutex::new(analytics_enabled)),
+            enabled: Arc::new(AtomicBool::new(analytics_enabled)),
             api_host: "https://us.i.posthog.com".to_string(),
             local_api_base_url,
             local_api_key,
@@ -160,9 +174,21 @@ impl AnalyticsManager {
         }
     }
 
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        let debug =
+            cfg!(debug_assertions) || std::env::var("TAURI_ENV_DEBUG").is_ok_and(|v| v == "true");
+        self.enabled.store(
+            enabled && !debug && !screenpipe_engine::analytics::telemetry_disabled_by_env(),
+            Ordering::SeqCst,
+        );
+    }
+
     /// Fetch UTM attribution from the website by IP matching.
     /// Called once on first launch; result is cached for all subsequent events.
     pub async fn fetch_attribution(&self) {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
         // Only fetch if we haven't already
         if self.attribution.lock().await.is_some() {
             return;
@@ -223,7 +249,7 @@ impl AnalyticsManager {
     /// Send a $create_alias event so PostHog merges the email-based identity
     /// (used by the website download endpoint) with this app's analytics UUID.
     pub async fn send_alias(&self, alias: &str) {
-        if !*self.enabled.lock().await || alias.is_empty() {
+        if !self.enabled.load(Ordering::SeqCst) || alias.is_empty() {
             return;
         }
         let url = format!("{}/capture/", self.api_host);
@@ -261,7 +287,7 @@ impl AnalyticsManager {
         event: &str,
         properties: Option<serde_json::Value>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if !*self.enabled.lock().await {
+        if !self.enabled.load(Ordering::SeqCst) {
             return Ok(());
         }
 
@@ -272,6 +298,10 @@ impl AnalyticsManager {
             .host_info
             .get_or_try_init(|| tokio::task::spawn_blocking(HostInfo::collect))
             .await?;
+
+        if !self.enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
 
         let app_version = env!("CARGO_PKG_VERSION");
 
@@ -409,7 +439,7 @@ impl AnalyticsManager {
 
         loop {
             interval.tick().await;
-            if *self.enabled.lock().await {
+            if self.enabled.load(Ordering::SeqCst) {
                 // Get health status
                 let health_status = match self.check_recording_health().await {
                     Ok(status) => status,

@@ -339,18 +339,15 @@ fn is_encrypted_bytes(data: &[u8]) -> bool {
     data.len() >= 8 && &data[..8] == STORE_MAGIC
 }
 
-/// Did this store JSON parse and contain a non-empty `settings.aiPresets`?
-/// Used as the "is this a real user state" signal — empty presets means the
-/// migration in use-settings.tsx will seed defaults, which is the wipe trigger.
+/// Non-empty presets prove personal settings are healthy. A native managed
+/// policy may deliberately permit none; restoring a prior snapshot in that case
+/// would undo the organization's restriction and overwrite newer settings.
 fn store_json_has_presets(data: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(data)
-        .ok()
-        .and_then(|v| {
-            v.pointer("/settings/aiPresets")
-                .and_then(|p| p.as_array())
-                .map(|a| !a.is_empty())
+    serde_json::from_slice::<Value>(data).ok().is_some_and(|value| {
+        value.pointer("/settings/aiPresets").and_then(Value::as_array).is_some_and(|presets| {
+            !presets.is_empty() || value.pointer("/settings/enterpriseAiPresetPolicy/version") == Some(&json!(2))
         })
-        .unwrap_or(false)
+    })
 }
 
 /// Atomically and *durably* write `bytes` to `path`.
@@ -2427,8 +2424,10 @@ impl SettingsStore {
         settings.enable_semantic_context = true;
         // Automatic meeting capture also applies before the frontend mounts,
         // including old stores with the former opt-in saved as false.
-        settings.experimental_meeting_piggyback =
-            screenpipe_config::default_experimental_meeting_piggyback();
+        settings.experimental_meeting_piggyback = self.extra.get("enterpriseManagedSettings")
+            .and_then(|managed| managed.get("experimentalMeetingPiggyback"))
+            .and_then(Value::as_bool)
+            .unwrap_or_else(screenpipe_config::default_experimental_meeting_piggyback);
         // Override user_id with the Clerk JWT token from the auth user object.
         // This token is used as the Bearer credential for screenpipe cloud
         // (transcription proxy, Pi agent, etc.), not as a database ID.
@@ -2889,7 +2888,7 @@ fn migrate_remote_logs_default_enabled(settings: &mut SettingsStore) -> bool {
 }
 
 fn backfill_default_ai_preset(settings: &mut SettingsStore) -> bool {
-    if !settings.ai_presets.is_empty() {
+    if !settings.ai_presets.is_empty() || settings.extra.get("enterpriseAiPresetPolicy").is_some_and(|policy| policy["version"] == 2) {
         return false;
     }
     settings.ai_presets = SettingsStore::default().ai_presets;
@@ -2912,7 +2911,8 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .map(|obj| !obj.contains_key("restartNotificationsDefaultedOff"))
         .unwrap_or(false);
     let should_persist_ai_preset_backfill = raw_obj.as_ref().is_some_and(|obj| {
-        obj.get("aiPresets")
+        !obj.get("enterpriseAiPresetPolicy").is_some_and(|policy| policy["version"] == 2)
+            && obj.get("aiPresets")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
     });
@@ -4427,6 +4427,15 @@ mod tests {
         assert!(!backfill_default_ai_preset(&mut settings));
     }
 
+    #[test]
+    fn organization_empty_presets_survive_recovery_and_boot_migrations() {
+        let raw = json!({"settings":{"aiPresets":[],"enterpriseAiPresetPolicy":{"version":2,"allow_screenpipe_cloud":false,"allow_employee_custom_presets":false}}});
+        assert!(store_json_has_presets(&serde_json::to_vec(&raw).unwrap()));
+        let mut settings: SettingsStore = serde_json::from_value(raw["settings"].clone()).unwrap();
+        assert!(!backfill_default_ai_preset(&mut settings));
+        assert!(settings.ai_presets.is_empty());
+    }
+
     /// Any `<name>.durable.<pid>.<seq>.tmp` still sitting in `dir`.
     fn lingering_durable_temps(dir: &std::path::Path) -> Vec<String> {
         std::fs::read_dir(dir)
@@ -5738,6 +5747,17 @@ mod tests {
             json!({"smartRecording": false}),
         );
         assert!(store.to_recording_settings().experimental_meeting_piggyback);
+    }
+
+    #[test]
+    fn managed_smart_audio_choice_overrides_the_default_but_emergency_off_still_wins() {
+        let mut settings = SettingsStore::default();
+        for enabled in [false, true] {
+            settings.extra.insert("enterpriseManagedSettings".into(), json!({"experimentalMeetingPiggyback":enabled}));
+            assert_eq!(settings.to_recording_settings().experimental_meeting_piggyback, enabled);
+        }
+        settings.extra.insert("remoteControlPolicy".into(), json!({"schemaVersion":1,"boolean":{"smartRecording":{"defaultEnabled":true,"forceDisabled":true}}}));
+        assert!(!settings.to_recording_settings().experimental_meeting_piggyback);
     }
 
     #[test]

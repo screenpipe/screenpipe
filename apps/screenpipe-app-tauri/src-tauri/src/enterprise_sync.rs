@@ -20,7 +20,8 @@
 use crate::enterprise::sync as ee_sync;
 
 #[cfg(feature = "enterprise-support")]
-pub(crate) const NATIVE_POLICY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+pub(crate) const NATIVE_POLICY_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
 
 #[cfg(feature = "enterprise-support")]
 mod imp {
@@ -1464,6 +1465,10 @@ mod imp {
         hidden_sections: Vec<String>,
         #[serde(rename = "lockedSettings", default)]
         locked_settings: HashMap<String, serde_json::Value>,
+        #[serde(rename = "appUpdatePolicy", default)]
+        app_update_policy: Option<serde_json::Value>,
+        #[serde(flatten)]
+        extra: serde_json::Map<String, serde_json::Value>,
         #[serde(rename = "requireAccountLogin", default)]
         require_account_login: bool,
         #[serde(rename = "recordingAllowed", default = "default_recording_allowed")]
@@ -1474,6 +1479,9 @@ mod imp {
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeEnterprisePolicy {
+        app_update_policy: serde_json::Value,
+        extra: serde_json::Map<String, serde_json::Value>,
+        settings_saved: bool,
         hidden_sections: Vec<String>,
         locked_settings: HashMap<String, serde_json::Value>,
         enforce_auto_start: bool,
@@ -1502,6 +1510,12 @@ mod imp {
                 self.locked_settings.get("autoConnectAiTools"),
             );
             NativeEnterprisePolicy {
+                app_update_policy: self
+                    .app_update_policy
+                    .or_else(|| self.locked_settings.get("app_update_policy").cloned())
+                    .unwrap_or(serde_json::Value::Null),
+                extra: self.extra,
+                settings_saved: false,
                 auto_connect_ai_tools,
                 hidden_sections: self.hidden_sections,
                 locked_settings: self.locked_settings,
@@ -1628,7 +1642,7 @@ mod imp {
         policy_url: &str,
         device_id: &str,
         credential: &EnterprisePolicyCredential,
-        apply_ai_tool_policy: impl FnOnce(bool),
+        apply_runtime_policy: impl FnOnce(&mut NativeEnterprisePolicy) -> bool,
     ) -> Result<NativeEnterprisePolicy, NativePolicyFetchError> {
         let request = http.get(policy_url).header("X-Device-Id", device_id);
         let request = apply_enterprise_credential(request, credential);
@@ -1664,11 +1678,14 @@ mod imp {
                 &endpoint,
             );
         }
-        let policy = response.into_native_policy();
-        // GET authenticated this workspace's policy. Apply AI setup before
-        // recording-paused branches or fallible enrollment/settings work can
-        // discard it. This never grants recording or bypasses seat checks.
-        apply_ai_tool_policy(policy.auto_connect_ai_tools);
+        let mut policy = response.into_native_policy();
+        // Policy delivery is independent of permission to record or seat
+        // enrollment. Paused and hidden devices must remain manageable.
+        if !apply_runtime_policy(&mut policy) {
+            return Err(NativePolicyFetchError::Unavailable(
+                "superseded enterprise policy response; latest refresh owns desired state".into(),
+            ));
+        }
         Ok(policy)
     }
 
@@ -1775,12 +1792,90 @@ mod imp {
         ))
     }
 
+    fn begin_runtime_policy_refresh(
+        app: &tauri::AppHandle,
+        account: bool,
+        request: u64,
+    ) -> impl FnOnce(&mut NativeEnterprisePolicy) -> bool + Send {
+        let app = app.clone();
+        let apply_ai = crate::enterprise_policy::begin_ai_tool_policy_refresh();
+        move |policy| {
+            crate::enterprise::managed_settings::POLICY_REFRESH
+                .apply(request, || {
+                    let root = crate::db_relaunch::active_data_dir();
+                    let saved = crate::enterprise::managed_settings::persist_snapshot(
+                        &app,
+                        &policy.locked_settings,
+                        &policy.app_update_policy,
+                        &policy.extra,
+                    );
+                    for key in ["managedPipes", "managedSkills"] {
+                        if policy.extra.get(key).is_some_and(|value| !value.is_array()) {
+                            crate::enterprise::runtime_policy::failure(
+                                &root,
+                                key,
+                                "invalid desired-state type; last valid policy retained",
+                            );
+                        }
+                    }
+                    policy.settings_saved = saved.is_ok();
+                    if let Err(error) = &saved {
+                        crate::enterprise::runtime_policy::failure(&root, "settings", error);
+                    } else {
+                        crate::enterprise::runtime_policy::queue_saved_files(&app);
+                    }
+                    apply_ai(policy.auto_connect_ai_tools);
+                    policy.sync_streams.apply();
+                    crate::enterprise_policy::set_enterprise_policy(
+                        policy.hidden_sections.clone(),
+                        policy.enforce_auto_start,
+                    );
+                    let config = screenpipe_core::paths::default_screenpipe_data_dir()
+                        .join("enterprise.json");
+                    if let Err(error) = crate::enterprise::runtime_policy::apply_team(
+                        &policy.extra,
+                        account,
+                        &config,
+                    ) {
+                        crate::enterprise::runtime_policy::failure(&root, "team_config", &error);
+                    }
+                })
+                .is_some()
+        }
+    }
+
     async fn resolve_native_authorization(
+        app: &tauri::AppHandle,
         http: &reqwest::Client,
         policy_url: &str,
         heartbeat_url: &str,
         device_id: &str,
         measurement: Option<&RecordingMeasurement>,
+    ) -> (u64, NativeAuthorizationResult) {
+        let request = crate::enterprise::managed_settings::POLICY_REFRESH.begin();
+        (
+            request,
+            resolve_native_authorization_at(
+                app,
+                http,
+                policy_url,
+                heartbeat_url,
+                device_id,
+                measurement,
+                request,
+            )
+            .await,
+        )
+    }
+
+    async fn resolve_native_authorization_at(
+        app: &tauri::AppHandle,
+        http: &reqwest::Client,
+        policy_url: &str,
+        heartbeat_url: &str,
+        device_id: &str,
+        measurement: Option<&RecordingMeasurement>,
+        request: u64,
     ) -> NativeAuthorizationResult {
         let credentials = current_policy_credentials();
         if credentials.is_empty() {
@@ -1797,7 +1892,11 @@ mod imp {
                 policy_url,
                 device_id,
                 &credential,
-                crate::enterprise_policy::begin_ai_tool_policy_refresh(),
+                begin_runtime_policy_refresh(
+                    app,
+                    credential.kind() == EnterprisePolicyCredentialKind::AccountToken,
+                    request,
+                ),
             )
             .await
             {
@@ -1880,6 +1979,43 @@ mod imp {
         NativeAuthorizationResult::Unavailable("enterprise policy could not be verified".into())
     }
 
+    fn grant_current_policy(
+        app: &tauri::AppHandle,
+        request: u64,
+        policy: &NativeEnterprisePolicy,
+        startup: bool,
+    ) -> Result<(), String> {
+        crate::enterprise::managed_settings::POLICY_REFRESH
+            .apply(request, || {
+                if !policy.settings_saved {
+                    return Err(
+                        "managed policy save failed; recording grant deferred until retry".into(),
+                    );
+                }
+                if startup {
+                    crate::enterprise::managed_settings::persist(
+                        app,
+                        &policy.locked_settings,
+                        true,
+                    )?;
+                }
+                if crate::enterprise_policy::update_recording_authorized(true) {
+                    app.state::<crate::recording::RecordingState>()
+                        .set_capture_intent(true);
+                }
+                Ok(())
+            })
+            .ok_or("enterprise authorization superseded by a newer policy refresh")?
+    }
+
+    fn revoke_current_policy(app: &tauri::AppHandle, request: u64, reason: &str) {
+        crate::enterprise::managed_settings::POLICY_REFRESH.apply(request, || {
+            crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
+                app, reason,
+            );
+        });
+    }
+
     /// Resolve Enterprise credentials before the shared application bootstrap
     /// proceeds. Tauri's setup callback is synchronous and already runs under
     /// the main Tokio runtime, so the network check owns a small worker runtime
@@ -1905,6 +2041,7 @@ mod imp {
                     tokio::time::timeout(
                         std::time::Duration::from_secs(12),
                         resolve_native_authorization(
+                            &worker_app,
                             &http,
                             &policy_url,
                             &heartbeat_url,
@@ -1917,7 +2054,7 @@ mod imp {
                 })
             });
 
-        let result = match worker {
+        let (request, result) = match worker {
             Ok(worker) => match worker.join() {
                 Ok(Ok(result)) => result,
                 Ok(Err(error)) => {
@@ -1937,17 +2074,9 @@ mod imp {
 
         match result {
             NativeAuthorizationResult::Authorized(policy) => {
-                if crate::enterprise::managed_settings::persist(app, &policy.locked_settings, true)
-                    .is_err()
-                {
+                if grant_current_policy(app, request, &policy, true).is_err() {
                     return false;
                 }
-                policy.sync_streams.apply();
-                crate::enterprise_policy::set_enterprise_policy(
-                    policy.hidden_sections,
-                    policy.enforce_auto_start,
-                );
-                crate::enterprise_policy::update_recording_authorized(true);
                 info!("enterprise: startup authentication completed");
                 true
             }
@@ -1981,113 +2110,97 @@ mod imp {
         credential_type: Option<&str>,
         credential: Option<&str>,
     ) -> Result<(), String> {
-        let Some(credential_value) = credential.map(str::trim).filter(|value| !value.is_empty())
-        else {
-            let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
-            return Err("no enterprise credential was provided".to_string());
-        };
-        let credential = match credential_type {
-            Some("license_key") => {
-                EnterprisePolicyCredential::LicenseKey(credential_value.to_string())
+        let request = crate::enterprise::managed_settings::POLICY_REFRESH.begin();
+        let credential = match (
+            credential_type,
+            credential.map(str::trim).filter(|value| !value.is_empty()),
+        ) {
+            (Some("license_key"), Some(value)) => {
+                EnterprisePolicyCredential::LicenseKey(value.into())
             }
-            Some("account") => {
-                EnterprisePolicyCredential::AccountToken(credential_value.to_string())
+            (Some("account"), Some(value)) => {
+                EnterprisePolicyCredential::AccountToken(value.into())
             }
             _ => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
-                return Err("unsupported enterprise credential type".to_string());
+                revoke_current_policy(app, request, "authorization_rejected");
+                return Err("no supported enterprise credential was provided".into());
             }
         };
         let (policy_url, heartbeat_url) = authorization_endpoint_urls();
         let http = reqwest::Client::builder()
-            // The caller's IPC deadline is twenty seconds. Finish first so a
-            // timed-out webview request cannot grant access later in the
-            // background after the UI has already reported failure.
             .timeout(std::time::Duration::from_secs(9))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("enterprise policy client: {error}"))?;
         let device_id = settings_device_id(app).unwrap_or_else(|| "unknown".to_string());
-
-        match fetch_and_apply_native_policy(
+        let fetched = fetch_and_apply_native_policy(
             &http,
             &policy_url,
             &device_id,
             &credential,
-            crate::enterprise_policy::begin_ai_tool_policy_refresh(),
+            begin_runtime_policy_refresh(
+                app,
+                credential.kind() == EnterprisePolicyCredentialKind::AccountToken,
+                request,
+            ),
         )
-        .await
-        {
+        .await;
+        let (reason, error) = match fetched {
+            Ok(policy) if !policy.recording_allowed => (
+                "admin_disabled",
+                RECORDING_DISABLED_BY_ADMIN_CODE.to_string(),
+            ),
             Ok(policy)
-                if credential_authorizes_policy(
+                if !credential_authorizes_policy(
                     credential.kind(),
                     policy.require_account_login,
-                ) && policy.recording_allowed =>
+                ) =>
             {
-                match send_enrollment_heartbeat(
-                    &http,
-                    &heartbeat_url,
-                    &device_id,
-                    &credential,
-                    None,
+                (
+                    "account_required",
+                    "organization requires account sign-in".into(),
                 )
-                .await
-                {
-                    Ok(()) => {
-                        // Save native settings before the UI can start capture;
-                        // completing a restart must not hold authentication IPC.
-                        crate::enterprise::managed_settings::prepare(app, &policy.locked_settings)
-                            .await?;
-                        let newly_authorized =
-                            crate::enterprise_policy::update_recording_authorized(true);
-                        if newly_authorized {
-                            app.state::<crate::recording::RecordingState>()
-                                .set_capture_intent(true);
-                        }
-                        crate::recording::resume_enterprise_recording(app).await;
-                        crate::enterprise_policy::set_enterprise_policy(
-                            policy.hidden_sections,
-                            policy.enforce_auto_start,
-                        );
-                        Ok(())
-                    }
-                    Err(NativePolicyFetchError::RecordingDisabled) => {
-                        let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled")
-                                .await;
-                        Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
-                    }
-                    Err(NativePolicyFetchError::CredentialRejected(_)) => {
-                        let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected")
-                                .await;
-                        Err("enterprise enrollment was rejected".to_string())
-                    }
-                    Err(NativePolicyFetchError::Unavailable(error)) => {
-                        Err(format!("enterprise heartbeat is unavailable: {error}"))
-                    }
+            }
+            Ok(policy) => match send_enrollment_heartbeat(
+                &http,
+                &heartbeat_url,
+                &device_id,
+                &credential,
+                None,
+            )
+            .await
+            {
+                Ok(()) => {
+                    grant_current_policy(app, request, &policy, false)?;
+                    crate::recording::resume_enterprise_recording(app).await;
+                    return Ok(());
                 }
-            }
-            Ok(policy) if !policy.recording_allowed => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled").await;
-                Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
-            }
-            Ok(_) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "account_required").await;
-                Err("organization requires account sign-in".to_string())
-            }
-            Err(NativePolicyFetchError::CredentialRejected(_)) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "authorization_rejected").await;
-                Err("enterprise credential was rejected".to_string())
-            }
-            Err(NativePolicyFetchError::RecordingDisabled) => {
-                let _ = crate::enterprise_recording_access::revoke_enterprise_recording_with_reason(app, "admin_disabled").await;
-                Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
-            }
+                Err(NativePolicyFetchError::RecordingDisabled) => (
+                    "admin_disabled",
+                    RECORDING_DISABLED_BY_ADMIN_CODE.to_string(),
+                ),
+                Err(NativePolicyFetchError::CredentialRejected(_)) => (
+                    "authorization_rejected",
+                    "enterprise enrollment was rejected".into(),
+                ),
+                Err(NativePolicyFetchError::Unavailable(error)) => {
+                    return Err(format!("enterprise heartbeat is unavailable: {error}"))
+                }
+            },
+            Err(NativePolicyFetchError::RecordingDisabled) => (
+                "admin_disabled",
+                RECORDING_DISABLED_BY_ADMIN_CODE.to_string(),
+            ),
+            Err(NativePolicyFetchError::CredentialRejected(_)) => (
+                "authorization_rejected",
+                "enterprise credential was rejected".into(),
+            ),
             Err(NativePolicyFetchError::Unavailable(error)) => {
-                Err(format!("enterprise policy is unavailable: {error}"))
+                return Err(format!("enterprise policy is unavailable: {error}"))
             }
-        }
+        };
+        revoke_current_policy(app, request, reason);
+        Err(error)
     }
 
     fn show_enterprise_auth_recovery(app: &tauri::AppHandle) {
@@ -2118,6 +2231,7 @@ mod imp {
     fn spawn_native_policy_watcher(app: &tauri::AppHandle) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
+            crate::enterprise::runtime_policy::queue_saved_files(&app);
             let (policy_url, heartbeat_url) = authorization_endpoint_urls();
             let http = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -2141,14 +2255,15 @@ mod imp {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     continue;
                 }
-                let was_hidden = crate::enterprise_policy::is_app_ui_hidden();
+
                 let device_id = settings_device_id(&app).unwrap_or_else(|| "unknown".to_string());
                 // Re-resolve the live instance port and auth key each turn:
                 // startup/restart may replace either after this task starts.
                 let api = local_api_context_from_app(&app);
                 let logs = crate::log_files::get_screenpipe_data_dir(&app).ok();
                 let measurement = measure_recording(&http, &api, logs.as_deref()).await;
-                let authorization = resolve_native_authorization(
+                let (request, authorization) = resolve_native_authorization(
+                    &app,
                     &http,
                     &policy_url,
                     &heartbeat_url,
@@ -2156,6 +2271,7 @@ mod imp {
                     Some(&measurement),
                 )
                 .await;
+                let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                 // Also release the first-pass barrier after an offline/rejected
                 // response; an unknown policy keeps its documented default,
                 // while a cached disable remains disabled.
@@ -2163,49 +2279,11 @@ mod imp {
                 let mut next_poll = native_policy_poll_interval(&authorization);
                 match authorization {
                     NativeAuthorizationResult::Authorized(policy) => {
-                        let was_authorized = crate::enterprise_policy::recording_authorized();
-                        // Save before granting access so a concurrent app
-                        // start cannot capture with the previous policy.
-                        let settings_prepared = if crate::enterprise::managed_settings::prepare(
-                            &app,
-                            &policy.locked_settings,
-                        )
-                        .await
-                        .is_ok()
-                        {
-                            let newly_authorized =
-                                crate::enterprise_policy::update_recording_authorized(true);
-                            if newly_authorized {
-                                app.state::<crate::recording::RecordingState>()
-                                    .set_capture_intent(true);
-                            }
-                            // The native owner applies settings and reconciles
-                            // capture. Policy refresh never waits for teardown.
-                            true
-                        } else {
-                            false
-                        };
+                        let settings_prepared =
+                            grant_current_policy(&app, request, &policy, false).is_ok();
                         if !settings_prepared {
                             next_poll = NATIVE_POLICY_RETRY_INTERVAL;
-                            crate::enterprise_policy::update_recording_authorized(was_authorized);
                         }
-                        // Managed-background deployments may never create the
-                        // Home webview, so the native watcher must apply the
-                        // complete upload policy it just authenticated. This
-                        // is idempotent when the visible frontend is running.
-                        policy.sync_streams.apply();
-                        crate::enterprise_policy::set_enterprise_policy(
-                            policy.hidden_sections,
-                            policy.enforce_auto_start,
-                        );
-                        if was_hidden
-                            && !crate::commands::apply_enterprise_ui_visibility(app.clone())
-                        {
-                            info!("enterprise: native policy watcher restored visible UI");
-                        } else if !was_hidden {
-                            let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
-                        }
-
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
                         if settings_prepared {
@@ -2219,9 +2297,7 @@ mod imp {
                     }
                     NativeAuthorizationResult::RecordingDisabled => {
                         info!("enterprise: recording paused for this device by workspace admin");
-                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app, "admin_disabled",
-                        );
+                        revoke_current_policy(&app, request, "admin_disabled");
                         // Publish cancellation and retain native teardown before
                         // reporting I/O; heartbeat failure cannot delay the stop.
                         if crate::enterprise::recording_events::pending(&device_id, &heartbeat_url)
@@ -2247,28 +2323,25 @@ mod imp {
                         warn!(
                             "enterprise: organization requires account sign-in; device key cannot authorize recording"
                         );
-                        if was_hidden {
-                            // Authentication recovery must be visible. The Home
-                            // webview will fetch and reapply the complete policy
-                            // after the employee signs in.
-                            crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
-                            let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
-                        }
-                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app, "account_required",
-                        );
-                        show_enterprise_auth_recovery(&app);
+                        crate::enterprise::managed_settings::POLICY_REFRESH.apply(request, || {
+                            if crate::enterprise_policy::is_app_ui_hidden() {
+                                crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
+                                let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
+                            }
+                            crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(&app, "account_required");
+                            show_enterprise_auth_recovery(&app);
+                        });
                     }
                     NativeAuthorizationResult::Rejected
                     | NativeAuthorizationResult::NoCredential => {
-                        if was_hidden {
-                            crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
-                            let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
-                        }
-                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
-                            &app, "authorization_rejected",
-                        );
-                        show_enterprise_auth_recovery(&app);
+                        crate::enterprise::managed_settings::POLICY_REFRESH.apply(request, || {
+                            if crate::enterprise_policy::is_app_ui_hidden() {
+                                crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
+                                let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
+                            }
+                            crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(&app, "authorization_rejected");
+                            show_enterprise_auth_recovery(&app);
+                        });
                     }
                     NativeAuthorizationResult::Unavailable(error) => {
                         // A network/control-plane outage must not revoke a grant
@@ -3895,6 +3968,8 @@ mod imp {
         fn hidden_ui_policy_matches_frontend_section_normalization() {
             let response = NativePolicyResponse {
                 license_id: None,
+                app_update_policy: None,
+                extra: serde_json::Map::new(),
                 hidden_sections: vec!["app_ui".to_string(), "app_ui".to_string()],
                 locked_settings: HashMap::from([
                     ("recording".to_string(), serde_json::Value::Bool(true)),
@@ -3941,6 +4016,121 @@ mod imp {
         }
 
         #[tokio::test]
+        async fn update_policy_is_delivered_before_paused_recording_or_enrollment() {
+            use wiremock::{
+                matchers::{method, path},
+                Mock, MockServer, ResponseTemplate,
+            };
+            let server = MockServer::start().await;
+            let http = reqwest::Client::new();
+            let updates = serde_json::json!({"mode":"screenpipe","default_auto_update":true,"allow_employee_override":false});
+            for top_level in [false, true] {
+                server.reset().await;
+                let mut response = serde_json::json!({"hiddenSections":["app_ui"],"recordingAllowed":false,"lockedSettings":{}});
+                if top_level {
+                    response["appUpdatePolicy"] = updates.clone();
+                } else {
+                    response["lockedSettings"]["app_update_policy"] = updates.clone();
+                }
+                Mock::given(method("GET"))
+                    .and(path("/policy"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(&server)
+                    .await;
+                let mut applied = None;
+                let policy = super::fetch_and_apply_native_policy(
+                    &http,
+                    &format!("{}/policy", server.uri()),
+                    "fixture-device",
+                    &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
+                    |policy| {
+                        applied = Some(policy.app_update_policy.clone());
+                        true
+                    },
+                )
+                .await
+                .unwrap();
+                assert!(!policy.recording_allowed);
+                assert_eq!(applied, Some(updates.clone()));
+            }
+        }
+
+        #[tokio::test]
+        async fn paused_policy_delivers_all_device_state_to_native_storage_without_windows() {
+            use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+            let server = MockServer::start().await;
+            let root = tempfile::tempdir().unwrap();
+            let app = tauri::test::mock_builder()
+                .plugin(tauri_plugin_store::Builder::default().build())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            assert!(app.webview_windows().is_empty());
+            let file = root.path().join("store.bin");
+            let store = tauri_plugin_store::StoreBuilder::new(app.handle(), &file)
+                .disable_auto_save()
+                .build()
+                .unwrap();
+            store.set(
+                "settings",
+                serde_json::json!(crate::store::SettingsStore::default()),
+            );
+            let response = serde_json::json!({
+                "recordingAllowed": false, "hiddenSections": [],
+                "lockedSettings": {"disableAudio":"true","analyticsEnabled":"false","experimentalMeetingPiggyback":"false"},
+                "appUpdatePolicy": {"mode":"manual","default_auto_update":false,"allow_employee_override":false},
+                "aiPresetPolicy": {"version":2,"allow_screenpipe_cloud":false,"allow_employee_custom_presets":false},
+                "syncStreams": {"frames":false,"audio":false,"frame_images":"off"},
+                "managedPipes":[], "managedSkills":[], "isAdmin":true,"gatewayUrl":null
+            });
+            Mock::given(path("/policy"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .mount(&server)
+                .await;
+            let fetched = super::fetch_and_apply_native_policy(
+                &reqwest::Client::new(),
+                &format!("{}/policy", server.uri()),
+                "native-fixture",
+                &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
+                |policy| {
+                    crate::enterprise::managed_settings::persist_snapshot_store(
+                        store.as_ref(),
+                        &policy.locked_settings,
+                        &policy.app_update_policy,
+                        &policy.extra,
+                        root.path(),
+                        || store.save().map_err(|e| e.to_string()),
+                    )
+                    .unwrap();
+                    true
+                },
+            )
+            .await
+            .unwrap();
+            assert!(!fetched.recording_allowed);
+            assert!(fetched
+                .hidden_sections
+                .iter()
+                .all(|section| section != "app_ui"));
+            assert!(!fetched.sync_streams.frames);
+            assert!(!fetched.sync_streams.audio);
+            assert!(fetched.extra.contains_key("isAdmin"));
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+            assert_eq!(
+                saved["settings"]["enterpriseAppUpdatePolicy"]["mode"],
+                "manual"
+            );
+            assert_eq!(saved["settings"]["aiPresets"], serde_json::json!([]));
+            assert_eq!(saved["settings"]["disableAudio"], true);
+            assert_eq!(saved["settings"]["analyticsEnabled"], false);
+            assert_eq!(
+                saved["settings"]["enterpriseRuntimePolicy"],
+                serde_json::json!({"managedPipes":[],"managedSkills":[]})
+            );
+            assert!(app.webview_windows().is_empty());
+        }
+
+        #[tokio::test]
         async fn ai_tool_policy_applies_on_fetch_even_when_recording_is_paused() {
             use wiremock::{
                 matchers::{header, method, path},
@@ -3974,7 +4164,10 @@ mod imp {
                     &format!("{}/policy", server.uri()),
                     "fixture-device",
                     &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
-                    |enabled| applied = Some(enabled),
+                    |policy| {
+                        applied = Some(policy.auto_connect_ai_tools);
+                        true
+                    },
                 )
                 .await
                 .unwrap();
@@ -4027,8 +4220,9 @@ mod imp {
                         &older_url,
                         "fixture-device",
                         &credential,
-                        |enabled| {
-                            assert!(!policy.update(older, enabled));
+                        |fetched| {
+                            assert!(!policy.update(older, fetched.auto_connect_ai_tools));
+                            true
                         }
                     ),
                     super::fetch_and_apply_native_policy(
@@ -4036,9 +4230,10 @@ mod imp {
                         &newer_url,
                         "fixture-device",
                         &credential,
-                        |enabled| {
-                            assert!(policy.update(newer, enabled));
+                        |fetched| {
+                            assert!(policy.update(newer, fetched.auto_connect_ai_tools));
                             release_older.notify_one();
+                            true
                         }
                     ),
                 )
@@ -4081,7 +4276,10 @@ mod imp {
                     &format!("{}/policy", server.uri()),
                     "fixture-device",
                     &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
-                    |_| called = true,
+                    |_| {
+                        called = true;
+                        true
+                    },
                 )
                 .await;
                 assert!(result.is_err());
@@ -4116,7 +4314,10 @@ mod imp {
                     &url,
                     "fixture-device",
                     &credential,
-                    |_| called = true,
+                    |_| {
+                        called = true;
+                        true
+                    },
                 ),
             )
             .await;
@@ -4226,7 +4427,7 @@ mod imp {
                             &format!("{}/policy", server.uri()),
                             "fixture-device",
                             &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
-                            |_| {},
+                            |_| true,
                         )
                         .await
                         .unwrap();
