@@ -150,6 +150,7 @@ pub(crate) fn ai_settings(raw: &Value, current: &Value) -> Value {
         } else {
             preset
                 .get("api_key")
+                .filter(|value| !value.is_null())
                 .or_else(|| preset.get("apiKey"))
                 .and_then(Value::as_str)
                 .unwrap_or_default()
@@ -160,8 +161,8 @@ pub(crate) fn ai_settings(raw: &Value, current: &Value) -> Value {
             "id": id, "provider": provider, "model": model,
             "url": if provider == "screenpipe-cloud" { String::new() } else { text(preset, "url") },
             "prompt": text(preset, "prompt"), "apiKey": if key.is_empty() { Value::Null } else { json!(key) },
-            "maxContextChars": preset.get("max_context_chars").or_else(|| preset.get("maxContextChars")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_context_chars"].clone()),
-            "maxTokens": preset.get("max_tokens").or_else(|| preset.get("maxTokens")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_max_tokens"].clone()),
+            "maxContextChars": preset.get("max_context_chars").filter(|value| !value.is_null()).or_else(|| preset.get("maxContextChars")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_context_chars"].clone()),
+            "maxTokens": preset.get("max_tokens").filter(|value| !value.is_null()).or_else(|| preset.get("maxTokens")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_max_tokens"].clone()),
             "enterpriseManaged": true, "defaultPreset": false,
         }));
     }

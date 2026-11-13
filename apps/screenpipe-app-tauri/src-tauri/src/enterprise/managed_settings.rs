@@ -285,9 +285,11 @@ pub(crate) fn persist_snapshot_store<R: tauri::Runtime>(
             let mut next = update_policy_settings(updates, &current);
             next["enterpriseRuntimePolicy"] =
                 super::runtime_policy::file_policy(extra, &next["enterpriseRuntimePolicy"]);
-            if let Some(ai) = extra
-                .get("aiPresetPolicy")
+            let ai_policy = extra.get("aiPresetPolicy");
+            if let Some(ai) = ai_policy
+                .filter(|value| !value.is_null())
                 .or_else(|| extra.get("managedAiPreset"))
+                .or(ai_policy)
             {
                 super::runtime_policy::ai_settings(ai, &next)
             } else {
@@ -691,6 +693,26 @@ mod tests {
             || panic!("identical snapshot must not write again")
         )
         .unwrap());
+        let legacy = json!({"aiPresetPolicy":null,"managedAiPreset":{"provider":"custom","model":"legacy-company-model","url":"http://127.0.0.1:11434","api_key":null,"apiKey":"fixture-only-not-a-credential","max_context_chars":null,"maxContextChars":128000,"max_tokens":null,"maxTokens":8192}}).as_object().unwrap().clone();
+        persist_snapshot_store(
+            store.as_ref(),
+            &locked,
+            &updates,
+            &legacy,
+            root.path(),
+            || store.save().map_err(|e| e.to_string()),
+        )
+        .unwrap();
+        let legacy: crate::store::SettingsStore =
+            serde_json::from_value(store.get("settings").unwrap()).unwrap();
+        assert_eq!(legacy.ai_presets.len(), 1);
+        assert_eq!(legacy.ai_presets[0].model, "legacy-company-model");
+        assert_eq!(
+            legacy.ai_presets[0].api_key.as_deref(),
+            Some("fixture-only-not-a-credential")
+        );
+        assert_eq!(legacy.ai_presets[0].max_context_chars, 128000);
+        assert_eq!(legacy.ai_presets[0].max_tokens, 8192);
     }
 
     #[test]
