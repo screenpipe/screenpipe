@@ -5,9 +5,37 @@
 
 The default is **2 fps**. The setting controls background sampling and applies to the producer without restarting recording. Saved screenshots keep their existing activity and capture-frequency rules. The macOS cache now owns each frame's policy, scene, native buffers, blackout operations, and any foreground-restoration layers. Events render that prepared frame; an empty cache waits for the producer. There is no event-time freshness fence or native monitor-snapshot fallback. HD video has its own frame rate. Effective sampling is at least the configured idle recording rate (`ceil(1000 / idleCaptureIntervalMs)` fps). A faster idle pin raises sampling rather than slowing the promised recording cadence; live sampling edits below that minimum are rejected.
 
-**Historical measurements below use the earlier freshness/fallback implementation.** They support the initial inexpensive 2 fps preference, but do not measure the new frame-owned cache. Higher sampling can improve temporal alignment by reducing frame age; the old fresh-snapshot latency comparison is not a measurement of that benefit. Two fps preserves the previous native preview cadence and was close to 1 fps in those VMs.
+**The sections labelled historical use the earlier freshness/fallback implementation.** They support the initial inexpensive 2 fps preference, but do not measure the new frame-owned cache. Higher sampling can improve temporal alignment by reducing frame age; the old fresh-snapshot latency comparison is not a measurement of that benefit. Two fps preserves the previous native preview cadence and was close to 1 fps in those VMs.
 
-## Moving-screen comparison
+## Current macOS frame-owned cache measurements
+
+The producer-owned implementation completed **1,200/1,200 saved and reopened JPEGs**: seven moving-Safari trials at 1/2/4/8/12/24/30 fps plus static 2/24/30 fps. Each trial scheduled 120 requests at 250 ms intervals and completed every request. The optimized production Rust helper used the checked-in `release-dev` profile (the screen/image packages retain their release optimization); the separate actual app journeys used `debug-dev` with E2E fixtures. No compilation, app capture, VNC client, or desktop recorder ran during the timed matrix.
+
+| Requested fps | Native callbacks/s | Warm image read p95 ms | Frame age p95 ms | Probe CPU/core % | WindowServer CPU/core % |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.97 | 3.28 | 1025.1 | 12.10 | 19.57 |
+| 2 | 1.92 | 3.09 | 390.5 | 17.31 | 21.47 |
+| 4 | 3.93 | 3.18 | 268.4 | 26.20 | 21.35 |
+| 8 | 7.80 | 3.32 | 276.7 | 35.17 | 22.92 |
+| 12 | 11.66 | 3.16 | 229.5 | 35.63 | 22.43 |
+| 24 | 22.92 | 3.14 | 213.1 | 40.93 | 23.86 |
+| 30 | 28.61 | 3.21 | 216.0 | 39.90 | 23.38 |
+
+All **1,190/1,190 warm reads** selected frames timestamped before their request; all 1,200 frames had native timing metadata. Cold first-image requests took 338–983 ms, including scene collection, source startup, producer preparation, and image conversion. Warm image reads include RGBA composition and exclude JPEG/disk work. The process CPU column includes the continuous producer, four image selections per second, JPEG writes, reopened-image decoding, and pixel inspection; it is not idle producer CPU.
+
+At 2 fps, moving-screen frame age was 230 ms median / 390 ms p95. At 24 fps it was 130 ms median / 213 ms p95. Native delivery increased, but scene/window-layer preparation limited the alignment improvement at higher rates in this VM. The requested FPS is a sampling rate, not a promise of equally many prepared or persisted screenshots. Two fps remains the inexpensive default; one fps uses less CPU with roughly a one-second p95 age, and 24/30 fps costs more with diminishing alignment gains here. These are single VM trials, not a battery measurement.
+
+Static frames can legitimately retain old native image timestamps: p95 ages reached 14–20 seconds while the image was unchanged. No event-time age fence or relabelling was applied. All static requests still produced separate durable files. The static 24 fps trial has no callback-rate estimate because the boundary sequence sample was unavailable; its 120 image requests all passed.
+
+The current actual app retained 8/16/16/16 screenshots in 20-second moving phases at 2/4/24/30 fps; static dedup retained 0/0/1/0. One privacy JPEG preserved 15,639 allowed cyan pixels and zero forbidden magenta pixels across the whole image. Scene failure/recovery reached the normal redacted collector. On the final monitor-session ownership build, pause held 5→5 persisted JPEGs through activity and resume advanced to 7; health reported 8 captured/8 DB-written, zero dropped. A retained JPEG was reopened and its Safari marker verified with Vision OCR.
+
+HD remained CFR H.264 in one chunk through 2→24→4 screenshot changes: 442 frames/44.2 seconds at 10 fps, 1,393 frames/46.433 seconds at 30 fps. Finalized marker offsets stayed in range (max 440 and 1,380). Window privacy gating for HD remained unchanged.
+
+The native Timeline NSView is absent from WebDriver webview screenshots. Additional navigation checks did not establish a visible marker in that native view, so this report does not claim that UI acceptance. Stored pixels and DB ingest were verified independently. Account setup used synthetic local E2E fixtures; actual consumer authentication and hosted ingest were outside this capture check.
+
+[Summary CSV](macos-cache/summary.csv), [complete results](macos-cache/summary.json), [per-request/process/native logs](macos-cache/raw/), [runner](macos-cache/run-matrix.py), [source/build checksums](macos-cache/source-receipt.json).
+
+## Historical moving-screen comparison
 
 CPU values below are percentages of **one logical core**, measured within each VM. The VMs and workloads differ; this is a comparison between rates on each platform, not an OS ranking.
 
@@ -23,7 +51,7 @@ CPU values below are percentages of **one logical core**, measured within each V
 
 The Windows callback/CPU columns come from the original streaming matrix, which allowed cached readback. Its fresh latency column comes from the later request-correlated acquisition test; these are separate experiments. Native acquisition timestamps are not exposed by this Windows path, so latency is a software proxy.
 
-## Mac: method, cost, and startup
+## Historical Mac: method, cost, and startup
 
 macOS 26.6.2 (25G83), headless Orchard/Tart VirtualMac2,1, 12 vCPUs, 24 GiB, 1024×768. The optimized Swift harness exercises positive-selection ScreenCaptureKit and JPEG encoding, without AX walking, OCR, or disk writes. Static and 60 Hz synthetic moving fixtures each ran at 1/2/4/8/12/24/30 fps plus screenshot-only baseline, for 30 seconds at 4 requests/s. No other app capture, compilation, or desktop recording ran during the trials.
 
@@ -43,7 +71,7 @@ The follow-up fresh test completed **210/210 requests**, 35 each at 1/2/4/8/24/3
 
 [Windows report and exact commands](windows/README.md), [raw matrix](windows/matrix-raw.json), [summary](windows/matrix-summary.csv).
 
-## Real application acceptance
+## Historical application acceptance before the cache ownership change
 
 The supported native E2E builds used synthetic Standard-account fixtures. This tests capture behavior, rather than consumer authentication.
 

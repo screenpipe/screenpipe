@@ -1,0 +1,321 @@
+[
+  {
+    "scene": "dynamic",
+    "fps": 1,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.271418999999998,
+    "cold_capture_ms": 337.62895799999995,
+    "warm_capture_p50_ms": 2.704292,
+    "warm_capture_p95_ms": 3.280584,
+    "frame_age_p50_ms": 526.495,
+    "frame_age_p95_ms": 1025.136,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 30,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 19.569478999949396,
+        "peak_rss_mib": 115.0
+      },
+      "replayd": {
+        "one_core_percent": 2.555464611677284,
+        "peak_rss_mib": 80.46875
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 12.104832371102617,
+        "peak_rss_mib": 43.34375
+      }
+    },
+    "native_callbacks_per_second": 0.9747242899915008
+  },
+  {
+    "scene": "dynamic",
+    "fps": 2,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.335300750000002,
+    "cold_capture_ms": 983.324666,
+    "warm_capture_p50_ms": 2.697833,
+    "warm_capture_p95_ms": 3.08875,
+    "frame_age_p50_ms": 230.371,
+    "frame_age_p95_ms": 390.47,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 58,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 21.47275245504808,
+        "peak_rss_mib": 115.25
+      },
+      "replayd": {
+        "one_core_percent": 4.462306369564563,
+        "peak_rss_mib": 80.515625
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 17.31240666688227,
+        "peak_rss_mib": 43.515625
+      }
+    },
+    "native_callbacks_per_second": 1.915941656416939
+  },
+  {
+    "scene": "dynamic",
+    "fps": 4,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.264579124999997,
+    "cold_capture_ms": 406.492833,
+    "warm_capture_p50_ms": 2.746334,
+    "warm_capture_p95_ms": 3.1782500000000002,
+    "frame_age_p50_ms": 186.355,
+    "frame_age_p95_ms": 268.37,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 116,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 21.35484745095369,
+        "peak_rss_mib": 115.171875
+      },
+      "replayd": {
+        "one_core_percent": 4.035561723014818,
+        "peak_rss_mib": 80.53125
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 26.197521518571442,
+        "peak_rss_mib": 46.328125
+      }
+    },
+    "native_callbacks_per_second": 3.9326273046078324
+  },
+  {
+    "scene": "dynamic",
+    "fps": 8,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.242165333000003,
+    "cold_capture_ms": 389.934958,
+    "warm_capture_p50_ms": 2.66525,
+    "warm_capture_p95_ms": 3.321916,
+    "frame_age_p50_ms": 126.815,
+    "frame_age_p95_ms": 276.704,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 118,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 22.921473934495122,
+        "peak_rss_mib": 115.15625
+      },
+      "replayd": {
+        "one_core_percent": 4.442928868360227,
+        "peak_rss_mib": 80.515625
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 35.17318687451864,
+        "peak_rss_mib": 46.40625
+      }
+    },
+    "native_callbacks_per_second": 7.7982703100320006
+  },
+  {
+    "scene": "dynamic",
+    "fps": 12,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.305018582999992,
+    "cold_capture_ms": 400.70058400000005,
+    "warm_capture_p50_ms": 2.6829169999999998,
+    "warm_capture_p95_ms": 3.161292,
+    "frame_age_p50_ms": 147.537,
+    "frame_age_p95_ms": 229.54,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 118,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 22.434264519156233,
+        "peak_rss_mib": 115.25
+      },
+      "replayd": {
+        "one_core_percent": 4.634623508448383,
+        "peak_rss_mib": 80.59375
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 35.632866249737326,
+        "peak_rss_mib": 46.3125
+      }
+    },
+    "native_callbacks_per_second": 11.663939254473272
+  },
+  {
+    "scene": "dynamic",
+    "fps": 24,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.244511125000002,
+    "cold_capture_ms": 372.571209,
+    "warm_capture_p50_ms": 2.6600420000000002,
+    "warm_capture_p95_ms": 3.1411249999999997,
+    "frame_age_p50_ms": 129.619,
+    "frame_age_p95_ms": 213.089,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 118,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 23.863631630725816,
+        "peak_rss_mib": 115.3125
+      },
+      "replayd": {
+        "one_core_percent": 5.116039503343287,
+        "peak_rss_mib": 80.609375
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 40.92831602674602,
+        "peak_rss_mib": 46.46875
+      }
+    },
+    "native_callbacks_per_second": 22.924738084867382
+  },
+  {
+    "scene": "dynamic",
+    "fps": 30,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.261711582999993,
+    "cold_capture_ms": 410.616625,
+    "warm_capture_p50_ms": 2.7969589999999998,
+    "warm_capture_p95_ms": 3.213959,
+    "frame_age_p50_ms": 132.319,
+    "frame_age_p95_ms": 216.014,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 118,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 23.38103179176507,
+        "peak_rss_mib": 115.34375
+      },
+      "replayd": {
+        "one_core_percent": 5.349041805598029,
+        "peak_rss_mib": 80.5625
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 39.899142021630496,
+        "peak_rss_mib": 46.421875
+      }
+    },
+    "native_callbacks_per_second": 28.605235282429977
+  },
+  {
+    "scene": "static",
+    "fps": 2,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.318260917000003,
+    "cold_capture_ms": 949.657375,
+    "warm_capture_p50_ms": 2.6666659999999998,
+    "warm_capture_p95_ms": 3.040375,
+    "frame_age_p50_ms": 6642.711,
+    "frame_age_p95_ms": 20140.514,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 9,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 2.988627382902235,
+        "peak_rss_mib": 115.578125
+      },
+      "replayd": {
+        "one_core_percent": 4.06319003742897,
+        "peak_rss_mib": 80.546875
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 15.278937744050985,
+        "peak_rss_mib": 43.421875
+      }
+    },
+    "native_callbacks_per_second": 1.9157722978922405
+  },
+  {
+    "scene": "static",
+    "fps": 24,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.400597000000005,
+    "cold_capture_ms": 914.323917,
+    "warm_capture_p50_ms": 2.659417,
+    "warm_capture_p95_ms": 3.345291,
+    "frame_age_p50_ms": 6551.641,
+    "frame_age_p95_ms": 17044.925,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 8,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 5.256799107704196,
+        "peak_rss_mib": 115.703125
+      },
+      "replayd": {
+        "one_core_percent": 7.031387341515018,
+        "peak_rss_mib": 80.59375
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 27.171081062108136,
+        "peak_rss_mib": 46.5625
+      }
+    }
+  },
+  {
+    "scene": "static",
+    "fps": 30,
+    "exit_code": 0,
+    "requests": 120,
+    "saved": 120,
+    "failed": 0,
+    "elapsed_seconds": 30.367699958999992,
+    "cold_capture_ms": 398.936709,
+    "warm_capture_p50_ms": 2.652709,
+    "warm_capture_p95_ms": 3.336125,
+    "frame_age_p50_ms": 3891.573,
+    "frame_age_p95_ms": 14392.638,
+    "pre_request_frames": 119,
+    "native_timestamp_frames": 120,
+    "distinct_frame_times": 14,
+    "cpu": {
+      "WindowServer": {
+        "one_core_percent": 6.536813317084525,
+        "peak_rss_mib": 115.53125
+      },
+      "replayd": {
+        "one_core_percent": 8.145875056674393,
+        "peak_rss_mib": 80.59375
+      },
+      "screenshot_redaction_probe": {
+        "one_core_percent": 28.158580442824988,
+        "peak_rss_mib": 46.375
+      }
+    },
+    "native_callbacks_per_second": 18.42124795483809
+  }
+]

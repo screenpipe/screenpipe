@@ -1,0 +1,3 @@
+[2m2026-11-13T22:09:43.693121Z[0m [32m INFO[0m [2mscreenpipe_screen::screenshot_rate[0m[2m:[0m screenshot acquisition frame rate changed [3mprevious_fps[0m[2m=[0m2 [3mfps[0m[2m=[0m8 [3mactivation[0m[2m=[0m"next_screenshot"
+[2m2026-11-13T22:09:43.702509Z[0m [32m INFO[0m [2mscreenpipe_screen::monitor::macos::macos_version[0m[2m:[0m Detected macOS version: 26.6
+[2m2026-11-13T22:09:43.977602Z[0m [32m INFO[0m [2mscreenpipe_screen::screenshot_privacy::stream[0m[2m:[0m persistent positive-selection screenshot stream started [3mwidth[0m[2m=[0m1024 [3mheight[0m[2m=[0m768 [3mfps[0m[2m=[0m8 [3mlegacy_preview_active[0m[2m=[0mfalse
