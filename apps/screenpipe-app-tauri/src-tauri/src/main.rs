@@ -785,6 +785,7 @@ async fn main() {
                 release: Some(format!("screenpipe-app@{}", app_version).into()),
                 send_default_pii: false,
                 server_name: Some("screenpipe-app".into()),
+                transport: Some(std::sync::Arc::new(crate::analytics::sentry_transport)),
                 before_send: Some(std::sync::Arc::new(|mut event| {
                     if !crate::analytics::consent_enabled() {
                         return None;
@@ -1243,7 +1244,7 @@ async fn main() {
         .plugin(tauri_plugin_webdriver::init())
         .plugin(e2e::plugin());
 
-    // Only add Sentry plugin if telemetry is enabled
+    // The transport checks live consent for native and webview reports.
     let app = if let Some(ref _guard) = sentry_guard {
         let client = sentry::Hub::current().client().unwrap();
         app.plugin(tauri_plugin_sentry::init(&client))

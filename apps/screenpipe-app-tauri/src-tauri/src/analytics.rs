@@ -29,6 +29,37 @@ pub(crate) fn consent_enabled() -> bool {
     TELEMETRY_CONSENT.load(Ordering::SeqCst)
 }
 
+// The webview plugin forwards non-event envelopes directly, bypassing
+// before_send. Gate the transport too so all reports follow live consent.
+struct SentryConsentTransport {
+    inner: Arc<dyn sentry::Transport>,
+    allowed: fn() -> bool,
+}
+
+impl sentry::Transport for SentryConsentTransport {
+    fn send_envelope(&self, envelope: sentry::Envelope) {
+        if (self.allowed)() {
+            self.inner.send_envelope(envelope);
+        }
+    }
+
+    fn flush(&self, timeout: Duration) -> bool {
+        self.inner.flush(timeout)
+    }
+
+    fn shutdown(&self, timeout: Duration) -> bool {
+        self.inner.shutdown(timeout)
+    }
+}
+
+pub(crate) fn sentry_transport(options: &sentry::ClientOptions) -> Arc<dyn sentry::Transport> {
+    use sentry::TransportFactory;
+    Arc::new(SentryConsentTransport {
+        inner: sentry::transports::DefaultTransportFactory.create_transport(options),
+        allowed: consent_enabled,
+    })
+}
+
 const EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
@@ -745,6 +776,45 @@ pub fn start_analytics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sentry_raw_envelopes_follow_live_consent_on_an_existing_client() {
+        static ALLOWED: AtomicBool = AtomicBool::new(false);
+        fn allowed() -> bool {
+            ALLOWED.load(Ordering::SeqCst)
+        }
+        #[derive(Default)]
+        struct Received(std::sync::Mutex<Vec<sentry::Envelope>>);
+        impl sentry::Transport for Received {
+            fn send_envelope(&self, envelope: sentry::Envelope) {
+                self.0.lock().unwrap().push(envelope);
+            }
+        }
+        let received = Arc::new(Received::default());
+        let client = sentry::Client::from(sentry::ClientOptions {
+            dsn: Some("https://fixture@example.invalid/1".parse().unwrap()),
+            transport: Some(Arc::new(SentryConsentTransport {
+                inner: received.clone(),
+                allowed,
+            })),
+            ..Default::default()
+        });
+        // This is the raw plugin path: no event exists for before_send to filter.
+        let raw = || {
+            sentry::Envelope::from_slice(
+                b"{}\n{\"type\":\"client_report\"}\n{\"timestamp\":1,\"discarded_events\":[]}\n",
+            )
+            .unwrap()
+        };
+        client.send_envelope(raw());
+        assert!(received.0.lock().unwrap().is_empty());
+        ALLOWED.store(true, Ordering::SeqCst);
+        client.send_envelope(raw());
+        assert_eq!(received.0.lock().unwrap().len(), 1);
+        ALLOWED.store(false, Ordering::SeqCst);
+        client.send_envelope(raw());
+        assert_eq!(received.0.lock().unwrap().len(), 1);
+    }
 
     async fn analytics_server(
         status: axum::http::StatusCode,
