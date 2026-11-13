@@ -99,7 +99,7 @@ jobs:
     # links whisper.cpp/llama.cpp, which is slow to compile from scratch).
     # A measured cold run spent 89min in Build and another 27min compiling
     # the CoreAudio smoke test. Leave time for the engine test and real launch.
-    timeout-minutes: 180
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
