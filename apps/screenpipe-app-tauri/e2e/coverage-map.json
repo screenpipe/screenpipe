@@ -3330,6 +3330,25 @@
       "confidence": "partial",
       "ux": "real-user-flow",
       "notes": "Opens the floating star panel through the web toolbar when present or the shared native command, saves a 15-minute session against the isolated backend, and checks Escape, close, reopen, and that Home stays hidden. Runs without app activation; actual Space/focus transitions still need desktop acceptance."
+    },
+    {
+      "spec": "screenshot-frame-rate-windows.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "capture-ocr",
+        "settings",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "capture-ocr",
+        "settings-recording"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Recording-enabled Windows VM: verifies 2 fps default and persisted setting, live 2/24/4 native changes, pause/resume, and retained privacy-filtered screenshots using owned color fixtures."
     }
   ]
 }
