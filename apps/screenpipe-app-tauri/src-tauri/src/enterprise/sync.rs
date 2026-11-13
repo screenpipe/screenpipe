@@ -3203,6 +3203,10 @@ pub(crate) mod tests {
     async fn pin_failure_is_collected_without_uploading_recordings() {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _mode_env = UploadModeEnvGuard::clear();
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_readable",
+        );
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::path(
             "/api/enterprise/storage-binding/mode",
@@ -5341,8 +5345,8 @@ pub(crate) mod tests {
             Self(prior, None)
         }
 
-        /// Like `clear`, but also deploys an MDM destination pin for the
-        /// guard's lifetime — direct modes fail closed without one.
+        /// Like `clear`, but also deploys a destination pin for tests using
+        /// an explicit MDM upload-mode override.
         fn pin() -> Self {
             let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
             std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
@@ -6325,7 +6329,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn server_mode_resolution_covers_hosted_and_both_direct_modes() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::pin();
+        let _mode_env = UploadModeEnvGuard::clear();
         for (desired_mode, expected_label) in [
             ("hosted_ingest", "hosted_ingest"),
             ("direct_upload_readable", "direct_readable"),
