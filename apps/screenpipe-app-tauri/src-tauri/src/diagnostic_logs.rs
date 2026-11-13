@@ -737,13 +737,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wgc_interval_failure_reaches_redacted_support_report_with_outcome() {
+    async fn induced_wgc_interval_failure_and_recovery_reach_normal_redacted_collector() {
         let dir = tempfile::tempdir().unwrap();
         let current = dir.path().join("screenpipe-app.2026-11-13.log");
+        // Induced collector fixture only. The screenpipe-screen unit invokes the
+        // production WGC outcome recorder and checks these fields at their source.
         std::fs::write(
             &current,
             concat!(
-                "WARN WGC native minimum update interval unsupported or failed requested_fps=1 interval_ticks=10000000 error=HRESULT(0x80070032): The request is not supported; retaining safe demand-driven capture\n",
+                "WARN WGC native minimum update interval failed transiently requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=failed error=HRESULT(0x80004005): Unspecified error; retaining safe demand-driven capture; a later retry can recover native rate control\n",
+                "INFO WGC native minimum update interval recovered requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=recovered\n",
                 "INFO contact=private-person@example.com\n",
             ),
         )
@@ -751,10 +754,14 @@ mod tests {
         let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
             .await
             .unwrap();
-        assert!(report.contains("requested_fps=1"));
-        assert!(report.contains("HRESULT(0x80070032)"));
-        assert!(report.contains("The request is not supported"));
+        assert!(report.contains("requested_fps=2"));
+        assert!(report.contains("interval_ticks=5000000"));
+        assert!(report.contains("cause=FreshRequestRestore"));
+        assert!(report.contains("outcome=failed"));
+        assert!(report.contains("HRESULT(0x80004005)"));
         assert!(report.contains("retaining safe demand-driven capture"));
+        assert!(report.contains("outcome=recovered"));
+        assert!(report.contains("native minimum update interval recovered"));
         assert!(!report.contains("private-person@example.com"));
         println!("redacted WGC interval support report:\n{report}");
     }

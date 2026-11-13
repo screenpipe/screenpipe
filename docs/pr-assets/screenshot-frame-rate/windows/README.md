@@ -118,6 +118,33 @@ every ffmpeg whose command line referenced the task result directory; that patte
 also matched the outer `acceptance.mp4` recorder before its normal report/finalize
 path ran. Recovery cleanup instead validates the separate demo output and parent PID.
 
+## Interval bookkeeping correction (2026-11-12)
+
+The focused correction based on tested SHA `07c0c9a7684b7a5820fa2514dd027527f0b5b992`
+counts every configured-interval restore as an attempt and success/failure, restores
+`Applied` after a later success, and emits one failure/recovery pair with cause,
+FPS, ticks, outcome, and HRESULT. Unsupported capability HRESULTs are remembered
+for the WGC session, so fresh requests retain their post-request-pixel guard without
+repeating the native capability probe or WARN. Other failures remain retryable.
+
+The failure/recovery test is an induced unit fixture: it invokes the production WGC
+outcome recorder but is not older-OS hardware acceptance. A separate explicitly
+induced log fixture exercises the normal support collector/redactor. That wrapped
+collector test was blocked twice before test execution by the Tauri build script's
+Windows file lock (`os error 32`); no raw-Cargo fallback was used.
+
+Scoped results:
+
+- WGC module units: 11 passed, 3 live-desktop tests ignored.
+- Focused failure→recovery and unavailable-capability tests: 1 passed each.
+- Rebuilt fresh native smoke at 2 fps and 24 fps: 14/14 requests at each rate,
+  zero failures, 14 copies, `Applied`; attempts/successes were 16/16 and failures 0.
+- `git diff --check`: passed.
+
+The original 28 streaming trials, 210/210 fresh requests, live/persistence/privacy/
+pause evidence, normal collected-log result, and 24.93-second real-app demo above
+remain the supported-OS behavioral evidence; they were not rerun or relabeled.
+
 ## Evidence and commands
 
 - `matrix-raw.json`, `matrix-summary.csv`, and `raw/`: complete per-run values and
