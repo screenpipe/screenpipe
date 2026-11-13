@@ -455,10 +455,13 @@ describe("meeting note – bottom line is clickable", function () {
     // and clicks land on the footer. A correct, non-overlapping layout keeps
     // the scroll viewport's bottom adjacent to the footer's top (overlap ≈ 0).
     //
-    // (lastParaCoveredByFooter / caretInLastLine are logged above as
-    // user-facing confirmation but not asserted: getBoundingClientRect reports
-    // unclipped boxes and raw pointer-action caret placement can be flaky under
-    // the webdriver plugin, so they're diagnostics, not the gate.)
-    expect(g.scrollOverlapFooter ?? 9999).toBeLessThan(8);
+    // Quiet saved meetings omit the footer. Their lower boundary is the
+    // window edge; the final line must still hit the editor at max scroll.
+    // Raw pointer-action caret placement remains diagnostic because the
+    // WebDriver plugin can place the caret unreliably.
+    expect(g.scrollBox).not.toBeNull();
+    expect(g.lastPara).not.toBeNull();
+    expect(g.hitAtLastParaCenter).toMatchObject({ inEditor: true, inFooter: false });
+    expect(g.scrollBox!.bottom - (g.footer?.top ?? g.innerHeight)).toBeLessThan(8);
   });
 });

@@ -9,7 +9,9 @@ import {
   waitForTestId,
   t,
 } from "../helpers/test-utils.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow, waitForWindowHandle } from "../helpers/tauri.js";
+import { paidAccountFixture } from "../helpers/account-fixtures.js";
+import { snapshotFixtureAccount, restoreFixtureAccount, type FixtureAccountSnapshot } from "../helpers/account-fixture-restoration.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
 // Trackpad pinch on the Live View canvas, driven through the real app with the
@@ -32,7 +34,7 @@ const VIEW_ID = "pinch-zoom-e2e";
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
 const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
 
-type ShowWindowPayload = { Home: { page: null } };
+let originalAccount: FixtureAccountSnapshot | undefined;
 
 interface CanvasViewport {
   x: number;
@@ -47,102 +49,29 @@ interface CanvasDocument {
 
 /** Brain sits behind the entitlement gate, so open Home with an entitled account. */
 async function seedEntitledAccount(): Promise<void> {
-  const windowPayload: ShowWindowPayload = { Home: { page: null } };
-  await browser.executeAsync(
-    (payload: ShowWindowPayload, done: (value?: unknown) => void) => {
-      const tauri = globalThis as unknown as {
-        __TAURI__?: {
-          core?: { invoke: (cmd: string, args: object) => Promise<unknown> };
-        };
-        __TAURI_INTERNALS__?: {
-          invoke: (cmd: string, args: object) => Promise<unknown>;
-        };
-      };
-      const invoke =
-        tauri.__TAURI__?.core?.invoke ?? tauri.__TAURI_INTERNALS__?.invoke;
-      if (!invoke) {
-        done();
-        return;
-      }
-      void invoke("show_window", { window: payload })
-        .then(() => done())
-        .catch(() => done());
-    },
-    windowPayload,
-  );
-
-  const homeHandle = await browser.waitUntil(
-    async () =>
-      (await browser.getWindowHandles()).find((handle) => handle === "home") ||
-      false,
-    { timeout: t(8_000), timeoutMsg: "Home window handle did not appear" },
-  );
-  await browser.switchToWindow(homeHandle as string);
-  const writeStartedAt = (await browser.execute(
-    (key: string, eventName: string) => {
+  await showWindow({ Home: { page: null } });
+  await waitForWindowHandle("home", t(8_000));
+  await browser.switchToWindow("home");
+  originalAccount = await snapshotFixtureAccount();
+  const writeStartedAt = await browser.execute(
+    (key: string, eventName: string, accountJson: string) => {
       const startedAt = performance.now();
       delete document.documentElement.dataset.e2eSettingsWriteFinishedAt;
-      // The gate re-verifies against /api/user; without a stub that call fails
-      // and flips the app straight back to "sign in required".
-      const originalFetch = window.fetch.bind(window);
-      (window as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.href
-              : input.url;
-        if (new URL(url, window.location.href).pathname === "/api/user") {
-          return new Response(
-            JSON.stringify({
-              id: "e2e-pinch-zoom-user",
-              email: "e2e-pinch-zoom@screenpipe.test",
-              token: "e2e-pinch-zoom-token",
-              app_entitled: true,
-              subscription_plan: "standard",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return originalFetch(input, init);
-      };
-      const checkedAt = new Date().toISOString();
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          id: "e2e-pinch-zoom-user",
-          email: "e2e-pinch-zoom@screenpipe.test",
-          token: "e2e-pinch-zoom-token",
-          app_entitled: true,
-          subscription_plan: "standard",
-          entitlement: {
-            active: true,
-            plan: "standard",
-            source: "subscription",
-            checked_at: checkedAt,
-            features: { app: true, cloud: false },
-          },
-        }),
-      );
+      localStorage.setItem("screenpipe_e2e_account_fixture_active", "1");
+      localStorage.setItem(key, accountJson);
       window.dispatchEvent(new Event(eventName));
       return startedAt;
     },
     E2E_ACCOUNT_USER_KEY,
     E2E_ACCOUNT_USER_EVENT,
-  )) as number;
+    JSON.stringify(paidAccountFixture("brain-canvas")),
+  );
   await browser.waitUntil(
-    async () =>
-      (await browser.execute(
-        (startedAt: number) =>
-          Number(
-            document.documentElement.dataset.e2eSettingsWriteFinishedAt ?? 0,
-          ) >= startedAt,
-        writeStartedAt,
-      )) as boolean,
-    {
-      timeout: t(15_000),
-      timeoutMsg: "E2E account settings write did not finish",
-    },
+    async () => browser.execute(
+      (startedAt: number) => Number(document.documentElement.dataset.e2eSettingsWriteFinishedAt ?? 0) >= startedAt,
+      writeStartedAt,
+    ),
+    { timeout: t(15_000), timeoutMsg: "E2E account settings write did not finish" },
   );
 }
 
@@ -155,6 +84,7 @@ async function emitNativeMagnify(magnification: number): Promise<void> {
 }
 
 async function pinchBurst(delta: number, frames: number): Promise<void> {
+  await canvasCenter();
   for (let frame = 0; frame < frames; frame += 1) {
     await emitNativeMagnify(delta);
   }
@@ -220,6 +150,11 @@ async function canvasCenter(): Promise<{
     );
     if (!element) throw new Error("canvas surface not found");
     const rect = element.getBoundingClientRect();
+    const point = { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+    // This WebDriver's moveTo emits mousemove, not the pointerover event that
+    // React uses for the canvas hover guard. Supply the gesture's hover input.
+    element.dispatchEvent(new PointerEvent("pointerover", { ...point, bubbles: true, pointerType: "mouse" }));
+    element.dispatchEvent(new PointerEvent("pointermove", { ...point, bubbles: true, pointerType: "mouse" }));
     return {
       client: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
       local: { x: rect.width / 2, y: rect.height / 2 },
@@ -327,7 +262,14 @@ describe("Live View canvas pinch zoom", function () {
   });
 
   after(async () => {
-    await invokeOrThrow("delete_brain_view", { id: VIEW_ID }).catch(() => {});
+    try {
+      await invokeOrThrow("delete_brain_view", { id: VIEW_ID });
+    } finally {
+      if (originalAccount) {
+        await browser.switchToWindow("home");
+        await restoreFixtureAccount(originalAccount, t(15_000));
+      }
+    }
   });
 
   // Runs first on purpose: the canvas latches "this platform has a gesture
@@ -407,7 +349,7 @@ describe("Live View canvas pinch zoom", function () {
       y: (center.y - start.y) / start.zoom,
     };
 
-    const zoomIn = await $("[aria-label='zoom in']");
+    const zoomIn = await $("[aria-label='Zoom in']");
     await zoomIn.click();
     await browser.pause(t(200));
     const zoomed = await paintedViewport();
@@ -434,7 +376,7 @@ describe("Live View canvas pinch zoom", function () {
     );
 
     // Zooming out past the floor clamps instead of running away.
-    const zoomOut = await $("[aria-label='zoom out']");
+    const zoomOut = await $("[aria-label='Zoom out']");
     for (let click = 0; click < 20; click += 1) {
       await zoomOut.click();
     }

@@ -250,7 +250,9 @@ export function applyLiveDelta(
         ? {
             ...block,
             text: event.replace ? delta : `${block.text}${event.delta}`,
-            capturedAt: event.captured_at,
+            capturedAt: sameLiveStream(block, event)
+              ? earliestCapturedAt(block.capturedAt, event.captured_at)
+              : event.captured_at,
           }
         : block,
     );
@@ -282,6 +284,7 @@ export function applyLiveFinal(
   const transcript = event.transcript.trim();
   if (!transcript) return blocks;
   const key = liveKey(event);
+  const existing = blocks.find((block) => block.key === key && sameLiveStream(block, event));
   return [
     ...blocks.filter(
       (block) =>
@@ -297,7 +300,7 @@ export function applyLiveFinal(
       provider: event.provider,
       model: event.model,
       text: transcript,
-      capturedAt: event.captured_at,
+      capturedAt: earliestCapturedAt(existing?.capturedAt, event.captured_at),
       final: true,
     },
   ];
@@ -310,6 +313,12 @@ function normalizeForDedupe(text: string) {
 function timestampMs(iso: string): number {
   const ms = new Date(iso).getTime();
   return Number.isFinite(ms) ? ms : 0;
+}
+
+function earliestCapturedAt(existing: string | undefined, incoming: string): string {
+  const previous = existing ? timestampMs(existing) : 0;
+  const next = timestampMs(incoming);
+  return previous > 0 && (next === 0 || previous <= next) ? existing! : incoming;
 }
 
 /**

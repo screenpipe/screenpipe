@@ -165,3 +165,57 @@ test("workspace fixture preserves pre-existing tabs while exercising its exact t
   expect(ids).not.toContain(priorNavigation.evaluate("CHAT_A"));
   expect(ids).not.toContain(priorNavigation.evaluate("CHAT_B"));
 });
+
+test.each([true, false])("new-chat fixture validates draft content independently of placeholder copy (blank=%s)", async (blank) => {
+  const { context, runCase } = fixtureRuntime("chat-sidebar-navigation.spec.ts");
+  let opened = false;
+  context.expect = expect;
+  context.t = (value: number) => value;
+  context.process = { platform: "linux" };
+  context.KeyboardEvent = class { constructor(..._args: unknown[]) {} };
+  context.window = {
+    get __e2eForegroundReady() { return opened ? "draft-id" : "prior-id"; },
+    dispatchEvent: () => { opened = true; },
+    __e2eReadChatSession: () => ({ draft: true, messageCount: blank ? 0 : 1, messageIds: blank ? [] : ["sent-message"] }),
+  };
+  context.document = {
+    querySelector: (selector: string) => selector.includes("chat-row-")
+      ? (opened ? null : { dataset: { testid: "chat-row-prior-id" } })
+      : selector.includes("aria-selected")
+        ? { closest: () => ({ dataset: { chatTabId: opened ? "draft-id" : "prior-id" } }) }
+        : { textContent: opened ? "Untitled" : "Prior chat" },
+    querySelectorAll: () => [{ textContent: "Prior chat" }],
+  };
+  context.browser = {
+    execute: (callback: (...args: any[]) => unknown, ...args: unknown[]) => callback(...args),
+    waitUntil: async (condition: () => Promise<boolean>) => {
+      throw new Error(await condition() ? "draft-verified" : "draft-rejected");
+    },
+  };
+  await expect(runCase("creates one blank active tab without an abandoned sidebar row")).rejects.toThrow(blank ? "draft-verified" : "draft-rejected");
+});
+
+test("sidebar menu fixture delivers contextmenu when WebKit right-click does not", async () => {
+  const { context, runCase } = fixtureRuntime("chat-sidebar-navigation.spec.ts");
+  let opened = false;
+  context.expect = expect;
+  context.window = { __e2eForegroundReady: "active-chat" };
+  context.MouseEvent = class {
+    type: string;
+    constructor(type: string, init: object) { this.type = type; Object.assign(this, init); }
+  };
+  const tab = { dataset: { chatTabId: "active-chat" }, getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 28 }), dispatchEvent: (event: { type: string; button: number; bubbles: boolean }) => { opened = event.type === "contextmenu" && event.button === 2 && event.bubbles; } };
+  context.document = {
+    querySelector: (selector: string) => selector.includes("chat-row-")
+      ? { dataset: { testid: "chat-row-active-chat" } }
+      : selector.includes("aria-selected") ? { closest: () => tab }
+        : selector.includes("data-chat-tab-id") ? tab : { textContent: "Active chat" },
+    querySelectorAll: () => [{}],
+  };
+  context.$ = (selector: string) => selector.includes("data-chat-actions-menu")
+    ? { waitForDisplayed: async () => { throw Error(opened ? "menu-opened" : "menu-missing"); } }
+    : { waitForDisplayed: async () => {}, getAttribute: async () => "Active chat", click: async () => {} };
+  context.t = (value: number) => value;
+  context.browser = { execute: (callback: (...args: any[]) => unknown, ...args: unknown[]) => callback(...args) };
+  await expect(runCase("anchors a safe Pin, Rename, Archive menu to the active title")).rejects.toThrow("menu-opened");
+});

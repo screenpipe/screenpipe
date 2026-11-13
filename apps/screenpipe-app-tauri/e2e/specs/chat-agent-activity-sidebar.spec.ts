@@ -355,7 +355,7 @@ describe("unified recents sidebar", function () {
     const codexPath = writeLiveCodexUserMessage();
     const codexRow = await $(`[data-testid="chat-row-${LIVE_CODEX_ID}"]`);
     await codexRow.waitForDisplayed({ timeout: t(15_000) });
-    expect(await codexRow.$('[aria-label="unread"]').isExisting()).toBe(false);
+    expect(await codexRow.$('[aria-label="Unread"]').isExisting()).toBe(false);
     await codexRow.$("button").click();
     await browser.waitUntil(
       async () => (await codexRow.getAttribute("data-current")) === "true",
@@ -415,7 +415,7 @@ describe("unified recents sidebar", function () {
     const claudePath = writeLiveClaudeUserMessage();
     const claudeRow = await $(`[data-testid="chat-row-${LIVE_CLAUDE_ID}"]`);
     await claudeRow.waitForDisplayed({ timeout: t(15_000) });
-    expect(await claudeRow.$('[aria-label="unread"]').isExisting()).toBe(false);
+    expect(await claudeRow.$('[aria-label="Unread"]').isExisting()).toBe(false);
     await claudeRow.$("button").click();
     await browser.waitUntil(
       async () => (await claudeRow.getAttribute("data-current")) === "true",

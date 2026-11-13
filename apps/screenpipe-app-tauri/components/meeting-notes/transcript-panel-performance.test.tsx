@@ -195,6 +195,37 @@ describe("SpeakerParagraph render isolation", () => {
     });
   });
 
+  it("keeps same-item refinements and finals ahead of an interleaved speaker", () => {
+    const turn = {
+      meeting_id: 1, provider: "e2e", item_id: "turn-02",
+      device_name: "System Audio", device_type: "output",
+      delta: "The live transcript", replace: true,
+      captured_at: "2026-07-29T19:00:01.000Z",
+    };
+    const partial = applyLiveDelta([], turn);
+    const interleaved = applyLiveFinal(partial, {
+      ...turn, item_id: "anchor", device_name: "Microphone", device_type: "input",
+      transcript: "I will keep that thought in place.",
+      captured_at: "2026-07-29T19:00:02.000Z",
+    });
+    const refined = applyLiveDelta(interleaved, {
+      ...turn, delta: " should settle in place", replace: false,
+      captured_at: "2026-07-29T19:00:03.000Z",
+    });
+    const finalized = applyLiveFinal(refined, {
+      ...turn, transcript: "The live transcript should settle in place.",
+      captured_at: "2026-07-29T19:00:04.000Z",
+    });
+    for (const blocks of [refined, finalized]) {
+      const rows = blocks.map((block, index) => liveBlockToSpeakerBlock(block, index)!).sort((a, b) => a.startMs - b.startMs);
+      expect(rows.map(row => row.text)).toEqual([
+        blocks === refined ? "The live transcript should settle in place" : "The live transcript should settle in place.",
+        "I will keep that thought in place.",
+      ]);
+      expect(blocks.find(block => block.itemId === turn.item_id)?.capturedAt).toBe(turn.captured_at);
+    }
+  });
+
   it("merges adjacent finalized turns for one speaker but preserves real splits", () => {
     const sameSpeaker = {
       ...block,

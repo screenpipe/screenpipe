@@ -471,7 +471,7 @@ describe("meeting summary recovery controls", function () {
     );
     await saveScreenshot("meeting-summary-01-saved-finalizing");
 
-    const showTranscript = await $("button=show transcript");
+    const showTranscript = await $("button=Show transcript");
     await showTranscript.click();
     await browser.waitUntil(
       async () =>
@@ -494,7 +494,7 @@ describe("meeting summary recovery controls", function () {
         }
       ).__meetingSummaryRecoveryHoldStart = true;
     });
-    await $("button=resume recording").click();
+    await $("button=Resume recording").click();
     await waitForVisibleCopy("resuming meeting");
     expect(
       await $("[data-testid=meeting-summary-transition]").isExisting(),
@@ -550,7 +550,7 @@ describe("meeting summary recovery controls", function () {
     await waitForVisibleCopy("The draft appears in Summary");
     await saveScreenshot("meeting-summary-06-writing-notes");
 
-    await $("button=view summary").click();
+    await $("button=View summary").click();
     const writingSummarySurface = await $(
       "[data-testid=meeting-summary-surface]",
     );

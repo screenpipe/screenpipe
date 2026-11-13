@@ -464,13 +464,13 @@ describe("meeting workspace tabs and responsive layout", function () {
     await browser.pause(t(400));
     const geometry = (await browser.execute(() => {
       const tabs = Array.from(
-        document.querySelectorAll<HTMLElement>('[role="tab"]'),
+        document.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Meeting workspace"] [role="tab"]'),
       ).map((tab) => {
         const rect = tab.getBoundingClientRect();
         return { left: rect.left, right: rect.right, width: rect.width };
       });
       const panel = document.querySelector<HTMLElement>(
-        '[role="tabpanel"]:not([aria-hidden="true"]):not(.hidden)',
+        '[id^="meeting-panel-"][role="tabpanel"]:not([aria-hidden="true"]):not(.hidden)',
       );
       const footer = document.querySelector<HTMLElement>("footer");
       const panelRect = panel?.getBoundingClientRect();

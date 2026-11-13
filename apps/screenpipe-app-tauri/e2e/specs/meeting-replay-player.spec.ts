@@ -325,7 +325,7 @@ describe("historical meeting silent replay player", function () {
     const selectedTabs = (await browser.execute(() =>
       Array.from(
         document.querySelectorAll<HTMLElement>(
-          '[role="tab"][aria-selected="true"]',
+          '[role="tablist"][aria-label="Meeting workspace"] [role="tab"][aria-selected="true"]',
         ),
       ).map((tab) => tab.id),
     )) as string[];

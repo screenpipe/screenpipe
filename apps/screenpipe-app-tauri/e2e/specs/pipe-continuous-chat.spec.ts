@@ -12,6 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
+import { paidAccountFixture } from "../helpers/account-fixtures.js";
+import { snapshotFixtureAccount, restoreFixtureAccount, type FixtureAccountSnapshot } from "../helpers/account-fixture-restoration.js";
 import {
   authHeaders,
   getLocalApiConfig,
@@ -47,6 +49,8 @@ type ApiResult = {
 };
 
 let fixtureDir = "";
+let originalAccount: FixtureAccountSnapshot | undefined;
+let fixtureApiReady = false;
 let apiBase = "http://127.0.0.1:3030";
 let apiHeaders: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -71,6 +75,7 @@ async function apiRequest(
 }
 
 async function cleanupFixture(): Promise<void> {
+  if (!fixtureApiReady) return;
   await apiRequest(
     "POST",
     `/pipes/${encodeURIComponent(PIPE_NAME)}/stop`,
@@ -262,6 +267,13 @@ describe("Pipes: continue in one chat", function () {
       ...authHeaders(config.key),
     };
     await waitForLocalApi(config.port);
+    fixtureApiReady = true;
+    originalAccount = await snapshotFixtureAccount();
+    // This journey tests chat memory with an additional installed user pipe.
+    // Keep other scenarios' pipes; establish its paid premise through the real
+    // account hook and native policy refresh before attempting installation.
+    const paid = paidAccountFixture("first-run");
+    await restoreFixtureAccount({ user: paid, token: paid.token, seed: null, active: "1" }, t(15_000));
     await cleanupFixture();
     await piConversation.initialize();
     await piConversation.configureAppPreset();
@@ -269,9 +281,22 @@ describe("Pipes: continue in one chat", function () {
   });
 
   after(async () => {
-    await cleanupFixture();
-    await piConversation.dispose();
-    if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+    try {
+      await cleanupFixture();
+    } finally {
+      try {
+        await piConversation.dispose();
+      } finally {
+        try {
+          if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+        } finally {
+          if (originalAccount) {
+            await openHomeWindow();
+            await restoreFixtureAccount(originalAccount, t(15_000));
+          }
+        }
+      }
+    }
   });
 
   it("explains the behavior, rolls back a failed save, then persists it", async () => {

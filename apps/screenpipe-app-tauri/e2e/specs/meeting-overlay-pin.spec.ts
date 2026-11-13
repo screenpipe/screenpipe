@@ -7,18 +7,17 @@ import {
   getLocalApiConfig,
   type LocalApiConfig,
 } from "../helpers/api-utils.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
-import { t, waitForAppReady } from "../helpers/test-utils.js";
+import { invokeOrThrow, waitForWindowHandle } from "../helpers/tauri.js";
+import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
+import { paidAccountFixture } from "../helpers/account-fixtures.js";
+import { snapshotFixtureAccount, restoreFixtureAccount, type FixtureAccountSnapshot } from "../helpers/account-fixture-restoration.js";
 
 /// The live transcript card can be pinned so it survives the pointer leaving,
 /// and the pin is scoped to one meeting: the card must disappear when that
 /// meeting ends even though nothing moved the pointer.
 ///
-/// This drives the native macOS AppKit card. The Windows/Linux reminder is a
-/// webview, but under every E2E seed that window renders the app's sign-in gate
-/// instead of the overlay, so no spec can reach its DOM today — that surface is
-/// covered by the component tests in `app/shortcut-reminder/page.test.tsx`,
-/// which render the real page and drive a real `mouseout`.
+/// macOS uses the native AppKit card. Windows/Linux use the real reminder
+/// webview with an isolated synthetic account and the same meeting API.
 interface NativeOverlayState {
   transcriptVisible: boolean;
   pinned: boolean;
@@ -80,9 +79,19 @@ describe("meeting overlay pin", function () {
   let config: LocalApiConfig;
   let meetingId = 0;
   let hasNativeOverlay = false;
+  let originalAccount: FixtureAccountSnapshot | undefined;
 
   before(async function () {
     await waitForAppReady();
+    if (process.platform !== "darwin") {
+      await openHomeWindow();
+      originalAccount = await snapshotFixtureAccount();
+      await browser.execute((user: string) => {
+        localStorage.setItem("screenpipe_e2e_account_user", user);
+        window.dispatchEvent(new Event("screenpipe-e2e-seed-account-user"));
+      }, JSON.stringify(paidAccountFixture("first-run")));
+      await $("textarea").waitForDisplayed({ timeout: t(30_000) });
+    }
     // The no-recording seed disables capture, so open the isolated server
     // explicitly: this spec needs the DB, HTTP, and the meeting-overlay socket
     // but no screen or microphone permission.
@@ -105,6 +114,12 @@ describe("meeting overlay pin", function () {
     // Show the reminder only after the server is up — that is what hands the
     // overlay its authenticated meeting-overlay socket URL.
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
+    if (process.platform !== "darwin") {
+      await waitForWindowHandle("shortcut-reminder", t(30_000));
+      await browser.switchToWindow("shortcut-reminder");
+      await $('[data-testid="shortcut-reminder-root"]').waitForDisplayed({ timeout: t(30_000) });
+      return;
+    }
     await browser.waitUntil(async () => (await nativeState()) != null, {
       timeout: t(30_000),
       interval: 250,
@@ -127,6 +142,10 @@ describe("meeting overlay pin", function () {
         method: "DELETE",
       }).catch(() => undefined);
     }
+    if (originalAccount) {
+      await browser.switchToWindow("home");
+      await restoreFixtureAccount(originalAccount, t(15_000));
+    }
   });
 
   it("holds a pinned transcript through pointer exit and drops it when the meeting ends", async () => {
@@ -135,6 +154,35 @@ describe("meeting overlay pin", function () {
       body: JSON.stringify({ app: "e2e-overlay-pin", title: "pin fixture" }),
     });
     meetingId = meeting.id;
+
+    if (process.platform !== "darwin") {
+      await $('[aria-label="Meeting live"]').waitForDisplayed({ timeout: t(20_000) });
+      // Drive the same DOM enter/exit events as React's mouse handlers. The
+      // non-activating overlay cannot reliably receive OS-synthesized hovering.
+      await browser.execute(() => {
+        document.querySelector('[data-testid="shortcut-reminder-root"]')!
+          .dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
+      });
+      const preview = await $('[data-testid="shortcut-reminder-meeting-preview"]');
+      await preview.waitForDisplayed({ timeout: t(20_000) });
+      await $('[aria-label="Pin transcript"]').click();
+      expect(await preview.getAttribute("data-pinned")).toBe("true");
+      await browser.execute(() => {
+        document.querySelector('[data-testid="shortcut-reminder-meeting-preview"]')!
+          .dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+      });
+      await browser.pause(t(1_000));
+      expect(await preview.isDisplayed()).toBe(true);
+      expect(await preview.getAttribute("data-pinned")).toBe("true");
+      await apiRequest(config, "/meetings/stop", {
+        method: "POST", body: JSON.stringify({ id: meetingId, append_typed_text: false }),
+      });
+      await browser.waitUntil(async () => {
+        return !(await $('[data-testid="shortcut-reminder-meeting-preview"]').isExisting())
+          && !(await $('[aria-label="Meeting live"]').isExisting());
+      }, { timeout: t(20_000), interval: 200, timeoutMsg: "pinned transcript outlived its meeting" });
+      return;
+    }
 
     await waitForNativeState(
       (state) => state.meetingActive,

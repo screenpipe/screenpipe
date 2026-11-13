@@ -229,7 +229,7 @@ describe("Home sidebar has one coherent active chat", function () {
         (await browser.execute((id: string) =>
           Boolean(
             document.querySelector(
-              `[data-testid="chat-row-${id}"] [aria-label="unread"]`,
+              `[data-testid="chat-row-${id}"] [aria-label="Unread"]`,
             ),
           ),
         CHAT_B)) as boolean,
@@ -273,10 +273,17 @@ describe("Home sidebar has one coherent active chat", function () {
         const state = await visualState();
         if (state.foregroundId && state.foregroundId !== previous) {
           draftId = state.foregroundId;
+          // Home's shortcut can reuse an existing blank tab. Its placeholder
+          // title differs from the inline new-tab label; prove it is empty.
+          const draft = await browser.execute((id: string) =>
+            (window as any).__e2eReadChatSession?.(id) ?? null,
+          draftId);
           return (
             state.selectedId === null &&
             state.titleCount === 1 &&
-            state.title === "New chat" &&
+            draft?.draft === true &&
+            draft.messageCount === 0 &&
+            draft.messageIds.length === 0 &&
             state.activeTabCount === 1 &&
             state.activeTabId === draftId
           );
@@ -311,7 +318,18 @@ describe("Home sidebar has one coherent active chat", function () {
     const tab = await $(`[data-chat-tab-id="${state.foregroundId}"] [role="tab"]`);
     await tab.waitForDisplayed({ timeout: t(5_000) });
     expect(await tab.getAttribute("aria-label")).toBe(title);
-    await tab.click({ button: "right" });
+    // Use the established WebKit context-menu transport from workspace-tabs.
+    // Native right-click does not consistently deliver contextmenu to Radix.
+    await browser.execute((id: string) => {
+      const target = document.querySelector<HTMLElement>(`[data-chat-tab-id="${id}"]`);
+      if (!target) throw new Error(`active chat tab ${id} was not found`);
+      const rect = target.getBoundingClientRect();
+      target.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, button: 2, buttons: 2,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      }));
+    }, state.foregroundId!);
     const menu = await $("[data-chat-actions-menu]");
     await menu.waitForDisplayed({ timeout: t(5_000) });
     const actions = await browser.execute(() =>
