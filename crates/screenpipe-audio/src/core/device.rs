@@ -734,7 +734,110 @@ where
 /// device-change notification (sleep/wake, hotplug). Still serialized
 /// through the same mutex.
 pub async fn invalidate_device_cache() {
-    *device_cache().lock().await = None;
+    let mut cache = device_cache().lock().await;
+    *cache = None;
+    probe_verdicts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
+
+/// Re-probe an endpoint that previously had no usable format after this long,
+/// so a phantom endpoint that later gains a codec is picked up without a restart.
+const UNUSABLE_PROBE_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Per-endpoint memo of the format probe in `has_usable_*_configs`.
+///
+/// On Windows each probe activates a fresh `IAudioClient` and issues ~70
+/// `IsFormatSupported` calls (cpal trials every common sample rate × sample
+/// format). Repeating that for every endpoint on each 30 s inventory refresh
+/// grows `audiodg.exe` handle counts without bound and slows the whole machine
+/// within hours (GitHub #7700). Enumerating endpoint names is cheap and still
+/// runs every refresh; only the format probe is memoized.
+///
+/// Usable verdicts persist while the endpoint keeps appearing. Unusable verdicts
+/// expire after [`UNUSABLE_PROBE_TTL`]. Endpoints missing from a pass are
+/// forgotten, so a re-plugged device is probed again.
+#[derive(Default)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct ProbeVerdictCache {
+    entries: std::collections::HashMap<(String, bool), ProbeVerdict>,
+    pass: u64,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct ProbeVerdict {
+    usable: bool,
+    probed_at: Instant,
+    seen_pass: u64,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl ProbeVerdictCache {
+    fn begin_pass(&mut self) {
+        self.pass += 1;
+    }
+
+    fn usable(
+        &mut self,
+        name: &str,
+        is_input: bool,
+        now: Instant,
+        probe: impl FnOnce() -> bool,
+    ) -> bool {
+        let pass = self.pass;
+        let key = (name.to_string(), is_input);
+        if let Some(verdict) = self.entries.get_mut(&key) {
+            let fresh = verdict.usable
+                || now.saturating_duration_since(verdict.probed_at) < UNUSABLE_PROBE_TTL;
+            if fresh {
+                verdict.seen_pass = pass;
+                return verdict.usable;
+            }
+        }
+        let usable = probe();
+        self.entries.insert(
+            key,
+            ProbeVerdict {
+                usable,
+                probed_at: now,
+                seen_pass: pass,
+            },
+        );
+        usable
+    }
+
+    /// Forget endpoints that did not appear in the pass that just finished.
+    fn end_pass(&mut self) {
+        let pass = self.pass;
+        self.entries.retain(|_, v| v.seen_pass == pass);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+fn probe_verdicts() -> &'static std::sync::Mutex<ProbeVerdictCache> {
+    static VERDICTS: OnceLock<std::sync::Mutex<ProbeVerdictCache>> = OnceLock::new();
+    VERDICTS.get_or_init(|| std::sync::Mutex::new(ProbeVerdictCache::default()))
+}
+
+/// Windows inventory filter: run the expensive format probe once per endpoint
+/// appearance instead of on every refresh. Other platforms probe directly.
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn endpoint_usable(device: &cpal::Device, is_input: bool, probe: impl FnOnce() -> bool) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(name) = device.name() {
+            return probe_verdicts()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .usable(&name, is_input, Instant::now(), probe);
+        }
+    }
+    let _ = (device, is_input);
+    probe()
 }
 
 /// True if cpal reports at least one usable input config for this device.
@@ -797,8 +900,14 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
         let host = cpal::default_host();
         let mut devices = Vec::new();
 
+        #[cfg(target_os = "windows")]
+        probe_verdicts()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin_pass();
+
         for device in host.input_devices()? {
-            if !has_usable_input_configs(&device) {
+            if !endpoint_usable(&device, true, || has_usable_input_configs(&device)) {
                 // Skip phantom devices (see has_usable_input_configs docs).
                 // Don't even log at warn level — these can show up every
                 // 30s cache refresh on hardware that exposes 3-4 of them.
@@ -870,7 +979,7 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
 
         #[cfg(not(target_os = "macos"))]
         for device in host.output_devices()? {
-            if !has_usable_output_configs(&device) {
+            if !endpoint_usable(&device, false, || has_usable_output_configs(&device)) {
                 if let Ok(name) = device.name() {
                     tracing::debug!("skipping output device with no usable configs: {}", name);
                 }
@@ -894,13 +1003,19 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
                 };
                 if !devices.iter().any(|d| d.name == name)
                     && should_include_output_device(&name)
-                    && has_usable_output_configs(&device)
+                    && endpoint_usable(&device, false, || has_usable_output_configs(&device))
                 {
                     // TODO: not sure if it can be input, usually aggregate or multi output
                     devices.push(AudioDevice::new(name, DeviceType::Output));
                 }
             }
         }
+
+        #[cfg(target_os = "windows")]
+        probe_verdicts()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .end_pass();
 
         Ok(devices)
     }
@@ -2139,5 +2254,101 @@ mod inventory_cache_tests {
             read(&cache, &generation, &calls, vec![]).await;
         }
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[cfg(test)]
+mod probe_verdict_cache_tests {
+    use super::{ProbeVerdictCache, UNUSABLE_PROBE_TTL};
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    /// Simulates the 2 s monitor / 30 s TTL inventory refresh for one day and
+    /// counts how often the expensive WASAPI format probe would run (#7700).
+    #[test]
+    fn steady_inventory_probes_each_endpoint_once() {
+        let mut cache = ProbeVerdictCache::default();
+        let probes = Cell::new(0u32);
+        let start = Instant::now();
+        let endpoints = [("Microphone (USB)", true), ("Speakers (Realtek)", false)];
+        for refresh in 0..(24 * 60 * 2) {
+            let now = start + Duration::from_secs(30 * refresh);
+            cache.begin_pass();
+            for (name, is_input) in endpoints {
+                assert!(cache.usable(name, is_input, now, || {
+                    probes.set(probes.get() + 1);
+                    true
+                }));
+            }
+            cache.end_pass();
+        }
+        assert_eq!(probes.get(), 2, "one probe per endpoint per appearance");
+    }
+
+    #[test]
+    fn unusable_endpoint_is_reprobed_after_ttl_and_can_recover() {
+        let mut cache = ProbeVerdictCache::default();
+        let start = Instant::now();
+        let probes = Cell::new(0u32);
+        let mut refresh = |now, answer| {
+            cache.begin_pass();
+            let usable = cache.usable("Microphone (PDP Audio Device)", true, now, || {
+                probes.set(probes.get() + 1);
+                answer
+            });
+            cache.end_pass();
+            usable
+        };
+        assert!(!refresh(start, false));
+        assert!(
+            !refresh(start + Duration::from_secs(30), true),
+            "cached within TTL"
+        );
+        assert_eq!(probes.get(), 1);
+        assert!(
+            refresh(start + UNUSABLE_PROBE_TTL, true),
+            "re-probed after TTL"
+        );
+        assert_eq!(probes.get(), 2);
+    }
+
+    #[test]
+    fn endpoint_missing_from_a_pass_is_probed_again_when_it_returns() {
+        let mut cache = ProbeVerdictCache::default();
+        let now = Instant::now();
+        let probes = Cell::new(0u32);
+        let mut count = || {
+            probes.set(probes.get() + 1);
+            true
+        };
+        cache.begin_pass();
+        cache.usable("Headset", true, now, &mut count);
+        cache.end_pass();
+        cache.begin_pass(); // headset unplugged: absent from this pass
+        cache.end_pass();
+        cache.begin_pass();
+        cache.usable("Headset", true, now, &mut count);
+        cache.end_pass();
+        assert_eq!(probes.get(), 2);
+    }
+
+    #[test]
+    fn input_and_output_endpoints_with_the_same_name_are_separate() {
+        let mut cache = ProbeVerdictCache::default();
+        let now = Instant::now();
+        cache.begin_pass();
+        assert!(cache.usable("Realtek Audio", true, now, || true));
+        assert!(!cache.usable("Realtek Audio", false, now, || false));
+        cache.end_pass();
+    }
+
+    #[test]
+    fn clear_forces_a_fresh_probe() {
+        let mut cache = ProbeVerdictCache::default();
+        let now = Instant::now();
+        cache.begin_pass();
+        assert!(cache.usable("Mic", true, now, || true));
+        cache.clear();
+        assert!(!cache.usable("Mic", true, now, || false));
     }
 }
