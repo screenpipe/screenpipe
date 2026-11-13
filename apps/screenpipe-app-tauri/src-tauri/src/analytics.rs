@@ -791,12 +791,17 @@ mod tests {
             }
         }
         let received = Arc::new(Received::default());
+        let transport = Arc::new(SentryConsentTransport {
+            inner: received.clone(),
+            allowed,
+        });
         let client = sentry::Client::from(sentry::ClientOptions {
             dsn: Some("https://fixture@example.invalid/1".parse().unwrap()),
-            transport: Some(Arc::new(SentryConsentTransport {
-                inner: received.clone(),
-                allowed,
-            })),
+            transport: Some(Arc::new(
+                move |_options: &sentry::ClientOptions| -> Arc<dyn sentry::Transport> {
+                    transport.clone()
+                },
+            )),
             ..Default::default()
         });
         // This is the raw plugin path: no event exists for before_send to filter.
