@@ -29,7 +29,10 @@ try {
       'Unauthenticated enterprise devices must remain behind the workspace gate');
     await page.getByPlaceholder('ENT-XXXX-XXXX-XXXX-XXXX').fill('ENT-TEST-TEST-TEST-TEST');
     await page.getByRole('button', { name: 'Activate', exact: true }).click();
-    await page.getByRole('button', { name: 'Do later', exact: true }).click({ timeout: 5000 }).catch(() => {});
+    const migrationPrompt = page.getByTestId('storage-migration-prompt');
+    await migrationPrompt.waitFor({ state: 'visible' });
+    await migrationPrompt.getByRole('button', { name: 'Do later', exact: true }).click();
+    await migrationPrompt.waitFor({ state: 'hidden' });
   }
   const capture = name => page.screenshot({ path: `${out}/${name}.png`, animations: 'disabled', style: 'nextjs-portal { display: none; }' });
   await authenticate();
