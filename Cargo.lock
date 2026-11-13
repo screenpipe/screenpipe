@@ -1317,7 +1317,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers 0.22.2",
  "yoke 0.8.2",
- "zip 7.2.0",
+ "zip 7.4.0",
 ]
 
 [[package]]
@@ -3920,7 +3920,6 @@ version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dab9e9188e97a93276e1fe7b56401b851e2b45a46d045ca658100c1303ada649"
 dependencies = [
- "generic-array 0.14.7",
  "rustversion",
  "typenum",
 ]
@@ -4762,18 +4761,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "internal-russh-num-bigint"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8e22120c32fb4d19ec55fba35015f57095cd95a2e3b732e44457f5915b2ee8"
-dependencies = [
- "num-integer",
- "num-traits",
- "rand 0.10.1",
- "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -6050,6 +6037,8 @@ checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
+ "rand 0.10.1",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -6918,18 +6907,19 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.0"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b537f975f6d8dcf48db368d7ec209d583b015713b5df0f5d92d2631e4ff5595"
+checksum = "e0bc922d9aa8cfcf598de27b3c6122cb2eeda9d6fe71527a22ebcb7f633540ff"
 dependencies = [
+ "base16ct 1.0.0",
  "byteorder",
  "bytes",
  "delegate",
  "futures",
  "log",
- "rand 0.8.6",
- "sha2 0.10.9",
- "thiserror 1.0.69",
+ "rand 0.10.1",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
  "tokio",
  "windows 0.62.2",
  "windows-strings 0.5.1",
@@ -8209,9 +8199,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.5"
+version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7c230e0ed9cbeb92fbad6c8848985d6df2a1464c0dc247a021abd666e9005e"
+checksum = "94be3d86c71b9ed220a675c405e35c7a02565a009bf8da2e9cc13a700320a5c5"
 dependencies = [
  "aes",
  "bitflags 2.11.1",
@@ -8239,13 +8229,12 @@ dependencies = [
  "hex-literal",
  "hmac 0.13.0",
  "inout 0.2.2",
- "internal-russh-num-bigint",
  "keccak 0.2.0",
  "log",
  "md5 0.8.1",
  "ml-kem",
  "module-lattice",
- "num-bigint 0.4.6",
+ "num-bigint 0.5.1",
  "p256 0.14.0",
  "p384 0.14.0",
  "p521",
@@ -8390,9 +8379,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.40"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -13471,9 +13460,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "7.2.0"
+version = "7.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
+checksum = "cc12baa6db2b15a140161ce53d72209dacea594230798c24774139b54ecaa980"
 dependencies = [
  "crc32fast",
  "indexmap 2.14.0",
