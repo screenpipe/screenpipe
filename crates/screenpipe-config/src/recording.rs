@@ -6,8 +6,10 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Measured screenshot acquisition default; independent of HD's encoded fps.
+/// Low-rate screenshot acquisition default; independent of HD's encoded fps.
 pub const DEFAULT_SCREENSHOT_FRAME_RATE: u32 = 2;
+/// Positive CMTime timescales use signed 32-bit integers.
+pub const MAX_SCREENSHOT_FRAME_RATE: u32 = i32::MAX as u32;
 
 fn default_screenshot_frame_rate() -> u32 {
     DEFAULT_SCREENSHOT_FRAME_RATE
@@ -19,8 +21,10 @@ fn deserialize_screenshot_frame_rate<'de, D: Deserializer<'de>>(
     let fps = u32::deserialize(deserializer)?;
     // CMTime's timescale is a positive signed 32-bit integer. These are native
     // representation boundaries, not a product capture-rate ceiling.
-    if fps == 0 || fps > i32::MAX as u32 {
-        return Err(serde::de::Error::custom("screenshotFrameRate must be a positive whole fps value representable by the native CMTime timescale"));
+    if fps == 0 || fps > MAX_SCREENSHOT_FRAME_RATE {
+        return Err(serde::de::Error::custom(format!(
+            "screenshotFrameRate {fps} fps is outside the native range 1..={MAX_SCREENSHOT_FRAME_RATE} fps; select a positive whole frame rate in that range"
+        )));
     }
     Ok(fps)
 }
@@ -489,9 +493,9 @@ pub struct RecordingSettings {
     #[serde(rename = "captureMaxWidth", default)]
     pub capture_max_width: u32,
 
-    /// Screenshot acquisition fps. independent of snapshot
-    /// save cadence and HD video fps. Persisted across recording restarts and
-    /// applied live by the desktop's screenshot-only frame-rate command.
+    /// Background screenshot acquisition fps, independent of snapshot save
+    /// cadence and HD video fps. Activity-triggered screenshots may request a
+    /// fresh frame. Persisted across recording restarts and applied live.
     #[serde(
         rename = "screenshotFrameRate",
         default = "default_screenshot_frame_rate",

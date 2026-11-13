@@ -24,6 +24,7 @@ screenpipe-config = { path = "../screenpipe-config" }
 screenpipe-a11y = { path = "../screenpipe-a11y" }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 # async
 tokio = { workspace = true }

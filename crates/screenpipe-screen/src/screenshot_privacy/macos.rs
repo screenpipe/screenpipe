@@ -7,8 +7,8 @@ use cidre::{api, cv, ns, sc};
 use once_cell::sync::Lazy;
 use std::future::Future;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 use std::time::Instant;
 use tokio::sync::{Notify, Semaphore};
@@ -74,15 +74,46 @@ pub(super) async fn capture_filtered(
     let id = monitor.id();
     let stream_slot = super::stream::slot(id);
     let mut lease = super::stream::RequestLease::new(id, stream_slot.clone());
+    let background = Arc::new(AtomicBool::new(true));
     let result = capture_with_scene_retries(id, CAPTURE_SLOT.clone(), || {
         let filters = filters.clone();
         let stream_slot = stream_slot.clone();
         let excluded_ids = excluded_ids.to_vec();
-        move || async move { capture(id, &filters, sources, &excluded_ids, &stream_slot).await }
+        let background = background.clone();
+        move || async move {
+            let result = capture(
+                id,
+                &filters,
+                sources,
+                &excluded_ids,
+                &stream_slot,
+                background.load(Ordering::Acquire),
+            )
+            .await;
+            if result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.downcast_ref::<SceneChanged>().is_some())
+            {
+                background.store(false, Ordering::Release);
+                super::stream::suspend(&stream_slot);
+            }
+            result
+        }
     })
     .await;
     lease.completed = result.is_ok();
     result
+}
+
+pub(super) async fn cached_preview(id: u32) -> anyhow::Result<Option<DynamicImage>> {
+    if !super::stream::has_source(id) {
+        return Ok(None);
+    }
+    capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
+        super::stream::copy_preview(id)
+    })
+    .await
 }
 
 async fn capture_with_scene_retries<F, J, Fut, T>(
@@ -309,6 +340,72 @@ struct Surface {
     height: f64,
     alpha: f64,
     layer: i64,
+}
+
+#[derive(Default)]
+struct SharingControlCache {
+    surfaces: Vec<Surface>,
+    pids: Vec<i32>,
+    ids: Arc<std::collections::HashSet<(u32, i32)>>,
+    complete: bool,
+}
+static SHARING_CONTROLS: Lazy<Mutex<SharingControlCache>> =
+    Lazy::new(|| Mutex::new(SharingControlCache::default()));
+struct SharingControls {
+    ids: Arc<std::collections::HashSet<(u32, i32)>>,
+    complete: bool,
+    cause: Option<String>,
+}
+
+fn sharing_controls(surfaces: &[Surface], pids: &[i32]) -> SharingControls {
+    let mut cache = SHARING_CONTROLS.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.complete && cache.surfaces == surfaces && cache.pids == pids {
+        return SharingControls {
+            ids: cache.ids.clone(),
+            complete: true,
+            cause: None,
+        };
+    }
+    let present: std::collections::HashSet<_> = surfaces
+        .iter()
+        .map(|surface| (surface.id, surface.pid))
+        .collect();
+    let mut ids: std::collections::HashSet<_> = cache
+        .ids
+        .iter()
+        .copied()
+        .filter(|id| present.contains(id))
+        .collect();
+    let mut cause = None;
+    for &pid in pids {
+        match screenpipe_a11y::platform::macos::window_sharing_control_ids(pid) {
+            Ok(controls) => {
+                ids.retain(|(_, owner)| *owner != pid);
+                ids.extend(
+                    controls
+                        .into_iter()
+                        .map(|id| (id, pid))
+                        .filter(|id| present.contains(id)),
+                );
+            }
+            Err(error) => {
+                cause.get_or_insert_with(|| format!("pid={pid}: {error}"));
+            }
+        }
+    }
+    let complete = cause.is_none();
+    let ids = Arc::new(ids);
+    *cache = SharingControlCache {
+        surfaces: surfaces.to_vec(),
+        pids: pids.to_vec(),
+        ids: ids.clone(),
+        complete,
+    };
+    SharingControls {
+        ids,
+        complete,
+        cause,
+    }
 }
 
 fn same_composition(before: &[Surface], after: &[Surface]) -> bool {
@@ -577,12 +674,12 @@ fn needs_occlusion_mask(
         })
 }
 
-async fn take(
+async fn take_observed(
     filter: &sc::ContentFilter,
     width: usize,
     height: usize,
     window: bool,
-) -> anyhow::Result<image::RgbaImage> {
+) -> anyhow::Result<(image::RgbaImage, Option<chrono::DateTime<chrono::Utc>>)> {
     let mut cfg = sc::StreamCfg::new();
     cfg.set_width(width);
     cfg.set_height(height);
@@ -597,12 +694,19 @@ async fn take(
     }
     let sample = sc::ScreenshotManager::capture_sample_buf(filter, &cfg)
         .await
-        .map_err(|e| anyhow!("window-filtered screenshot: {e:?}"))?;
+        .map_err(|e| {
+            anyhow!("window-filtered screenshot (single_window={window}, {width}x{height}): {e:?}")
+        })?;
     let mut pixels = sample
         .image_buf()
         .ok_or_else(|| anyhow!("missing screenshot pixels"))?
         .retained();
-    Ok(rgba(&mut pixels)?.into_rgba8())
+    let captured_at = super::stream::wall_timestamp(
+        sample.pts(),
+        cidre::cm::Clock::host_time_clock().time(),
+        chrono::Utc::now(),
+    );
+    Ok((rgba(&mut pixels)?.into_rgba8(), captured_at))
 }
 
 async fn capture(
@@ -611,8 +715,10 @@ async fn capture(
     sources: ExclusionSources,
     excluded_ids: &[u32],
     stream_slot: &Arc<super::stream::Slot>,
+    background: bool,
 ) -> anyhow::Result<CapturedPixels> {
     use super::scene::{self, Rect};
+    ensure!(stream_slot.is_active(), "screenshot capture invalidated");
     let detector = sources
         .ignore_incognito_windows
         .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
@@ -626,6 +732,10 @@ async fn capture(
         .ok_or_else(|| anyhow!("filtered display disappeared"))?;
     let frame = display.frame();
     let before = snapshot(frame)?;
+    // The cache may be read after policy/Dock checks have done other work.
+    // Frames produced after this actual scene snapshot can satisfy the same
+    // validated selection; older queued callbacks cannot.
+    let scene_observed_at = cidre::cm::Clock::host_time_clock().time();
     let available = content.windows();
     let native = |surface: &Surface| {
         available.iter().find(|w| {
@@ -653,6 +763,23 @@ async fn capture(
                 && window_allowed(filters, detector.as_deref(), &s.app, &s.title, s.pid)
         })
         .collect();
+    let mut pids: Vec<_> = before
+        .iter()
+        .zip(&allowed)
+        // AppKit's observed sharing control belongs to a normal-level app
+        // window. Shell/menu surfaces have no application AXWindows endpoint;
+        // retain those surfaces normally rather than querying WindowServer.
+        .filter_map(|(surface, allowed)| (*allowed && surface.layer == 0).then_some(surface.pid))
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    let controls = sharing_controls(&before, &pids);
+    stream_slot.report_background_availability(controls.complete, controls.cause.as_deref());
+    let (before, allowed): (Vec<_>, Vec<_>) = before
+        .into_iter()
+        .zip(allowed)
+        .filter(|(surface, _)| !controls.ids.contains(&(surface.id, surface.pid)))
+        .unzip();
     let selected: Vec<_> = before
         .iter()
         .zip(&allowed)
@@ -683,6 +810,7 @@ async fn capture(
     let width = if cap == 0 { nw } else { nw.min(cap) };
     let height = (nh * width / nw).max(1);
     let mut captured_at = chrono::Utc::now();
+    let mut native_timestamp = false;
     let mut canvas = if selected.is_empty() {
         super::stream::invalidate(id);
         image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]))
@@ -700,20 +828,49 @@ async fn capture(
             .map(|w| (w.id(), w.owning_app().map_or(0, |a| a.process_id())))
             .collect();
         windows.sort_unstable();
-        let (mut buffer, observed_at) = super::stream::frame(
-            stream_slot,
-            &filter,
-            super::stream::Key {
-                width,
-                height,
-                menu_bar,
-                windows,
-                fps: super::stream::frame_rate(),
-            },
-        )
-        .await?;
-        captured_at = observed_at;
-        let pixels = rgba(&mut buffer)?.into_rgba8();
+        let source = if background && controls.complete {
+            match super::stream::frame(
+                stream_slot,
+                &filter,
+                super::stream::Key {
+                    width,
+                    height,
+                    menu_bar,
+                    windows,
+                    fps: super::stream::frame_rate(),
+                },
+                scene_observed_at,
+            )
+            .await
+            {
+                Ok(source) => source,
+                Err(error) if stream_slot.is_active() => {
+                    // Background-source failure must not discard an otherwise
+                    // capturable event. The snapshot below keeps the identical
+                    // positive filter and all scene/privacy validation.
+                    tracing::warn!(monitor_id = id, fps = super::stream::frame_rate(),
+                    error = %error, screenshot_outcome = "retrying_same_policy_snapshot",
+                    "background screenshot source failed; requesting a native snapshot");
+                    super::stream::suspend(stream_slot);
+                    None
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            super::stream::suspend(stream_slot);
+            None
+        };
+        let pixels = if let Some((mut buffer, observed_at)) = source {
+            captured_at = observed_at;
+            native_timestamp = true;
+            rgba(&mut buffer)?.into_rgba8()
+        } else {
+            ensure!(stream_slot.is_active(), "screenshot capture invalidated");
+            let (pixels, observed_at) = take_observed(&filter, width, height, false).await?;
+            native_timestamp = observed_at.is_some();
+            captured_at = observed_at.unwrap_or_else(chrono::Utc::now);
+            pixels
+        };
         let mut canvas =
             image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]));
         scene::overlay_premultiplied(&mut canvas, &pixels, 0, 0, None);
@@ -746,8 +903,12 @@ async fn capture(
             });
             if let Some(dock) = dock {
                 let filter = sc::ContentFilter::with_desktop_independent_window(dock);
-                let coverage =
-                    take(&filter, rect.width as usize, rect.height as usize, true).await?;
+                let (coverage, observed_at) =
+                    take_observed(&filter, rect.width as usize, rect.height as usize, true)
+                        .await
+                        .map_err(|error| error.context("Dock alpha coverage capture"))?;
+                captured_at = captured_at.max(observed_at.unwrap_or_else(chrono::Utc::now));
+                native_timestamp &= observed_at.is_some();
                 if let Some(bounds) =
                     scene::paint_black_coverage(&mut canvas, &coverage, rect.x, rect.y)
                 {
@@ -770,7 +931,14 @@ async fn capture(
             // revealing excluded pixels or repainting unrelated foreground UI.
             let window = native(surface).ok_or_else(|| anyhow!("allowed window disappeared"))?;
             let filter = sc::ContentFilter::with_desktop_independent_window(window);
-            let pixels = take(&filter, rect.width as usize, rect.height as usize, true).await?;
+            let (pixels, observed_at) =
+                take_observed(&filter, rect.width as usize, rect.height as usize, true)
+                    .await
+                    .map_err(|error| error.context("allowed foreground restoration capture"))?;
+            // A composite is ready only after its last observed layer. Do not
+            // label restored foreground pixels with an older base-frame time.
+            captured_at = captured_at.max(observed_at.unwrap_or_else(chrono::Utc::now));
+            native_timestamp &= observed_at.is_some();
             scene::overlay_redacted(&mut canvas, &pixels, rect.x, rect.y, &redacted);
         }
     }
@@ -788,10 +956,16 @@ async fn capture(
     ) {
         return Err(SceneChanged("Dock thumbnail policy changed during capture").into());
     }
+    let after_scene = snapshot(frame)?;
+    let after_controls = sharing_controls(&after_scene, &pids);
+    let after_scene: Vec<_> = after_scene
+        .into_iter()
+        .filter(|surface| !after_controls.ids.contains(&(surface.id, surface.pid)))
+        .collect();
     validate_scene_excluding(
         &before,
         &allowed,
-        &snapshot(frame)?,
+        &after_scene,
         filters,
         detector.as_deref(),
         excluded_ids,
@@ -814,10 +988,11 @@ async fn capture(
     Ok(CapturedPixels {
         image: DynamicImage::ImageRgba8(canvas),
         captured_at,
+        native_timestamp,
     })
 }
 
-fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
+pub(super) fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
     let (w, h) = (buf.width(), buf.height());
     ensure!(
         w > 0 && h > 0 && w <= 16384 && h <= 16384,

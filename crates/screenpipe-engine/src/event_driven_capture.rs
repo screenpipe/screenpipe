@@ -3354,7 +3354,11 @@ async fn do_capture(
                 }
                 frame.image
             }
-            Err(error) if params.window_filters.has_window_patterns() => {
+            Err(error)
+                if screenpipe_screen::screenshot_privacy::uses_positive_selection(
+                    &params.window_filters,
+                ) =>
+            {
                 debug!("window-filtered screenshot withheld: {error}");
                 skip_pixels_for_unknown_exclusions = true;
                 image::DynamicImage::new_rgba8(1, 1)
@@ -3362,13 +3366,13 @@ async fn do_capture(
             Err(error) => return Err(error),
         }
     };
-    // Preserve native stream observation time, including idle confirmation of
-    // unchanged pixels, rather than relabelling cached pixels at return time.
+    // Preserve the source observation time. Idle samples with an older native
+    // PTS require a fresh screenshot rather than relabelling cached pixels.
     #[cfg(target_os = "macos")]
     let captured_at = native_captured_at.unwrap_or_else(Utc::now);
     #[cfg(target_os = "macos")]
     if !monitor_hosts_focus {
-        // A sparse background-display screenshot must not leave a 24fps
+        // A sparse background-display screenshot must not leave a continuous
         // preview running throughout Warm state. HD has a separate owner.
         screenpipe_screen::stream_invalidation::release_screenshot_stream(params.monitor_id);
     }

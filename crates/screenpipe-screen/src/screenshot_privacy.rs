@@ -24,8 +24,8 @@ pub(crate) mod stream;
 mod windows;
 
 /// The caller must withhold the screenshot on error; accessibility collection
-/// can continue under its independent filters. `excluded_ids` is used only by
-/// the existing non-pattern path (e.g. URL/incognito policies).
+/// can continue under its independent filters. `excluded_ids` additionally
+/// constrains source selection for URL/incognito policies.
 pub async fn capture_monitor_image_filtered(
     monitor: &SafeMonitor,
     filters: &WindowFilters,
@@ -45,12 +45,30 @@ pub struct CapturedFrame {
     pub image: DynamicImage,
     pub captured_at: chrono::DateTime<chrono::Utc>,
     pub duration: Duration,
+    /// False for legacy/return-time fallback; never advertise it as native PTS.
+    pub native_timestamp: bool,
 }
 
 #[derive(Clone)]
 struct CapturedPixels {
     image: DynamicImage,
     captured_at: chrono::DateTime<chrono::Utc>,
+    native_timestamp: bool,
+}
+
+pub fn uses_positive_selection(filters: &WindowFilters) -> bool {
+    #[cfg(target_os = "macos")]
+    if cidre::api::macos_available("14.0") {
+        return true;
+    }
+    filters.has_window_patterns()
+}
+
+/// Share the existing screenshot producer with visual-change detection. These
+/// pixels are a diff preview only, never authorization to save a screenshot.
+#[cfg(target_os = "macos")]
+pub async fn cached_monitor_preview(id: u32) -> anyhow::Result<Option<DynamicImage>> {
+    macos::cached_preview(id).await
 }
 
 pub async fn capture_monitor_frame_filtered(
@@ -63,11 +81,7 @@ pub async fn capture_monitor_frame_filtered(
     let start = Instant::now();
     // macOS 14+ uses the same positive-selection stream with or without window
     // patterns. Keep the older OS and other platforms' existing native paths.
-    #[cfg(target_os = "macos")]
-    let streaming = cidre::api::macos_available("14.0");
-    #[cfg(not(target_os = "macos"))]
-    let streaming = false;
-    if !streaming && !filters.has_window_patterns() {
+    if !uses_positive_selection(filters) {
         let (image, duration) =
             crate::utils::capture_monitor_image_with_freshness(monitor, excluded_ids, fresh)
                 .await?;
@@ -75,6 +89,7 @@ pub async fn capture_monitor_frame_filtered(
             image,
             captured_at: chrono::Utc::now(),
             duration,
+            native_timestamp: false,
         });
     }
     #[cfg(target_os = "macos")]
@@ -87,12 +102,14 @@ pub async fn capture_monitor_frame_filtered(
     let pixels = image.map(|image| CapturedPixels {
         image,
         captured_at: chrono::Utc::now(),
+        native_timestamp: false,
     });
     let pixels = report_filtered_capture(monitor.id(), pixels)?;
     Ok(CapturedFrame {
         image: pixels.image,
         captured_at: pixels.captured_at,
         duration: start.elapsed(),
+        native_timestamp: pixels.native_timestamp,
     })
 }
 

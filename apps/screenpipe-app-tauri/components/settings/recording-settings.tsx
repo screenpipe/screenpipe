@@ -128,7 +128,7 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
-import { commands, SettingsStore, MonitorDevice, AudioDeviceInfo, HardwareCapability } from "@/lib/utils/tauri";
+import { commands, SettingsStore, MonitorDevice, AudioDeviceInfo, HardwareCapability, DEFAULT_SCREENSHOT_FRAME_RATE } from "@/lib/utils/tauri";
 
 import {
   useSettings,
@@ -3957,7 +3957,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         {screenshotImagesEnabled && (isMacOS || isWindows) && (
           <LockedSetting settingKey="screenshotFrameRate">
             <ScreenshotFrameRateCard
-              value={settings.screenshotFrameRate ?? 2}
+              value={settings.screenshotFrameRate ?? DEFAULT_SCREENSHOT_FRAME_RATE}
               onChange={handleScreenshotFrameRateChange}
             />
           </LockedSetting>

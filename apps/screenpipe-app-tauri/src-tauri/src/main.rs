@@ -449,6 +449,14 @@ macro_rules! define_specta_builder {
 
         Builder::new()
             .commands(tauri_helper::specta_collect_commands!())
+            .constant(
+                "DEFAULT_SCREENSHOT_FRAME_RATE",
+                screenpipe_config::DEFAULT_SCREENSHOT_FRAME_RATE,
+            )
+            .constant(
+                "MAX_SCREENSHOT_FRAME_RATE",
+                screenpipe_config::MAX_SCREENSHOT_FRAME_RATE,
+            )
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
             .typ::<sync::SyncStatusResponse>()

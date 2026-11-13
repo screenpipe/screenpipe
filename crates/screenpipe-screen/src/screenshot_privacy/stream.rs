@@ -6,6 +6,7 @@
 //! conversion remains on the existing screenshot worker, at the save cadence.
 
 use anyhow::{anyhow, ensure, Result};
+use cidre::sc::stream::{Delegate, Output};
 use cidre::{arc, cm, cv, define_obj_type, dispatch, ns, objc, sc};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -13,14 +14,42 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use tokio::sync::Notify;
 
 static SLOTS: Lazy<Mutex<HashMap<u32, Arc<Slot>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(super) struct Slot {
+    id: u32,
     active: AtomicBool,
     stream: Mutex<Option<Arc<NativeStream>>>,
     sequence: Arc<AtomicU64>,
+    background_available: AtomicBool,
+}
+
+impl Slot {
+    pub(super) fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub(super) fn report_background_availability(&self, available: bool, cause: Option<&str>) {
+        if self.background_available.swap(available, Ordering::AcqRel) == available {
+            return;
+        }
+        if available {
+            tracing::info!(
+                monitor_id = self.id,
+                fps = frame_rate(),
+                "background screenshot sampling available again"
+            );
+        } else {
+            tracing::warn!(
+                monitor_id = self.id,
+                fps = frame_rate(),
+                error = cause.unwrap_or("sharing-control metadata unavailable"),
+                screenshot_outcome = "same_policy_snapshots",
+                "background screenshot sampling unavailable; keeping on-demand recording"
+            );
+        }
+    }
 }
 
 pub(super) fn slot(id: u32) -> Arc<Slot> {
@@ -30,12 +59,22 @@ pub(super) fn slot(id: u32) -> Arc<Slot> {
         .entry(id)
         .or_insert_with(|| {
             Arc::new(Slot {
+                id,
                 active: AtomicBool::new(true),
                 stream: Mutex::new(None),
                 sequence: Arc::new(AtomicU64::new(0)),
+                background_available: AtomicBool::new(true),
             })
         })
         .clone()
+}
+
+pub(super) fn suspend(slot: &Slot) {
+    let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(native) = removed {
+        native.shared.disable();
+        drop(native);
+    }
 }
 
 fn close(slot: Arc<Slot>) {
@@ -100,11 +139,58 @@ pub(crate) fn invalidate_all() {
 }
 
 pub(crate) fn sequence(id: u32) -> Option<u64> {
+    let slots = SLOTS.lock().ok()?;
+    let slot = slots.get(&id)?;
+    let stream = slot.stream.lock().ok()?;
+    // A same-policy snapshot fallback has no producer to monitor. Reporting a
+    // frozen zero here would repeatedly tear down otherwise valid recording.
+    stream.as_ref()?;
+    Some(slot.sequence.load(Ordering::Acquire))
+}
+
+pub(super) fn has_source(id: u32) -> bool {
     SLOTS
         .lock()
-        .ok()?
+        .unwrap_or_else(|e| e.into_inner())
         .get(&id)
-        .map(|slot| slot.sequence.load(Ordering::Acquire))
+        .is_some_and(|slot| {
+            slot.stream
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+        })
+}
+
+// Called only on the serialized screenshot worker. This preview is used for
+// visual-change detection; saved screenshots still reselect current policy.
+pub(super) fn copy_preview(id: u32) -> Result<Option<image::DynamicImage>> {
+    let slot = SLOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned();
+    let Some(slot) = slot else { return Ok(None) };
+    let native = slot
+        .stream
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let Some(native) = native else {
+        return Ok(None);
+    };
+    ensure!(
+        slot.active.load(Ordering::Acquire) && native.shared.enabled.load(Ordering::Acquire),
+        "screenshot preview is being invalidated"
+    );
+    let mut frame = native
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .frame
+        .clone()
+        .ok_or_else(|| anyhow!("screenshot preview has no native frame yet"))?;
+    super::macos::rgba(&mut frame.0).map(Some)
 }
 
 // CoreVideo reference counting is thread safe. A retained SCK image owns an
@@ -118,11 +204,19 @@ unsafe impl Send for NativeFrame {}
 struct State {
     frame: Option<NativeFrame>,
     observed: Option<cm::Time>,
+    received_at: Option<cm::Time>,
     error: Option<String>,
 }
 
 impl State {
-    fn observe(&mut self, status: Option<i64>, frame: Option<NativeFrame>, pts: cm::Time) {
+    fn observe(
+        &mut self,
+        status: Option<i64>,
+        frame: Option<NativeFrame>,
+        pts: cm::Time,
+        received_at: cm::Time,
+    ) {
+        self.received_at = Some(received_at);
         match status {
             Some(value) if value == sc::FrameStatus::Complete as i64 => {
                 self.frame = frame;
@@ -140,7 +234,9 @@ impl State {
 
     fn at_or_after(&self, not_before: cm::Time) -> Option<(NativeFrame, cm::Time)> {
         self.observed
-            .filter(|pts| *pts >= not_before)
+            .filter(|pts| {
+                *pts >= not_before && self.received_at.is_some_and(|time| time >= not_before)
+            })
             .and_then(|pts| self.frame.as_ref().map(|frame| (frame.clone(), pts)))
     }
 }
@@ -148,7 +244,6 @@ impl State {
 struct Shared {
     enabled: AtomicBool,
     state: Mutex<State>,
-    changed: Notify,
     sequence: Arc<AtomicU64>,
 }
 
@@ -156,7 +251,6 @@ impl Shared {
     fn disable(&self) {
         self.enabled.store(false, Ordering::Release);
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = State::default();
-        self.changed.notify_waiters();
     }
 }
 
@@ -188,7 +282,6 @@ impl sc::stream::DelegateImpl for Receiver {
         state.observed = None;
         state.error = Some(cause);
         drop(state);
-        shared.changed.notify_waiters();
     }
 }
 
@@ -208,6 +301,7 @@ impl sc::stream::OutputImpl for Receiver {
         if !shared.enabled.load(Ordering::Acquire) {
             return;
         }
+        let received_at = cm::Clock::host_time_clock().time();
         let status = sample
             .attaches(false)
             .and_then(|a| a.iter().next())
@@ -223,15 +317,14 @@ impl sc::stream::OutputImpl for Receiver {
         if !shared.enabled.load(Ordering::Acquire) {
             return;
         }
-        // Idle confirms unchanged pixels at this native observation time,
-        // even when SCK supplies no new IOSurface.
+        // Preserve SCK's timestamp even for idle callbacks: it may repeat an
+        // older image time and cannot be replaced with callback-arrival time.
         let frame = (status == Some(sc::FrameStatus::Complete as i64))
             .then(|| sample.image_buf().map(|b| NativeFrame(b.retained())))
             .flatten();
-        state.observe(status, frame, sample.pts());
+        state.observe(status, frame, sample.pts(), received_at);
         shared.sequence.fetch_add(1, Ordering::Release);
         drop(state);
-        shared.changed.notify_waiters();
     }
 }
 
@@ -255,20 +348,23 @@ struct NativeStream {
 impl Drop for NativeStream {
     fn drop(&mut self) {
         self.shared.disable();
-        // Remove the output before releasing it. The serial-queue fence owns
-        // it until already-enqueued callbacks finish; no thread waits for an
-        // OS stop completion and no detached stop worker accumulates.
+        // The receiver is both output and delegate. Retain it through native
+        // stop completion, then fence the output queue before releasing it.
+        // No thread waits for stop and no detached stop worker accumulates.
         if let Err(error) = self
             .stream
             .remove_stream_output(self.output.as_ref(), sc::OutputType::Screen)
         {
             tracing::warn!(error = ?error, "screenshot stream output removal failed");
         }
-        let output = self.output.retained();
-        self.queue.async_once(move || drop(output));
-        self.stream.stop_with_ch(|error| {
+        let mut output = Some(self.output.retained());
+        let queue = self.queue.retained();
+        self.stream.stop_with_ch(move |error| {
             if let Some(error) = error {
                 tracing::warn!(error = ?error, "screenshot stream stop failed");
+            }
+            if let Some(output) = output.take() {
+                queue.async_once(move || drop(output));
             }
         });
     }
@@ -278,14 +374,14 @@ pub(super) async fn frame(
     slot: &Arc<Slot>,
     filter: &sc::ContentFilter,
     key: Key,
-) -> Result<(arc::R<cv::ImageBuf>, chrono::DateTime<chrono::Utc>)> {
+    not_before: cm::Time,
+) -> Result<Option<(arc::R<cv::ImageBuf>, chrono::DateTime<chrono::Utc>)>> {
     ensure!(
         slot.active.load(Ordering::Acquire),
         "screenshot stream invalidated; next capture must reopen it"
     );
     // A late callback for a previous policy must never satisfy this request.
     // Compare native PTS, not callback-arrival time (queues can deliver late).
-    let not_before = cm::Clock::host_time_clock().time();
     let existing = slot
         .stream
         .lock()
@@ -296,10 +392,13 @@ pub(super) async fn frame(
     } else {
         let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
         drop(removed);
+        // Visual probes previously owned a second 2fps producer. They read
+        // this source while it is active, so retire that legacy handle here.
+        // HD owns a separate stream and is unaffected by this API.
+        sck_rs::invalidate_monitor_stream(slot.id);
         let shared = Arc::new(Shared {
             enabled: AtomicBool::new(true),
             state: Mutex::new(State::default()),
-            changed: Notify::new(),
             sequence: slot.sequence.clone(),
         });
         let output = Receiver::with(shared.clone());
@@ -347,40 +446,63 @@ pub(super) async fn frame(
             width = native.key.width,
             height = native.key.height,
             fps = native.key.fps,
+            legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
             "persistent positive-selection screenshot stream started"
         );
         native
     };
-    loop {
-        let changed = native.shared.changed.notified();
-        tokio::pin!(changed);
-        changed.as_mut().enable();
-        ensure!(
-            slot.active.load(Ordering::Acquire) && native.shared.enabled.load(Ordering::Acquire),
-            "screenshot stream invalidated; next capture must reopen it"
-        );
-        let observed = {
-            let state = native
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(error) = &state.error {
-                return Err(anyhow!("screenshot stream stopped: {error}"));
-            }
-            state.at_or_after(not_before)
-        };
-        if let Some((frame, pts)) = observed {
-            let age = cm::Clock::host_time_clock().time().as_secs() - pts.as_secs();
-            ensure!(
-                age.is_finite() && age >= 0.0,
-                "invalid native screenshot timestamp"
-            );
-            let captured_at = chrono::Utc::now()
-                - chrono::Duration::from_std(std::time::Duration::from_secs_f64(age))?;
-            return Ok((frame.0, captured_at));
+    ensure!(
+        slot.active.load(Ordering::Acquire) && native.shared.enabled.load(Ordering::Acquire),
+        "screenshot stream invalidated; next capture must reopen it"
+    );
+    let observed = {
+        let state = native
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(error) = &state.error {
+            return Err(anyhow!("screenshot stream stopped: {error}"));
         }
-        changed.await;
+        state.at_or_after(not_before)
+    };
+    // This is a cache lookup, never capture admission paced by background fps.
+    // If no frame arrived after the current policy observation, the caller
+    // requests a snapshot with the identical positive filter. Waiting for the
+    // next 2fps update delayed valid event screenshots by ~500ms in the VM.
+    let Some((frame, pts)) = observed else {
+        return Ok(None);
+    };
+    let Some(captured_at) =
+        wall_timestamp(pts, cm::Clock::host_time_clock().time(), chrono::Utc::now())
+    else {
+        return Ok(None);
+    };
+    Ok(Some((frame.0, captured_at)))
+}
+
+/// SCK reports presentation time, which can be slightly ahead of its callback
+/// (observed in the VM). Preserve that signed offset instead of discarding a
+/// valid frame or relabelling its time. Invalid/unrepresentable metadata lets
+/// the caller request fresh pixels without rejecting otherwise valid pixels.
+pub(super) fn wall_timestamp(
+    pts: cm::Time,
+    host_now: cm::Time,
+    utc_now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !pts.is_valid() {
+        return None;
+    }
+    let age = host_now.as_secs() - pts.as_secs();
+    if !age.is_finite() {
+        return None;
+    }
+    let offset = std::time::Duration::try_from_secs_f64(age.abs()).ok()?;
+    let offset = chrono::Duration::from_std(offset).ok()?;
+    if age >= 0.0 {
+        utc_now.checked_sub_signed(offset)
+    } else {
+        utc_now.checked_add_signed(offset)
     }
 }
 
@@ -399,8 +521,32 @@ pub(super) fn frame_rate() -> u32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn snapshot_only_admission_does_not_report_a_frozen_producer() {
+        let id = 4_000_000_004;
+        let admission = slot(id);
+        admission.sequence.store(12, Ordering::Release);
+        assert_eq!(sequence(id), None);
+        suspend(&admission);
+        assert!(admission.is_active());
+        assert_eq!(sequence(id), None);
+        invalidate(id);
+    }
+
     fn pixels() -> NativeFrame {
         NativeFrame(cv::PixelBuf::new(2, 2, cv::PixelFormat::_32_BGRA, None).unwrap())
+    }
+
+    #[test]
+    fn a_future_presentation_time_does_not_authorize_an_already_cached_frame() {
+        let mut state = State::default();
+        state.observe(
+            Some(sc::FrameStatus::Complete as i64),
+            Some(pixels()),
+            cm::Time::new(12, 1),
+            cm::Time::new(10, 1),
+        );
+        assert!(state.at_or_after(cm::Time::new(11, 1)).is_none());
     }
 
     #[test]
@@ -410,6 +556,7 @@ mod tests {
             Some(sc::FrameStatus::Complete as i64),
             Some(pixels()),
             cm::Time::new(10, 1),
+            cm::Time::new(20, 1),
         );
         // Callback arrival could be arbitrarily late; source PTS is what
         // decides whether this image belongs to the new privacy observation.
@@ -417,6 +564,7 @@ mod tests {
         state.observe(
             Some(sc::FrameStatus::Complete as i64),
             Some(pixels()),
+            cm::Time::new(12, 1),
             cm::Time::new(12, 1),
         );
         assert!(state.at_or_after(cm::Time::new(11, 1)).is_some());
@@ -429,16 +577,19 @@ mod tests {
             Some(sc::FrameStatus::Idle as i64),
             None,
             cm::Time::new(10, 1),
+            cm::Time::new(10, 1),
         );
         assert!(state.at_or_after(cm::Time::new(1, 1)).is_none());
         state.observe(
             Some(sc::FrameStatus::Complete as i64),
             Some(pixels()),
             cm::Time::new(10, 1),
+            cm::Time::new(10, 1),
         );
         state.observe(
             Some(sc::FrameStatus::Idle as i64),
             None,
+            cm::Time::new(12, 1),
             cm::Time::new(12, 1),
         );
         assert!(state.at_or_after(cm::Time::new(11, 1)).is_some());
@@ -448,13 +599,45 @@ mod tests {
             Some(sc::FrameStatus::Suspended as i64),
             Some(sc::FrameStatus::Stopped as i64),
         ] {
-            state.observe(status, None, cm::Time::new(13, 1));
+            state.observe(status, None, cm::Time::new(13, 1), cm::Time::new(13, 1));
             state.observe(
                 Some(sc::FrameStatus::Idle as i64),
                 None,
                 cm::Time::new(14, 1),
+                cm::Time::new(14, 1),
             );
             assert!(state.at_or_after(cm::Time::new(11, 1)).is_none());
+        }
+    }
+
+    #[test]
+    fn idle_does_not_relabel_an_old_frame_with_a_new_observation_time() {
+        let mut state = State::default();
+        state.observe(
+            Some(sc::FrameStatus::Complete as i64),
+            Some(pixels()),
+            cm::Time::new(10, 1),
+            cm::Time::new(10, 1),
+        );
+        state.observe(
+            Some(sc::FrameStatus::Idle as i64),
+            None,
+            cm::Time::new(10, 1),
+            cm::Time::new(10, 1),
+        );
+        assert!(state.frame.is_some());
+        assert!(state.at_or_after(cm::Time::new(11, 1)).is_none());
+    }
+
+    #[test]
+    fn presentation_time_preserves_past_present_and_future_offsets() {
+        let now = chrono::Utc::now();
+        let host = cm::Time::new(10_000, 1000);
+        for milliseconds in [-5, 0, 5] {
+            assert_eq!(
+                wall_timestamp(cm::Time::new(10_000 + milliseconds, 1000), host, now),
+                Some(now + chrono::Duration::milliseconds(milliseconds)),
+            );
         }
     }
 

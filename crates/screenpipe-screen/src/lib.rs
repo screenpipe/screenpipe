@@ -115,7 +115,7 @@ pub mod stream_invalidation {
         sck_rs::invalidate_monitor_stream(monitor_id);
     }
 
-    /// Release only the high-rate screenshot preview when focus leaves a
+    /// Release only the screenshot preview when focus leaves a
     /// display. Warm visual probes and the HD recorder keep their own handles.
     pub fn release_screenshot_stream(monitor_id: u32) {
         crate::screenshot_privacy::stream::invalidate(monitor_id);

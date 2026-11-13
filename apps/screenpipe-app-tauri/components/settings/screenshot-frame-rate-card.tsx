@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Monitor } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { MAX_SCREENSHOT_FRAME_RATE } from "@/lib/utils/tauri";
 
 export function ScreenshotFrameRateCard({ value, onChange }: {
   value: number;
@@ -23,7 +24,7 @@ export function ScreenshotFrameRateCard({ value, onChange }: {
             <div className="min-w-0">
               <h3 id="screenshot-frame-rate-label" className="text-sm font-medium text-foreground">Screenshot frame rate</h3>
               <p id="screenshot-frame-rate-description" className="text-xs text-muted-foreground mt-0.5">
-                Sampling rate for activity-triggered screenshots. Higher rates use more power. HD video has its own frame rate.
+                Background sampling rate. Activity-triggered screenshots can request a fresh frame. Higher rates use more power. HD video has its own frame rate.
               </p>
               {error && <p id="screenshot-frame-rate-error" role="alert" className="text-xs text-destructive mt-1">Enter a positive whole frame rate.</p>}
             </div>
@@ -33,7 +34,7 @@ export function ScreenshotFrameRateCard({ value, onChange }: {
               type="number"
               min={1}
               // CMTime uses a positive signed 32-bit timescale.
-              max={2_147_483_647}
+              max={MAX_SCREENSHOT_FRAME_RATE}
               step={1}
               className="w-24 h-8 text-xs"
               aria-labelledby="screenshot-frame-rate-label"

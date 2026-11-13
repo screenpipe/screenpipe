@@ -15,8 +15,8 @@ pub fn current() -> u32 {
 pub fn set(fps: u32) -> anyhow::Result<()> {
     // CMTime has a positive signed 32-bit timescale; reject values that cannot
     // be represented rather than silently clamping the user's preference.
-    anyhow::ensure!(fps > 0 && fps <= i32::MAX as u32,
-        "screenshot acquisition rate {fps} fps cannot be represented by the native positive timescale; correct screenshotFrameRate");
+    anyhow::ensure!(fps > 0 && fps <= screenpipe_config::MAX_SCREENSHOT_FRAME_RATE,
+        "screenshot acquisition rate {fps} fps is outside the native range 1..={} fps; correct screenshotFrameRate", screenpipe_config::MAX_SCREENSHOT_FRAME_RATE);
     let previous = FRAME_RATE.swap(fps, Ordering::AcqRel);
     if previous != fps {
         tracing::info!(

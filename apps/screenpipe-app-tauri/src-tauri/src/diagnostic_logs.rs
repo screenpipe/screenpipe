@@ -737,6 +737,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn induced_wgc_interval_failure_and_recovery_reach_normal_redacted_collector() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-13.log");
+        // Induced collector fixture only. The screenpipe-screen unit invokes the
+        // production WGC outcome recorder and checks these fields at their source.
+        std::fs::write(
+            &current,
+            concat!(
+                "WARN WGC native minimum update interval failed transiently requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=failed error=HRESULT(0x80004005): Unspecified error; retaining safe demand-driven capture; a later retry can recover native rate control\n",
+                "INFO WGC native minimum update interval recovered requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=recovered\n",
+                "INFO contact=private-person@example.com\n",
+            ),
+        )
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("requested_fps=2"));
+        assert!(report.contains("interval_ticks=5000000"));
+        assert!(report.contains("cause=FreshRequestRestore"));
+        assert!(report.contains("outcome=failed"));
+        assert!(report.contains("HRESULT(0x80004005)"));
+        assert!(report.contains("retaining safe demand-driven capture"));
+        assert!(report.contains("outcome=recovered"));
+        assert!(report.contains("native minimum update interval recovered"));
+        assert!(!report.contains("private-person@example.com"));
+        println!("redacted WGC interval support report:\n{report}");
+    }
+
+    #[tokio::test]
     async fn pi_summary_failure_survives_rotation_and_support_redaction() {
         let dir = tempfile::tempdir().unwrap();
         let current = dir.path().join("screenpipe-app.2026-11-03.log");
