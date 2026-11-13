@@ -606,7 +606,7 @@ pub(crate) async fn run(
         let mut authorized = cfg.clone();
         authorized.upload_mode =
             super::sync::EnterpriseUploadMode::Blocked("recovery support policy unresolved".into());
-        if let Err(error) = authorized.resolve_upload_mode().await {
+        if let Err(error) = authorized.resolve_support_mode().await {
             debug!("enterprise recovery: policy resolution failed; request will be refused");
             let _ = retain_failure(&authorized, &error.to_string()).await;
         }
