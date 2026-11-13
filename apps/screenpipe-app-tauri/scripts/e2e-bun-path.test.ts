@@ -26,7 +26,8 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 for (const [platform, arch, releaseTarget, relativePath] of [
   ["linux", "x64", undefined, "src-tauri/bun-x86_64-unknown-linux-gnu"],
-  ["win32", "x64", undefined, "src-tauri/target/debug-dev/bun.exe"],
+  ["win32", "x64", undefined, "src-tauri/bun-x86_64-pc-windows-msvc.exe"],
+  ["win32", "arm64", undefined, "src-tauri/bun-aarch64-pc-windows-msvc.exe"],
   ["darwin", "arm64", undefined, "src-tauri/bun-aarch64-apple-darwin"],
   ["darwin", "x64", undefined, "src-tauri/bun-x86_64-apple-darwin"],
   ["darwin", "arm64", "x86_64-apple-darwin", "src-tauri/bun-x86_64-apple-darwin"],

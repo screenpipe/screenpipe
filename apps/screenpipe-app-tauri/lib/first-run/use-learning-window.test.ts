@@ -148,6 +148,29 @@ describe("native first-run summary projection", () => {
     expect(restored.result.current.phase).toBe("done");
   });
 
+  it("keeps an empty result dismissed across native polls and remounts", async () => {
+    vi.useFakeTimers();
+    mocks.getOnboardingStatus.mockResolvedValue(nativeStatus("empty"));
+    const first = renderHook(() => useLearningWindow());
+    let restored: ReturnType<typeof renderHook> | undefined;
+    try {
+      await act(async () => {});
+      expect(first.result.current.phase).toBe("empty");
+      act(() => first.result.current.dismiss());
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(first.result.current.phase).toBe("done");
+      first.unmount();
+
+      restored = renderHook(() => useLearningWindow());
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(readLearningWindow().phase).toBe("done");
+    } finally {
+      first.unmount();
+      restored?.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains a treatment summary when it renders before the initial status poll", async () => {
     beginLearningWindow();
     markLearningReady("first-run-native-chat");

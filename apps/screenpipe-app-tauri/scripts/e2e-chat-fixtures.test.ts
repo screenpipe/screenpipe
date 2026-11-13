@@ -6,6 +6,7 @@ import { createContext, runInContext } from "node:vm";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { selectOrderedSessions, type SessionRecord } from "../lib/stores/chat-store";
 
 const dirs: string[] = [];
@@ -18,11 +19,21 @@ function fixtureRuntime(spec: string) {
   const declarations = source.statements.filter((node) => ts.isVariableStatement(node) || ts.isFunctionDeclaration(node));
   const context: Record<string, any> = {
     join, homedir: () => join(root, "unrelated-home"), E2E_DATA_DIR: root,
-    mkdirSync, readFileSync, writeFileSync, rmSync, Date, Set,
+    mkdirSync, readFileSync, writeFileSync, rmSync, Date, Set, randomUUID,
   };
   const vmContext = createContext(context);
   runInContext(ts.transpile(declarations.map((node) => node.getText(source)).join("\n"), { target: ts.ScriptTarget.ES2022 }), vmContext);
-  return { root, context, evaluate: (code: string) => runInContext(code, vmContext) };
+  const runCase = (name: string) => {
+    let callback: ts.Node | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(source) === "it" && node.arguments[0] && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === name) callback = node.arguments[1];
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (!callback) throw new Error(`Missing E2E case: ${name}`);
+    return runInContext(ts.transpile(`(${callback.getText(source)})()`, { target: ts.ScriptTarget.ES2022 }), vmContext);
+  };
+  return { root, context, runCase, evaluate: (code: string) => runInContext(code, vmContext) };
 }
 
 test("crowded imported fixture stays visible without deleting unrelated recent history", () => {
@@ -123,4 +134,34 @@ test("activity cleanup reports native stop failure and retains owned cleanup evi
   context.invokeOrThrow = async () => { throw new Error("native stop rejected"); };
   await expect(context.cleanup()).rejects.toThrow("native stop rejected");
   expect(JSON.parse(readFileSync(join(root, "chats", "owned-stop-error.json"), "utf8")).id).toBe("owned-stop-error");
+});
+
+
+test("floating Chat isolation snapshots existing Home tabs instead of assuming a fresh working set", async () => {
+  const { context, runCase } = fixtureRuntime("chat-window.spec.ts");
+  context.expect = expect;
+  context.t = (value: number) => value;
+  context.document = { querySelectorAll: () => ["prior-one", "prior-two"].map((id) => ({ dataset: { chatTabId: id } })) };
+  context.browser = {
+    switchToWindow: async () => {},
+    execute: (callback: () => unknown) => callback(),
+    waitUntil: async (condition: () => Promise<boolean>) => { if (!await condition()) throw new Error("fresh-tab assumption"); },
+  };
+  context.showWindow = async () => { throw new Error("fixture-native-boundary"); };
+  await expect(runCase("does not open the floating window's chat as a second Home tab")).rejects.toThrow("fixture-native-boundary");
+});
+
+
+test("workspace fixture preserves pre-existing tabs while exercising its exact two-tab working set", async () => {
+  const { context, runCase, evaluate } = fixtureRuntime("chat-workspace-tabs.spec.ts");
+  const ids = evaluate("[CHAT_A, CHAT_B]");
+  evaluate('previousHomeTabs = ["prior-tab"]');
+  context.expect = expect;
+  context.document = { querySelectorAll: () => ["prior-tab", ...ids].map((id) => ({ dataset: { chatTabId: id } })) };
+  context.browser = { execute: (callback: () => unknown) => callback() };
+  context.$ = () => { throw new Error("fixture-pointer-boundary"); };
+  await expect(runCase("keeps multiple chats open, swaps the split pane, and closes non-destructively")).rejects.toThrow("fixture-pointer-boundary");
+  const priorNavigation = fixtureRuntime("chat-sidebar-navigation.spec.ts");
+  expect(ids).not.toContain(priorNavigation.evaluate("CHAT_A"));
+  expect(ids).not.toContain(priorNavigation.evaluate("CHAT_B"));
 });

@@ -121,7 +121,9 @@ export function useLearningWindow(
         }
         return;
       }
-      if (phase === "empty") setState(markLearningEmpty("no_capture_in_range"));
+      if (phase === "empty" && readLearningWindow().phase !== "done") {
+        setState(markLearningEmpty("no_capture_in_range"));
+      }
     };
 
     void sync();

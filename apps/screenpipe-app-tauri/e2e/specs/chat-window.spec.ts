@@ -144,12 +144,11 @@ describe("Chat window", function () {
 
   it("does not open the floating window's chat as a second Home tab", async () => {
     await browser.switchToWindow("home");
-    await browser.waitUntil(async () => (await openHomeChatIds()).length === 1, {
-      timeout: t(15_000),
-      interval: 100,
-      timeoutMsg: "Home did not settle on its one initial chat tab",
-    });
+    // Other specs leave valid tabs open in this persistent Home window. The
+    // isolation contract is that opening floating Chat preserves that exact set.
     const initialHomeTabs = await openHomeChatIds();
+    expect(initialHomeTabs.length).toBeGreaterThan(0);
+    expect(new Set(initialHomeTabs).size).toBe(initialHomeTabs.length);
 
     await showWindow("Chat");
     await waitForWindowHandle(CHAT_HANDLE, t(15_000));

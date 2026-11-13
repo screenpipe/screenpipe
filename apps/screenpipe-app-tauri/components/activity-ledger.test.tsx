@@ -2419,16 +2419,20 @@ describe("ActivityLedger", () => {
   });
 
   it("retries app icons with bounded exponential backoff", async () => {
-    render(<ActivityLedger />);
-    await generateActivities();
-    await screen.findByText("Fixed a capture reliability regression");
+    // Auto-advancing timers can cross an exact retry boundary while act flushes.
+    vi.useRealTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    vi.setSystemTime(new Date("2026-08-17T20:00:00Z"));
+    await act(async () => { render(<ActivityLedger />); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate activities" }));
+    });
+    expect(screen.getByText("Fixed a capture reliability regression")).toBeInTheDocument();
 
     const appArtifact = screen.getByRole("link", {
       name: /Open Arc at .* in Timeline/,
     });
-    await waitFor(() =>
-      expect(appArtifact.querySelector("img")).not.toBeNull(),
-    );
+    expect(appArtifact.querySelector("img")).not.toBeNull();
 
     fireEvent.error(appArtifact.querySelector("img")!);
     expect(appArtifact.querySelector("img")).toBeNull();

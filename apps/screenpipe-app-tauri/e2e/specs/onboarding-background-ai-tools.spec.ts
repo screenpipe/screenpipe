@@ -408,13 +408,26 @@ async function callActivitySummaryThroughMcp(
       await browser.switchToWindow("home");
       await browser.waitUntil(
         async () => {
+          await browser.switchToWindow("home");
+          const completed = await invokeOrThrow<{ isCompleted: boolean }>(
+            "get_onboarding_status",
+          );
+          if (completed.isCompleted) return true;
           // The optional Workflows rollout adds a final choice. Complete its
           // normal Screenpipe path if present; never bypass persisted completion.
           if ((await browser.getWindowHandles()).includes("onboarding")) {
-            await browser.switchToWindow("onboarding");
-            const findSomething = await $("button*=Find something");
-            if (await findSomething.isExisting() && await findSomething.isDisplayed()) {
-              await findSomething.click();
+            try {
+              await browser.switchToWindow("onboarding");
+              const findSomething = await $("button*=Find something");
+              if (await findSomething.isExisting() && await findSomething.isDisplayed()) {
+                await findSomething.click();
+              }
+            } catch (error) {
+              // Native completion destroys this child. A stale handle must not
+              // prevent reading the authoritative receipt from live Home.
+              if (!/no window could be found|no such window/i.test(String(error))) {
+                throw error;
+              }
             }
           }
           await browser.switchToWindow("home");

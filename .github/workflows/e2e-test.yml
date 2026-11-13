@@ -936,6 +936,11 @@ jobs:
       shell: bash
       run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
 
+    - name: Install local AI gateway fixture dependencies
+      working-directory: packages/ai-gateway
+      shell: bash
+      run: bun install --frozen-lockfile
+
     - name: Install frontend dependencies
       working-directory: apps/screenpipe-app-tauri
       shell: bash

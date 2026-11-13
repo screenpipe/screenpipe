@@ -43,11 +43,24 @@
 // clickable without throwing. That catches a broken target, an empty label, or
 // a handler that dies on click, on whatever machine runs it.
 
-import { existsSync } from "node:fs";
-import { E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { showWindow, waitForWindowHandle } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow, waitForWindowHandle } from "../helpers/tauri.js";
 import { t, waitForAppReady } from "../helpers/test-utils.js";
+
+import { snapshotFixtureAccount, restoreFixtureAccount, type FixtureAccountSnapshot } from "../helpers/account-fixture-restoration.js";
+import { paidAccountFixture } from "../helpers/account-fixtures.js";
+
+const ownedSummaryIds = new Set<string>();
+const SUMMARY_TEXT = "Fictional first-run handoff summary for the isolated E2E fixture.";
+type StoredView = { learning: string | null };
+let onboardingRid: number;
+let originalOnboarding: Record<string, unknown>;
+let originalView: StoredView;
+let originalAccount: FixtureAccountSnapshot;
 
 const seedFlags = E2E_SEED_FLAGS.split(",")
   .map((flag) => flag.trim().toLowerCase())
@@ -118,7 +131,7 @@ const readyState = (over: Record<string, unknown> = {}) => ({
   phase: "ready",
   startedAt: new Date().toISOString(),
   seededAt: new Date().toISOString(),
-  chatId: "first-run-handoff-e2e",
+  chatId: randomUUID(),
   emptyReason: null,
   pendingEmptyReport: false,
   ...over,
@@ -127,35 +140,47 @@ const readyState = (over: Record<string, unknown> = {}) => ({
 /** Seed window state and land on Home in one step, so the first mount already
  *  reads the seeded state instead of the previous test's. */
 const openHomeWith = async (state: Record<string, unknown>) => {
+  const chatId = state.chatId;
+  if (typeof chatId !== "string" || !chatId) throw new Error("ready fixture needs a chat id");
+  ownedSummaryIds.add(chatId);
+  mkdirSync(join(E2E_DATA_DIR, "chats"), { recursive: true });
+  const now = Date.now();
+  writeFileSync(join(E2E_DATA_DIR, "chats", `${chatId}.json`), JSON.stringify({
+    id: chatId, title: "First-run handoff fixture", kind: "chat",
+    messages: [{ id: `${chatId}-assistant`, role: "assistant", content: SUMMARY_TEXT, timestamp: now }],
+    createdAt: now, updatedAt: now,
+  }));
+  await invokeOrThrow("plugin:store|set", {
+    rid: onboardingRid, key: "onboarding", value: {
+      ...originalOnboarding,
+      isCompleted: true,
+      completedAt: state.startedAt,
+      currentStep: null,
+      trialActivationFreshInstall: false,
+      firstRunSummaryPhase: "ready",
+      firstRunSummaryStartedAt: state.startedAt,
+      firstRunSummaryChatId: chatId,
+      firstRunSummaryNotificationSentAt: null,
+      firstRunSummaryNotificationId: null,
+      firstRunSummaryError: null,
+      firstRunSummaryTelemetryVersion: 2,
+    },
+  });
+  await invokeOrThrow("plugin:store|save", { rid: onboardingRid });
   await showWindow({ Home: { page: "home" } });
   await waitForWindowHandle("home", t(20_000));
   await browser.switchToWindow("home");
   await browser.execute(
-    (accountKey: string, learningKey: string, learningValue: string) => {
-      const checkedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        accountKey,
-        JSON.stringify({
-          id: "e2e-handoff-user",
-          email: "e2e-handoff@screenpipe.test",
-          token: "e2e-handoff-token",
-          app_entitled: true,
-          subscription_plan: "standard",
-          entitlement: {
-            active: true,
-            plan: "standard",
-            source: "subscription",
-            checked_at: checkedAt,
-            features: { app: true, cloud: false },
-          },
-        }),
-      );
+    (accountKey: string, learningKey: string, learningValue: string, accountJson: string) => {
+      window.localStorage.setItem("screenpipe_e2e_account_fixture_active", "1");
+      window.localStorage.setItem(accountKey, accountJson);
       window.localStorage.setItem(learningKey, learningValue);
-      window.location.href = "/home?section=home";
+      window.location.href = "/home?section=home&mode=screenpipe";
     },
     E2E_ACCOUNT_USER_KEY,
     LEARNING_STORAGE_KEY,
     JSON.stringify(state),
+    JSON.stringify(paidAccountFixture("first-run")),
   );
   await browser.waitUntil(
     async () => (await browser.getUrl()).includes("section=home"),
@@ -181,6 +206,52 @@ const describeOrSkip = canRun ? describe : describe.skip;
 describeOrSkip("first-run agent handoff", () => {
   before(async () => {
     await waitForAppReady();
+    await showWindow({ Home: { page: "home" } });
+    await waitForWindowHandle("home", t(20_000));
+    await browser.switchToWindow("home");
+    const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+      path: join(E2E_DATA_DIR, "store.bin"),
+    });
+    if (rid == null) throw new Error("onboarding store is not loaded");
+    onboardingRid = rid;
+    const [record, exists] = await invokeOrThrow<[Record<string, unknown>, boolean]>(
+      "plugin:store|get", { rid, key: "onboarding" },
+    );
+    if (!exists) throw new Error("onboarding record is missing");
+    originalOnboarding = record;
+    originalAccount = await snapshotFixtureAccount();
+    originalView = await browser.execute((learningKey: string, accountKey: string): StoredView =>
+      ({ learning: localStorage.getItem(learningKey) }),
+      LEARNING_STORAGE_KEY, E2E_ACCOUNT_USER_KEY,
+    );
+
+  });
+
+  after(async () => {
+    try {
+      if (!originalOnboarding) return;
+      await invokeOrThrow("plugin:store|set", {
+        rid: onboardingRid, key: "onboarding", value: originalOnboarding,
+      });
+      await invokeOrThrow("plugin:store|save", { rid: onboardingRid });
+      await browser.switchToWindow("home");
+      await restoreFixtureAccount(originalAccount, t(15_000));
+      await browser.execute((learningKey: string, accountKey: string, saved: StoredView) => {
+        for (const [key, value] of Object.entries({ [learningKey]: saved.learning })) {
+          if (value == null) localStorage.removeItem(key);
+          else localStorage.setItem(key, value);
+        }
+      }, LEARNING_STORAGE_KEY, E2E_ACCOUNT_USER_KEY, originalView);
+    } finally {
+      const stopped = await Promise.allSettled(
+        [...ownedSummaryIds].map(sessionId => invokeOrThrow("pi_stop", { sessionId })),
+      );
+      for (const id of ownedSummaryIds) {
+        rmSync(join(E2E_DATA_DIR, "chats", `${id}.json`), { force: true });
+      }
+      const failure = stopped.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    }
   });
 
   it("keeps the summary the primary action, handoff or not", async () => {
@@ -246,6 +317,7 @@ describeOrSkip("first-run agent handoff", () => {
               const state = JSON.parse(localStorage.getItem(key) ?? "{}");
               return (
                 state.phase === "done" &&
+                document.body.textContent?.includes("Fictional first-run handoff summary for the isolated E2E fixture.") &&
                 !document.querySelector('[data-testid="first-run-learning-banner"]') &&
                 !document.querySelector('[data-testid="first-run-open-summary"]')
               );

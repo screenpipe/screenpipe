@@ -10,26 +10,27 @@
 // required", so none of this is reachable. Real users arrive here having just
 // signed in during setup, which is what this seed reproduces.
 //
-// `no-recording` is load-bearing for the empty-path test: no useful screen or
-// audio evidence arrives, so the assertion runs against a real engine answer
-// rather than a stubbed activity response. Entitlement recovery may restart
-// the server, so the exact classified reason is intentionally not pinned.
+// `no-recording` keeps these synthetic native lifecycle fixtures independent
+// of physical screen and audio devices. The empty case seeds a durable native
+// result to test its UI projection; native evidence-floor tests separately
+// verify when the producer may settle or start generation.
 //
 // What this proves that unit tests cannot:
 //   1. The banner mounts on Home — the surface setup now routes to — and its
 //      countdown is live rather than a frozen first render.
-//   2. A foreground empty result settles durably with the real engine reason
-//      preserved. Connection setup already happened inside onboarding and is
-//      never gated on this result.
-//   3. A late retry runs in the background and surfaces only if a summary is
-//      ready. Reopening hours later must not look like onboarding restarted.
+//   2. A native empty result projects durably and stays dismissed after reload.
+//      Connection setup already happened inside onboarding and is never gated
+//      on this result.
+//   3. Native writing keeps its original deadline across reload, and an old
+//      completion timestamp cannot arm a second job in the browser.
 //   4. Foreground empty choices survive reload until the user dismisses them;
-//      a ready result retires after opening or after an app restart.
+//      a ready result retires only after its saved summary actually renders.
 //
 // The summary text and the seed-once rules are pure functions covered in
-// lib/first-run/learning-window.test.ts. This spec drives the state machine
-// through the real UI against the real engine.
+// lib/first-run/learning-window.test.ts. This spec drives the real UI against
+// isolated native lifecycle records and owned synthetic summary chats.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
@@ -40,6 +41,7 @@ import {
   waitForWindowHandle,
 } from "../helpers/tauri.js";
 import { t, waitForAppReady } from "../helpers/test-utils.js";
+import { snapshotFixtureAccount, restoreFixtureAccount, type FixtureAccountSnapshot } from "../helpers/account-fixture-restoration.js";
 import { paidAccountFixture } from "../helpers/account-fixtures.js";
 
 const seedFlags = E2E_SEED_FLAGS.split(",")
@@ -55,8 +57,21 @@ const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 // in only for e2e builds. Brain sits behind the account gate, and no seed flag
 // creates a signed-in user, so without this the section never renders.
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
+type StoredView = { learning: string | null };
+let onboardingRid: number;
+let originalOnboarding: Record<string, unknown>;
+let originalView: StoredView;
+let originalAccount: FixtureAccountSnapshot;
+
+const readNativeState = () => invokeOrThrow<{
+  isCompleted: boolean;
+  firstRunSummaryPhase: string;
+  firstRunSummaryStartedAt: string | null;
+  firstRunSummaryChatId: string | null;
+}>("get_onboarding_status");
+
 const BANNER = '[data-testid="first-run-learning-banner"]';
-const SUMMARY_CHAT_ID = "first-run-e2e";
+const SUMMARY_CHAT_ID = randomUUID();
 const SUMMARY_TEXT =
   "Screenpipe saw work across Arc and Cursor. You reviewed onboarding and prepared the next app release.";
 const SUMMARY_CHAT_PATH = join(
@@ -127,20 +142,31 @@ const storedLearningState = async (): Promise<Record<string, unknown> | null> =>
  */
 const openHomeWith = async (
   state: Record<string, unknown>,
-  options: { alignCompletion?: boolean } = {},
+  options: { native?: Record<string, unknown> } = {},
 ) => {
-  // Directly seeded lifecycle states model a window that already belongs to
-  // the latest setup. Keep the native completion just behind that window;
-  // otherwise the app-start seed is newer than an intentionally old
-  // `startedAt` and the production stale-WebView recovery correctly replaces
-  // the fixture with a fresh learning run before the assertion can inspect it.
-  const startedAt =
-    typeof state.startedAt === "string" ? Date.parse(state.startedAt) : NaN;
-  if (options.alignCompletion !== false && Number.isFinite(startedAt)) {
-    await invokeOrThrow("plugin:e2e|set_onboarding_completed_ago", {
-      seconds: Math.max(1, Math.ceil((Date.now() - startedAt) / 1_000) + 1),
-    });
-  }
+  // Native owns the lifecycle. Seed its durable record as well as the view's
+  // mirror, so the next status poll cannot replace this scenario with another run.
+  const startedAt = typeof state.startedAt === "string" ? state.startedAt : new Date().toISOString();
+  await invokeOrThrow("plugin:store|set", {
+    rid: onboardingRid,
+    key: "onboarding",
+    value: {
+      ...originalOnboarding,
+      isCompleted: true,
+      completedAt: startedAt,
+      currentStep: null,
+      trialActivationFreshInstall: false,
+      firstRunSummaryPhase: state.phase === "done" ? "ready" : state.phase,
+      firstRunSummaryStartedAt: startedAt,
+      firstRunSummaryChatId: state.chatId ?? null,
+      firstRunSummaryNotificationSentAt: null,
+      firstRunSummaryNotificationId: null,
+      firstRunSummaryError: null,
+      firstRunSummaryTelemetryVersion: 2,
+      ...options.native,
+    },
+  });
+  await invokeOrThrow("plugin:store|save", { rid: onboardingRid });
 
   // Same route setup completion uses: show_window(Home { page: "home" }).
   await showWindow({ Home: { page: "home" } });
@@ -148,10 +174,11 @@ const openHomeWith = async (
   await browser.switchToWindow("home");
   await browser.execute(
     (accountKey: string, learningKey: string, learningValue: string, accountJson: string) => {
+      window.localStorage.setItem("screenpipe_e2e_account_fixture_active", "1");
       window.localStorage.setItem(accountKey, accountJson);
       window.localStorage.setItem(learningKey, learningValue);
       // Set both before navigating so the fresh mount reads them on boot.
-      window.location.href = "/home?section=home";
+      window.location.href = "/home?section=home&mode=screenpipe";
     },
     E2E_ACCOUNT_USER_KEY,
     LEARNING_STORAGE_KEY,
@@ -191,21 +218,48 @@ const learningState = (over: Record<string, unknown> = {}) => ({
 
   before(async () => {
     await waitForAppReady();
+    await showWindow({ Home: { page: "home" } });
+    await waitForWindowHandle("home", t(20_000));
+    await browser.switchToWindow("home");
+    const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+      path: join(E2E_DATA_DIR, "store.bin"),
+    });
+    if (rid == null) throw new Error("onboarding store is not loaded");
+    onboardingRid = rid;
+    const [record, exists] = await invokeOrThrow<[Record<string, unknown>, boolean]>(
+      "plugin:store|get", { rid, key: "onboarding" },
+    );
+    if (!exists) throw new Error("onboarding record is missing");
+    originalOnboarding = record;
+    originalAccount = await snapshotFixtureAccount();
+    originalView = await browser.execute((learningKey: string, accountKey: string): StoredView =>
+      ({ learning: localStorage.getItem(learningKey) }),
+      LEARNING_STORAGE_KEY, E2E_ACCOUNT_USER_KEY,
+    );
   });
 
-  // Several tests below call `reset_onboarding` to look like a user who has
-  // not finished setup. The app process is shared by the whole suite and the
-  // onboarding store is global, so leaving it reset does not end with this
-  // file: `ShowRewindWindow::Main` returns the onboarding window while
-  // onboarding is incomplete (window/show.rs), so every later spec that waits
-  // for a `main` / `main-window` handle never gets one. That is how one
-  // missing hook here reddened main-window, main-window-close-reopen,
-  // main-overlay-visibility, tray-search and window-lifecycle, and burned
-  // ~20 minutes of the job budget on their retries. Same restore as
-  // screen-recording-restart.spec.ts.
   after(async () => {
-    rmSync(SUMMARY_CHAT_PATH, { force: true });
-    await invokeOrThrow("complete_onboarding").catch(() => {});
+    try {
+      if (!originalOnboarding) return;
+      await invokeOrThrow("plugin:store|set", {
+        rid: onboardingRid, key: "onboarding", value: originalOnboarding,
+      });
+      await invokeOrThrow("plugin:store|save", { rid: onboardingRid });
+      await browser.switchToWindow("home");
+      await restoreFixtureAccount(originalAccount, t(15_000));
+      await browser.execute((learningKey: string, accountKey: string, saved: StoredView) => {
+        for (const [key, value] of Object.entries({ [learningKey]: saved.learning })) {
+          if (value == null) localStorage.removeItem(key);
+          else localStorage.setItem(key, value);
+        }
+      }, LEARNING_STORAGE_KEY, E2E_ACCOUNT_USER_KEY, originalView);
+    } finally {
+      try {
+        await invokeOrThrow("pi_stop", { sessionId: SUMMARY_CHAT_ID });
+      } finally {
+        rmSync(SUMMARY_CHAT_PATH, { force: true });
+      }
+    }
   });
 
   it("shows a live countdown while it is learning", async () => {
@@ -237,47 +291,32 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("recovers an interrupted first attempt exactly once and stays quiet", async () => {
-    const expiredAt = new Date(Date.now() - 10 * 60 * 1_000).toISOString();
-    await openHomeWith(
-      learningState({
-        startedAt: expiredAt,
-        lateRetryUsed: false,
-      }),
-    );
-
-    await browser.waitUntil(
-      async () => {
-        const state = await storedLearningState();
-        return (
-          state?.phase === "learning" &&
-          state?.lateRetryUsed === true &&
-          state?.showProgress === false &&
-          typeof state?.startedAt === "string" &&
-          state.startedAt !== expiredAt
-        );
-      },
-      {
-        timeout: t(30_000),
-        timeoutMsg: "expired first attempt did not become one quiet recovery",
-      },
-    );
-    expect(await bannerCount()).toBe(0);
+  it("restores native writing without restarting its learning deadline", async () => {
+    const nativeStartedAt = new Date().toISOString();
+    await openHomeWith(learningState({
+      startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    }), { native: {
+      firstRunSummaryPhase: "writing",
+      firstRunSummaryStartedAt: nativeStartedAt,
+    } });
+    await browser.waitUntil(async () => {
+      const state = await storedLearningState();
+      return state?.phase === "writing" && state.startedAt === nativeStartedAt;
+    }, { timeout: t(30_000), timeoutMsg: "native writing was not restored" });
+    expect(await bannerPhase()).toBe("writing");
+    await browser.execute(() => { window.location.reload(); });
+    await browser.waitUntil(async () => (await bannerPhase()) === "writing", {
+      timeout: t(30_000), timeoutMsg: "reload restarted native writing",
+    });
+    const native = await readNativeState();
+    expect(native.firstRunSummaryPhase).toBe("writing");
+    expect(native.firstRunSummaryStartedAt).toBe(nativeStartedAt);
   });
 
-  it("ends an empty foreground result without repeating onboarding setup", async () => {
-    // Ceiling already elapsed, so the window must settle on this mount. With
-    // recording off the engine answers that it is not recording, and that
-    // exact reason remains available for diagnosis without reviving connection
-    // setup after onboarding has already finished.
-    await openHomeWith(
-      learningState({
-        startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
-        // The one recovery was already spent. This must now settle rather than
-        // opening an unbounded loop of fresh two-minute attempts.
-        lateRetryUsed: true,
-      }),
-    );
+  it("projects the native empty result without repeating onboarding setup", async () => {
+    // The native owner has classified this run. The view must display its
+    // durable result rather than infer another retry from the browser clock.
+    await openHomeWith(learningState({ phase: "empty", emptyReason: "no_capture_in_range" }));
 
     await browser.waitUntil(
       async () => {
@@ -298,7 +337,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     const bodyText = (await browser.execute(
       () => document.body.textContent ?? "",
     )) as string;
-    expect(bodyText).toContain("screenpipe is ready");
+    expect(bodyText).toContain("Screenpipe is ready");
     expect(
       await browser.execute(
         () => !!document.querySelector('[data-testid="first-run-next-steps"]'),
@@ -313,7 +352,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await showWindow({ Home: { page: null } });
     await browser.switchToWindow("home");
     await browser.execute(() => {
-      window.location.href = "/home?section=home";
+      window.location.href = "/home?section=home&mode=screenpipe";
     });
     await browser.pause(t(4_000));
     expect(await bannerCount()).toBe(1);
@@ -327,6 +366,12 @@ const learningState = (over: Record<string, unknown> = {}) => ({
       timeoutMsg: "empty result survived explicit dismissal",
     });
     expect((await storedLearningState())?.phase).toBe("done");
+    await browser.execute(() => { window.location.reload(); });
+    await browser.waitUntil(async () => {
+      const shell = await $('[data-testid="section-home"]').isExisting();
+      return shell && (await storedLearningState())?.phase === "done";
+    }, { timeout: t(20_000), timeoutMsg: "dismissal did not survive reload" });
+    expect(await bannerCount()).toBe(0);
   });
 
   it("opens the summary without inventing a user turn or covering Home", async () => {
@@ -416,7 +461,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await waitForWindowHandle("home", t(20_000));
     await browser.switchToWindow("home");
     await browser.execute(() => {
-      window.location.href = "/home?section=home";
+      window.location.href = "/home?section=home&mode=screenpipe";
     });
 
     await browser.waitUntil(async () => (await bannerPhase()) === "learning", {
@@ -426,64 +471,54 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     });
   });
 
-  // A late retry preserves the chance to produce a first summary, but the wait
-  // itself has no context hours after setup and must stay in the background.
-  it("retries a first summary silently for someone who comes back later", async () => {
-    await browser.execute((key: string) => {
-      window.localStorage.removeItem(key);
-    }, LEARNING_STORAGE_KEY);
-
-    await invokeOrThrow("reset_onboarding");
-    await invokeOrThrow("complete_onboarding");
-    // Well past the ceiling, well inside the grace: the returning-user case.
-    await invokeOrThrow("plugin:e2e|set_onboarding_completed_ago", {
-      seconds: 3 * 60 * 60,
-    });
-
-    await showWindow({ Home: { page: "home" } });
-    await waitForWindowHandle("home", t(20_000));
-    await browser.switchToWindow("home");
-    await browser.execute(() => {
-      window.location.href = "/home?section=home";
-    });
-
-    await browser.waitUntil(
-      async () => {
-        const state = await storedLearningState();
-        return state?.phase === "learning" && state.showProgress === false;
-      },
-      {
-        timeout: t(40_000),
-        timeoutMsg: "no background learning window after a late return",
-      },
-    );
+  it("does not rearm a native job from an old completion timestamp", async () => {
+    await openHomeWith(learningState({ phase: "idle", startedAt: null }), { native: {
+      completedAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      firstRunSummaryPhase: "idle",
+      firstRunSummaryStartedAt: null,
+    } });
+    await browser.pause(t(4_000));
     expect(await bannerCount()).toBe(0);
-    const bodyText = (await browser.execute(
-      () => document.body.textContent ?? "",
-    )) as string;
-    expect(bodyText).not.toContain("Learning about your work");
+    expect((await storedLearningState())?.phase).toBe("idle");
+    const native = await readNativeState();
+    expect(native.firstRunSummaryPhase).toBe("idle");
+    expect(native.firstRunSummaryStartedAt).toBeNull();
+  });
+
+  it("keeps a persisted native background run silent across reload", async () => {
+    const startedAt = new Date().toISOString();
+    await openHomeWith(learningState({ startedAt, phase: "writing", showProgress: false }), {
+      native: {
+        completedAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+        firstRunSummaryPhase: "writing",
+      },
+    });
+    await browser.waitUntil(async () => (await storedLearningState())?.phase === "writing", {
+      timeout: t(30_000), timeoutMsg: "native background writing was not projected",
+    });
+    expect(await bannerCount()).toBe(0);
+    await browser.execute(() => { window.location.reload(); });
+    await browser.waitUntil(async () => (await storedLearningState())?.phase === "writing", {
+      timeout: t(30_000), timeoutMsg: "background writing was lost on reload",
+    });
+    expect(await bannerCount()).toBe(0);
+    expect((await storedLearningState())?.showProgress).toBe(false);
+    const native = await readNativeState();
+    expect(native.firstRunSummaryPhase).toBe("writing");
+    expect(native.firstRunSummaryStartedAt).toBe(startedAt);
   });
 
   it("keeps every background evidence-floor miss out of the interface", async () => {
     for (const emptyReason of [
-      "no_frames_captured",
-      "below_frame_floor",
-      "single_app_below_floor",
+      "no_frames_captured", "below_frame_floor", "single_app_below_floor",
     ]) {
-      await openHomeWith(
-        learningState({ phase: "empty", emptyReason, showProgress: false }),
-      );
-      await browser.waitUntil(
-        async () => {
-          const state = await storedLearningState();
-          return state?.phase === "empty";
-        },
-        {
-          timeout: t(30_000),
-          timeoutMsg: `state never settled for ${emptyReason}`,
-        },
-      );
+      await openHomeWith(learningState({ phase: "empty", emptyReason, showProgress: false }));
+      await browser.waitUntil(async () => {
+        const state = await storedLearningState();
+        return state?.phase === "empty";
+      }, { timeout: t(30_000), timeoutMsg: `native empty result did not project for ${emptyReason}` });
       expect(await bannerCount()).toBe(0);
+      expect((await storedLearningState())?.showProgress).toBe(false);
     }
   });
 
@@ -496,7 +531,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
 
     for (const phase of ["idle", "done"]) {
       await openHomeWith(learningState({ phase }), {
-        alignCompletion: false,
+        native: { isCompleted: false, completedAt: null, firstRunSummaryPhase: "idle", firstRunSummaryStartedAt: null },
       });
       await browser.pause(t(3_000));
       expect(await bannerCount()).toBe(0);

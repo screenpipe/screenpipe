@@ -575,7 +575,7 @@ describe("connected snapshot sharing", function () {
           });
       });
     };
-    const shareCaret = await $(`[aria-label="more meeting actions"]`);
+    const shareCaret = await $(`[data-testid="meeting-more-button"]`);
     await shareCaret.waitForExist({ timeout: t(10_000) });
     expect(
       existsSync(await saveScreenshot("connected-share-meeting-entry")),
@@ -599,7 +599,7 @@ describe("connected snapshot sharing", function () {
     ).toBe(true);
 
     const closeDisconnected = await $(
-      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="close"]`,
+      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="Close"]`,
     );
     await closeDisconnected.click();
     await waitForShareDialogClosed();
@@ -704,11 +704,11 @@ describe("connected snapshot sharing", function () {
     );
 
     const closeReceipt = await $(
-      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="close"]`,
+      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="Close"]`,
     );
     await closeReceipt.click();
     await waitForShareDialogClosed();
-    const backToMeetings = await $(`[aria-label="back to meetings"]`);
+    const backToMeetings = await $(`[aria-label="Back to meetings"]`);
     await backToMeetings.waitForExist({ timeout: t(10_000) });
     await backToMeetings.click();
     const brainNav = await waitForTestId("nav-brain", 10_000);

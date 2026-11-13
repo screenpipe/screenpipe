@@ -4,11 +4,14 @@
 
 /** Native proof for the ephemeral chat working set and live split pane. */
 
+import { randomUUID } from "node:crypto";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 
-const CHAT_A = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const CHAT_B = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const CHAT_A = randomUUID();
+const CHAT_B = randomUUID();
+let previousHomeTabs: string[] = [];
+
 const TITLES: Record<string, string> = {
   [CHAT_A]: "workspace research",
   [CHAT_B]: "workspace implementation",
@@ -195,6 +198,8 @@ describe("Chat workspace tabs and split", function () {
         timeoutMsg: "chat seed hook did not mount",
       },
     );
+    // Keep the pre-existing working set intact; this scenario adds its own two tabs.
+    previousHomeTabs = await openTabIds();
     await seedChat(CHAT_A, TITLES[CHAT_A]);
     await seedChat(CHAT_B, TITLES[CHAT_B]);
     await waitForForeground(CHAT_B);
@@ -305,7 +310,7 @@ describe("Chat workspace tabs and split", function () {
 
   it("keeps multiple chats open, swaps the split pane, and closes non-destructively", async () => {
     const initialTabs = await openTabIds();
-    expect(initialTabs).toEqual([CHAT_A, CHAT_B]);
+    expect(initialTabs).toEqual([...previousHomeTabs, CHAT_A, CHAT_B]);
 
     // Use native pointer clicks here. DOM element.click() bypasses hit testing
     // and previously let the transparent window-drag layer hide the fact that
@@ -376,7 +381,11 @@ describe("Chat workspace tabs and split", function () {
     await browser.waitUntil(
       async () => {
         const ids = await openTabIds();
-        return ids.length === 2 && ids[0] === CHAT_A && ids[1] !== CHAT_B;
+        const keptTabs = [...previousHomeTabs, CHAT_A];
+        return ids.length === keptTabs.length + 1 &&
+          keptTabs.every((id, index) => ids[index] === id) &&
+          !keptTabs.includes(ids[ids.length - 1]) &&
+          ids[ids.length - 1] !== CHAT_B;
       },
       {
         timeout: t(8_000),

@@ -1711,8 +1711,8 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "tests": 9,
-      "notes": "Post-setup summary on Home under the authenticated seed: immediate runs show a live countdown, an interrupted first attempt gets exactly one quiet recovery, exhausted empty engine results settle with their diagnostic reason preserved, silent states stay silent across reloads, late returns retry in the background, ready summaries remain actionable, a verified shown Chat-shortcut outcome completes the contextual practice lesson while a hidden outcome stays recoverable, and idle/done never render."
+      "tests": 10,
+      "notes": "Projects the native first-run lifecycle on Home: live countdown, persisted writing retains its start and deadline across reload, an old completion cannot arm a new job, empty results stay dismissed across polls and reloads, background writing and all three evidence-floor misses stay silent, saved summaries open without an invented user turn, and the Chat shortcut requires a verified shown outcome."
     },
     {
       "spec": "first-run-reset-learning-window.spec.ts",
@@ -1735,7 +1735,7 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "tests": 2,
-      "notes": "Home is the single first-summary lifecycle owner: reset events clear the mounted Home state, while the separate Chat webview neither renders nor claims a second learning window from the shared onboarding completion."
+      "notes": "Native owns the first-summary lifecycle and Home owns its result UI: reset clears the mounted view and disarms the persisted native job; Chat may share the storage projection but must preserve the same native start and chat identity without rendering another banner."
     },
     {
       "spec": "focus-warm-pause.spec.ts",
