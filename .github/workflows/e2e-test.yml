@@ -983,6 +983,13 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       run: bun run test:e2e:onboarding-first-run
 
+    - name: Verify named Capture saves through starred sessions
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      env:
+        RECORD_VIDEO: "true"
+      run: bun run test:e2e --spec e2e/specs/starred-session-popover.spec.ts --specFileRetries 0
+
     - name: Run E2E Tests
       # ADVISORY (non-blocking): the full serial suite (maxInstances:1) with
       # specFileRetries:3 on the slow macos-15 image exceeds the job budget and
