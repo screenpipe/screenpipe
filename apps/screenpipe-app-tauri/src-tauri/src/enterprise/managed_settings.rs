@@ -705,7 +705,8 @@ mod tests {
         .unwrap();
         let legacy: crate::store::SettingsStore =
             serde_json::from_value(store.get("settings").unwrap()).unwrap();
-        assert_eq!(legacy.ai_presets.len(), 1);
+        assert_eq!(legacy.ai_presets.len(), 2);
+        assert_eq!(legacy.ai_presets[1].id, "screenpipe-cloud");
         assert_eq!(legacy.ai_presets[0].model, "legacy-company-model");
         assert_eq!(
             legacy.ai_presets[0].api_key.as_deref(),
@@ -723,7 +724,10 @@ mod tests {
             || store.save().map_err(|e| e.to_string()),
         )
         .unwrap();
-        assert_eq!(store.get("settings").unwrap()["aiPresets"], json!([]));
+        assert_eq!(
+            store.get("settings").unwrap()["aiPresets"],
+            json!(crate::store::SettingsStore::default())["aiPresets"]
+        );
     }
 
     #[test]
