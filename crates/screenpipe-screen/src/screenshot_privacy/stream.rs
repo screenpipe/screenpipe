@@ -114,6 +114,7 @@ unsafe impl Sync for NativeFrame {}
 struct State {
     frame: Option<NativeFrame>,
     observed: Option<cm::Time>,
+    received_at: Option<chrono::DateTime<chrono::Utc>>,
     error: Option<String>,
 }
 
@@ -122,21 +123,29 @@ impl State {
         match status {
             Some(value) if value == sc::FrameStatus::Complete as i64 => {
                 self.frame = frame;
+                self.received_at = Some(chrono::Utc::now());
                 self.observed = pts.is_valid().then_some(pts);
             }
             Some(value) if value == sc::FrameStatus::Idle as i64 && self.frame.is_some() => {
-                self.observed = pts.is_valid().then_some(pts);
+                if pts.is_valid() {
+                    self.observed = Some(pts);
+                    self.received_at = Some(chrono::Utc::now());
+                }
             }
             _ => {
                 self.frame = None;
                 self.observed = None;
+                self.received_at = None;
             }
         }
     }
 
-    fn image(&self) -> Option<(NativeFrame, cm::Time)> {
-        self.observed
-            .and_then(|pts| self.frame.as_ref().map(|frame| (frame.clone(), pts)))
+    fn image(&self) -> Option<(NativeFrame, Option<cm::Time>, chrono::DateTime<chrono::Utc>)> {
+        Some((
+            self.frame.as_ref()?.clone(),
+            self.observed,
+            self.received_at?,
+        ))
     }
 }
 
@@ -278,7 +287,7 @@ pub(super) async fn frame(
     slot: &Arc<Slot>,
     filter: &sc::ContentFilter,
     key: Key,
-) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>)> {
+) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
     ensure!(
         slot.active.load(Ordering::Acquire),
         "screenshot stream invalidated; next capture must reopen it"
@@ -383,12 +392,17 @@ pub(super) async fn frame(
             }
             state.image()
         };
-        if let Some((frame, pts)) = observed {
-            if let Some(captured_at) =
-                wall_timestamp(pts, native.clock_anchor.0, native.clock_anchor.1)
-            {
-                return Ok((frame, captured_at));
-            }
+        if let Some((frame, pts, received_at)) = observed {
+            let captured_at = pts
+                .and_then(|pts| wall_timestamp(pts, native.clock_anchor.0, native.clock_anchor.1));
+            // Missing timing metadata affects alignment quality, never capture
+            // permission. Preserve this callback's estimate with an explicit
+            // non-native flag instead of withholding its usable pixels.
+            return Ok((
+                frame,
+                captured_at.unwrap_or(received_at),
+                captured_at.is_some(),
+            ));
         }
         tokio::select! {
             _ = &mut changed => {},
@@ -399,8 +413,8 @@ pub(super) async fn frame(
 
 /// SCK reports presentation time, which can be slightly ahead of its callback
 /// (observed in the VM). Preserve that signed offset instead of discarding a
-/// valid frame or relabelling its time. Invalid metadata waits for another
-/// stream sample; it never switches capture mechanisms.
+/// valid frame or relabelling its time. Invalid metadata uses an explicitly
+/// non-native callback-time estimate; it never switches capture mechanisms.
 pub(super) fn wall_timestamp(
     pts: cm::Time,
     host_now: cm::Time,
@@ -446,8 +460,27 @@ mod tests {
         let mut state = State::default();
         for pts in [cm::Time::new(10, 1), cm::Time::new(30, 1)] {
             state.observe(Some(sc::FrameStatus::Complete as i64), Some(pixels()), pts);
-            assert_eq!(state.image().unwrap().1, pts);
+            assert_eq!(state.image().unwrap().1, Some(pts));
         }
+    }
+
+    #[test]
+    fn missing_native_timestamp_never_withholds_usable_pixels_or_retimes_them_on_read() {
+        let mut state = State::default();
+        state.observe(
+            Some(sc::FrameStatus::Complete as i64),
+            Some(pixels()),
+            cm::Time::invalid(),
+        );
+        let (_, pts, received_at) = state.image().unwrap();
+        assert!(pts.is_none());
+        assert_eq!(state.image().unwrap().2, received_at);
+        state.observe(
+            Some(sc::FrameStatus::Idle as i64),
+            None,
+            cm::Time::invalid(),
+        );
+        assert_eq!(state.image().unwrap().2, received_at);
     }
 
     #[test]
@@ -469,7 +502,7 @@ mod tests {
             None,
             cm::Time::new(10, 1),
         );
-        assert_eq!(state.image().unwrap().1, cm::Time::new(10, 1));
+        assert_eq!(state.image().unwrap().1, Some(cm::Time::new(10, 1)));
         for status in [
             None,
             Some(sc::FrameStatus::Blank as i64),

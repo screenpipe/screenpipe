@@ -788,6 +788,7 @@ fn needs_occlusion_mask(
 struct LayerImage {
     pixels: super::stream::NativeFrame,
     captured_at: chrono::DateTime<chrono::Utc>,
+    native_timestamp: bool,
 }
 
 async fn sample_window_layer(
@@ -812,16 +813,18 @@ async fn sample_window_layer(
         .image_buf()
         .ok_or_else(|| anyhow!("missing screenshot pixels"))?
         .retained();
+    let received_at = chrono::Utc::now();
     let captured_at = super::stream::wall_timestamp(
         sample.pts(),
         cidre::cm::Clock::host_time_clock().time(),
-        chrono::Utc::now(),
+        received_at,
     );
-    let captured_at = captured_at
-        .ok_or_else(|| anyhow!("screenshot scene layer has invalid presentation time"))?;
+    let native_timestamp = captured_at.is_some();
+    let captured_at = captured_at.unwrap_or(received_at);
     Ok(LayerImage {
         pixels: super::stream::NativeFrame(pixels),
         captured_at,
+        native_timestamp,
     })
 }
 
@@ -848,6 +851,7 @@ struct PreparedFrame {
     base: Option<super::stream::NativeFrame>,
     operations: Vec<Draw>,
     captured_at: chrono::DateTime<chrono::Utc>,
+    native_timestamp: bool,
 }
 
 #[derive(Clone)]
@@ -912,7 +916,7 @@ impl PreparedFrame {
         Ok(CapturedPixels {
             image: DynamicImage::ImageRgba8(canvas),
             captured_at: self.captured_at,
-            native_timestamp: self.base.is_some(),
+            native_timestamp: self.native_timestamp,
         })
     }
 }
@@ -1020,9 +1024,9 @@ async fn prepare(
         surfaces: before.clone(),
         allowed: allowed.clone(),
     });
-    let (base, mut captured_at) = if selected.is_empty() {
+    let (base, mut captured_at, mut native_timestamp) = if selected.is_empty() {
         super::stream::suspend(stream_slot);
-        (None, chrono::Utc::now())
+        (None, chrono::Utc::now(), false)
     } else {
         let menu_bar = before.iter().zip(&allowed).any(|(s, ok)| {
             *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
@@ -1035,7 +1039,7 @@ async fn prepare(
             .map(|w| (w.id(), w.owning_app().map_or(0, |a| a.process_id())))
             .collect();
         windows.sort_unstable();
-        let (pixels, captured_at) = super::stream::frame(
+        let (pixels, captured_at, native_timestamp) = super::stream::frame(
             stream_slot,
             &filter,
             super::stream::Key {
@@ -1048,7 +1052,7 @@ async fn prepare(
             },
         )
         .await?;
-        (Some(pixels), captured_at)
+        (Some(pixels), captured_at, native_timestamp)
     };
     let bounds = Rect {
         x: 0,
@@ -1083,6 +1087,7 @@ async fn prepare(
                         .await
                         .map_err(|error| error.context("Dock alpha coverage sampling"))?;
                 captured_at = captured_at.max(coverage.captured_at);
+                native_timestamp &= coverage.native_timestamp;
                 operations.push(Draw::Coverage(rect, coverage));
             } else {
                 operations.push(Draw::Black(rect));
@@ -1102,6 +1107,7 @@ async fn prepare(
                 .await
                 .map_err(|error| error.context("allowed foreground restoration sampling"))?;
             captured_at = captured_at.max(pixels.captured_at);
+            native_timestamp &= pixels.native_timestamp;
             operations.push(Draw::Restore(rect, pixels));
         }
     }
@@ -1158,6 +1164,7 @@ async fn prepare(
         base,
         operations,
         captured_at,
+        native_timestamp,
     })
 }
 
@@ -1284,6 +1291,7 @@ mod tests {
                 height: 8,
             })],
             captured_at: at,
+            native_timestamp: true,
         }
     }
 
@@ -1333,6 +1341,7 @@ mod tests {
             LayerImage {
                 pixels: solid_buffer(2, 2, [0, 128, 0, 128]),
                 captured_at: at,
+                native_timestamp: true,
             },
         ));
         frame.operations.push(Draw::Coverage(
@@ -1345,6 +1354,7 @@ mod tests {
             LayerImage {
                 pixels: solid_buffer(2, 2, [255, 0, 255, 255]),
                 captured_at: at,
+                native_timestamp: true,
             },
         ));
         let pixels = frame.render().unwrap().image.into_rgba8();

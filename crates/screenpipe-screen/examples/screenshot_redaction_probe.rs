@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 println!(
                     "{}",
-                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"capture_ms":time.as_secs_f64()*1000.0,"requested_at":requested_at,"captured_at":frame.captured_at,"native_timestamp":frame.native_timestamp,"cache_age_ms":cache_age_ms,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
+                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"capture_ms":time.as_secs_f64()*1000.0,"requested_at":requested_at,"captured_at":frame.captured_at,"native_timestamp":frame.native_timestamp,"native_sequence":monitor.last_capture_seq(),"cache_age_ms":cache_age_ms,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
                 );
                 saved += 1;
             }

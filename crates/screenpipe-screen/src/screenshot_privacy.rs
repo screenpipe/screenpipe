@@ -46,7 +46,7 @@ pub struct CapturedFrame {
     pub image: DynamicImage,
     pub captured_at: chrono::DateTime<chrono::Utc>,
     pub duration: Duration,
-    /// False for legacy/return-time fallback; never advertise it as native PTS.
+    /// False for callback/return-time estimates; never advertise them as native PTS.
     pub native_timestamp: bool,
 }
 
