@@ -3,6 +3,7 @@
 
 //! Native acceptance/soak probe. Run only on an isolated synthetic desktop.
 //! OUT MODE MONITOR FRAMES INTERVAL_MS [MAX_WIDTH] [FPS]; MODE=exclude/include/none/empty.
+//! INTERVAL_MS schedules request starts; slow runs still finish every request.
 use screenpipe_screen::{
     capture_screenshot_by_window::{ExclusionSources, WindowFilters},
     monitor::{get_default_monitor, get_monitor_by_id},
@@ -70,7 +71,10 @@ async fn main() -> anyhow::Result<()> {
     let mut saved = 0;
     let mut rejected = 0;
     let mut leaked = 0;
+    let mut next_capture = tokio::time::Instant::now();
     for index in 0..count {
+        tokio::time::sleep_until(next_capture).await;
+        next_capture += Duration::from_millis(interval);
         let requested_at = chrono::Utc::now();
         match capture_monitor_frame_filtered(
             &monitor,
@@ -123,9 +127,6 @@ async fn main() -> anyhow::Result<()> {
                     serde_json::json!({"index":index,"saved":false,"error":error.to_string()})
                 );
             }
-        }
-        if interval > 0 {
-            tokio::time::sleep(Duration::from_millis(interval)).await;
         }
     }
     #[cfg(target_os = "macos")]
