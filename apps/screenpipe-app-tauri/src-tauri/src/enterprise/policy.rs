@@ -4,9 +4,9 @@
 
 //! Enterprise policy state shared between the frontend and Rust (tray, etc.).
 //!
-//! The frontend fetches the policy from the screenpipe API and pushes it here
-//! via the `set_enterprise_policy` Tauri command. The tray menu reads it when
-//! rebuilding to hide items the admin has disabled.
+//! The native authenticated policy owner updates this state independently of
+//! webview lifetime. Tray and window code read it to enforce organization policy.
+//! The Tauri setter remains available for compatibility.
 
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
@@ -150,9 +150,8 @@ static POLICY_UPDATE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Per-stream sync policy. Text/event streams and parsed app data default on;
 /// Activities, feedback, and screenshot pixels require explicit opt-in. The
-/// frontend pulls the admin's choices from `GET /api/enterprise/policy`
-/// (`syncStreams` field) on
-/// the 5-min poll and pushes them in via `set_sync_streams`. The sync state
+/// native watcher pulls the admin's choices from `GET /api/enterprise/policy`
+/// (`syncStreams` field) on its 5-minute poll and applies them here. The sync state
 /// machine in `enterprise_sync::run_one_sync` reads this on every tick.
 /// How many frame images (screenshots) may leave this device — the org's
 /// dashboard choice, never hardcoded. A MODE rather than a bool because some
@@ -588,7 +587,7 @@ fn resolve_tray_hidden(
     immutable_deployment_hidden || server_policy_hidden.unwrap_or(persisted_hidden)
 }
 
-/// Called by the frontend after fetching the enterprise policy.
+/// Called by the native policy owner after authenticating enterprise policy.
 #[tauri::command]
 #[specta::specta]
 pub fn set_enterprise_policy(hidden_sections: Vec<String>, enforce_auto_start: bool) {
