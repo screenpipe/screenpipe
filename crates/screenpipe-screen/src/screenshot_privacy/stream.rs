@@ -246,6 +246,7 @@ struct NativeStream {
     output: arc::R<Receiver>,
     queue: arc::R<dispatch::Queue>,
     shared: Arc<Shared>,
+    clock_anchor: (cm::Time, chrono::DateTime<chrono::Utc>),
 }
 
 impl Drop for NativeStream {
@@ -323,6 +324,7 @@ pub(super) async fn frame(
             output,
             queue,
             shared,
+            clock_anchor: (cm::Clock::host_time_clock().time(), chrono::Utc::now()),
         });
         native
             .stream
@@ -357,6 +359,8 @@ pub(super) async fn frame(
     // This generation owns its positive filter and window scene. Reuse its
     // retained image regardless of age; native PTS is alignment metadata only.
     // The producer validates the scene before publishing pixels with its plan.
+    // A fixed clock anchor also keeps a repeated native PTS identical across
+    // cache reads; selecting the frame again cannot give it a new timestamp.
     loop {
         let changed = native.shared.changed.notified();
         tokio::pin!(changed);
@@ -381,7 +385,7 @@ pub(super) async fn frame(
         };
         if let Some((frame, pts)) = observed {
             if let Some(captured_at) =
-                wall_timestamp(pts, cm::Clock::host_time_clock().time(), chrono::Utc::now())
+                wall_timestamp(pts, native.clock_anchor.0, native.clock_anchor.1)
             {
                 return Ok((frame, captured_at));
             }
