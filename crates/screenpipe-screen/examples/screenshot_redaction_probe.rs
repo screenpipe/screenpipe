@@ -2,11 +2,12 @@
 // https://screenpipe.com
 
 //! Native acceptance/soak probe. Run only on an isolated synthetic desktop.
-//! OUT MODE MONITOR FRAMES INTERVAL_MS [MAX_WIDTH]; MODE=exclude/include/none/empty.
+//! OUT MODE MONITOR FRAMES INTERVAL_MS [MAX_WIDTH] [FPS]; MODE=exclude/include/none/empty.
+//! INTERVAL_MS schedules request starts; slow runs still finish every request.
 use screenpipe_screen::{
     capture_screenshot_by_window::{ExclusionSources, WindowFilters},
     monitor::{get_default_monitor, get_monitor_by_id},
-    screenshot_privacy::capture_monitor_image_filtered,
+    screenshot_privacy::capture_monitor_frame_filtered,
 };
 use std::{
     path::PathBuf,
@@ -15,6 +16,11 @@ use std::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init()
+        .ok();
     let args: Vec<String> = std::env::args().collect();
     let out = PathBuf::from(args.get(1).expect("output directory"));
     std::fs::create_dir_all(&out)?;
@@ -28,12 +34,17 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(not(target_os = "macos"))]
         anyhow::bail!("MAX_WIDTH is unsupported on this platform: {cap}");
     }
+    if let Some(fps) = args.get(7) {
+        screenpipe_screen::screenshot_rate::set(fps.parse()?)?;
+    }
     let monitor = if id == 0 {
         get_default_monitor().await
     } else {
         get_monitor_by_id(id).await
     }
     .ok_or_else(|| anyhow::anyhow!("missing monitor"))?;
+    #[cfg(target_os = "macos")]
+    let _source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor.id());
     let filters = match mode {
         "exclude" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         "none" => WindowFilters::new(&[], &[], &[]),
@@ -60,8 +71,12 @@ async fn main() -> anyhow::Result<()> {
     let mut saved = 0;
     let mut rejected = 0;
     let mut leaked = 0;
+    let mut next_capture = tokio::time::Instant::now();
     for index in 0..count {
-        match capture_monitor_image_filtered(
+        tokio::time::sleep_until(next_capture).await;
+        next_capture += Duration::from_millis(interval);
+        let requested_at = chrono::Utc::now();
+        match capture_monitor_frame_filtered(
             &monitor,
             &filters,
             ExclusionSources::default(),
@@ -70,9 +85,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .await
         {
-            Ok((image, time)) => {
+            Ok(frame) => {
+                let cache_age_ms = (requested_at - frame.captured_at)
+                    .num_microseconds()
+                    .map(|age| age as f64 / 1000.0);
+                let time = frame.duration;
+                let image = frame.image;
                 let write_start = Instant::now();
-                let path = writer.write(&image, chrono::Utc::now(), monitor.id())?;
+                let path = writer.write(&image, frame.captured_at, monitor.id())?;
                 let write_ms = write_start.elapsed().as_secs_f64() * 1000.0;
                 let read_start = Instant::now();
                 let stored = image::open(&path)?.to_rgb8();
@@ -96,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 println!(
                     "{}",
-                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"capture_ms":time.as_secs_f64()*1000.0,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
+                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"capture_ms":time.as_secs_f64()*1000.0,"requested_at":requested_at,"captured_at":frame.captured_at,"native_timestamp":frame.native_timestamp,"native_sequence":monitor.last_capture_seq(),"cache_age_ms":cache_age_ms,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
                 );
                 saved += 1;
             }
@@ -108,10 +128,9 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
-        if interval > 0 {
-            tokio::time::sleep(Duration::from_millis(interval)).await;
-        }
     }
+    #[cfg(target_os = "macos")]
+    screenpipe_screen::stream_invalidation::invalidate_streams();
     println!(
         "{}",
         serde_json::json!({"summary":true,"saved":saved,"rejected":rejected,"leaked":leaked,"elapsed_ms":start.elapsed().as_millis()})

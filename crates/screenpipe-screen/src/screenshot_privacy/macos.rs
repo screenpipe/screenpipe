@@ -6,46 +6,386 @@ use anyhow::{anyhow, ensure};
 use cidre::{api, cv, ns, sc};
 use once_cell::sync::Lazy;
 use std::future::Future;
-use std::sync::Arc;
-use tokio::sync::Semaphore;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::Instant;
+use tokio::sync::{watch, Notify, Semaphore};
 
 // A synchronous native call may never return. Keep its permit in the worker
 // after the outer timeout so it cannot accumulate replacement blocking workers.
-static CAPTURE_SLOT: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(1)));
+static CAPTURE_SLOT: Lazy<Arc<CaptureSlot>> = Lazy::new(|| Arc::new(CaptureSlot::new()));
 const DEADLINE: Duration = Duration::from_secs(5);
+const QUEUE_DEADLINE: Duration = Duration::from_secs(1);
 
-pub(crate) async fn capture_filtered(
+struct CaptureSlot {
+    semaphore: Arc<Semaphore>,
+    generation: AtomicU64,
+    cancelled: Notify,
+}
+
+impl CaptureSlot {
+    fn new() -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(1)),
+            generation: AtomicU64::new(0),
+            cancelled: Notify::new(),
+        }
+    }
+}
+
+struct CancelCaptureOnDrop {
+    slot: Arc<CaptureSlot>,
+    generation: u64,
+}
+
+impl Drop for CancelCaptureOnDrop {
+    fn drop(&mut self) {
+        // A completed worker may already have released its slot to a new
+        // request. Cancel only our own generation, never the next capture.
+        if self
+            .slot
+            .generation
+            .compare_exchange(
+                self.generation,
+                self.generation.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            self.slot.cancelled.notify_waiters();
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Policy {
+    filters: WindowFilters,
+    sources: ExclusionSources,
+    excluded_ids: Vec<u32>,
+}
+
+pub(super) struct Producer {
+    policy: Arc<Policy>,
+    frames: watch::Sender<Option<Arc<PreparedFrame>>>,
+}
+
+pub(super) async fn capture_filtered(
     monitor: &SafeMonitor,
     filters: &WindowFilters,
     sources: ExclusionSources,
+    excluded_ids: &[u32],
     _fresh: bool,
-) -> anyhow::Result<DynamicImage> {
+) -> anyhow::Result<CapturedPixels> {
     ensure!(
         api::macos_available("14.0"),
         "window-filtered screenshots require macOS 14 or newer"
     );
-    let id = monitor.id();
-    let filters = filters.clone();
+    let mut excluded_ids = excluded_ids.to_vec();
+    excluded_ids.sort_unstable();
+    excluded_ids.dedup();
+    let policy = Policy {
+        filters: filters.clone(),
+        sources,
+        excluded_ids,
+    };
+    let (slot, producer) = loop {
+        let slot = super::stream::slot(monitor.id());
+        let producer = {
+            let mut entry = slot.producer.lock().unwrap_or_else(|e| e.into_inner());
+            match entry.as_ref() {
+                Some(producer) if *producer.policy == policy => Some(producer.clone()),
+                Some(_) => None,
+                None => {
+                    let (frames, _) = watch::channel(None);
+                    let producer = Arc::new(Producer {
+                        policy: Arc::new(policy.clone()),
+                        frames,
+                    });
+                    *entry = Some(producer.clone());
+                    tokio::spawn(produce(monitor.id(), slot.clone(), producer.clone()));
+                    Some(producer)
+                }
+            }
+        };
+        if let Some(producer) = producer {
+            break (slot, producer);
+        }
+        // A user configuration change starts a new policy generation. Scene
+        // changes within that generation never revoke an already owned frame.
+        super::stream::invalidate(monitor.id());
+    };
+    let frame = selected_frame(&slot, producer.frames.subscribe()).await?;
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
-        capture(id, &filters, sources).await
+        ensure!(slot.is_active(), "screenshot capture invalidated");
+        let rendered = frame.render()?;
+        ensure!(
+            slot.is_active(),
+            "screenshot capture invalidated during rendering"
+        );
+        Ok(rendered)
     })
     .await
 }
 
+async fn selected_frame(
+    slot: &Arc<super::stream::Slot>,
+    mut frames: watch::Receiver<Option<Arc<PreparedFrame>>>,
+) -> anyhow::Result<Arc<PreparedFrame>> {
+    loop {
+        let cancelled = slot.cancelled.notified();
+        tokio::pin!(cancelled);
+        cancelled.as_mut().enable();
+        ensure!(slot.is_active(), "screenshot capture invalidated");
+        if let Some(frame) = frames.borrow_and_update().clone() {
+            return Ok(frame);
+        }
+        // An empty cache waits for its continuous producer. Event time and a
+        // new privacy observation are never capture permissions or fallbacks.
+        tokio::select! {
+            result = frames.changed() => result.map_err(|_| anyhow!("screenshot producer stopped"))?,
+            _ = &mut cancelled => {},
+        }
+    }
+}
+
+async fn produce(id: u32, slot: Arc<super::stream::Slot>, producer: Arc<Producer>) {
+    // Native scene collection may wait for the stream. Give each monitor its
+    // own single-flight containment; only selected frames use the shared pixel
+    // rendering worker. A slow source cannot occupy another monitor's worker.
+    let worker = Arc::new(CaptureSlot::new());
+    let mut failure = None;
+    while slot.is_active() {
+        let started = Instant::now();
+        let cancelled = slot.cancelled.notified();
+        tokio::pin!(cancelled);
+        cancelled.as_mut().enable();
+        if !slot.is_active() {
+            break;
+        }
+        let result = tokio::select! {
+            biased;
+            _ = &mut cancelled => break,
+            result = capture_with_scene_retries(id, worker.clone(), || {
+                let slot = slot.clone();
+                let policy = producer.policy.clone();
+                move || async move { prepare(id, policy, &slot).await }
+            }) => result,
+        };
+        match result {
+            Ok(frame) => {
+                if failure.take().is_some() {
+                    tracing::info!(
+                        monitor_id = id,
+                        screenshot_outcome = "cached",
+                        "continuous screenshot source recovered"
+                    );
+                }
+                producer.frames.send_replace(Some(Arc::new(frame)));
+            }
+            Err(error) => {
+                let cause = format!("{error:#}");
+                if failure.as_ref() != Some(&cause) {
+                    tracing::warn!(monitor_id = id, error = %cause, screenshot_outcome = "waiting_for_stream",
+                        cached_frame_available = producer.frames.borrow().is_some(),
+                        "continuous screenshot source could not prepare the next frame");
+                    failure = Some(cause);
+                }
+                // A previously prepared frame keeps its own policy and scene.
+                // Native failure reopens only the source, never a snapshot API.
+                super::stream::suspend(&slot);
+            }
+        }
+        let cadence = Duration::from_secs_f64(1.0 / super::stream::frame_rate() as f64);
+        tokio::select! {
+            _ = &mut cancelled => break,
+            _ = tokio::time::sleep(cadence.saturating_sub(started.elapsed())) => {},
+        }
+    }
+    producer.frames.send_replace(None);
+}
+
+pub(super) async fn cached_preview(id: u32) -> anyhow::Result<Option<DynamicImage>> {
+    let Some(slot) = super::stream::existing_slot(id) else {
+        return Ok(None);
+    };
+    let frame = {
+        let producer = slot.producer.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(producer) = producer.as_ref() else {
+            return Ok(None);
+        };
+        let frame = producer.frames.borrow().clone();
+        frame.ok_or_else(|| anyhow!("continuous screenshot source has no prepared preview yet"))?
+    };
+    capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
+        ensure!(slot.is_active(), "screenshot preview invalidated");
+        Ok(Some(frame.render()?.image))
+    })
+    .await
+}
+
+async fn capture_with_scene_retries<F, J, Fut, T>(
+    monitor_id: u32,
+    slot: Arc<CaptureSlot>,
+    mut job: F,
+) -> anyhow::Result<T>
+where
+    F: FnMut() -> J,
+    J: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<T>>,
+    T: Clone + Send + 'static,
+{
+    // Each rejected attempt releases its worker before reselection, so a
+    // changing display cannot reserve the slot across retries.
+    retry_scene_changes(monitor_id, || {
+        capture_on_worker(slot.clone(), DEADLINE, job())
+    })
+    .await
+}
+
+/// A scene transition invalidates the old selection, not permission to capture
+/// the next safe scene. Re-resolve it within the request's existing queue/native
+/// budget. Each completed attempt releases its worker before the next selection.
+async fn retry_scene_changes<F, Fut, T>(monitor_id: u32, mut capture_job: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    let started = Instant::now();
+    let mut retries = 0_u64;
+    let mut deadline: Option<RetryDeadline> = None;
+    loop {
+        let result = if let Some(deadline) = deadline {
+            let expired = || {
+                anyhow!(
+                "window-filtered capture timed out while reselecting (elapsed_ms={}, native_budget_ms={}, queue_budget_ms={}); next stream frame unavailable; the producer will retry scene preparation",
+                started.elapsed().as_millis(), deadline.budget.as_millis(), QUEUE_DEADLINE.as_millis(),
+            )
+            };
+            if tokio::time::Instant::now() >= deadline.at {
+                return Err(expired());
+            }
+            tokio::time::timeout_at(deadline.at, capture_job())
+                .await
+                .map_err(|_| expired())?
+        } else {
+            capture_job().await
+        };
+        match result {
+            Ok(image) => {
+                if retries > 0 {
+                    tracing::info!(
+                        monitor_id,
+                        retries,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        screenshot_outcome = "captured",
+                        "window-filtered capture recovered after scene change"
+                    );
+                }
+                return Ok(image);
+            }
+            Err(error) => {
+                if error.downcast_ref::<SceneChanged>().is_none() {
+                    return Err(error);
+                }
+                if deadline.is_none() {
+                    deadline = error.downcast_ref::<RetryDeadline>().copied();
+                }
+                retries += 1;
+                if retries == 1 {
+                    tracing::warn!(monitor_id, error = %error, screenshot_outcome = "retrying",
+                        "window-filtered capture reselecting after scene change");
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SceneChanged(&'static str);
+
+impl std::fmt::Display for SceneChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for SceneChanged {}
+
+#[derive(Clone, Copy, Debug)]
+struct RetryDeadline {
+    at: tokio::time::Instant,
+    budget: Duration,
+    reason: &'static str,
+}
+
+impl std::fmt::Display for RetryDeadline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+impl std::error::Error for RetryDeadline {}
+
+// Preserve retry classification across the worker boundary while destroying
+// native error objects inside their originating autorelease pool.
+#[derive(Clone)]
+enum WorkerFailure {
+    Scene {
+        marker: &'static str,
+        detail: String,
+    },
+    Native(String),
+}
+
+impl WorkerFailure {
+    fn from_error(error: anyhow::Error) -> Self {
+        if let Some(scene) = error.downcast_ref::<SceneChanged>() {
+            Self::Scene {
+                marker: scene.0,
+                detail: format!("{error:#}"),
+            }
+        } else {
+            Self::Native(format!("{error:#}"))
+        }
+    }
+
+    fn into_error(self) -> anyhow::Error {
+        match self {
+            Self::Scene { marker, detail } => {
+                anyhow::Error::new(SceneChanged(marker)).context(detail)
+            }
+            Self::Native(detail) => anyhow::Error::msg(detail),
+        }
+    }
+}
+
 // Construct the future on its native worker: ScreenCaptureKit objects must stay
 // on that thread and inside its autorelease pool.
-async fn capture_on_worker<F, Fut>(
-    slot: Arc<Semaphore>,
+async fn capture_on_worker<F, Fut, T>(
+    slot: Arc<CaptureSlot>,
     deadline: Duration,
     capture_job: F,
-) -> anyhow::Result<DynamicImage>
+) -> anyhow::Result<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<DynamicImage>>,
+    Fut: Future<Output = anyhow::Result<T>>,
+    T: Clone + Send + 'static,
 {
-    let permit = tokio::time::timeout(Duration::from_secs(1), slot.acquire_owned())
+    let permit = tokio::time::timeout(QUEUE_DEADLINE, slot.semaphore.clone().acquire_owned())
         .await
         .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
+    let generation = slot
+        .generation
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    let _cancel_on_drop = CancelCaptureOnDrop {
+        slot: slot.clone(),
+        generation,
+    };
     let runtime = tokio::runtime::Handle::current();
     let work = tokio::task::spawn_blocking(move || {
         let _permit = permit;
@@ -55,17 +395,47 @@ where
                     // Timing out the JoinHandle alone detaches a still-running
                     // worker. Bound the native completion future here so a lost
                     // callback drops that future and releases the capture slot.
-                    tokio::time::timeout(deadline, capture_job())
-                        .await
-                        .map_err(|_| anyhow!("window-filtered capture timed out"))?
+                    let capture = tokio::time::timeout(deadline, capture_job());
+                    tokio::pin!(capture);
+                    loop {
+                        // Register before checking the generation so a pause
+                        // between the check and await cannot lose its wakeup.
+                        let cancelled = slot.cancelled.notified();
+                        tokio::pin!(cancelled);
+                        cancelled.as_mut().enable();
+                        if slot.generation.load(Ordering::Acquire) != generation {
+                            return Err(anyhow!("window-filtered capture cancelled"));
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = &mut cancelled => {},
+                            result = &mut capture => return result.map_err(|_| anyhow!("window-filtered capture timed out"))?,
+                        }
+                    }
                 })
-                .map_err(|e| e.to_string())
+                .map_err(WorkerFailure::from_error)
         })
-        .map_err(anyhow::Error::msg)
     });
-    tokio::time::timeout(deadline, work)
+    // Keep the original native deadline and synchronous-call containment.
+    // Later attempts share this first admission's deadline, including time
+    // spent fairly yielding the worker to another display.
+    let at = tokio::time::Instant::now() + deadline;
+    let result = tokio::time::timeout_at(at, work)
         .await
-        .map_err(|_| anyhow!("window-filtered capture timed out"))??
+        .map_err(|_| anyhow!("window-filtered capture timed out"))??;
+    result.map_err(|failure| {
+        let error = failure.into_error();
+        if let Some(scene) = error.downcast_ref::<SceneChanged>() {
+            let reason = scene.0;
+            error.context(RetryDeadline {
+                at,
+                budget: deadline,
+                reason,
+            })
+        } else {
+            error
+        }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +450,72 @@ struct Surface {
     height: f64,
     alpha: f64,
     layer: i64,
+}
+
+#[derive(Default)]
+struct SharingControlCache {
+    surfaces: Vec<Surface>,
+    pids: Vec<i32>,
+    ids: Arc<std::collections::HashSet<(u32, i32)>>,
+    complete: bool,
+}
+static SHARING_CONTROLS: Lazy<Mutex<SharingControlCache>> =
+    Lazy::new(|| Mutex::new(SharingControlCache::default()));
+struct SharingControls {
+    ids: Arc<std::collections::HashSet<(u32, i32)>>,
+    complete: bool,
+    cause: Option<String>,
+}
+
+fn sharing_controls(surfaces: &[Surface], pids: &[i32]) -> SharingControls {
+    let mut cache = SHARING_CONTROLS.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.complete && cache.surfaces == surfaces && cache.pids == pids {
+        return SharingControls {
+            ids: cache.ids.clone(),
+            complete: true,
+            cause: None,
+        };
+    }
+    let present: std::collections::HashSet<_> = surfaces
+        .iter()
+        .map(|surface| (surface.id, surface.pid))
+        .collect();
+    let mut ids: std::collections::HashSet<_> = cache
+        .ids
+        .iter()
+        .copied()
+        .filter(|id| present.contains(id))
+        .collect();
+    let mut cause = None;
+    for &pid in pids {
+        match screenpipe_a11y::platform::macos::window_sharing_control_ids(pid) {
+            Ok(controls) => {
+                ids.retain(|(_, owner)| *owner != pid);
+                ids.extend(
+                    controls
+                        .into_iter()
+                        .map(|id| (id, pid))
+                        .filter(|id| present.contains(id)),
+                );
+            }
+            Err(error) => {
+                cause.get_or_insert_with(|| format!("pid={pid}: {error}"));
+            }
+        }
+    }
+    let complete = cause.is_none();
+    let ids = Arc::new(ids);
+    *cache = SharingControlCache {
+        surfaces: surfaces.to_vec(),
+        pids: pids.to_vec(),
+        ids: ids.clone(),
+        complete,
+    };
+    SharingControls {
+        ids,
+        complete,
+        cause,
+    }
 }
 
 fn same_composition(before: &[Surface], after: &[Surface]) -> bool {
@@ -109,6 +545,7 @@ fn same_dock_coverage(before: Option<&[Surface]>, after: Option<&[Surface]>) -> 
 /// change matters only when it changes the policy used to select the pixels.
 /// Compare with the verdict recorded before capture, not a second evaluation
 /// of the old title against potentially changed native privacy state.
+#[cfg(test)]
 fn validate_scene(
     before: &[Surface],
     allowed: &[bool],
@@ -116,20 +553,37 @@ fn validate_scene(
     filters: &WindowFilters,
     detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
 ) -> anyhow::Result<()> {
-    ensure!(
-        before.len() == allowed.len() && same_composition(before, after),
-        "desktop scene changed during privacy capture (identity, geometry or stacking)"
-    );
+    validate_scene_excluding(before, allowed, after, filters, detector, &[])
+}
+
+fn validate_scene_excluding(
+    before: &[Surface],
+    allowed: &[bool],
+    after: &[Surface],
+    filters: &WindowFilters,
+    detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
+    excluded_ids: &[u32],
+) -> anyhow::Result<()> {
+    if before.len() != allowed.len() || !same_composition(before, after) {
+        return Err(SceneChanged(
+            "desktop scene changed during privacy capture (identity, geometry or stacking)",
+        )
+        .into());
+    }
     for ((before, allowed), after) in before.iter().zip(allowed).zip(after) {
         if before.title != after.title {
-            ensure!(
-                !before.title.is_empty() && !after.title.is_empty(),
-                "window title availability changed during privacy capture"
-            );
-            ensure!(
-                *allowed == window_allowed(filters, detector, &after.app, &after.title, after.pid),
-                "window privacy policy changed during capture"
-            );
+            if before.title.is_empty() || after.title.is_empty() {
+                return Err(SceneChanged(
+                    "window title availability changed during privacy capture",
+                )
+                .into());
+            }
+            if *allowed
+                != (!excluded_ids.contains(&after.id)
+                    && window_allowed(filters, detector, &after.app, &after.title, after.pid))
+            {
+                return Err(SceneChanged("window privacy policy changed during capture").into());
+            }
         }
     }
     Ok(())
@@ -313,40 +767,169 @@ fn output_rect(
     }
 }
 
-async fn take(
+fn needs_occlusion_mask(
+    surfaces: &[Surface],
+    allowed: &[bool],
+    index: usize,
+    display: cidre::cg::Rect,
+    width: u32,
+    height: u32,
+) -> bool {
+    let rect = output_rect(&surfaces[index], display, width, height);
+    surfaces[..index]
+        .iter()
+        .zip(&allowed[..index])
+        .any(|(below, allowed)| {
+            *allowed && output_rect(below, display, width, height).intersects(rect)
+        })
+}
+
+#[derive(Clone)]
+struct LayerImage {
+    pixels: super::stream::NativeFrame,
+    captured_at: chrono::DateTime<chrono::Utc>,
+    native_timestamp: bool,
+}
+
+async fn sample_window_layer(
     filter: &sc::ContentFilter,
     width: usize,
     height: usize,
-    window: bool,
-) -> anyhow::Result<image::RgbaImage> {
+) -> anyhow::Result<LayerImage> {
     let mut cfg = sc::StreamCfg::new();
     cfg.set_width(width);
     cfg.set_height(height);
     cfg.set_pixel_format(cv::PixelFormat::_32_BGRA);
     cfg.set_shows_cursor(false);
     cfg.set_scales_to_fit(true);
-    if window {
-        cfg.set_ignore_shadows_single_window(true);
-    }
+    cfg.set_ignore_shadows_single_window(true);
     if api::macos_available("15.0") {
         cfg.set_show_mouse_clicks(false);
     }
     let sample = sc::ScreenshotManager::capture_sample_buf(filter, &cfg)
         .await
-        .map_err(|e| anyhow!("window-filtered screenshot: {e:?}"))?;
-    let mut pixels = sample
+        .map_err(|e| anyhow!("screenshot scene layer ({width}x{height}): {e:?}"))?;
+    let pixels = sample
         .image_buf()
         .ok_or_else(|| anyhow!("missing screenshot pixels"))?
         .retained();
-    Ok(rgba(&mut pixels)?.into_rgba8())
+    let received_at = chrono::Utc::now();
+    let captured_at = super::stream::wall_timestamp(
+        sample.pts(),
+        cidre::cm::Clock::host_time_clock().time(),
+        received_at,
+    );
+    let native_timestamp = captured_at.is_some();
+    let captured_at = captured_at.unwrap_or(received_at);
+    Ok(LayerImage {
+        pixels: super::stream::NativeFrame(pixels),
+        captured_at,
+        native_timestamp,
+    })
 }
 
-async fn capture(
+// The retained native pixels and every blackout/restoration operation travel
+// together. Neither rendering nor event selection consults the live desktop.
+#[derive(Clone)]
+pub(super) struct SceneMetadata {
+    surfaces: Vec<Surface>,
+    allowed: Vec<bool>,
+}
+
+impl PartialEq for SceneMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed == other.allowed && same_composition(&self.surfaces, &other.surfaces)
+    }
+}
+
+#[derive(Clone)]
+struct PreparedFrame {
+    policy: Arc<Policy>,
+    scene: Arc<SceneMetadata>,
+    width: usize,
+    height: usize,
+    base: Option<super::stream::NativeFrame>,
+    operations: Vec<Draw>,
+    captured_at: chrono::DateTime<chrono::Utc>,
+    native_timestamp: bool,
+}
+
+#[derive(Clone)]
+enum Draw {
+    Black(super::scene::Rect),
+    Coverage(super::scene::Rect, LayerImage),
+    Restore(super::scene::Rect, LayerImage),
+}
+
+impl PreparedFrame {
+    fn render(&self) -> anyhow::Result<CapturedPixels> {
+        use super::scene::{self, Rect};
+        debug_assert_eq!(self.scene.surfaces.len(), self.scene.allowed.len());
+        // This frame retains the immutable policy and scene used by its plan.
+        let _policy = &self.policy;
+        let mut canvas = image::RgbaImage::from_pixel(
+            self.width as u32,
+            self.height as u32,
+            image::Rgba([0, 0, 0, 255]),
+        );
+        if let Some(base) = &self.base {
+            let mut buffer = base.clone();
+            let pixels = rgba(&mut buffer.0)?.into_rgba8();
+            scene::overlay_premultiplied(&mut canvas, &pixels, 0, 0, None);
+        }
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: self.width as u32,
+            height: self.height as u32,
+        };
+        let mut redacted = Vec::new();
+        for operation in &self.operations {
+            match operation {
+                Draw::Black(rect) => {
+                    scene::paint_black(&mut canvas, *rect);
+                    if let Some(rect) = rect.intersection(bounds) {
+                        redacted.push(scene::Redaction::Rect(rect));
+                    }
+                }
+                Draw::Coverage(rect, layer) => {
+                    let mut buffer = layer.pixels.clone();
+                    let coverage = rgba(&mut buffer.0)?.into_rgba8();
+                    if let Some(bounds) =
+                        scene::paint_black_coverage(&mut canvas, &coverage, rect.x, rect.y)
+                    {
+                        redacted.push(scene::Redaction::Coverage {
+                            bounds,
+                            mask: coverage,
+                            x: rect.x,
+                            y: rect.y,
+                        });
+                    }
+                }
+                Draw::Restore(rect, layer) => {
+                    let mut buffer = layer.pixels.clone();
+                    let pixels = rgba(&mut buffer.0)?.into_rgba8();
+                    scene::overlay_redacted(&mut canvas, &pixels, rect.x, rect.y, &redacted);
+                }
+            }
+        }
+        Ok(CapturedPixels {
+            image: DynamicImage::ImageRgba8(canvas),
+            captured_at: self.captured_at,
+            native_timestamp: self.native_timestamp,
+        })
+    }
+}
+
+async fn prepare(
     id: u32,
-    filters: &WindowFilters,
-    sources: ExclusionSources,
-) -> anyhow::Result<DynamicImage> {
-    use super::scene::{self, Rect};
+    policy: Arc<Policy>,
+    stream_slot: &Arc<super::stream::Slot>,
+) -> anyhow::Result<PreparedFrame> {
+    use super::scene::Rect;
+    let filters = &policy.filters;
+    let sources = policy.sources;
+    ensure!(stream_slot.is_active(), "screenshot capture invalidated");
     let detector = sources
         .ignore_incognito_windows
         .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
@@ -382,10 +965,32 @@ async fn capture(
         .iter()
         .map(|s| {
             native(s).is_some()
+                && !policy.excluded_ids.contains(&s.id)
                 && !(Some(s.pid) == dock_pid && s.layer == 20 && dock_before.is_none())
                 && window_allowed(filters, detector.as_deref(), &s.app, &s.title, s.pid)
         })
         .collect();
+    let mut pids: Vec<_> = before
+        .iter()
+        .zip(&allowed)
+        // AppKit's observed sharing control belongs to a normal-level app
+        // window. Shell/menu surfaces have no application AXWindows endpoint;
+        // retain those surfaces normally rather than querying WindowServer.
+        .filter_map(|(surface, allowed)| (*allowed && surface.layer == 0).then_some(surface.pid))
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    let controls = sharing_controls(&before, &pids);
+    ensure!(
+        controls.complete,
+        "sharing-control scene metadata unavailable: {}",
+        controls.cause.as_deref().unwrap_or("unknown native cause")
+    );
+    let (before, allowed): (Vec<_>, Vec<_>) = before
+        .into_iter()
+        .zip(allowed)
+        .filter(|(surface, _)| !controls.ids.contains(&(surface.id, surface.pid)))
+        .unzip();
     let selected: Vec<_> = before
         .iter()
         .zip(&allowed)
@@ -415,19 +1020,39 @@ async fn capture(
     let cap = crate::monitor::sck_capture_max_width() as usize;
     let width = if cap == 0 { nw } else { nw.min(cap) };
     let height = (nh * width / nw).max(1);
-    let mut canvas = if selected.is_empty() {
-        image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]))
+    let scene = Arc::new(SceneMetadata {
+        surfaces: before.clone(),
+        allowed: allowed.clone(),
+    });
+    let (base, mut captured_at, mut native_timestamp) = if selected.is_empty() {
+        super::stream::suspend(stream_slot);
+        (None, chrono::Utc::now(), false)
     } else {
+        let menu_bar = before.iter().zip(&allowed).any(|(s, ok)| {
+            *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
+        });
         if api::macos_available("14.2") {
-            filter.set_include_menu_bar(before.iter().zip(&allowed).any(|(s, ok)| {
-                *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
-            }));
+            filter.set_include_menu_bar(menu_bar);
         }
-        let pixels = take(&filter, width, height, false).await?;
-        let mut canvas =
-            image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]));
-        scene::overlay_premultiplied(&mut canvas, &pixels, 0, 0, None);
-        canvas
+        let mut windows: Vec<_> = selected
+            .iter()
+            .map(|w| (w.id(), w.owning_app().map_or(0, |a| a.process_id())))
+            .collect();
+        windows.sort_unstable();
+        let (pixels, captured_at, native_timestamp) = super::stream::frame(
+            stream_slot,
+            &filter,
+            super::stream::Key {
+                width,
+                height,
+                menu_bar,
+                windows,
+                fps: super::stream::frame_rate(),
+                scene: scene.clone(),
+            },
+        )
+        .await?;
+        (Some(pixels), captured_at, native_timestamp)
     };
     let bounds = Rect {
         x: 0,
@@ -435,10 +1060,18 @@ async fn capture(
         width: width as u32,
         height: height as u32,
     };
+    let mut operations = Vec::new();
     let mut redacted = Vec::<Rect>::new();
-    for (surface, ok) in before.iter().zip(&allowed) {
+    for (index, (surface, ok)) in before.iter().zip(&allowed).enumerate() {
         let rect = output_rect(surface, frame, width as u32, height as u32);
         if !*ok {
+            // Native positive selection already omits excluded pixels, over
+            // our black canvas. Mask only selected content underneath this
+            // surface. An excluded bottommost wallpaper needs no mask; erasing
+            // it again otherwise forces recapture of every foreground window.
+            if !needs_occlusion_mask(&before, &allowed, index, frame, width as u32, height as u32) {
+                continue;
+            }
             // The system Dock owns a display-sized transparent overlay. Its
             // rectangle is not its visible coverage. Use only native alpha as
             // a mask; none of this excluded surface's RGB enters the output.
@@ -450,47 +1083,63 @@ async fn capture(
             if let Some(dock) = dock {
                 let filter = sc::ContentFilter::with_desktop_independent_window(dock);
                 let coverage =
-                    take(&filter, rect.width as usize, rect.height as usize, true).await?;
-                scene::paint_black_coverage(&mut canvas, &coverage, rect.x, rect.y);
+                    sample_window_layer(&filter, rect.width as usize, rect.height as usize)
+                        .await
+                        .map_err(|error| error.context("Dock alpha coverage sampling"))?;
+                captured_at = captured_at.max(coverage.captured_at);
+                native_timestamp &= coverage.native_timestamp;
+                operations.push(Draw::Coverage(rect, coverage));
             } else {
-                scene::paint_black(&mut canvas, rect);
+                operations.push(Draw::Black(rect));
             }
+            // Conservatively retain restoration layers overlapping a Dock
+            // mask's bounds. Its precise alpha is read only for a saved frame.
             if let Some(clipped) = rect.intersection(bounds) {
-                scene::add_region(&mut redacted, clipped);
+                redacted.push(clipped);
             }
-        } else if redacted.iter().any(|r| rect.intersects(*r)) {
+        } else if redacted.iter().any(|redaction| redaction.intersects(rect)) {
             // Restore only the affected part of an allowed foreground surface.
             // Capturing its native pixels preserves translucent corners without
             // revealing excluded pixels or repainting unrelated foreground UI.
             let window = native(surface).ok_or_else(|| anyhow!("allowed window disappeared"))?;
             let filter = sc::ContentFilter::with_desktop_independent_window(window);
-            let pixels = take(&filter, rect.width as usize, rect.height as usize, true).await?;
-            for region in &redacted {
-                scene::overlay_premultiplied(&mut canvas, &pixels, rect.x, rect.y, Some(*region));
-            }
+            let pixels = sample_window_layer(&filter, rect.width as usize, rect.height as usize)
+                .await
+                .map_err(|error| error.context("allowed foreground restoration sampling"))?;
+            captured_at = captured_at.max(pixels.captured_at);
+            native_timestamp &= pixels.native_timestamp;
+            operations.push(Draw::Restore(rect, pixels));
         }
     }
     if let Some(masks) = &dock_before {
         for mask in masks {
-            scene::paint_black(
-                &mut canvas,
-                output_rect(mask, frame, width as u32, height as u32),
-            );
+            operations.push(Draw::Black(output_rect(
+                mask,
+                frame,
+                width as u32,
+                height as u32,
+            )));
         }
     }
-    ensure!(
-        same_dock_coverage(
-            dock_before.as_deref(),
-            dock_masks(dock_pid, frame, filters, detector.as_deref()).as_deref(),
-        ),
-        "Dock thumbnail policy changed during capture"
-    );
-    validate_scene(
+    if !same_dock_coverage(
+        dock_before.as_deref(),
+        dock_masks(dock_pid, frame, filters, detector.as_deref()).as_deref(),
+    ) {
+        return Err(SceneChanged("Dock thumbnail policy changed during capture").into());
+    }
+    let after_scene = snapshot(frame)?;
+    let after_controls = sharing_controls(&after_scene, &pids);
+    let after_scene: Vec<_> = after_scene
+        .into_iter()
+        .filter(|surface| !after_controls.ids.contains(&(surface.id, surface.pid)))
+        .collect();
+    validate_scene_excluding(
         &before,
         &allowed,
-        &snapshot(frame)?,
+        &after_scene,
         filters,
         detector.as_deref(),
+        &policy.excluded_ids,
     )?;
     let after = sc::ShareableContent::current()
         .await
@@ -498,18 +1147,28 @@ async fn capture(
     let after_windows = after.windows();
     for (s, ok) in before.iter().zip(&allowed) {
         if *ok {
-            ensure!(
-                after_windows.iter().any(|w| w.id() == s.id
+            if !after_windows.iter().any(|w| {
+                w.id() == s.id
                     && w.is_on_screen()
-                    && w.owning_app().is_some_and(|a| a.process_id() == s.pid)),
-                "allowed window changed during capture"
-            );
+                    && w.owning_app().is_some_and(|a| a.process_id() == s.pid)
+            }) {
+                return Err(SceneChanged("allowed window changed during capture").into());
+            }
         }
     }
-    Ok(DynamicImage::ImageRgba8(canvas))
+    Ok(PreparedFrame {
+        policy,
+        scene,
+        width,
+        height,
+        base,
+        operations,
+        captured_at,
+        native_timestamp,
+    })
 }
 
-fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
+pub(super) fn rgba(buf: &mut cv::ImageBuf) -> anyhow::Result<DynamicImage> {
     let (w, h) = (buf.width(), buf.height());
     ensure!(
         w > 0 && h > 0 && w <= 16384 && h <= 16384,
@@ -573,6 +1232,210 @@ mod tests {
             alpha: 1.0,
             layer: 0,
         }
+    }
+
+    fn assert_pending<F: Future>(future: std::pin::Pin<&mut F>) {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(future.poll(&mut context).is_pending());
+    }
+
+    fn solid_buffer(
+        width: usize,
+        height: usize,
+        bgra: [u8; 4],
+    ) -> super::super::stream::NativeFrame {
+        let mut pixels = cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, None).unwrap();
+        let flags = cv::pixel_buffer::LockFlags::DEFAULT;
+        unsafe { pixels.lock_base_addr(flags) }.result().unwrap();
+        let stride = pixels.bytes_per_row();
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(pixels.base_address() as *mut u8, stride * height)
+        };
+        for row in bytes.chunks_exact_mut(stride) {
+            for pixel in row[..width * 4].chunks_exact_mut(4) {
+                pixel.copy_from_slice(&bgra);
+            }
+        }
+        unsafe { pixels.unlock_lock_base_addr(flags) }
+            .result()
+            .unwrap();
+        super::super::stream::NativeFrame(pixels)
+    }
+
+    fn prepared_for_test(at: chrono::DateTime<chrono::Utc>) -> PreparedFrame {
+        PreparedFrame {
+            policy: Arc::new(Policy {
+                filters: WindowFilters::new(&["Private".into()], &[], &[]),
+                sources: ExclusionSources::default(),
+                excluded_ids: vec![],
+            }),
+            scene: Arc::new(SceneMetadata {
+                surfaces: vec![
+                    surface("TextEdit", "Public"),
+                    Surface {
+                        id: 43,
+                        width: 4.0,
+                        height: 8.0,
+                        ..surface("TextEdit", "Private")
+                    },
+                ],
+                allowed: vec![true, false],
+            }),
+            width: 8,
+            height: 8,
+            base: Some(solid_buffer(8, 8, [255, 255, 0, 255])),
+            operations: vec![Draw::Black(super::super::scene::Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 8,
+            })],
+            captured_at: at,
+            native_timestamp: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_frame_keeps_its_scene_and_timestamp_after_the_live_scene_changes() {
+        let slot = super::super::stream::slot(4_000_001_001);
+        let at = chrono::Utc::now() - chrono::Duration::seconds(30);
+        let prepared = Arc::new(prepared_for_test(at));
+        let (frames, receiver) = watch::channel(Some(prepared.clone()));
+        let mut live = prepared.scene.surfaces.clone();
+        live[0].x += 100.0;
+        live[0].title = "Private".into();
+        assert!(validate_scene(
+            &prepared.scene.surfaces,
+            &prepared.scene.allowed,
+            &live,
+            &prepared.policy.filters,
+            None
+        )
+        .is_err());
+        let selected = selected_frame(&slot, receiver).await.unwrap();
+        assert!(Arc::ptr_eq(&selected, &prepared));
+        assert_eq!(selected.captured_at, at);
+        assert_eq!(selected.scene.surfaces[0].x, 0.0);
+        assert_eq!(selected.scene.surfaces[0].title, "Public");
+        let rendered = selected.render().unwrap();
+        assert_eq!(rendered.captured_at, at);
+        let pixels = rendered.image.into_rgba8();
+        assert_eq!(pixels.get_pixel(1, 1).0, [0, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(6, 1).0, [0, 255, 255, 255]);
+        drop(frames);
+        super::super::stream::invalidate(4_000_001_001);
+    }
+
+    #[test]
+    fn retained_foreground_and_dock_alpha_render_over_the_owned_blackout_plan() {
+        use super::super::scene::Rect;
+        let at = chrono::Utc::now();
+        let mut frame = prepared_for_test(at);
+        frame.operations.push(Draw::Restore(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            LayerImage {
+                pixels: solid_buffer(2, 2, [0, 128, 0, 128]),
+                captured_at: at,
+                native_timestamp: true,
+            },
+        ));
+        frame.operations.push(Draw::Coverage(
+            Rect {
+                x: 6,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            LayerImage {
+                pixels: solid_buffer(2, 2, [255, 0, 255, 255]),
+                captured_at: at,
+                native_timestamp: true,
+            },
+        ));
+        let pixels = frame.render().unwrap().image.into_rgba8();
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 128, 0, 255]);
+        assert_eq!(pixels.get_pixel(3, 0).0, [0, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(6, 0).0, [0, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(6, 6).0, [0, 255, 255, 255]);
+    }
+
+    #[tokio::test]
+    async fn empty_cache_waits_for_the_stream_and_event_cancellation_keeps_the_source() {
+        let slot = super::super::stream::slot(4_000_001_002);
+        let (frames, receiver) = watch::channel(None);
+        let waiting = selected_frame(&slot, receiver.clone());
+        tokio::pin!(waiting);
+        assert_pending(waiting.as_mut());
+        let prepared = Arc::new(prepared_for_test(chrono::Utc::now()));
+        frames.send_replace(Some(prepared.clone()));
+        assert!(Arc::ptr_eq(&waiting.await.unwrap(), &prepared));
+        frames.send_replace(None);
+        {
+            let cancelled = selected_frame(&slot, receiver.clone());
+            tokio::pin!(cancelled);
+            assert_pending(cancelled.as_mut());
+        }
+        assert!(slot.is_active());
+        let paused = selected_frame(&slot, receiver);
+        tokio::pin!(paused);
+        assert_pending(paused.as_mut());
+        super::super::stream::invalidate(4_000_001_002);
+        assert!(paused.await.is_err());
+    }
+
+    #[test]
+    fn excluded_background_masks_only_selected_content_behind_it() {
+        let display = cidre::cg::Rect {
+            origin: cidre::cg::Point { x: 0.0, y: 0.0 },
+            size: cidre::cg::Size {
+                width: 1600.0,
+                height: 1000.0,
+            },
+        };
+        let private = surface("Dock", "Wallpaper-");
+        let mut public = surface("TextEdit", "Public");
+        public.id += 1;
+        assert!(!needs_occlusion_mask(
+            &[private.clone(), public.clone()],
+            &[false, true],
+            0,
+            display,
+            1600,
+            1000
+        ));
+        assert!(needs_occlusion_mask(
+            &[public.clone(), private.clone()],
+            &[true, false],
+            1,
+            display,
+            1600,
+            1000
+        ));
+        public.x = 900.0;
+        assert!(!needs_occlusion_mask(
+            &[public.clone(), private.clone()],
+            &[true, false],
+            1,
+            display,
+            1600,
+            1000
+        ));
+        // Preserve masking at fractional positions that share an output pixel.
+        public.x = 799.5;
+        public.width = 1.0;
+        assert!(needs_occlusion_mask(
+            &[public, private],
+            &[true, false],
+            1,
+            display,
+            1600,
+            1000
+        ));
     }
 
     #[test]
@@ -685,8 +1548,246 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stable_capture_gets_a_turn_before_another_capture_retries() {
+        let slot = Arc::new(CaptureSlot::new());
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (started, ready) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let changing_slot = slot.clone();
+        let changing_order = order.clone();
+        let changing = tokio::spawn(async move {
+            let mut first = Some((started, released));
+            capture_with_scene_retries(1, changing_slot, move || {
+                let first = first.take();
+                let order = changing_order.clone();
+                move || async move {
+                    if let Some((started, released)) = first {
+                        order.lock().unwrap().push("changing");
+                        let _ = started.send(());
+                        let _ = released.await;
+                        Err(SceneChanged("desktop scene changed during privacy capture").into())
+                    } else {
+                        order.lock().unwrap().push("retry");
+                        Ok(DynamicImage::new_rgba8(3, 2))
+                    }
+                }
+            })
+            .await
+        });
+        ready.await.unwrap();
+        let stable_order = order.clone();
+        let stable = capture_with_scene_retries(2, slot, move || {
+            let order = stable_order.clone();
+            move || async move {
+                order.lock().unwrap().push("stable");
+                Ok(DynamicImage::new_rgba8(4, 2))
+            }
+        });
+        tokio::pin!(stable);
+        // Queue the second caller while the first native attempt still owns
+        // the slot. Reselection must go behind this already-waiting work.
+        std::future::poll_fn(|cx| {
+            assert!(stable.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        release.send(()).unwrap();
+        assert_eq!(stable.await.unwrap().width(), 4);
+        assert_eq!(changing.await.unwrap().unwrap().width(), 3);
+        assert_eq!(*order.lock().unwrap(), ["changing", "stable", "retry"]);
+    }
+
+    #[tokio::test]
+    async fn repeated_scene_changes_stop_at_total_request_budget_and_recover() {
+        let slot = Arc::new(CaptureSlot::new());
+        let result = tokio::time::timeout(
+            QUEUE_DEADLINE + DEADLINE + QUEUE_DEADLINE,
+            capture_with_scene_retries::<_, _, _, DynamicImage>(1, slot.clone(), || {
+                || {
+                    std::future::ready(Err(SceneChanged(
+                        "desktop scene changed during privacy capture",
+                    )
+                    .into()))
+                }
+            }),
+        )
+        .await
+        .expect("the request must not reset its deadline on each retry");
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("native_budget_ms=5000"), "{error}");
+        assert!(error.contains("next stream frame unavailable"), "{error}");
+        let next =
+            capture_with_scene_retries(2, slot, || || async { Ok(DynamicImage::new_rgba8(3, 2)) })
+                .await
+                .unwrap();
+        assert_eq!((next.width(), next.height()), (3, 2));
+    }
+
+    #[tokio::test]
+    async fn scene_change_reselects_until_a_privacy_valid_image_is_available() {
+        let filters = WindowFilters::new(&["::Private".into()], &[], &[]);
+        let public = [surface("TextEdit", "Public")];
+        let private = [surface("TextEdit", "Private")];
+        let mut attempts = 0;
+        let image = retry_scene_changes(1, || {
+            attempts += 1;
+            // First acquisition crosses a public-to-private policy change.
+            // A fresh selection rejects that window before reading its pixels.
+            let result = if attempts == 1 {
+                validate_scene(&public, &[true], &private, &filters, None)
+                    .map(|()| DynamicImage::new_rgba8(1, 1))
+            } else {
+                validate_scene(&private, &[false], &private, &filters, None).map(|()| {
+                    DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                        3,
+                        2,
+                        image::Rgba([0, 0, 0, 255]),
+                    ))
+                })
+            };
+            std::future::ready(result)
+        })
+        .await
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!((image.width(), image.height()), (3, 2));
+        assert!(image
+            .to_rgba8()
+            .pixels()
+            .all(|pixel| pixel.0 == [0, 0, 0, 255]));
+    }
+
+    #[tokio::test]
+    async fn scene_reselection_preserves_native_errors() {
+        let mut attempts = 0;
+        let error = retry_scene_changes::<_, _, DynamicImage>(1, || {
+            attempts += 1;
+            std::future::ready(Err(anyhow!("ScreenCaptureKit stream failed to start")))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error.to_string(), "ScreenCaptureKit stream failed to start");
+    }
+
+    #[tokio::test]
+    async fn continuous_scene_changes_respect_existing_deadline_and_recover() {
+        let slot = Arc::new(CaptureSlot::new());
+        let first = capture_on_worker::<_, _, DynamicImage>(
+            slot.clone(),
+            Duration::from_millis(50),
+            || async {
+                retry_scene_changes(1, || {
+                    std::future::ready(Err(SceneChanged(
+                        "desktop scene changed during privacy capture",
+                    )
+                    .into()))
+                })
+                .await
+            },
+        )
+        .await;
+        assert!(first.unwrap_err().to_string().contains("timed out"));
+        let next = capture_on_worker(slot, Duration::from_secs(1), || async {
+            Ok(DynamicImage::new_rgba8(3, 2))
+        })
+        .await
+        .unwrap();
+        assert_eq!((next.width(), next.height()), (3, 2));
+    }
+
+    #[tokio::test]
+    async fn completing_old_request_does_not_cancel_next_capture() {
+        let slot = Arc::new(CaptureSlot::new());
+        let (first_started, first_ready) = oneshot::channel();
+        let (finish_first, first_release) = oneshot::channel();
+        let first = capture_on_worker(slot.clone(), DEADLINE, move || async move {
+            let _ = first_started.send(());
+            let _ = first_release.await;
+            Ok(DynamicImage::new_rgba8(2, 2))
+        });
+        tokio::pin!(first);
+        std::future::poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        first_ready.await.unwrap();
+        finish_first.send(()).unwrap();
+        // The native worker has returned, but its async caller has not yet
+        // consumed the result or dropped its cancellation guard.
+        let free = slot.semaphore.clone().acquire_owned().await.unwrap();
+        drop(free);
+        let (second_started, second_ready) = oneshot::channel();
+        let (finish_second, second_release) = oneshot::channel();
+        let second = tokio::spawn(capture_on_worker(slot, DEADLINE, move || async move {
+            let _ = second_started.send(());
+            let _ = second_release.await;
+            Ok(DynamicImage::new_rgba8(3, 2))
+        }));
+        second_ready.await.unwrap();
+        first.await.unwrap();
+        finish_second.send(()).unwrap();
+        let image = second.await.unwrap().unwrap();
+        assert_eq!((image.width(), image.height()), (3, 2));
+    }
+
+    #[tokio::test]
+    async fn aborting_capture_cancels_native_work_during_reselection() {
+        let slot = Arc::new(CaptureSlot::new());
+        let (started, ready) = oneshot::channel();
+        let attempts = Arc::new(AtomicU64::new(0));
+        let attempt_count = attempts.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let native_dropped = dropped.clone();
+        struct OnDrop(Arc<AtomicBool>);
+        impl Drop for OnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let task = tokio::spawn(capture_on_worker(
+            slot.clone(),
+            DEADLINE,
+            move || async move {
+                let mut started = Some(started);
+                retry_scene_changes(1, || {
+                    let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+                    let started = if attempt == 1 { started.take() } else { None };
+                    let native_dropped = native_dropped.clone();
+                    async move {
+                        if attempt == 0 {
+                            return Err(SceneChanged(
+                                "desktop scene changed during privacy capture",
+                            )
+                            .into());
+                        }
+                        let _on_drop = OnDrop(native_dropped);
+                        if let Some(started) = started {
+                            let _ = started.send(());
+                        }
+                        std::future::pending::<anyhow::Result<DynamicImage>>().await
+                    }
+                })
+                .await
+            },
+        ));
+        ready.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let next = capture_on_worker(slot, DEADLINE, || async {
+            Ok(DynamicImage::new_rgba8(3, 2))
+        })
+        .await
+        .unwrap();
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(attempt_count.load(Ordering::Acquire), 2);
+        assert_eq!((next.width(), next.height()), (3, 2));
+    }
+
+    #[tokio::test]
     async fn stalled_completion_releases_slot_for_next_capture() {
-        let slot = Arc::new(Semaphore::new(1));
+        let slot = Arc::new(CaptureSlot::new());
         let (release, completion) = oneshot::channel::<()>();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = cancelled.clone();
@@ -715,10 +1816,13 @@ mod tests {
         // Always unblock the old implementation before asserting so a failing
         // regression test cannot leave runtime shutdown waiting on its worker.
         let _ = release.send(());
-        let _drained = tokio::time::timeout(Duration::from_secs(1), slot.acquire_owned())
-            .await
-            .expect("worker must drain after its completion is released")
-            .unwrap();
+        let _drained = tokio::time::timeout(
+            Duration::from_secs(1),
+            slot.semaphore.clone().acquire_owned(),
+        )
+        .await
+        .expect("worker must drain after its completion is released")
+        .unwrap();
 
         assert!(first.unwrap_err().to_string().contains("timed out"));
         let image = second.expect("next screenshot must succeed after a missing completion");
@@ -731,10 +1835,12 @@ mod tests {
 
     #[tokio::test]
     async fn privacy_failure_is_returned_and_does_not_poison_next_capture() {
-        let slot = Arc::new(Semaphore::new(1));
-        let result = capture_on_worker(slot.clone(), Duration::from_secs(1), || async {
-            Err(anyhow!("desktop scene changed during privacy capture"))
-        })
+        let slot = Arc::new(CaptureSlot::new());
+        let result = capture_on_worker::<_, _, DynamicImage>(
+            slot.clone(),
+            Duration::from_secs(1),
+            || async { Err(anyhow!("desktop scene changed during privacy capture")) },
+        )
         .await;
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -750,7 +1856,7 @@ mod tests {
 
     #[tokio::test]
     async fn synchronous_native_stall_does_not_spawn_replacement_workers() {
-        let slot = Arc::new(Semaphore::new(1));
+        let slot = Arc::new(CaptureSlot::new());
         let (release, blocked) = std::sync::mpsc::channel::<()>();
         let replacement_started = Arc::new(AtomicBool::new(false));
         let started = replacement_started.clone();

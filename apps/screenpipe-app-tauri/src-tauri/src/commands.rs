@@ -5354,3 +5354,21 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
     );
     Ok(())
 }
+
+/// Apply only the screenshot acquisition rate. HD remains independently owned.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_screenshot_frame_rate(fps: u32) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        screenpipe_screen::screenshot_rate::set(fps).map_err(|error| {
+            warn!(fps, error = %error, "screenshot frame-rate update failed");
+            error.to_string()
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = fps;
+        Err("screenshot acquisition frame rate is supported on macOS and Windows".into())
+    }
+}

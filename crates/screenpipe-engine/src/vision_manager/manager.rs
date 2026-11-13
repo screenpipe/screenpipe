@@ -63,6 +63,8 @@ pub struct VisionManagerConfig {
     /// Max width (px) of the macOS screen capture that OCR reads. 0 = native.
     /// Independent of `video_quality`, which only sizes what is stored.
     pub capture_max_width: u32,
+    /// Preview acquisition rate, independent of HD's encoded frame rate.
+    pub screenshot_frame_rate: u32,
     /// Skip screenshot pixels/JPEG/OCR while keeping accessibility-tree capture.
     pub disable_screenshots: bool,
     pub focused_window_screenshots: bool,
@@ -179,6 +181,10 @@ pub struct VisionManager {
     /// Health reads this cached value without introducing CoreGraphics calls
     /// into the 1 Hz endpoint.
     monitor_capture_expected: Arc<AtomicBool>,
+    /// Initialize once per manager. Monitor hotplug and watchdog restart must
+    /// not overwrite a later live screenshot-rate update with startup config.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    screenshot_frame_rate_initialized: AtomicBool,
 }
 
 impl VisionManager {
@@ -231,6 +237,8 @@ impl VisionManager {
         });
 
         Self {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            screenshot_frame_rate_initialized: AtomicBool::new(false),
             config,
             db,
             vision_handle,
@@ -351,6 +359,20 @@ impl VisionManager {
 
     /// Start recording on all currently connected monitors
     pub async fn start(&self) -> Result<()> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if !self
+            .screenshot_frame_rate_initialized
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            if let Err(error) = screenpipe_screen::screenshot_rate::initialize(
+                self.config.screenshot_frame_rate,
+                self.config.idle_capture_interval_ms,
+            ) {
+                self.screenshot_frame_rate_initialized
+                    .store(false, std::sync::atomic::Ordering::Release);
+                return Err(error);
+            }
+        }
         let mut status = self.status.write().await;
         if *status == VisionManagerStatus::Running {
             debug!("VisionManager already running");
@@ -812,6 +834,10 @@ impl VisionManager {
 
             // Abort the task
             handle.abort();
+            // Stop sampling immediately even if the old task is still inside
+            // native IPC. Its source-owner guard handles delayed cancellation.
+            #[cfg(target_os = "macos")]
+            screenpipe_screen::stream_invalidation::release_screenshot_stream(monitor_id);
 
             // Wait for it to finish with a timeout — if the capture task is stuck
             // in a spawn_blocking AX tree walk, cancellation can be delayed.
@@ -1058,6 +1084,7 @@ mod tests {
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),
             capture_max_width: 0,
+            screenshot_frame_rate: screenpipe_config::DEFAULT_SCREENSHOT_FRAME_RATE,
             disable_screenshots: false,
             focused_window_screenshots: false,
             enable_semantic_context,

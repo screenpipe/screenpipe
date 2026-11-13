@@ -57,6 +57,7 @@ pub use microsoft::perform_ocr_windows;
 pub use tesseract::{perform_ocr_tesseract, tesseract_available};
 pub mod browser_utils;
 pub mod screenshot_privacy;
+pub mod screenshot_rate;
 pub mod snapshot_writer;
 
 /// True when the native ScreenCaptureKit sync-worker containment layer has
@@ -102,6 +103,7 @@ pub mod stream_invalidation {
     /// Stop all persistent SCStream handles. The next capture call will
     /// lazily recreate them with fresh frames.
     pub fn invalidate_streams() {
+        crate::screenshot_privacy::stream::invalidate_all();
         sck_rs::stop_all_streams();
     }
 
@@ -109,7 +111,18 @@ pub mod stream_invalidation {
     /// goes Cold so `replayd` stops capturing frames we're not reading. The
     /// stream is lazily recreated on the next capture call after focus returns.
     pub fn invalidate_monitor_stream(monitor_id: u32) {
+        crate::screenshot_privacy::stream::invalidate(monitor_id);
         sck_rs::invalidate_monitor_stream(monitor_id);
+    }
+
+    /// Release only the screenshot preview when focus leaves a
+    /// display. Warm visual probes and the HD recorder keep their own handles.
+    pub fn release_screenshot_stream(monitor_id: u32) {
+        crate::screenshot_privacy::stream::invalidate(monitor_id);
+    }
+
+    pub fn set_screenshot_frame_rate(fps: u32) -> anyhow::Result<()> {
+        crate::screenshot_rate::set(fps)
     }
 
     /// Current frame-delivery sequence for a monitor's persistent stream, if
@@ -119,7 +132,8 @@ pub mod stream_invalidation {
     /// (SCK delivers identical frames at the frame interval), so a stalled
     /// sequence means the OS callback died, not that the screen is idle.
     pub fn monitor_frame_seq(monitor_id: u32) -> Option<u64> {
-        sck_rs::monitor_frame_seq(monitor_id)
+        crate::screenshot_privacy::stream::sequence(monitor_id)
+            .or_else(|| sck_rs::monitor_frame_seq(monitor_id))
     }
 
     /// Latest RGBA frame from the persistent ~2fps SCK stream, if one is running.

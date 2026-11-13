@@ -30,7 +30,7 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
-use screenpipe_screen::screenshot_privacy::capture_monitor_image_filtered;
+use screenpipe_screen::screenshot_privacy::capture_monitor_frame_filtered;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use std::collections::HashMap;
 #[cfg(debug_assertions)]
@@ -1046,6 +1046,11 @@ pub(crate) async fn event_driven_capture_loop(
         monitor_id, device_name
     );
 
+    // The producer outlives individual events, but never its monitor's task.
+    // This also runs on cancellation, early return, and task panic.
+    #[cfg(target_os = "macos")]
+    let _screenshot_source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor_id);
+
     let screenshots_disabled_by_config = config.disable_screenshots;
     let focused_window_screenshots = config.focused_window_screenshots;
     let mut screenshot_disabled = screenshots_disabled_by_config;
@@ -1457,6 +1462,8 @@ pub(crate) async fn event_driven_capture_loop(
             was_cold = is_cold;
             let accessibility_is_active = matches!(capture_state, CaptureState::Active);
             if should_suspend_on_focus_away(accessibility_was_active, accessibility_is_active) {
+                #[cfg(target_os = "macos")]
+                screenpipe_screen::stream_invalidation::release_screenshot_stream(monitor_id);
                 if let Err(error) = tree_walker
                     .suspend_with_timeout(Duration::from_millis(250))
                     .await
@@ -3256,6 +3263,7 @@ async fn do_capture(
             corrupt: None,
         });
     }
+    #[cfg(not(target_os = "macos"))]
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
     #[cfg(target_os = "windows")]
@@ -3263,8 +3271,9 @@ async fn do_capture(
         .then(get_foreground_window_identity_fresh)
         .flatten();
 
-    // Explicit window patterns use fresh positive selection at the capture
-    // boundary below. Other policies retain the existing bounded resolution.
+    // Positive-selection sources resolve exclusions in their producer and
+    // retain the policy with each prepared frame. Do not gate cached pixels on
+    // a fresh event-time exclusion observation. Legacy sources still resolve here.
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
     // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
     // deduped so the persistent stream isn't needlessly recreated when
@@ -3276,7 +3285,9 @@ async fn do_capture(
     // frame's pixels (like `screenshot_disabled`; the a11y walk continues and
     // applies its own independent window filtering) rather than storing a
     // frame that may contain a window the user asked to hide.
-    let storage_exclusions = if screenshot_disabled || params.window_filters.has_window_patterns() {
+    let storage_exclusions = if screenshot_disabled
+        || screenpipe_screen::screenshot_privacy::uses_positive_selection(&params.window_filters)
+    {
         Some(Vec::new())
     } else {
         storage_excluded_sck_window_ids(
@@ -3317,6 +3328,8 @@ async fn do_capture(
         tokio::time::sleep(CONTEXT_CAPTURE_SETTLE).await;
     }
 
+    #[cfg(target_os = "macos")]
+    let mut native_captured_at = None;
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3327,9 +3340,9 @@ async fn do_capture(
     } else {
         let excluded_ids = storage_exclusions.unwrap_or_default();
 
-        // Resolve positive window surfaces at the capture boundary, after any
-        // focus-settle delay. Never substitute monitor pixels on policy failure.
-        match capture_monitor_image_filtered(
+        // macOS selects a prepared stream frame with its own policy and scene.
+        // Other platforms retain their existing positive-selection boundary.
+        match capture_monitor_frame_filtered(
             params.monitor,
             &params.window_filters,
             exclusion_sources(params.tree_walker_config),
@@ -3338,14 +3351,22 @@ async fn do_capture(
         )
         .await
         {
-            Ok((image, capture_dur)) => {
+            Ok(frame) => {
                 debug!(
                     "screenshot captured in {:?} for monitor {}",
-                    capture_dur, params.monitor_id
+                    frame.duration, params.monitor_id
                 );
-                image
+                #[cfg(target_os = "macos")]
+                {
+                    native_captured_at = Some(frame.captured_at);
+                }
+                frame.image
             }
-            Err(error) if params.window_filters.has_window_patterns() => {
+            Err(error)
+                if screenpipe_screen::screenshot_privacy::uses_positive_selection(
+                    &params.window_filters,
+                ) =>
+            {
                 debug!("window-filtered screenshot withheld: {error}");
                 skip_pixels_for_unknown_exclusions = true;
                 image::DynamicImage::new_rgba8(1, 1)
@@ -3353,6 +3374,16 @@ async fn do_capture(
             Err(error) => return Err(error),
         }
     };
+    // Preserve the source observation time. Idle samples with an older native
+    // PTS require a fresh screenshot rather than relabelling cached pixels.
+    #[cfg(target_os = "macos")]
+    let captured_at = native_captured_at.unwrap_or_else(Utc::now);
+    #[cfg(target_os = "macos")]
+    if !monitor_hosts_focus {
+        // A sparse background-display screenshot must not leave a continuous
+        // preview running throughout Warm state. HD has a separate owner.
+        screenpipe_screen::stream_invalidation::release_screenshot_stream(params.monitor_id);
+    }
     // This scalar is the screenshot's app identity. Read it immediately after
     // ScreenCaptureKit returns so no process object travels with the pixels.
     let screenshot_focus_pid = if monitor_hosts_focus && !screenshot_disabled {

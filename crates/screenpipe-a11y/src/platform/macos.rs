@@ -53,6 +53,8 @@ static AX_QUERY_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// sets, so it only ever acts as a backstop: `AXUIElementSetMessagingTimeout`
 /// on a specific element still overrides it for that element.
 const AX_DEFAULT_TIMEOUT_SECS: f32 = 1.0;
+// Existing interaction-metadata reads use this shorter per-element bound.
+const AX_METADATA_TIMEOUT_SECS: f32 = 0.1;
 
 /// Keep click attribution recent enough that a delayed AX hit-test cannot
 /// accidentally describe a window that moved under the recorded coordinate.
@@ -1914,7 +1916,7 @@ fn find_labeled_descendant_at(
         // Each child is its own AX ref — cap its messaging timeout so a busy
         // app costs at most ~0.1s per read instead of the ~6s macOS default
         // (tree-walker pattern, tree/macos.rs).
-        let _ = child.set_messaging_timeout_secs(0.1);
+        let _ = child.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
         let Some(b) = get_element_bounds(child) else {
             continue;
         };
@@ -1973,7 +1975,7 @@ fn capture_click_at_position(
         // the window may expose only native chrome and no page/address URL.
         // This is a read, avoiding explicit screen-reader flag changes.
         let app = ax::UiElement::with_app_pid(request.app_pid);
-        let _ = app.set_messaging_timeout_secs(0.1);
+        let _ = app.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
         let _ = app.role();
     }
 
@@ -2021,7 +2023,7 @@ fn capture_click_at_position(
     // indexing) would stall this worker for seconds while it holds
     // AX_QUERY_LOCK, and the bounded ctx channel would then silently drop the
     // next clicks' context. Cap it like the tree walker does (tree/macos.rs).
-    let _ = elem.set_messaging_timeout_secs(0.1);
+    let _ = elem.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
 
     // Firefox page elements can omit AXWindow. Resolve the clicked ancestry,
     // never AXFocusedWindow (which can describe another window at mouse-down).
@@ -2039,7 +2041,7 @@ fn capture_click_at_position(
             return None;
         }
     };
-    let _ = window.set_messaging_timeout_secs(0.1);
+    let _ = window.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
     let raw_window_title = get_string_attr(&window, ax::attr::title())
         .or_else(|| get_string_attr(&window, ax::attr::desc()));
 
@@ -2105,6 +2107,53 @@ fn native_window_id(window: &ax::UiElement) -> Result<u32, String> {
     }
 }
 
+fn sharing_session_button(role: Option<&str>, title: Option<&str>) -> bool {
+    role == Some("AXButton") && title == Some("WindowSharingSessionButton")
+}
+
+/// Positively identify AppKit's window-sharing controls, not user dialogs.
+/// The native AX child marker is observed on macOS 26/27, not a public SDK
+/// constant. Unknown elements remain ordinary content. Match exact native
+/// window IDs; window titles, dimensions and screen positions are not identity.
+pub fn window_sharing_control_ids(pid: i32) -> Result<Vec<u32>, String> {
+    if !ax::is_process_trusted() {
+        return Err(
+            "Accessibility permission unavailable for sharing-control identification".into(),
+        );
+    }
+    let _query = AX_QUERY_LOCK.try_lock().ok_or("AX metadata query busy")?;
+    let app = ax::UiElement::with_app_pid(pid);
+    let _ = app.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
+    let value = app
+        .attr_value(ax::attr::windows())
+        .map_err(|error| format!("sharing-control AXWindows read failed: {error:?}"))?;
+    if value.get_type_id() != cf::Array::type_id() {
+        return Err("sharing-control AXWindows was not an array".into());
+    }
+    let windows: &cf::ArrayOf<ax::UiElement> = unsafe { std::mem::transmute(&*value) };
+    let mut ids = Vec::new();
+    for window in windows.iter() {
+        let _ = window.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
+        if window.pid().ok() != Some(pid) {
+            continue;
+        }
+        let Ok(children) = window.children() else {
+            continue;
+        };
+        for child in children.iter() {
+            let _ = child.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
+            if sharing_session_button(
+                get_string_attr(child, ax::attr::role()).as_deref(),
+                get_string_attr(child, ax::attr::title()).as_deref(),
+            ) {
+                ids.push(native_window_id(window)?);
+                break;
+            }
+        }
+    }
+    Ok(ids)
+}
+
 fn clicked_window_for_receiver(
     request: &ContextCaptureRequest,
 ) -> Result<Retained<ax::UiElement>, String> {
@@ -2112,7 +2161,7 @@ fn clicked_window_for_receiver(
         .window_id
         .ok_or("CGEvent receiver window ID missing")?;
     let app = ax::UiElement::with_app_pid(request.app_pid);
-    let _ = app.set_messaging_timeout_secs(0.1);
+    let _ = app.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
     let value = app
         .attr_value(ax::attr::windows())
         .map_err(|error| format!("receiver AXWindows read failed: {error:?}"))?;
@@ -2122,7 +2171,7 @@ fn clicked_window_for_receiver(
     let windows: &cf::ArrayOf<ax::UiElement> = unsafe { std::mem::transmute(&*value) };
     let mut last_error = "receiver window is no longer present".to_string();
     for window in windows.iter() {
-        let _ = window.set_messaging_timeout_secs(0.1);
+        let _ = window.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
         match native_window_id(window) {
             Ok(id) if id == wanted => {
                 validate_click_element_pid(
@@ -2165,7 +2214,7 @@ fn resolve_clicked_window(
             ));
         }
         seen.push(current.retained());
-        let _ = current.set_messaging_timeout_secs(0.1);
+        let _ = current.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
         validate_click_element_pid(target_pid, current.pid().ok(), std::process::id() as i32)
             .map_err(|reason| format!("AXWindow read failed: {window_error:?}; clicked ancestor identity rejected: {reason:?}"))?;
         if role_string(&current).as_deref() == Some("AXWindow") {
@@ -2471,7 +2520,7 @@ fn collect_ancestor_chain(
         let node_elem: &ax::UiElement = unsafe { std::mem::transmute(&*node) };
         // Per-hop cap: each ancestor is a NEW AXUIElement ref, so the
         // timeout set on the hit-test element does not carry over.
-        let _ = node_elem.set_messaging_timeout_secs(0.1);
+        let _ = node_elem.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
         let Some(role) = role_string(node_elem) else {
             break;
         };
@@ -2552,7 +2601,7 @@ fn get_focused_window_title(pid: i32) -> Option<String> {
     // frequent unbounded read we make. Match the 0.1s the click/context paths
     // already use rather than leaning on the 1s process default: a slow app
     // should cost us a missing title, not a stalled observer thread.
-    let _ = app.set_messaging_timeout_secs(0.1);
+    let _ = app.set_messaging_timeout_secs(AX_METADATA_TIMEOUT_SECS);
 
     let focused = app.attr_value(ax::attr::focused_window()).ok()?;
 
@@ -3272,6 +3321,24 @@ mod macos_click_attribution_eval;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sharing_control_requires_the_native_button_marker() {
+        assert!(sharing_session_button(
+            Some("AXButton"),
+            Some("WindowSharingSessionButton")
+        ));
+        assert!(!sharing_session_button(Some("AXButton"), Some("Window")));
+        assert!(!sharing_session_button(
+            Some("AXDialog"),
+            Some("WindowSharingSessionButton")
+        ));
+        assert!(!sharing_session_button(
+            None,
+            Some("WindowSharingSessionButton")
+        ));
+        assert!(!sharing_session_button(Some("AXButton"), None));
+    }
 
     /// The AX observer thread loops on `run_in_mode`. Two of the four results
     /// come back instantly: `Finished` when the mode has no sources or timers

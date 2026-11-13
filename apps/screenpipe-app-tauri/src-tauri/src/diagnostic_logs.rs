@@ -499,6 +499,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_screenshot_source_failure_and_recovery_survive_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        // Actual INFO/WARN output from the disposable macOS app acceptance run.
+        let emitted = include_str!(
+            "../../../../crates/screenpipe-screen/tests/fixtures/cached-screenshot-source-diagnostic.txt"
+        );
+        tokio::fs::write(root.path().join("screenpipe-app.2026-11-13.1.log"), emitted)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.path().join("screenpipe-app.2026-11-13.log"),
+            "contact=cache-fixture@screenpipe.test\n",
+        )
+        .await
+        .unwrap();
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "desktop scene changed during privacy capture",
+            "window-filtered capture recovered after scene change",
+            "monitor_id=1",
+            "screenshot_outcome=\"retrying\"",
+            "screenshot_outcome=\"captured\"",
+            "next stream frame unavailable",
+            "screenshot_outcome=\"waiting_for_stream\"",
+            "cached_frame_available=false",
+        ] {
+            assert!(
+                report.contains(evidence),
+                "missing collected support evidence: {evidence}"
+            );
+        }
+        assert!(!report.contains("cache-fixture@screenpipe.test"));
+        println!("CACHE_SOURCE_COLLECTED_SUPPORT={report}");
+    }
+
+    #[tokio::test]
     async fn enterprise_retention_failure_survives_support_redaction() {
         let root = tempfile::tempdir().unwrap();
         let emitted = include_str!(
@@ -734,6 +775,36 @@ mod tests {
         assert!(report.contains("continuing credential verification"));
         assert!(report.contains("recorder restarted"));
         assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
+    async fn induced_wgc_interval_failure_and_recovery_reach_normal_redacted_collector() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-13.log");
+        // Induced collector fixture only. The screenpipe-screen unit invokes the
+        // production WGC outcome recorder and checks these fields at their source.
+        std::fs::write(
+            &current,
+            concat!(
+                "WARN WGC native minimum update interval failed transiently requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=failed error=HRESULT(0x80004005): Unspecified error; retaining safe demand-driven capture; a later retry can recover native rate control\n",
+                "INFO WGC native minimum update interval recovered requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=recovered\n",
+                "INFO contact=private-person@example.com\n",
+            ),
+        )
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("requested_fps=2"));
+        assert!(report.contains("interval_ticks=5000000"));
+        assert!(report.contains("cause=FreshRequestRestore"));
+        assert!(report.contains("outcome=failed"));
+        assert!(report.contains("HRESULT(0x80004005)"));
+        assert!(report.contains("retaining safe demand-driven capture"));
+        assert!(report.contains("outcome=recovered"));
+        assert!(report.contains("native minimum update interval recovered"));
+        assert!(!report.contains("private-person@example.com"));
+        println!("redacted WGC interval support report:\n{report}");
     }
 
     #[tokio::test]
