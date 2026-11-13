@@ -239,10 +239,23 @@ impl DatabaseManager {
         // file come from the single source of truth `WAL_SAFETY_PRAGMAS`.
         // Filesystem paths (including Windows' verbatim prefix) are not URLs.
         // Keep URI parsing only for the existing in-memory connection forms.
+        // SQLite before 3.54 treats any `\\` path as a network share, including
+        // the `\\?\C:\` form `canonicalize` returns on Windows. It then shares
+        // one -shm lock handle across connections and can leak a WAL read lock,
+        // which stops checkpoints until restart (#7850). Open the plain drive
+        // path. dunce keeps the prefix when stripping is unsafe (paths over 260
+        // characters, reserved names, network shares); those still use it.
+        let sqlite_file = dunce::simplified(database_file);
+        if sqlite_file.as_os_str().to_string_lossy().starts_with(r"\\") {
+            warn!(
+                path = %sqlite_file.display(),
+                "SQLite opens this database with network-share locking; WAL checkpoints may stall"
+            );
+        }
         let connect_options = if is_in_memory {
             format!("sqlite:{database_path}").parse::<SqliteConnectOptions>()?
         } else {
-            SqliteConnectOptions::new().filename(database_file)
+            SqliteConnectOptions::new().filename(sqlite_file)
         };
         let mut connect_options = connect_options
             .busy_timeout(Duration::from_secs(5))

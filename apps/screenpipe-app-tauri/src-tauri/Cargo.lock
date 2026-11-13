@@ -11607,6 +11607,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "criterion",
+ "dunce",
  "fs2",
  "futures",
  "image 0.25.10",
