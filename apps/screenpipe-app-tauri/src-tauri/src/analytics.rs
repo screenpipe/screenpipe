@@ -806,10 +806,13 @@ mod tests {
         });
         // This is the raw plugin path: no event exists for before_send to filter.
         let raw = || {
-            sentry::Envelope::from_slice(
-                b"{}\n{\"type\":\"client_report\"}\n{\"timestamp\":1,\"discarded_events\":[]}\n",
+            let envelope = sentry::Envelope::from_slice(
+                b"{}\n{\"type\":\"session\"}\n{\"attrs\":{\"release\":\"native-policy-qa\"}}\n",
             )
-            .unwrap()
+            .unwrap();
+            assert!(envelope.event().is_none());
+            assert_eq!(envelope.items().count(), 1);
+            envelope
         };
         client.send_envelope(raw());
         assert!(received.0.lock().unwrap().is_empty());
