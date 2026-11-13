@@ -116,6 +116,23 @@ pub struct DirectUploadConfig {
     pub pinned_hosts: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ModeResolution {
+    Upload,
+    HostedSupport,
+}
+
+impl ModeResolution {
+    fn check_destination(self) -> Result<(), EnterpriseSyncError> {
+        match self {
+            Self::Upload => check_pinned_upload_destination(),
+            // Support uses the authenticated read posture, never an upload
+            // ticket. A missing archive pin must remain diagnosable.
+            Self::HostedSupport => Ok(()),
+        }
+    }
+}
+
 impl EnterpriseUploadMode {
     /// Resolve the upload mode by asking the control plane what this
     /// license is configured for. Replaces the old env-var bootstrap so
@@ -132,6 +149,21 @@ impl EnterpriseUploadMode {
         license_key: &str,
         ingest_url: &str,
     ) -> Result<Option<Self>, EnterpriseSyncError> {
+        Self::resolve_for(license_key, ingest_url, ModeResolution::Upload).await
+    }
+
+    pub(super) async fn resolve_for_support(
+        license_key: &str,
+        ingest_url: &str,
+    ) -> Result<Option<Self>, EnterpriseSyncError> {
+        Self::resolve_for(license_key, ingest_url, ModeResolution::HostedSupport).await
+    }
+
+    async fn resolve_for(
+        license_key: &str,
+        ingest_url: &str,
+        purpose: ModeResolution,
+    ) -> Result<Option<Self>, EnterpriseSyncError> {
         // Explicit env override — for MDM rollouts and local testing.
         // Only takes effect when set to a non-default value; the empty /
         // default case falls through to server resolution.
@@ -142,7 +174,7 @@ impl EnterpriseUploadMode {
                 && normalized != "hosted_ingest"
                 && normalized != "auto"
             {
-                if let Some(mode) = Self::from_env(ingest_url) {
+                if let Some(mode) = Self::from_env_for(ingest_url, purpose) {
                     tracing::info!(
                         "enterprise sync: upload mode taken from \
                          SCREENPIPE_ENTERPRISE_UPLOAD_MODE env override ({})",
@@ -162,7 +194,7 @@ impl EnterpriseUploadMode {
                     "enterprise sync: server requires write-only customer storage \
                      (plaintext direct upload, no hosted reads)"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectWriteOnly(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -171,7 +203,7 @@ impl EnterpriseUploadMode {
                 tracing::info!(
                     "enterprise sync: server requires readable customer storage for cloud processing"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectReadable(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -183,7 +215,7 @@ impl EnterpriseUploadMode {
                 tracing::info!(
                     "enterprise sync: server requested direct upload → direct_upload_readable"
                 );
-                check_pinned_upload_destination()?;
+                purpose.check_destination()?;
                 Ok(Some(Self::DirectReadable(
                     DirectUploadConfig::from_ingest_url(ingest_url),
                 )))
@@ -205,6 +237,10 @@ impl EnterpriseUploadMode {
     }
 
     pub fn from_env(ingest_url: &str) -> Option<Self> {
+        Self::from_env_for(ingest_url, ModeResolution::Upload)
+    }
+
+    fn from_env_for(ingest_url: &str, purpose: ModeResolution) -> Option<Self> {
         let mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
             .unwrap_or_else(|_| "screenpipe_write".to_string())
             .trim()
@@ -213,7 +249,7 @@ impl EnterpriseUploadMode {
         match mode.as_str() {
             "" | "screenpipe_write" | "hosted_ingest" => Some(Self::HostedIngest),
             "direct_upload_readable" => {
-                if let Err(error) = check_pinned_upload_destination() {
+                if let Err(error) = purpose.check_destination() {
                     warn!(
                         error = %error,
                         "enterprise sync: direct upload configured via MDM mode \
@@ -229,7 +265,7 @@ impl EnterpriseUploadMode {
             // spellings of the strict mode from the encrypted-upload era;
             // both now select plaintext write-only.
             "direct_upload_write_only" | "direct_upload" | "direct_upload_encrypted" => {
-                if let Err(error) = check_pinned_upload_destination() {
+                if let Err(error) = purpose.check_destination() {
                     warn!(
                         error = %error,
                         "enterprise sync: direct upload configured via MDM mode \
@@ -353,8 +389,18 @@ impl DirectUploadConfig {
 /// `host:port` entries; whitespace and empty entries ignored. This
 /// repurposes the env-var channel the (dropped) encryption root keys used —
 /// customers already deploy MDM env vars to enterprise fleets.
+/// Older rollout guides named the local setting `UPLOAD_DESTINATION_HOST`.
+/// Accept that spelling only when the canonical variable is absent, never
+/// over an explicit blank or invalid canonical value. Neither source comes
+/// from the control plane that chooses upload tickets.
 pub(super) fn pinned_hosts_from_env() -> Vec<String> {
-    std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS")
+    let configured = match std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS") {
+        Err(std::env::VarError::NotPresent) => {
+            std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST")
+        }
+        canonical => canonical,
+    };
+    configured
         .ok()
         .map(|raw| {
             raw.split(',')
@@ -931,9 +977,17 @@ mod tests {
     #[test]
     fn pinned_hosts_env_parsing_handles_lists_and_absence() {
         let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
+        let prior_legacy = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST").ok();
 
         std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS");
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST");
         assert!(pinned_hosts_from_env().is_empty());
+
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST",
+            " legacy-bucket.example ",
+        );
+        assert_eq!(pinned_hosts_from_env(), vec!["legacy-bucket.example"]);
 
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
@@ -947,10 +1001,152 @@ mod tests {
             ]
         );
 
+        // An explicit canonical setting wins, including a blank value that
+        // must keep direct upload blocked instead of resurrecting a stale pin.
+        std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", " ");
+        assert!(pinned_hosts_from_env().is_empty());
+
         match prior {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", v),
             None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
         }
+        match prior_legacy {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST"),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_rollout_destination_pin_is_enforced_through_upload_completion() {
+        let names = [
+            "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
+            "SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST",
+            "SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED",
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "SCREENPIPE_ENTERPRISE_UPLOAD_TICKET_URL",
+            "SCREENPIPE_ENTERPRISE_UPLOAD_COMPLETE_URL",
+        ];
+        struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for RestoreEnvironment {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreEnvironment(
+            names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for name in names {
+            std::env::remove_var(name);
+        }
+        let server = wiremock::MockServer::start().await;
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST",
+            server.address().to_string(),
+        );
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"desired_mode":"direct_upload_readable"})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/upload-ticket"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok":true,"method":"PUT","upload_url":format!("{}/blob",server.uri()),"headers":{}
+            }))).expect(3).mount(&server).await;
+        let payload = b"{\"kind\":\"frame\",\"device_id\":\"dev-1\",\"device_label\":\"host\",\"frame_id\":1,\"timestamp\":\"2026-05-13T18:00:00Z\",\"text\":\"fixture\"}\n";
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/blob"))
+            .and(wiremock::matchers::body_bytes(payload.to_vec()))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .expect(2)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/upload-complete"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let cfg = sync_cfg();
+        let ingest = format!("{}/api/enterprise/ingest", server.uri());
+        // The guide also sets an explicit write-only mode. Exercise that boot
+        // entry point before the account-configured readable mode below.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_write_only",
+        );
+        let Some(EnterpriseUploadMode::DirectWriteOnly(boot)) =
+            EnterpriseUploadMode::from_env(&ingest)
+        else {
+            panic!("the guide's local pin must configure write-only mode at boot");
+        };
+        let (counts, cursors) = test_counts_and_cursors();
+        upload_direct_write_only_batch(
+            &reqwest::Client::new(),
+            &cfg,
+            &boot,
+            payload.to_vec(),
+            counts,
+            cursors,
+        )
+        .await
+        .unwrap();
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
+        for permitted in [true, false] {
+            if !permitted {
+                std::env::set_var(
+                    "SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST",
+                    "other-bucket.invalid",
+                );
+            }
+            let mode = EnterpriseUploadMode::resolve(&cfg.license_key, &ingest)
+                .await
+                .unwrap()
+                .unwrap();
+            let EnterpriseUploadMode::DirectReadable(direct) = mode else {
+                panic!("readable direct mode expected");
+            };
+            let (counts, cursors) = test_counts_and_cursors();
+            let result = upload_direct_readable_batch(
+                &reqwest::Client::new(),
+                &cfg,
+                &direct,
+                payload.to_vec(),
+                counts,
+                cursors,
+                false,
+                false,
+            )
+            .await;
+            if permitted {
+                assert!(
+                    result.is_ok(),
+                    "locally pinned upload must complete: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(EnterpriseSyncError::DestinationNotPinned(_))),
+                    "mismatched local pin must refuse the ticket: {result:?}"
+                );
+            }
+        }
+        // Only the matching local pin permits a PUT and a completion. The
+        // untrusted ticket cannot send another body to customer storage.
+        server.verify().await;
     }
 
     #[test]
@@ -1014,14 +1210,17 @@ mod tests {
                 .is_none()
         );
 
-        if let Some(v) = prior_pin {
-            std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", v);
+        match prior_pin {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
         }
-        if let Some(v) = prior_allow {
-            std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED", v);
+        match prior_allow {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED"),
         }
-        if let Some(v) = prior_mode {
-            std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v);
+        match prior_mode {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
         }
     }
 
