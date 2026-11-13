@@ -841,7 +841,55 @@ impl PersistentCapture {
     /// BGRA->RGBA swizzle happen here, lazily, only when a frame is actually needed —
     /// not on every compositor frame `FrameArrived` delivers.
     pub fn get_latest_image(&self, timeout: Duration) -> Result<DynamicImage> {
-        self.get_image(timeout, FrameReadPolicy::Fresh)
+        self.refresh_min_update_interval();
+
+        // A low background producer rate must not make an explicitly requested
+        // fresh screenshot miss the caller's existing deadline. Temporarily remove
+        // the native throttle while this demand is outstanding, then restore the
+        // user's configured rate. The update mutex keeps live preference changes
+        // and concurrent requests ordered; cached pixels are still forbidden by
+        // FrameReadPolicy::Fresh.
+        let _update = self
+            .native_interval_update
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let override_applied = match self.session.SetMinUpdateInterval(TimeSpan { Duration: 0 }) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "WGC fresh-request interval override unsupported or failed; continuing with configured interval and fresh-pixel guard"
+                );
+                false
+            }
+        };
+
+        let result = self.get_image_inner(timeout, FrameReadPolicy::Fresh);
+        if override_applied {
+            let requested_fps = crate::screenshot_rate::current();
+            let interval_ticks = min_update_interval_ticks(requested_fps);
+            if let Err(error) = self.session.SetMinUpdateInterval(TimeSpan {
+                Duration: interval_ticks,
+            }) {
+                self.stats.native_interval_ticks.store(0, Ordering::Release);
+                self.stats
+                    .native_interval_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                self.native_interval_status.store(
+                    NativeIntervalStatus::UnsupportedOrFailed as u8,
+                    Ordering::Release,
+                );
+                tracing::warn!(requested_fps, interval_ticks, ?error, "WGC configured interval restore failed after fresh request; retaining safe demand-driven capture without native rate control");
+            } else {
+                self.stats
+                    .native_interval_requested_fps
+                    .store(requested_fps, Ordering::Release);
+                self.stats
+                    .native_interval_ticks
+                    .store(interval_ticks, Ordering::Release);
+            }
+        }
+        result
     }
 
     /// Read at recording cadence while still requesting the next changed frame.
@@ -857,6 +905,10 @@ impl PersistentCapture {
 
     fn get_image(&self, timeout: Duration, policy: FrameReadPolicy) -> Result<DynamicImage> {
         self.refresh_min_update_interval();
+        self.get_image_inner(timeout, policy)
+    }
+
+    fn get_image_inner(&self, timeout: Duration, policy: FrameReadPolicy) -> Result<DynamicImage> {
         let deadline = Instant::now() + timeout;
         let (frame_lock, frame_ready) = &*self.latest;
         let mut slot = frame_lock

@@ -78,6 +78,46 @@ in this run. The benchmark did prove successful native capability reporting and
 zero request failures on this OS, but cannot demonstrate the unsupported-OS path.
 Windows HD recording is unsupported and was neither fabricated nor implemented.
 
+## Recovery acceptance (2026-11-12)
+
+Follow-up task `capture-fps-recovery-c6c2` preserved the 28 streaming trials above
+and closed the Windows gaps. Inspection showed the earlier ~4 ms values came from
+`get_latest_image_streaming`, which may reuse the cached texture. Fresh callers use
+`get_latest_image` with existing 200/500 ms deadlines. At low configured rates the
+native interval could exceed those deadlines, so fresh demand now temporarily
+removes the WGC interval throttle, still requires a post-request frame, and restores
+the configured background interval afterward. It adds no timeout, FPS ceiling, or
+native timestamp, and never substitutes cached pixels for a fresh result.
+
+The focused fresh comparison used 286 ms requests (about 3.5/s), the existing
+200 ms deadline, and a moving fixture. Each rate completed 35/35 requests with zero
+failures and exactly 35 copies: 1/2/4/8/24/30 fps p95 request latency was
+55.93/60.43/58.47/38.71/50.18/61.22 ms. Callback counts were
+52/50/64/101/210/205, so requested rate still does not claim delivered compositor
+rate. `fresh-probe.json` and per-rate logs are in the private recovery evidence.
+
+The rebuilt real app retained one PID through 2→24→4. UI value 2 persisted across
+webview reload. `stop_capture` completed natively in 570 ms; DB-written frames stayed
+at 6 for the five-second pause and advanced to 7 after resume. This identifies the
+old 60-second result as harness/cleanup behavior, not a rate-control lifecycle
+regression. The same run retained seven frame rows and seven JPEGs. Every JPEG had
+10,994 sampled cyan pixels and zero sampled magenta pixels (4-pixel stride), proving
+the allowed cyan window remained while the excluded `PrivacyBlocked` magenta window
+did not. The DB rows point to those seven retained JPEGs.
+
+A scoped normal support-log collection test preserves a representative Windows
+`HRESULT(0x80070032)` interval failure, requested FPS/ticks, and the outcome
+`retaining safe demand-driven capture`; normal redaction changed the fixture email
+to `[EMAIL]`. The native failure remains nonfatal and the fresh-pixel guard remains
+active. The recovery evidence includes a separate, self-finalized 24.93-second
+`real-app-demo.mp4` showing the real app and both privacy fixtures. Its owned app
+and fixture PIDs were stopped explicitly. The outer worker recorder remained alive
+throughout.
+The prior delivery failure had no ffmpeg report file because cleanup force-killed
+every ffmpeg whose command line referenced the task result directory; that pattern
+also matched the outer `acceptance.mp4` recorder before its normal report/finalize
+path ran. Recovery cleanup instead validates the separate demo output and parent PID.
+
 ## Evidence and commands
 
 - `matrix-raw.json`, `matrix-summary.csv`, and `raw/`: complete per-run values and

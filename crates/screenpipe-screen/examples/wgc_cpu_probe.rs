@@ -73,6 +73,8 @@ mod windows_main {
         let duration_secs: u64 = arg_value(&args, "--duration").unwrap_or(20);
         let interval_ms: u64 = arg_value(&args, "--interval-ms").unwrap_or(286);
         let requested_fps: u32 = arg_value(&args, "--fps").unwrap_or(2);
+        let fresh = args.iter().any(|arg| arg == "--fresh");
+        let timeout_ms: u64 = arg_value(&args, "--timeout-ms").unwrap_or(200);
         let monitor_id: Option<u32> = arg_value(&args, "--monitor-id");
 
         screenpipe_screen::screenshot_rate::set(requested_fps)
@@ -89,8 +91,12 @@ mod windows_main {
         });
 
         println!(
-            "wgc_cpu_probe: monitor={} duration={}s sample_interval={}ms requested_fps={}",
-            monitor_id, duration_secs, interval_ms, requested_fps
+            "wgc_cpu_probe: monitor={} duration={}s sample_interval={}ms requested_fps={} mode={}",
+            monitor_id,
+            duration_secs,
+            interval_ms,
+            requested_fps,
+            if fresh { "fresh" } else { "streaming" }
         );
 
         let startup_started = Instant::now();
@@ -116,7 +122,12 @@ mod windows_main {
 
         while wall_start.elapsed() < run_for {
             let request_started = Instant::now();
-            match capture.get_latest_image_streaming(Duration::from_millis(200)) {
+            let image = if fresh {
+                capture.get_latest_image(Duration::from_millis(timeout_ms))
+            } else {
+                capture.get_latest_image_streaming(Duration::from_millis(timeout_ms))
+            };
+            match image {
                 Ok(_) => {
                     samples += 1;
                     latencies_ms.push(request_started.elapsed().as_secs_f64() * 1000.0);
@@ -152,6 +163,8 @@ mod windows_main {
             "WGC_RATE_JSON={}",
             serde_json::json!({
                 "requested_fps": requested_fps,
+                "request_mode": if fresh { "fresh" } else { "streaming_cached_while_refreshing" },
+                "timeout_ms": timeout_ms,
                 "selection_interval_ms": interval_ms,
                 "duration_seconds": elapsed_seconds,
                 "completed_requests": samples,
