@@ -20,7 +20,8 @@ describe("screenshot frame rate", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
     fireEvent.change(input, { target: { value: "30" } });
     fireEvent.blur(input);
-    expect(update).toHaveBeenCalledExactlyOnceWith(30);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(30);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText(/HD video has its own frame rate/)).toBeTruthy();
   });

@@ -34,7 +34,7 @@
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, RgbaImage};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows::{
@@ -69,11 +69,7 @@ use windows::{
     },
 };
 
-/// Caps the `FrameArrived` callback rate at ~60Hz. Purely a bonus on top of
-/// demand-driven copying: it reduces callback overhead on high-refresh-rate displays.
-/// Best-effort — `SetMinUpdateInterval` needs Win11 24H2+ and is a no-op if unsupported,
-/// since callbacks without a pending request only drain and inspect the frame.
-const MIN_UPDATE_INTERVAL_100NS: i64 = 166_667;
+const WINDOWS_TICKS_PER_SECOND: u64 = 10_000_000;
 
 const FRAME_POOL_BUFFERS: i32 = 2;
 
@@ -83,6 +79,11 @@ pub struct CaptureStats {
     pub frame_arrivals: u64,
     pub copy_submissions: u64,
     pub image_requests: u64,
+    pub native_interval_requested_fps: u32,
+    pub native_interval_ticks: i64,
+    pub native_interval_attempts: u64,
+    pub native_interval_successes: u64,
+    pub native_interval_failures: u64,
 }
 
 #[derive(Default)]
@@ -90,6 +91,11 @@ struct CaptureCounters {
     frame_arrivals: AtomicU64,
     copy_submissions: AtomicU64,
     image_requests: AtomicU64,
+    native_interval_requested_fps: AtomicU32,
+    native_interval_ticks: AtomicI64,
+    native_interval_attempts: AtomicU64,
+    native_interval_successes: AtomicU64,
+    native_interval_failures: AtomicU64,
 }
 
 impl CaptureCounters {
@@ -98,8 +104,30 @@ impl CaptureCounters {
             frame_arrivals: self.frame_arrivals.load(Ordering::Relaxed),
             copy_submissions: self.copy_submissions.load(Ordering::Relaxed),
             image_requests: self.image_requests.load(Ordering::Relaxed),
+            native_interval_requested_fps: self
+                .native_interval_requested_fps
+                .load(Ordering::Relaxed),
+            native_interval_ticks: self.native_interval_ticks.load(Ordering::Relaxed),
+            native_interval_attempts: self.native_interval_attempts.load(Ordering::Relaxed),
+            native_interval_successes: self.native_interval_successes.load(Ordering::Relaxed),
+            native_interval_failures: self.native_interval_failures.load(Ordering::Relaxed),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum NativeIntervalStatus {
+    NotAttempted = 0,
+    Applied = 1,
+    UnsupportedOrFailed = 2,
+}
+
+fn min_update_interval_ticks(fps: u32) -> i64 {
+    // Round up so the producer is never asked to exceed the preference. Windows'
+    // TimeSpan has 100ns resolution, so rates above 10 MHz saturate at one tick;
+    // this is a native representation limit, not a product FPS ceiling.
+    WINDOWS_TICKS_PER_SECOND.div_ceil(fps as u64).max(1) as i64
 }
 
 /// Generations make outstanding demand explicit and allow one frame to satisfy all
@@ -447,6 +475,8 @@ pub struct PersistentCapture {
     closed_token: EventRegistrationToken,
     latest: Arc<(Mutex<LatestFrame>, Condvar)>,
     stats: Arc<CaptureCounters>,
+    native_interval_status: AtomicU8,
+    native_interval_update: Mutex<()>,
     /// Set when the capture item reports `Closed` (monitor disconnect, session
     /// invalidated) or `stop()` runs. Checked *before* the cached frame in
     /// `get_latest_image` — a closed session errors out (triggering reinit in
@@ -609,14 +639,39 @@ impl PersistentCapture {
                 e
             );
         }
-        if let Err(e) = session.SetMinUpdateInterval(TimeSpan {
-            Duration: MIN_UPDATE_INTERVAL_100NS,
+        let requested_fps = crate::screenshot_rate::current();
+        let interval_ticks = min_update_interval_ticks(requested_fps);
+        stats
+            .native_interval_attempts
+            .fetch_add(1, Ordering::Relaxed);
+        stats
+            .native_interval_requested_fps
+            .store(requested_fps, Ordering::Relaxed);
+        let native_interval_status = match session.SetMinUpdateInterval(TimeSpan {
+            Duration: interval_ticks,
         }) {
-            tracing::debug!(
-                "SetMinUpdateInterval failed (non-fatal, needs Win11 24H2+): {:?}",
-                e
-            );
-        }
+            Ok(()) => {
+                stats
+                    .native_interval_ticks
+                    .store(interval_ticks, Ordering::Relaxed);
+                stats
+                    .native_interval_successes
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::info!(
+                    requested_fps,
+                    interval_ticks,
+                    "WGC native minimum update interval applied"
+                );
+                NativeIntervalStatus::Applied
+            }
+            Err(error) => {
+                stats
+                    .native_interval_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(requested_fps, interval_ticks, ?error, "WGC native minimum update interval unsupported or failed; retaining safe demand-driven capture");
+                NativeIntervalStatus::UnsupportedOrFailed
+            }
+        };
 
         if let Err(e) = session.StartCapture() {
             cleanup_init_failure(Some(&session));
@@ -632,6 +687,8 @@ impl PersistentCapture {
             closed_token,
             latest,
             stats,
+            native_interval_status: AtomicU8::new(native_interval_status as u8),
+            native_interval_update: Mutex::new(()),
             closed,
             stopped: AtomicBool::new(false),
             staging: Mutex::new(None),
@@ -799,6 +856,7 @@ impl PersistentCapture {
     }
 
     fn get_image(&self, timeout: Duration, policy: FrameReadPolicy) -> Result<DynamicImage> {
+        self.refresh_min_update_interval();
         let deadline = Instant::now() + timeout;
         let (frame_lock, frame_ready) = &*self.latest;
         let mut slot = frame_lock
@@ -850,6 +908,77 @@ impl PersistentCapture {
 
     pub fn stats(&self) -> CaptureStats {
         self.stats.snapshot()
+    }
+
+    pub fn native_interval_status(&self) -> NativeIntervalStatus {
+        match self.native_interval_status.load(Ordering::Acquire) {
+            1 => NativeIntervalStatus::Applied,
+            2 => NativeIntervalStatus::UnsupportedOrFailed,
+            _ => NativeIntervalStatus::NotAttempted,
+        }
+    }
+
+    /// Apply a live preference change before admitting the next screenshot request.
+    /// An already-admitted request is never cancelled or restarted.
+    fn refresh_min_update_interval(&self) {
+        let requested_fps = crate::screenshot_rate::current();
+        if self
+            .stats
+            .native_interval_requested_fps
+            .load(Ordering::Acquire)
+            == requested_fps
+        {
+            return;
+        }
+        let _update = self
+            .native_interval_update
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self
+            .stats
+            .native_interval_requested_fps
+            .load(Ordering::Acquire)
+            == requested_fps
+        {
+            return;
+        }
+        let interval_ticks = min_update_interval_ticks(requested_fps);
+        self.stats
+            .native_interval_requested_fps
+            .store(requested_fps, Ordering::Release);
+        self.stats
+            .native_interval_attempts
+            .fetch_add(1, Ordering::Relaxed);
+        match self.session.SetMinUpdateInterval(TimeSpan {
+            Duration: interval_ticks,
+        }) {
+            Ok(()) => {
+                self.stats
+                    .native_interval_ticks
+                    .store(interval_ticks, Ordering::Release);
+                self.stats
+                    .native_interval_successes
+                    .fetch_add(1, Ordering::Relaxed);
+                self.native_interval_status
+                    .store(NativeIntervalStatus::Applied as u8, Ordering::Release);
+                tracing::info!(
+                    requested_fps,
+                    interval_ticks,
+                    "live WGC native minimum update interval applied"
+                );
+            }
+            Err(error) => {
+                self.stats.native_interval_ticks.store(0, Ordering::Release);
+                self.stats
+                    .native_interval_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                self.native_interval_status.store(
+                    NativeIntervalStatus::UnsupportedOrFailed as u8,
+                    Ordering::Release,
+                );
+                tracing::warn!(requested_fps, interval_ticks, ?error, "live WGC native minimum update interval unsupported or failed; retaining safe demand-driven capture");
+            }
+        }
     }
 
     fn readback(&self, texture: &ID3D11Texture2D, width: u32, height: u32) -> Result<DynamicImage> {
@@ -1077,6 +1206,15 @@ mod tests {
         assert!(demand.is_complete(u64::MAX));
     }
 
+    #[test]
+    fn native_interval_rounds_up_without_an_arbitrary_fps_ceiling() {
+        assert_eq!(min_update_interval_ticks(1), 10_000_000);
+        assert_eq!(min_update_interval_ticks(2), 5_000_000);
+        assert_eq!(min_update_interval_ticks(24), 416_667);
+        assert_eq!(min_update_interval_ticks(30), 333_334);
+        assert_eq!(min_update_interval_ticks(i32::MAX as u32), 1);
+    }
+
     /// Resolve the first monitor through xcap, exactly like production code in
     /// monitor/windows.rs does. This also exercises the id contract that
     /// find_hmonitor re-derives (xcap Monitor::id() == HMONITOR value as u32) —
@@ -1123,6 +1261,37 @@ mod tests {
             (monitor_width, monitor_height)
         );
 
+        capture.stop();
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows desktop session"]
+    fn live_rate_changes_apply_without_restarting_the_session() {
+        let (monitor_id, _, _) = first_monitor().expect("no monitor found");
+        crate::screenshot_rate::set(2).expect("set 2fps");
+        let mut capture = PersistentCapture::new(monitor_id).expect("failed to start capture");
+        capture
+            .get_latest_image(Duration::from_secs(2))
+            .expect("failed to get first frame");
+
+        for fps in [24, 4] {
+            crate::screenshot_rate::set(fps).expect("set live fps");
+            capture
+                .get_latest_image_streaming(Duration::from_secs(2))
+                .expect("live rate change disturbed capture");
+            let stats = capture.stats();
+            assert_eq!(stats.native_interval_requested_fps, fps);
+            assert_eq!(stats.native_interval_ticks, min_update_interval_ticks(fps));
+            assert_eq!(
+                capture.native_interval_status(),
+                NativeIntervalStatus::Applied
+            );
+        }
+
+        let stats = capture.stats();
+        assert_eq!(stats.native_interval_attempts, 3);
+        assert_eq!(stats.native_interval_successes, 3);
+        assert_eq!(stats.native_interval_failures, 0);
         capture.stop();
     }
 
