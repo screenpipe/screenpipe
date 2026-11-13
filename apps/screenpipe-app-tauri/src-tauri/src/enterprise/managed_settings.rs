@@ -713,6 +713,17 @@ mod tests {
         );
         assert_eq!(legacy.ai_presets[0].max_context_chars, 128000);
         assert_eq!(legacy.ai_presets[0].max_tokens, 8192);
+        let cleared = json!({"aiPresetPolicy":null}).as_object().unwrap().clone();
+        persist_snapshot_store(
+            store.as_ref(),
+            &locked,
+            &updates,
+            &cleared,
+            root.path(),
+            || store.save().map_err(|e| e.to_string()),
+        )
+        .unwrap();
+        assert_eq!(store.get("settings").unwrap()["aiPresets"], json!([]));
     }
 
     #[test]
