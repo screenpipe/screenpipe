@@ -29,12 +29,12 @@ describe("shared feature flag refresh", () => {
     vi.useRealTimers();
   });
 
-  it("shares a minute schedule even when consumers mount beyond SDK debounce", () => {
+  it("shares a five-minute background schedule across consumers", () => {
     subscribe();
     vi.advanceTimersByTime(300);
     subscribe();
     expect(reload).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(59_700);
+    vi.advanceTimersByTime(299_700);
     expect(reload).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(300);
     expect(reload).toHaveBeenCalledTimes(2);
@@ -49,6 +49,7 @@ describe("shared feature flag refresh", () => {
     }
     expect(reload).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1000);
+    window.dispatchEvent(new Event("focus"));
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
@@ -59,7 +60,7 @@ describe("shared feature flag refresh", () => {
     expect(reload).toHaveBeenCalledTimes(1);
     visible("visible");
     expect(reload).toHaveBeenCalledTimes(2);
-    vi.advanceTimersByTime(59_999);
+    vi.advanceTimersByTime(299_999);
     expect(reload).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
     expect(reload).toHaveBeenCalledTimes(3);
@@ -71,19 +72,19 @@ describe("shared feature flag refresh", () => {
     vi.setSystemTime(Date.now() + 6 * 60 * 60 * 1000);
     window.dispatchEvent(new Event("focus"));
     expect(reload).toHaveBeenCalledTimes(2);
-    vi.advanceTimersByTime(59_999);
+    vi.advanceTimersByTime(299_999);
     expect(reload).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
     expect(reload).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps the minute deadline when the wall clock moves backwards", () => {
+  it("keeps the five-minute deadline when the wall clock moves backwards", () => {
     subscribe();
     vi.advanceTimersByTime(10_000);
     vi.setSystemTime(Date.now() - 6 * 60 * 60 * 1000);
     window.dispatchEvent(new Event("focus"));
     expect(reload).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(49_999);
+    vi.advanceTimersByTime(289_999);
     expect(reload).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
     expect(reload).toHaveBeenCalledTimes(2);
@@ -93,7 +94,7 @@ describe("shared feature flag refresh", () => {
     const stopA = subscribe();
     const stopB = subscribe();
     stopA();
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(300_000);
     expect(reload).toHaveBeenCalledTimes(2);
     visible("hidden");
     vi.advanceTimersByTime(3_600_000);
@@ -101,7 +102,7 @@ describe("shared feature flag refresh", () => {
     stopB();
     visible("visible");
     window.dispatchEvent(new Event("focus"));
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(300_000);
     expect(reload).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -109,13 +110,13 @@ describe("shared feature flag refresh", () => {
   it("retains each consumer's opt-out policy and resumes when allowed", () => {
     let allowed = false;
     subscribe(() => allowed);
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(300_000);
     expect(reload).not.toHaveBeenCalled();
     allowed = true;
     window.dispatchEvent(new Event("focus"));
     expect(reload).toHaveBeenCalledTimes(1);
     allowed = false;
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(300_000);
     expect(reload).toHaveBeenCalledTimes(1);
     subscribe(); // Functional remote-control flags retain their own policy.
     expect(reload).toHaveBeenCalledTimes(2);
@@ -126,8 +127,26 @@ describe("shared feature flag refresh", () => {
       throw new Error("not initialized");
     });
     subscribe();
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(300_000);
     expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds thirty minutes of continuous visible polling to seven requests", () => {
+    subscribe();
+    vi.advanceTimersByTime(30 * 60_000);
+    expect(reload).toHaveBeenCalledTimes(7); // initial + six periodic refreshes
+  });
+
+  it("refreshes on focus after a minute without waiting for the five-minute timer", () => {
+    subscribe();
+    vi.advanceTimersByTime(60_000);
+    expect(reload).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event("focus"));
+    expect(reload).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(299_999);
+    expect(reload).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(reload).toHaveBeenCalledTimes(3);
   });
 
   it("an unavailable consumer does not block an eligible consumer", () => {

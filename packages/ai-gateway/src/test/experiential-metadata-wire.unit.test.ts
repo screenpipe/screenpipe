@@ -56,7 +56,8 @@ describe('Experiential metadata on installed SDK requests', () => {
       expect(captured).toBeDefined();
       if (mode === 'hybrid') {
         const cf = JSON.parse(captured!.get('cf-aig-metadata')!);
-        expect(Object.keys(cf).sort()).toEqual(['lane', 'plan', 'trial', 'user_id', 'workload']);
+        expect(Object.keys(cf).sort()).toEqual(['enterprise_id_hash', 'lane', 'plan', 'trial', 'user_id', 'workload']);
+        expect(cf.enterprise_id_hash).toBe(tags.enterprise_id_hash);
         expect(cf.plan).toBe('business_ultra');
       }
       const original = await resolveHostedChatConnection(env, provider, context, model, undefined, 'retained_provider');

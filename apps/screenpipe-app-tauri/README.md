@@ -74,9 +74,8 @@ The eval covers source switching, local updates staying off, workflow details,
 search, matching local/cloud sidebar bounds, collapse/reopen, keyboard navigation,
 the host light/dark setting, compact layout, empty results, and denied access. It selects themes through
 the app's Appearance settings. Known Next.js development warnings from that settings
-route are logged; development-tool badges are omitted from captures. The existing
-shared Workflows shell uses its light palette under either host theme; this change
-does not introduce a separate cloud palette.
+route are logged; development-tool badges are omitted from captures. The shared
+Workflows shell and local/cloud catalogs follow the resolved host light/dark theme.
 
 ## fast browser UI development
 

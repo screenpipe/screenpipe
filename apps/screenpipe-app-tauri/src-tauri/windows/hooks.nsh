@@ -995,6 +995,33 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; Tauri's checkbox only removes bundle-id AppData directories. Screenpipe's
+  ; recordings live in this exact current-profile child instead; never honor
+  ; SCREENPIPE_DATA_DIR here because uninstall must not broaden its scope.
+  ${If} $DeleteAppDataCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+    SetShellVarContext current
+    RMDir /r "$PROFILE\.screenpipe"
+    ${If} ${FileExists} "$PROFILE\.screenpipe\*.*"
+      ; RMDir reports only an NSIS error flag, not the Windows failure that
+      ; caused a recursive removal to stop. Probe the retained root with a
+      ; named operation and capture its error before any other instruction.
+      System::Call 'kernel32::RemoveDirectoryW(w "$PROFILE\.screenpipe") i.r2 ?e'
+      Pop $0
+      ${If} $2 = 0
+        ; The retained root is part of normal, consented support collection.
+        ; Keep the failed operation, Windows cause, and actual outcome together.
+        CreateDirectory "$PROFILE\.screenpipe"
+        FileOpen $1 "$PROFILE\.screenpipe\update-install.log" a
+        FileSeek $1 0 END
+        FileWrite $1 'uninstaller_app_data_cleanup_failed: operation=remove_directory path=current_profile_screenpipe_data windows_result=$0 outcome=data_retained$\r$\n'
+        FileClose $1
+        DetailPrint "Screenpipe app data could not be fully deleted: remove_directory failed for $PROFILE\.screenpipe (Windows result $0); data was retained"
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Screenpipe was uninstalled, but remove_directory failed for $PROFILE\.screenpipe (Windows result $0), so some app data was retained. The remaining folder contains support details." /SD IDOK
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   !ifdef SCREENPIPE_PERSISTENT_INSTALLER
     Delete "$SMPROGRAMS\Remove Screenpipe Enterprise Persistence.lnk"
   !endif

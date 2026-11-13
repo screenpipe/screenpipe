@@ -32,8 +32,8 @@ export function buildExperientialRequestTags(auth: AuthResult): ExperientialRequ
   return parseTrainingMetadata(auth.trainingMetadata);
 }
 
-/** Enumerable symbols survive model-lane spreads without changing CF's JSON
- * metadata, allowance actor or existing five-field spend-rule contract. */
+/** Enumerable symbols preserve private audience/user/training tags across lane spreads.
+ * The context builder exposes the enterprise accounting hash separately. */
 export function attachExperientialRequestTags<T extends object>(context: T, tags: ExperientialRequestTags | null): T {
   const validated = parseTrainingMetadata(tags);
   if (!validated) {

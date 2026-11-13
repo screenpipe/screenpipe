@@ -333,6 +333,8 @@ export type AccountPlan =
 
 // Auth result with tier information
 export interface AuthResult {
+	/** Accounting labels accepted only from the authenticated backend service. Never grant access or training consent. */
+	enterpriseAiAttribution?: { enterprise_id_hash: string; ai_operation?: string };
 	/** Pseudonymous labels from the identity-matched authenticated website response. */
 	trainingMetadata?: ExperientialRequestTags;
 	isValid: boolean;

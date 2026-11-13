@@ -1,19 +1,20 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-use super::storage_error;
 use crate::DatabaseManager;
 
 impl DatabaseManager {
-    pub fn admit_consumer_sync(&self) -> Result<(), sqlx::Error> {
+    /// Preserve legacy record addresses; fresh histories use their persisted
+    /// database identity so a reset cannot reuse an earlier history's row IDs.
+    pub async fn consumer_sync_source_id(&self, device_id: &str) -> Result<String, sqlx::Error> {
         if self
             .storage
             .as_ref()
             .is_some_and(|s| !s.descriptor.source_continuity)
         {
-            return Err(storage_error("consumer upload binding unavailable: this independent database requires a separate destination namespace"));
+            return self.upload_source_id().await.map(str::to_owned);
         }
-        Ok(())
+        Ok(device_id.to_owned())
     }
 
     pub async fn upload_checkpoint(

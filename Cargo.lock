@@ -8669,6 +8669,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "windows 0.58.0",
  "windows-core 0.58.0",

@@ -254,3 +254,106 @@ it.each(["overview", "time", "bottlenecks", "evidence", "privacy"])("routes obso
   expect(screen.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible();
   expect(screen.getByRole("button", { name: "Context", exact: true })).toBeVisible();
 });
+
+describe("starting a managed workflow update", () => {
+  const oldJob = { id: "workflow-review:old", status: "incomplete" as const, message: "Previous update is incomplete" };
+  const newJob = { id: "workflow-discover:new", cycleId: "new-cycle", status: "queued" as const };
+  function platform() {
+    const value = createFixtureWorkflowsPlatform();
+    value.managesAnalysis = true;
+    value.loadCapturedWork = vi.fn().mockResolvedValue(null);
+    value.getLatestAnalysisJob = vi.fn().mockResolvedValue(oldJob);
+    value.getAnalysisJob = vi.fn().mockResolvedValue(newJob);
+    value.startAnalysisJob = vi.fn().mockResolvedValue(newJob);
+    return value;
+  }
+
+  it.each(["incomplete", "complete", "failed", "processing"] as const)("ignores a pre-click %s response after accepting a new execution", async status => {
+    const p = platform();
+    let finishOld!: (job: any) => void;
+    p.getLatestAnalysisJob = vi.fn(() => new Promise(resolve => { finishOld = resolve; }));
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    expect(p.getAnalysisJob).toHaveBeenCalledWith(newJob.id);
+    await act(async () => finishOld({ ...oldJob, status }));
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Waiting to start. Show agent activity/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Build my workflow catalog/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps loading throughout a slow start even when an old poll finishes", async () => {
+    const p = platform();
+    let finishOld!: (job: any) => void;
+    let finishStart!: (job: any) => void;
+    p.getLatestAnalysisJob = vi.fn(() => new Promise(resolve => { finishOld = resolve; }));
+    p.startAnalysisJob = vi.fn(() => new Promise(resolve => { finishStart = resolve; }));
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    await act(async () => finishOld(oldJob));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+    expect(p.getLatestAnalysisJob).toHaveBeenCalledOnce();
+    await act(async () => finishStart(newJob));
+    expect(p.getAnalysisJob).toHaveBeenCalledWith(newJob.id);
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+  });
+
+  it("ignores a late completed catalog from the previous request", async () => {
+    const p = platform();
+    p.getLatestAnalysisJob = vi.fn().mockResolvedValue({ ...oldJob, status: "complete" });
+    let finishOld!: (job: any) => void;
+    p.getAnalysisJob = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockResolvedValue(newJob);
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    await act(async () => finishOld({ ...oldJob, status: "complete", result: fixtureWorkflowAnalysis }));
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Research synthesis" })).not.toBeInTheDocument();
+  });
+
+  it("ignores an old status failure after accepting a new execution", async () => {
+    const p = platform();
+    let failOld!: (error: Error) => void;
+    p.getLatestAnalysisJob = vi.fn(() => new Promise((_resolve, reject) => { failOld = reject; }));
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    await act(async () => failOld(new Error("Old status connection failed")));
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+    expect(screen.queryByText("Old status connection failed")).not.toBeInTheDocument();
+  });
+
+  it("ends loading immediately on a rejected start and preserves its cause through old-job polling", async () => {
+    const p = platform();
+    const message = "Enable workflow tasks with Automatic updates before updating.";
+    p.startAnalysisJob = vi.fn().mockRejectedValue(new Error(message));
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    expect(screen.getByRole("button", { name: /Build my workflow catalog/ })).toBeVisible();
+    expect(screen.queryByText("Looking for workflows")).not.toBeInTheDocument();
+    expect(screen.getByText(message)).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByText(message)).toBeVisible();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    expect(p.startAnalysisJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a new active agent discovered while fetching a completed job's result", async () => {
+    const p = platform();
+    p.getLatestAnalysisJob = vi.fn().mockResolvedValue({ ...oldJob, status: "complete" });
+    await mount(p);
+    expect(screen.getByText("Looking for workflows")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Waiting to start. Show agent activity/ })).toBeVisible();
+  });
+
+  it("finishes the accepted run and then discovers later automatic updates", async () => {
+    const p = platform();
+    await mount(p);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Build my workflow catalog/ })));
+    vi.mocked(p.getAnalysisJob!).mockResolvedValueOnce({ ...newJob, status: "complete", result: fixtureWorkflowAnalysis });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();
+    expect(screen.queryByText("Looking for workflows")).not.toBeInTheDocument();
+    vi.mocked(p.getLatestAnalysisJob!).mockResolvedValue({ ...newJob, id: "workflow-discover:scheduled", status: "processing" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByRole("button", { name: /Updating workflows. Show agent activity/ })).toBeVisible();
+  });
+});

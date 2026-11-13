@@ -137,8 +137,8 @@ export function useAnnouncement(): UseAnnouncementResult {
       } catch {
         // posthog not ready / disabled — the one-shot read above is enough.
       }
-      // Share the one-minute refresh with other flag consumers. Repeated
-      // focus events reuse fresh cached values instead of forcing new requests.
+      // Share five-minute polling with other flag consumers. Foreground
+      // events refresh after one minute; repeated focus events reuse the cache.
       stopRefreshing = subscribeToFeatureFlagRefresh(
         () => !posthog.has_opted_out_capturing?.(),
       );

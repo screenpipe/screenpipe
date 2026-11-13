@@ -48,6 +48,111 @@ async fn search(db: &DatabaseManager, query: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn consumer_sync_sources_survive_restart_and_separate_recreated_histories() {
+    let device = "same-computer";
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    seed(&db, 1, Some("original history"), None).await;
+    let source = db.consumer_sync_source_id(device).await.unwrap();
+    assert_ne!(source, device);
+    db.save_upload_checkpoint("consumer", "acknowledged")
+        .await
+        .unwrap();
+    db.close().await;
+
+    let reopened = DatabaseManager::new(
+        root.path().join("db.sqlite").to_str().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reopened.consumer_sync_source_id(device).await.unwrap(),
+        source
+    );
+    assert_eq!(
+        reopened
+            .upload_checkpoint("consumer")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("acknowledged")
+    );
+    assert_eq!(
+        reopened
+            .frame_payloads(&[1], Projection::All)
+            .await
+            .unwrap()[&1]
+            .full_text
+            .as_deref(),
+        Some("original history")
+    );
+    reopened.close().await;
+
+    let replacement = tempfile::tempdir().unwrap();
+    let db =
+        DatabaseManager::new_hybrid(replacement.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+    seed(&db, 1, Some("replacement history"), None).await;
+    assert_ne!(db.consumer_sync_source_id(device).await.unwrap(), source);
+    assert!(db.upload_checkpoint("consumer").await.unwrap().is_none());
+    db.close().await;
+
+    let legacy = tempfile::tempdir().unwrap();
+    let path = legacy.path().join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    seed(&db, 1, Some("legacy history"), None).await;
+    assert_eq!(db.consumer_sync_source_id(device).await.unwrap(), device);
+    db.close().await;
+    migrate(legacy.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    let migrated = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        migrated.consumer_sync_source_id(device).await.unwrap(),
+        device
+    );
+    migrated.close().await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn consumer_sync_source_reopens_on_smb() {
+    let (_scratch, root) = smb_scratch_root();
+    let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
+        .await
+        .unwrap();
+    seed(&db, 1, Some("history on a shared drive"), None).await;
+    let source = db.consumer_sync_source_id("computer").await.unwrap();
+    db.close().await;
+    let reopened =
+        DatabaseManager::new(root.join("db.sqlite").to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+    assert_eq!(
+        reopened.consumer_sync_source_id("computer").await.unwrap(),
+        source
+    );
+    assert_eq!(
+        reopened
+            .frame_payloads(&[1], Projection::All)
+            .await
+            .unwrap()[&1]
+            .full_text
+            .as_deref(),
+        Some("history on a shared drive")
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
 async fn staged_sealed_reopened_search_and_full_payloads_match() {
     let root = tempfile::tempdir().unwrap();
     let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
@@ -689,11 +794,10 @@ async fn archive_record_budget_keeps_large_captures_resident_and_archives_later_
             .unwrap(),
         0
     );
-    assert!(db
-        .admit_consumer_sync()
-        .unwrap_err()
-        .to_string()
-        .contains("binding unavailable"));
+    assert_eq!(
+        db.consumer_sync_source_id("device").await.unwrap(),
+        db.upload_source_id().await.unwrap()
+    );
     db.close().await;
 }
 

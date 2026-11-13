@@ -5,7 +5,7 @@
 import { OpenAIProvider } from './openai';
 import { ExperientialArgonProvider } from './experiential-argon';
 import { ExperientialFableProvider } from './experiential-fable';
-import { AstraProvider } from './astra';
+import { AstraProvider, SolProvider } from './astra';
 import { OpenAIProProvider, OPENAI_PRO_NATIVE_FEATURES } from './openai-pro';
 import { AnthropicProvider } from './anthropic';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
@@ -216,7 +216,8 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 	}
 	const proFeatures = Object.prototype.hasOwnProperty.call(OPENAI_PRO_NATIVE_FEATURES, model)
 		? OPENAI_PRO_NATIVE_FEATURES[model as keyof typeof OPENAI_PRO_NATIVE_FEATURES] : undefined;
-	const Provider = model.toLowerCase() === 'gpt-6-astra' ? AstraProvider
+	const Provider = model.toLowerCase() === 'gpt-6.1-sol' ? SolProvider
+		: model.toLowerCase() === 'gpt-6-astra' ? AstraProvider
 		: proFeatures ? OpenAIProProvider : OpenAIProvider;
 	const provider = new Provider(
 		connection?.apiKey ?? requireSecret(env.OPENAI_API_KEY, 'OpenAI API key not configured'),

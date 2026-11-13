@@ -223,6 +223,19 @@ impl EnterpriseSyncConfig {
         }
         Ok(())
     }
+
+    /// Resolve fresh authorization for hosted diagnostics and recovery. Archive
+    /// destination admission belongs to uploads, not the support read posture.
+    /// Never reuse a readable policy after a failed refresh.
+    pub(super) async fn resolve_support_mode(&mut self) -> Result<(), EnterpriseSyncError> {
+        self.upload_mode = EnterpriseUploadMode::Blocked("support policy unresolved".into());
+        if let Some(mode) =
+            EnterpriseUploadMode::resolve_for_support(&self.license_key, &self.ingest_url).await?
+        {
+            self.upload_mode = mode;
+        }
+        Ok(())
+    }
 }
 
 // ─── Cursor (last-synced timestamp) ─────────────────────────────────────────
@@ -2545,7 +2558,7 @@ async fn fulfill_log_requests(
     // This worker owns a separate config from the recording sync loop. Resolve
     // its policy before polling: the startup clone is Blocked, and later policy
     // changes must also reach this worker while recording is unavailable.
-    if let Err(error) = cfg.resolve_upload_mode().await {
+    if let Err(error) = cfg.resolve_support_mode().await {
         debug!("log-requests: policy resolution failed: {error}");
         return None;
     }
@@ -3186,14 +3199,128 @@ pub(crate) mod tests {
         assert!(handled.is_none());
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn pin_failure_is_collected_without_uploading_recordings() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path(
+            "/api/enterprise/storage-binding/mode",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"desired_mode":"direct_upload"})),
+        )
+        .mount(&server)
+        .await;
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        let mut cursor = initialized_cursor();
+        cursor.save(&cfg.cursor_path).unwrap();
+        let checkpoint = std::fs::read(&cfg.cursor_path).unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let local = counting_local(
+            reads.clone(),
+            vec![vec![frame(
+                1,
+                "2026-08-04T00:01:00Z",
+                "private-app",
+                "private-recording",
+            )]],
+        );
+        let recovery = TestLicenseKeyRecovery::unavailable(reads.clone());
+        let http = enterprise_http_client();
+        let error = run_reported_sync_burst(&mut cfg, &mut cursor, &local, &http, &recovery)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("upload destination pin not configured"));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        wiremock::Mock::given(wiremock::matchers::path("/api/enterprise/upload-status"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(diagnostics::report(&cfg, &http, None)
+            .await
+            .unwrap()
+            .is_some());
+
+        let requested_at = "2026-08-04T00:02:00Z";
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"requested":true,"requested_at":requested_at}),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/logs"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"data":{
+                    "signedUrl":format!("{}/support-upload",server.uri()),
+                    "path":"logs/machine/enterprise-auto-dev-1/pin-failure.log"
+                }}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for (method, path) in [
+            ("PUT", "/support-upload"),
+            ("POST", "/api/logs/confirm"),
+            ("POST", "/api/enterprise/log-requests"),
+        ] {
+            wiremock::Mock::given(wiremock::matchers::method(method))
+                .and(wiremock::matchers::path(path))
+                .respond_with(wiremock::ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        assert_eq!(
+            fulfill_log_requests(&mut cfg, &http, None).await.as_deref(),
+            Some(requested_at)
+        );
+        let requests = server.received_requests().await.unwrap();
+        let report = requests
+            .iter()
+            .find(|r| r.url.path() == "/support-upload")
+            .unwrap();
+        let collected = String::from_utf8(report.body.clone()).unwrap();
+        assert!(collected.contains("upload destination pin not configured"));
+        assert!(collected.contains("pending data retained"));
+        assert!(!collected.contains("private-recording"));
+        assert!(requests.iter().all(|r| !matches!(
+            r.url.path(),
+            "/api/enterprise/upload-ticket"
+                | "/api/enterprise/upload-complete"
+                | "/api/enterprise/ingest"
+        )));
+        // A support refresh cannot turn the upload pin failure into admission.
+        assert!(
+            run_reported_sync_burst(&mut cfg, &mut cursor, &local, &http, &recovery)
+                .await
+                .is_err()
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(&cfg.cursor_path).unwrap(), checkpoint);
+    }
+
     #[tokio::test]
-    async fn log_requests_recover_initially_blocked_policy_after_lookup_failure() {
+    async fn log_requests_revoke_stale_readable_policy_and_recover_after_lookup_failure() {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _mode_env = UploadModeEnvGuard::clear();
         let server = wiremock::MockServer::start().await;
         let dir = TempDir::new().unwrap();
         let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
-        cfg.upload_mode = EnterpriseUploadMode::Blocked("startup policy unresolved".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::HostedIngest;
         let http = enterprise_http_client();
 
         wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -3920,6 +4047,7 @@ pub(crate) mod tests {
         let prior_license = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY").ok();
         let prior_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok();
         let prior_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+        let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
 
         // Case 1: no license env → None.
         std::env::remove_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY");
@@ -3960,7 +4088,12 @@ pub(crate) mod tests {
         assert_eq!(cfg.ingest_url, "https://staging/ingest");
 
         // Case 5: write-only direct upload needs no local key material and
-        // derives sibling control-plane URLs from the ingest URL.
+        // derives sibling control-plane URLs from the ingest URL. Direct
+        // modes fail closed without an MDM destination pin, so deploy one.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
+            "storage.customer.example.com",
+        );
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_write_only",
@@ -4025,6 +4158,21 @@ pub(crate) mod tests {
         )
         .is_none());
 
+        // Case 9: an explicit direct upload mode without a destination pin
+        // (and without the escape hatch) refuses to start sync — the
+        // fail-closed default for plaintext batches.
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS");
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_write_only",
+        );
+        let dir = TempDir::new().unwrap();
+        assert!(
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .is_none(),
+            "direct upload without a destination pin must refuse to start sync"
+        );
+
         // Restore prior state so we don't pollute other tests / the process.
         match prior_license {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY", v),
@@ -4037,6 +4185,10 @@ pub(crate) mod tests {
         match prior_mode {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v),
             None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+        }
+        match prior_pin {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
         }
     }
 
@@ -5180,13 +5332,26 @@ pub(crate) mod tests {
         assert!(!apply_rotated_device_config(&mut cfg, &remote));
     }
 
-    struct UploadModeEnvGuard(Option<String>);
+    struct UploadModeEnvGuard(Option<String>, Option<String>);
 
     impl UploadModeEnvGuard {
         fn clear() -> Self {
             let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
             std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
-            Self(prior)
+            Self(prior, None)
+        }
+
+        /// Like `clear`, but also deploys an MDM destination pin for the
+        /// guard's lifetime — direct modes fail closed without one.
+        fn pin() -> Self {
+            let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+            std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
+            let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
+            std::env::set_var(
+                "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
+                "storage.customer.example.com",
+            );
+            Self(prior, prior_pin)
         }
     }
 
@@ -5195,6 +5360,12 @@ pub(crate) mod tests {
             match self.0.take() {
                 Some(value) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", value),
                 None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+            }
+            match self.1.take() {
+                Some(value) => {
+                    std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS", value)
+                }
+                None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS"),
             }
         }
     }
@@ -5714,7 +5885,7 @@ pub(crate) mod tests {
     async fn sync_diagnostic_reports_failed_tick_independently_and_retries_after_restart() {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _policy_guard = crate::enterprise_policy::sync_streams_test_lock();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -6154,7 +6325,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn server_mode_resolution_covers_hosted_and_both_direct_modes() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::clear();
+        let _mode_env = UploadModeEnvGuard::pin();
         for (desired_mode, expected_label) in [
             ("hosted_ingest", "hosted_ingest"),
             ("direct_upload_readable", "direct_readable"),
@@ -6182,7 +6353,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn explicit_mdm_mode_resolves_without_calling_the_control_plane() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard(std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok());
+        let _mode_env = UploadModeEnvGuard::pin();
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_write_only",

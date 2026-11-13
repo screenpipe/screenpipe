@@ -510,7 +510,7 @@ export function WorkflowsView({ refreshControl, emptyState, reviewIds, workflows
     }), [query, workflows, selectedStatuses, selectedApps, selectedPeople, showArchived, sort]);
 
   return (
-    <section data-workflows-theme="light" aria-label="Workflow list">
+    <section aria-label="Workflow list">
       <div className={`${styles.catalogHeader} ${styles.quietCatalogHeader}`}>
         <div className={styles.catalogHeading}>
           <h1>Workflows</h1>
@@ -926,6 +926,8 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
   const [scopeId, setScopeId] = useState(initialScopeId ?? initialAnalysis?.scope?.id ?? "");
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisJob, setAnalysisJob] = useState<WorkflowAnalysisJob | null>(null);
+  const analysisRequest = useRef({ pending: false, jobId: undefined as string | undefined, failed: false });
+  const [analysisPollRevision, setAnalysisPollRevision] = useState(0);
   const runActivity = useWorkflowRunActivity(analysisJob, active && analyzing, platform.subscribeAnalysisActivity);
   const [analysisError, setAnalysisError] = useState("");
   const [selectedWorkflow, setSelectedWorkflow] = useState(0);
@@ -1087,50 +1089,65 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
 
   const observedJob = useRef("");
   useEffect(() => {
-    if (!active || !platform.managesAnalysis || !platform.getLatestAnalysisJob || !platform.getAnalysisJob) return;
+    const request = analysisRequest.current;
+    if (!active || request.pending || !platform.managesAnalysis || !platform.getLatestAnalysisJob || !platform.getAnalysisJob) return;
     let disposed = false;
     let prepared = false;
     let timer: ReturnType<typeof setTimeout>;
+    const stale = () => disposed || analysisRequest.current !== request;
     const poll = async () => {
+      if (stale()) return;
       let delay = 30_000;
       try {
         if (!prepared) {
           await platform.ensureAnalysisTask?.();
+          if (stale()) return;
           prepared = true;
-          if (!disposed) setAnalysisError("");
+          if (!request.failed) setAnalysisError("");
         }
-        const job = await platform.getLatestAnalysisJob!();
-        if (disposed) return;
+        // Follow the accepted execution immediately after a click. A latest-job
+        // read started before that click cannot end or replace the new run.
+        let job = request.jobId ? await platform.getAnalysisJob!(request.jobId) : await platform.getLatestAnalysisJob!();
+        if (stale()) return;
         // Missing status is not a new run or proof that the active update ended.
         if (!job) { timer = setTimeout(poll, 30_000); return; }
-        if (job?.status !== "complete") setAnalysisJob(job);
+        if (job.status === "complete" && !job.result && observedJob.current !== job.id) {
+          job = await platform.getAnalysisJob!(job.id);
+          if (stale()) return;
+        }
+        if (job.status !== "complete" || job.result) setAnalysisJob(job);
         if (job && (job.status === "queued" || job.status === "processing")) {
+          if (request.jobId) request.jobId = job.id;
           delay = 3000;
+          request.failed = false;
           setAnalyzing(true);
           setAnalysisError("");
         } else {
+          request.jobId = undefined;
           if (job && observedJob.current !== job.id) {
             if (job.status === "complete") {
-              const completed = await platform.getAnalysisJob!(job.id);
-              if (!disposed) setAnalysisJob(completed);
-              if (!disposed && completed.result) { setAnalysis(current => retainNewerWorkflowEdits(current, sanitizeWorkflowAnalysis(completed.result!))); setCatalogReady(true); setAnalysisError(""); observedJob.current = job.id; }
-              else if (!disposed && completed.message) setAnalysisError(completed.message);
+              const result = job.result;
+              if (result) { setAnalysis(current => retainNewerWorkflowEdits(current, sanitizeWorkflowAnalysis(result))); setCatalogReady(true); if (!request.failed) setAnalysisError(""); observedJob.current = job.id; }
+              else if (job.message && !request.failed) setAnalysisError(job.message);
             } else {
-              setAnalysisError(job.message || "Could not update workflows.");
+              if (!request.failed) setAnalysisError(job.message || "Could not update workflows.");
               observedJob.current = job.id;
             }
           }
           if (!disposed) setAnalyzing(false);
         }
-      } catch (error) { if (!disposed) { setAnalysisError(error instanceof Error ? error.message : "Could not check the workflow task."); } }
-      if (!disposed) timer = setTimeout(poll, delay);
+      } catch (error) { if (!stale() && !request.failed) { setAnalysisError(error instanceof Error ? error.message : "Could not check the workflow task."); } }
+      if (!stale()) timer = setTimeout(poll, delay);
     };
     void poll();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [platform, active]);
+  }, [platform, active, analysisPollRevision]);
 
   const analyze = useCallback(async () => {
     if (analysisUnavailableReason) { if (onAnalysisUnavailable) onAnalysisUnavailable(); else setAnalysisError(analysisUnavailableReason); return; }
+    if (analysisRequest.current.pending) return;
+    const request = { pending: true, jobId: undefined as string | undefined, failed: false };
+    analysisRequest.current = request;
     setAnalyzing(true);
     setAnalysisError("");
     try {
@@ -1141,7 +1158,11 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
       }
       const requestedScope = activeScope ?? undefined;
       if (platform.managesAnalysis && platform.startAnalysisJob) {
-        setAnalysisJob(await platform.startAnalysisJob(WORKFLOW_CATALOG_DAYS, { scope: requestedScope, workProfile }));
+        const job = await platform.startAnalysisJob(WORKFLOW_CATALOG_DAYS, { scope: requestedScope, workProfile });
+        request.jobId = job.id;
+        observedJob.current = "";
+        setAnalysisJob(job);
+        setAnalyzing(job.status === "queued" || job.status === "processing");
         return;
       }
       const nextAnalysis = platform.startAnalysisJob
@@ -1162,8 +1183,12 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
         }
       }
     } catch (error) {
+      request.failed = true;
+      setAnalyzing(false);
       setAnalysisError(error instanceof Error ? error.message : String(error || "Work map analysis failed."));
     } finally {
+      request.pending = false;
+      if (platform.managesAnalysis) setAnalysisPollRevision(value => value + 1);
       if (!platform.managesAnalysis) setAnalyzing(false);
     }
   }, [activeScope, analysis, platform, storageKey, workProfile, analysisUnavailableReason, onAnalysisUnavailable]);

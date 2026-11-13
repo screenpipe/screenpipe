@@ -49,6 +49,8 @@ mod imp {
 
     #[derive(Debug, Clone, Default, Deserialize, Serialize)]
     struct Cursor {
+        #[serde(default)]
+        source_id: Option<String>,
         enabled_at: Option<String>,
         last_frame_ts: Option<String>,
         last_audio_ts: Option<String>,
@@ -69,6 +71,15 @@ mod imp {
     }
 
     impl Cursor {
+        fn select_source(&mut self, source_id: &str, legacy_device_id: &str) {
+            let same_source = self.source_id.as_deref() == Some(source_id)
+                || (self.source_id.is_none() && source_id == legacy_device_id);
+            if !same_source {
+                *self = Self::default();
+            }
+            self.source_id = Some(source_id.to_owned());
+        }
+
         fn load(path: &std::path::Path) -> Self {
             std::fs::read_to_string(path)
                 .ok()
@@ -280,14 +291,7 @@ mod imp {
                 .send()
                 .await
                 .map_err(|error| error.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("local search returned {}", response.status()));
-            }
-            response
-                .json::<LocalSearchResponse>()
-                .await
-                .map(|body| body.data)
-                .map_err(|error| format!("local search decode failed: {error}"))
+            decode_local_search_response(response, content_type).await
         }
 
         async fn frames(&self, since: &str, offset: u32) -> Result<Vec<FrameRow>, String> {
@@ -480,6 +484,42 @@ mod imp {
     }
 
     #[derive(Debug, Deserialize)]
+    struct LocalSearchError {
+        error: Option<String>,
+        code: Option<String>,
+    }
+
+    async fn decode_local_search_response(
+        response: reqwest::Response,
+        stream: &str,
+    ) -> Result<Vec<LocalSearchItem>, String> {
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response.json::<LocalSearchError>().await.ok();
+            let mut fields = Vec::new();
+            if let Some(code) = detail.as_ref().and_then(|body| body.code.as_deref()) {
+                fields.push(format!("code={code}"));
+            }
+            if let Some(error) = detail.as_ref().and_then(|body| body.error.as_deref()) {
+                fields.push(format!("error={error}"));
+            }
+            return Err(if fields.is_empty() {
+                format!("local search {stream} returned {status}")
+            } else {
+                format!(
+                    "local search {stream} returned {status}: {}",
+                    fields.join("; ")
+                )
+            });
+        }
+        response
+            .json::<LocalSearchResponse>()
+            .await
+            .map(|body| body.data)
+            .map_err(|error| format!("local search decode failed: {error}"))
+    }
+
+    #[derive(Debug, Deserialize)]
     #[serde(tag = "type", content = "content")]
     enum LocalSearchItem {
         OCR(LocalOcr),
@@ -558,8 +598,6 @@ mod imp {
             return Ok(false);
         };
         let enabled_at = effective_enabled_at(server_enabled_at, config.device_enabled_at);
-        cursor.clamp_to(Some(enabled_at));
-        cursor.save(&config.cursor_path)?;
 
         let db = app
             .state::<crate::recording::RecordingState>()
@@ -569,16 +607,23 @@ mod imp {
             .as_ref()
             .map(|server| std::sync::Arc::clone(&server.db))
             .ok_or("recording database is not ready")?;
-        db.admit_consumer_sync()
-            .map_err(|error| error.to_string())?;
-        let read = db
-            .storage_read_token()
+        let source_id = db
+            .consumer_sync_source_id(&config.device_id)
             .await
             .map_err(|error| error.to_string())?;
-        let binding = format!(
+        // Recording may append while these pages are fetched. Only deletion or privacy changes may revoke bytes already prepared for upload.
+        let read = db
+            .storage_export_token()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut binding = format!(
             "consumer:{}:{}:{}",
             config.ingest_url, config.account_id, config.device_id
         );
+        if source_id != config.device_id {
+            binding.push(':');
+            binding.push_str(&source_id);
+        }
         if let Some(saved) = db
             .upload_checkpoint(&binding)
             .await
@@ -586,8 +631,10 @@ mod imp {
         {
             *cursor = serde_json::from_str(&saved)
                 .map_err(|error| format!("invalid source checkpoint: {error}"))?;
-            cursor.clamp_to(Some(enabled_at));
         }
+        cursor.select_source(&source_id, &config.device_id);
+        cursor.clamp_to(Some(enabled_at));
+        cursor.save(&config.cursor_path)?;
         let frames = local
             .frames(
                 cursor.last_frame_ts.as_deref().unwrap(),
@@ -635,7 +682,7 @@ mod imp {
         .into_iter()
         .any(|count| count >= PAGE_LIMIT as usize);
         let body = build_jsonl_with_parsed(
-            &config.device_id,
+            &source_id,
             &config.device_label,
             &frames,
             &parsed,
@@ -833,6 +880,55 @@ mod imp {
         use super::*;
 
         #[test]
+        fn database_switch_resets_progress_but_keeps_the_consent_floor() {
+            let floor = DateTime::parse_from_rfc3339("2026-11-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            let mut cursor = Cursor {
+                source_id: Some("database-a".into()),
+                last_frame_ts: Some("2026-11-06T00:00:00Z".into()),
+                boundary: CursorBoundary {
+                    frames: 42,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            cursor.select_source("database-b", "computer");
+            cursor.clamp_to(Some(floor));
+            assert_eq!(cursor.source_id.as_deref(), Some("database-b"));
+            assert_eq!(
+                cursor.last_frame_ts.as_deref(),
+                Some("2026-11-01T00:00:00+00:00")
+            );
+            assert_eq!(cursor.boundary.frames, 0);
+
+            cursor.last_frame_ts = Some("2026-11-02T00:00:00Z".into());
+            cursor.boundary.frames = 7;
+            let saved = serde_json::to_vec(&cursor).unwrap();
+            let mut reopened: Cursor = serde_json::from_slice(&saved).unwrap();
+            reopened.select_source("database-b", "computer");
+            reopened.clamp_to(Some(floor));
+            assert_eq!(reopened.last_frame_ts, cursor.last_frame_ts);
+            assert_eq!(reopened.boundary.frames, 7);
+        }
+
+        #[test]
+        fn old_cursors_keep_legacy_progress_but_cannot_skip_a_fresh_history() {
+            let saved = r#"{"last_frame_ts":"2026-11-06T00:00:00Z","boundary":{"frames":9,"audio":0,"ui":0,"memories":0,"parsed":0}}"#;
+            let mut legacy: Cursor = serde_json::from_str(saved).unwrap();
+            legacy.select_source("computer", "computer");
+            assert_eq!(
+                legacy.last_frame_ts.as_deref(),
+                Some("2026-11-06T00:00:00Z")
+            );
+            assert_eq!(legacy.boundary.frames, 9);
+            let mut fresh: Cursor = serde_json::from_str(saved).unwrap();
+            fresh.select_source("new-database", "computer");
+            assert!(fresh.last_frame_ts.is_none());
+            assert_eq!(fresh.boundary.frames, 0);
+        }
+
+        #[test]
         fn disabled_server_status_has_no_upload_boundary() {
             assert!(enabled_at_from_status(ServerSyncStatus {
                 enabled: false,
@@ -878,6 +974,78 @@ mod imp {
             assert_eq!(
                 effective_enabled_at(server_enabled_at, Some(device_enabled_at)),
                 device_enabled_at
+            );
+        }
+
+        #[tokio::test]
+        async fn local_search_error_keeps_safe_server_cause_in_support_diagnostics() {
+            use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+            let server = MockServer::start().await;
+            Mock::given(path("/search"))
+                .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                    "error": "frame storage: read revision changed; retry the complete query",
+                    "code": "storage_read_revoked",
+                    "private_content": "private-person@example.com",
+                    "token": "password=hunter2"
+                })))
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .get(format!("{}/search", server.uri()))
+                .send()
+                .await
+                .unwrap();
+            let error = decode_local_search_response(response, "ocr")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error,
+                "local search ocr returned 503 Service Unavailable: code=storage_read_revoked; error=frame storage: read revision changed; retry the complete query"
+            );
+            assert!(!error.contains("private-person@example.com"));
+            assert!(!error.contains("hunter2"));
+
+            let logs = tempfile::tempdir().unwrap();
+            tokio::fs::write(
+                logs.path().join("screenpipe-app.2026-11-05.1.log"),
+                format!(
+                    "WARN data sync frames fetch skipped: {error}\ncontact=private-person@example.com password=hunter2\n"
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::fs::write(
+                logs.path().join("screenpipe-app.2026-11-06.log"),
+                "INFO recorder restarted\n",
+            )
+            .await
+            .unwrap();
+            let report =
+                crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                    .await
+                    .unwrap();
+            assert!(report.contains("local search ocr returned 503 Service Unavailable"));
+            assert!(report.contains("code=storage_read_revoked"));
+            assert!(report.contains("frame storage: read revision changed"));
+            assert!(report.contains("recorder restarted"));
+            assert!(!report.contains("private-person@example.com"));
+            assert!(!report.contains("hunter2"));
+
+            Mock::given(path("/malformed"))
+                .respond_with(ResponseTemplate::new(503).set_body_string("not json"))
+                .mount(&server)
+                .await;
+            let malformed = reqwest::Client::new()
+                .get(format!("{}/malformed", server.uri()))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                decode_local_search_response(malformed, "audio")
+                    .await
+                    .unwrap_err(),
+                "local search audio returned 503 Service Unavailable"
             );
         }
 

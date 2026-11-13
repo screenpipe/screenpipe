@@ -118,10 +118,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
   return <>
     <Dialog open={active && !promptDismissed && (!processingPromptSeen || processingBusy || Boolean(processingError))} onOpenChange={open => { if (!open) void chooseProcessing(false); }}>
       <DialogContent style={{
-        "--foreground": "0 0% 9%", "--background": "0 0% 100%", "--muted-foreground": "80 4% 42%",
-        "--border": "70 10% 85%", "--primary": "0 0% 9%", "--primary-foreground": "0 0% 100%",
-        "--accent": "70 10% 95%", "--accent-foreground": "0 0% 9%",
-        colorScheme: "light", background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+        background: "hsl(var(--background))", color: "hsl(var(--foreground))", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
       } as React.CSSProperties} className="[&_button]:normal-case [&_button]:tracking-normal [&_button]:font-[inherit]" overlayClassName="bg-black/30" hideCloseButton={processingBusy} onEscapeKeyDown={event => { if (processingBusy) event.preventDefault(); }} onPointerDownOutside={event => { if (processingBusy) event.preventDefault(); }}>
         <DialogHeader className="text-left"><DialogTitle className="text-xl" style={{ fontFamily: "inherit", letterSpacing: 0 }}>Turn off local workflow processing?</DialogTitle><DialogDescription className="pt-2 leading-relaxed">Cloud workflows are processed in your workspace. Turn off the local workflow pipes to avoid running both. Recording, uploads, and other pipes stay as they are.</DialogDescription></DialogHeader>
         <p className="text-xs text-muted-foreground">You can turn local processing back on under This device → Automatic updates.</p>

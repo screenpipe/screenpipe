@@ -8,6 +8,10 @@ use std::time::Duration;
 pub const DESKTOP_DIAGNOSTIC_REPORT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub const CLI_DIAGNOSTIC_REPORT_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
+/// Routine CPU/RAM fleet summaries are hourly. Keep local resource sampling
+/// and recording-pipeline health reporting independent of this upload cadence.
+pub const RESOURCE_DIAGNOSTIC_REPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 const FINAL_REPORT_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Shared by resource and pipeline reporters in one engine generation. Flushes
