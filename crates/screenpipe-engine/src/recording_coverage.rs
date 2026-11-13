@@ -227,8 +227,8 @@ pub fn start_coverage_sampler(
 mod tests {
     use super::*;
 
-    // The accumulator is a process-global; reset it so tests don't interfere
-    // when run in the same process.
+    // Serialize the whole reset/update/assert sequence because the accumulator
+    // is process-global; resetting alone does not prevent concurrent writes.
     fn reset() {
         if let Ok(mut acc) = RECORDING_COVERAGE.lock() {
             *acc = CoverageAccumulator::default();
@@ -236,6 +236,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(recording_coverage)]
     fn buckets_active_secs_and_ratio_exclude_idle() {
         reset();
         // 80s recording, 20s stalled, 100s idle.
@@ -255,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(recording_coverage)]
     fn paused_counts_toward_active_but_not_recording() {
         reset();
         record_coverage_tick(CoverageState::Recording, 30);
@@ -268,6 +270,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(recording_coverage)]
     fn ticks_accumulate_into_same_bucket() {
         reset();
         record_coverage_tick(CoverageState::Recording, 5);
@@ -279,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(recording_coverage)]
     fn empty_accumulator_is_zero_ratio() {
         reset();
         let s = coverage_snapshot();
@@ -288,6 +292,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(recording_coverage)]
     fn perfect_coverage_is_ratio_one() {
         reset();
         record_coverage_tick(CoverageState::Recording, 600);
