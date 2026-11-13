@@ -329,17 +329,7 @@ fn sync_pipes(root: &Path, raw: &Value) -> Result<(), String> {
         }
         let body = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         if body.lines().any(|line| line.starts_with(PIPE_MARKER)) {
-            let next = body
-                .lines()
-                .map(|line| {
-                    if line == "enabled: true" {
-                        "enabled: false"
-                    } else {
-                        line
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let next = body.replacen("\nenabled: true\n", "\nenabled: false\n", 1);
             screenpipe_core::memories::external_sync::write_atomic_full(&path, &next)
                 .map_err(|e| e.to_string())?;
         }

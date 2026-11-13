@@ -808,6 +808,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_policy_opt_out_stops_an_already_running_analytics_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, mut received, server) = analytics_server(axum::http::StatusCode::OK, None).await;
+        let manager = test_manager(dir.path(), url, true);
+        manager.send_event("before_policy", None).await.unwrap();
+        assert_eq!(received.recv().await.unwrap()["event"], "before_policy");
+        manager.set_enabled(false);
+        manager.send_event("after_policy", None).await.unwrap();
+        assert!(received.try_recv().is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn event_burst_reuses_cached_host_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let (url, mut received, server) = analytics_server(axum::http::StatusCode::OK, None).await;
