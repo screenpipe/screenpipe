@@ -9,8 +9,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MAX_SCREENSHOT_FRAME_RATE } from "@/lib/utils/tauri";
 
-export function ScreenshotFrameRateCard({ value, onChange }: {
+export function ScreenshotFrameRateCard({ value, minimum = 1, onChange }: {
   value: number;
+  minimum?: number;
   onChange: (fps: number) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -24,15 +25,15 @@ export function ScreenshotFrameRateCard({ value, onChange }: {
             <div className="min-w-0">
               <h3 id="screenshot-frame-rate-label" className="text-sm font-medium text-foreground">Screenshot frame rate</h3>
               <p id="screenshot-frame-rate-description" className="text-xs text-muted-foreground mt-0.5">
-                Background sampling rate. Activity-triggered screenshots can request a fresh frame. Higher rates use more power. HD video has its own frame rate.
+                Background sampling rate. Sampling must cover Capture frequency. Activity-triggered screenshots can request a fresh frame. Higher rates use more power. HD video has its own frame rate.
               </p>
-              {error && <p id="screenshot-frame-rate-error" role="alert" className="text-xs text-destructive mt-1">Enter a positive whole frame rate.</p>}
+              {error && <p id="screenshot-frame-rate-error" role="alert" className="text-xs text-destructive mt-1">Enter a whole frame rate of at least {minimum} fps to cover Capture frequency.</p>}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              min={1}
+              min={minimum}
               // CMTime uses a positive signed 32-bit timescale.
               max={MAX_SCREENSHOT_FRAME_RATE}
               step={1}

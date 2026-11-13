@@ -9,6 +9,20 @@ import { ScreenshotFrameRateCard } from "./screenshot-frame-rate-card";
 afterEach(cleanup);
 
 describe("screenshot frame rate", () => {
+  it("prevents sampling below the configured idle recording rate", () => {
+    const update = vi.fn();
+    // Idle every 250 ms needs four samples per second.
+    render(<ScreenshotFrameRateCard value={4} minimum={4} onChange={update} />);
+    const input = screen.getByRole("spinbutton", { name: "Screenshot frame rate" });
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.blur(input);
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("at least 4 fps");
+    fireEvent.change(input, { target: { value: "5" } });
+    fireEvent.blur(input);
+    expect(update).toHaveBeenCalledWith(5);
+  });
+
   it("commits a valid sampling rate and leaves an invalid draft uncommitted", () => {
     const update = vi.fn();
     render(<ScreenshotFrameRateCard value={24} onChange={update} />);

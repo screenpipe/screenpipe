@@ -3,7 +3,7 @@
 
 # Screenshot sampling: default and VM measurements
 
-The default is **2 fps**. The setting controls background sampling and applies on the next screenshot without restarting recording. Saved screenshots keep their existing activity and capture-frequency rules. HD video has its own frame rate.
+The default is **2 fps**. The setting controls background sampling and applies on the next screenshot without restarting recording. Saved screenshots keep their existing activity and capture-frequency rules. HD video has its own frame rate. Effective sampling is at least the configured idle recording rate (`ceil(1000 / idleCaptureIntervalMs)` fps). A faster idle pin raises sampling rather than slowing the promised recording cadence; live sampling edits below that minimum are rejected.
 
 At roughly 3.5–4 screenshot requests per second, 24/30 fps did not provide a consistent fresh-request latency advantage that justifies making either the default. Two fps preserves the previous native preview cadence, with cost close to 1 fps in these VMs. Higher rates remain available.
 

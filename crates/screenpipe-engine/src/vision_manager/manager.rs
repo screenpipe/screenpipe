@@ -364,9 +364,10 @@ impl VisionManager {
             .screenshot_frame_rate_initialized
             .swap(true, std::sync::atomic::Ordering::AcqRel)
         {
-            if let Err(error) =
-                screenpipe_screen::screenshot_rate::set(self.config.screenshot_frame_rate)
-            {
+            if let Err(error) = screenpipe_screen::screenshot_rate::initialize(
+                self.config.screenshot_frame_rate,
+                self.config.idle_capture_interval_ms,
+            ) {
                 self.screenshot_frame_rate_initialized
                     .store(false, std::sync::atomic::Ordering::Release);
                 return Err(error);

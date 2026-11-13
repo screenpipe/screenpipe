@@ -3954,14 +3954,21 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {screenshotImagesEnabled && (isMacOS || isWindows) && (
-          <LockedSetting settingKey="screenshotFrameRate">
-            <ScreenshotFrameRateCard
-              value={settings.screenshotFrameRate ?? DEFAULT_SCREENSHOT_FRAME_RATE}
-              onChange={handleScreenshotFrameRateChange}
-            />
-          </LockedSetting>
-        )}
+        {screenshotImagesEnabled && (isMacOS || isWindows) && (() => {
+          const idleMs = settings.idleCaptureIntervalMs;
+          // Match the engine's whole-fps floor: sampling must cover idle saves.
+          const minimum = idleMs != null && idleMs > 0
+            ? Math.max(1, Math.ceil(1000 / idleMs)) : 1;
+          return (
+            <LockedSetting settingKey="screenshotFrameRate">
+              <ScreenshotFrameRateCard
+                value={Math.max(settings.screenshotFrameRate ?? DEFAULT_SCREENSHOT_FRAME_RATE, minimum)}
+                minimum={minimum}
+                onChange={handleScreenshotFrameRateChange}
+              />
+            </LockedSetting>
+          );
+        })()}
 
         {/* Capture frequency — guaranteed screenshot cadence. Capture is
             event-driven (clicks, typing, app/window switches, visual change),

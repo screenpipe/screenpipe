@@ -8,11 +8,11 @@ confidence, and criticality.
 - Manifest: `docs/coverage/core-engine-map.json`
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y, screenpipe-fs
 - Mapped suites: 37
-- Mapped Rust files: 413
-- Active test blocks: 4044
+- Mapped Rust files: 414
+- Active test blocks: 4047
 - Ignored/manual test blocks: 200
-- Declared test blocks: 4244
-- Weighted coverage points: 3327.4
+- Declared test blocks: 4247
+- Weighted coverage points: 3330.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ are explicitly enabled in a runtime lane.
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 33 | 3879 | 177 | 3253.6 | 21 | 11 | 100% |
-| macos | 32 | 3924 | 161 | 3249.7 | 22 | 11 | 100% |
-| linux | 29 | 3457 | 152 | 2871.9 | 20 | 11 | 100% |
+| windows | 33 | 3882 | 177 | 3256.6 | 21 | 11 | 100% |
+| macos | 32 | 3927 | 161 | 3252.7 | 22 | 11 | 100% |
+| linux | 29 | 3460 | 152 | 2874.9 | 20 | 11 | 100% |
 
 ## Crate Summary
 
@@ -35,7 +35,7 @@ are explicitly enabled in a runtime lane.
 | screenpipe-db | 5 | 69 | 30 | 644 | 35 | 613.2 | 9 |
 | screenpipe-sqlite-coordinator | 1 | 0 | 3 | 27 | 0 | 27.0 | 2 |
 | screenpipe-audio | 8 | 29 | 54 | 703 | 56 | 614.9 | 5 |
-| screenpipe-screen | 6 | 9 | 26 | 353 | 12 | 305.6 | 4 |
+| screenpipe-screen | 6 | 9 | 27 | 356 | 12 | 308.6 | 4 |
 | screenpipe-a11y | 4 | 2 | 34 | 407 | 43 | 296.3 | 3 |
 | screenpipe-fs | 1 | 0 | 1 | 3 | 0 | 3.0 | 3 |
 
@@ -73,17 +73,17 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | meeting | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 6 suites / 1770 active / 32 ignored / 1446.3 pts | 4 suites / 1416 active / 28 ignored / 1116.0 pts |
 | ocr | 4 suites / 141 active / 7 ignored / 130.8 pts | 4 suites / 134 active / 7 ignored / 128.6 pts | 3 suites / 125 active / 6 ignored / 119.6 pts |
 | os-integration | 1 suites / 6 active / 0 ignored / 1.7 pts | 1 suites / 6 active / 0 ignored / 1.7 pts | - |
-| performance | 13 suites / 1780 active / 91 ignored / 1575.0 pts | 14 suites / 1907 active / 104 ignored / 1625.8 pts | 13 suites / 1780 active / 91 ignored / 1575.0 pts |
+| performance | 13 suites / 1783 active / 91 ignored / 1578.0 pts | 14 suites / 1910 active / 104 ignored / 1628.8 pts | 13 suites / 1783 active / 91 ignored / 1578.0 pts |
 | pipes | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
-| privacy | 5 suites / 1069 active / 43 ignored / 870.4 pts | 5 suites / 1127 active / 27 ignored / 872.9 pts | 5 suites / 1027 active / 15 ignored / 835.3 pts |
+| privacy | 5 suites / 1072 active / 43 ignored / 873.4 pts | 5 suites / 1130 active / 27 ignored / 875.9 pts | 5 suites / 1030 active / 15 ignored / 838.3 pts |
 | real-app | - | 1 suites / 127 active / 13 ignored / 50.8 pts | - |
 | speaker | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts | 2 suites / 416 active / 18 ignored / 416.0 pts |
 | storage | 4 suites / 715 active / 45 ignored / 596.2 pts | 4 suites / 715 active / 45 ignored / 596.2 pts | 4 suites / 715 active / 45 ignored / 596.2 pts |
 | sync | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts | 1 suites / 559 active / 3 ignored / 391.3 pts |
-| timeline | 4 suites / 1310 active / 53 ignored / 1083.8 pts | 4 suites / 1310 active / 53 ignored / 1083.8 pts | 4 suites / 1310 active / 53 ignored / 1083.8 pts |
+| timeline | 4 suites / 1313 active / 53 ignored / 1086.8 pts | 4 suites / 1313 active / 53 ignored / 1086.8 pts | 4 suites / 1313 active / 53 ignored / 1086.8 pts |
 | transcription | 7 suites / 901 active / 53 ignored / 704.3 pts | 6 suites / 895 active / 53 ignored / 700.1 pts | 6 suites / 895 active / 53 ignored / 700.1 pts |
 | ui-events | 4 suites / 840 active / 34 ignored / 637.3 pts | 3 suites / 771 active / 5 ignored / 589.0 pts | 3 suites / 771 active / 5 ignored / 589.0 pts |
-| vision-capture | 6 suites / 660 active / 36 ignored / 518.7 pts | 6 suites / 653 active / 36 ignored / 516.5 pts | 5 suites / 644 active / 35 ignored / 507.5 pts |
+| vision-capture | 6 suites / 663 active / 36 ignored / 521.7 pts | 6 suites / 656 active / 36 ignored / 519.5 pts | 5 suites / 647 active / 35 ignored / 510.5 pts |
 
 ## Critical Flow Matrix
 
@@ -150,7 +150,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | engine-workflows | screenpipe-engine | windows, macos, linux | local-api, storage | local-api-search | high | partial | mixed | 7 | 40 | 0 | Catalog identity and persistence, revision-scoped feedback, workflow evidence and pipeline contracts, and denial of agent-granted rollout access. Does not assert live cloud discovery quality. Workflow publication orchestration deadlines and nested query backpressure are covered with virtual-time router tests. |
 | filesystem-durable-sync | screenpipe-fs | macos, linux, windows | database, vision-capture, audio | capture-ocr-pipeline, audio-record-transcribe, engine-health-lifecycle | high | strong | unit | 1 | 3 | 0 | Durable flushes preserve local full-sync behavior, fall back to fsync only for macOS ENOTSUP, and propagate real I/O or fallback failures. Real SMB migration and continued recording are covered by the marked-volume integration test. |
 | screen-capture-ocr-contract | screenpipe-screen | windows, macos, linux | vision-capture, ocr | capture-ocr-pipeline | high | partial | unit | 3 | 18 | 0 | Cross-platform cached-OCR unit coverage for RawCaptureResult to CaptureResult metadata, browser URL, focus state, window-to-screen OCR coordinate transformation, Tesseract output parsing, and contour-based text-region detection for the meeting OCR gate. |
-| screen-capture-windowing | screenpipe-screen | windows, macos, linux | vision-capture, timeline, performance, privacy | capture-ocr-pipeline, timeline-streaming, privacy-and-redaction, performance-liveness | high | strong | mixed | 19 | 237 | 1 | Window filtering, empty-window regressions, retry policy, URL timing, monitor cache, OCR cache, snapshots, and image comparison. |
+| screen-capture-windowing | screenpipe-screen | windows, macos, linux | vision-capture, timeline, performance, privacy | capture-ocr-pipeline, timeline-streaming, privacy-and-redaction, performance-liveness | high | strong | mixed | 20 | 240 | 1 | Window filtering, empty-window regressions, retry policy, URL timing, monitor cache, OCR cache, snapshots, and image comparison. |
 | screen-custom-ocr | screenpipe-screen | windows, macos, linux | ocr | capture-ocr-pipeline | medium | conditional | manual | 1 | 0 | 2 | Custom OCR tests are ignored by default and only contribute when explicitly run. |
 | screen-macos-ocr | screenpipe-screen | macos | ocr, vision-capture | capture-ocr-pipeline | high | strong | mixed | 2 | 9 | 1 | Apple Vision OCR source/unit coverage and fixture OCR assertions. |
 | screen-monitor-platform | screenpipe-screen | windows, macos, linux | vision-capture | capture-ocr-pipeline | medium | partial | unit | 7 | 73 | 7 | Per-OS monitor enumeration (Windows, macOS, Wayland/portal on Linux) and the persistent Windows.Graphics.Capture session. Each file is cfg-gated and only executes on its target OS. |
@@ -557,6 +557,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/scene.rs | source | 8 | 0 | 8 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/stream.rs | source | 9 | 0 | 9 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/windows.rs | source | 5 | 1 | 6 |
+| screen-capture-windowing | screenpipe-screen | src/screenshot_rate.rs | source | 3 | 0 | 3 |
 | screen-capture-windowing | screenpipe-screen | src/snapshot_writer.rs | source | 6 | 0 | 6 |
 | screen-capture-ocr-contract | screenpipe-screen | src/tesseract.rs | source | 6 | 0 | 6 |
 | screen-capture-ocr-contract | screenpipe-screen | src/text_regions.rs | source | 11 | 0 | 11 |
