@@ -115,11 +115,13 @@ struct State {
     frame: Option<NativeFrame>,
     observed: Option<cm::Time>,
     received_at: Option<chrono::DateTime<chrono::Utc>>,
+    revision: u64,
     error: Option<String>,
 }
 
 impl State {
     fn observe(&mut self, status: Option<i64>, frame: Option<NativeFrame>, pts: cm::Time) {
+        self.revision = self.revision.wrapping_add(1);
         match status {
             Some(value) if value == sc::FrameStatus::Complete as i64 => {
                 self.frame = frame;
@@ -290,7 +292,7 @@ pub(super) async fn frame(
 ) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
     ensure!(
         slot.active.load(Ordering::Acquire),
-        "screenshot stream invalidated; next capture must reopen it"
+        "screenshot stream invalidated"
     );
     // This is called by the scene producer, never by an event consumer. A new
     // native generation owns its positive filter for its entire lifetime.
@@ -299,8 +301,14 @@ pub(super) async fn frame(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let native = if let Some(native) = existing.filter(|s| s.key == key) {
-        native
+    let (native, previous_revision) = if let Some(native) = existing.filter(|s| s.key == key) {
+        let revision = native
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision;
+        (native, Some(revision))
     } else {
         let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
         drop(removed);
@@ -352,7 +360,7 @@ pub(super) async fn frame(
             let mut entry = slot.stream.lock().unwrap_or_else(|e| e.into_inner());
             ensure!(
                 slot.active.load(Ordering::Acquire),
-                "screenshot stream invalidated during start; next capture must reopen it"
+                "screenshot stream invalidated during start"
             );
             *entry = Some(native.clone());
         }
@@ -363,8 +371,11 @@ pub(super) async fn frame(
             legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
             "persistent positive-selection screenshot stream started"
         );
-        native
+        (native, None)
     };
+    // Producer preparation brackets a new callback with its scene observations.
+    // A just-started generation may already have received its first sample.
+    // Events never wait for this revision: they select the prepared-frame cache.
     // This generation owns its positive filter and window scene. Reuse its
     // retained image regardless of age; native PTS is alignment metadata only.
     // The producer validates the scene before publishing pixels with its plan.
@@ -390,7 +401,11 @@ pub(super) async fn frame(
             if let Some(error) = &state.error {
                 return Err(anyhow!("screenshot stream stopped: {error}"));
             }
-            state.image()
+            if previous_revision.is_none_or(|revision| state.revision != revision) {
+                state.image()
+            } else {
+                None
+            }
         };
         if let Some((frame, pts, received_at)) = observed {
             let captured_at = pts

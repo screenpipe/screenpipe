@@ -260,7 +260,7 @@ where
         let result = if let Some(deadline) = deadline {
             let expired = || {
                 anyhow!(
-                "window-filtered capture timed out while reselecting (elapsed_ms={}, native_budget_ms={}, queue_budget_ms={}); screenshot pixels unavailable; the next capture must reselect current privacy state",
+                "window-filtered capture timed out while reselecting (elapsed_ms={}, native_budget_ms={}, queue_budget_ms={}); next stream frame unavailable; the producer will retry scene preparation",
                 started.elapsed().as_millis(), deadline.budget.as_millis(), QUEUE_DEADLINE.as_millis(),
             )
             };
@@ -1615,7 +1615,7 @@ mod tests {
         .expect("the request must not reset its deadline on each retry");
         let error = result.unwrap_err().to_string();
         assert!(error.contains("native_budget_ms=5000"), "{error}");
-        assert!(error.contains("screenshot pixels unavailable"), "{error}");
+        assert!(error.contains("next stream frame unavailable"), "{error}");
         let next =
             capture_with_scene_retries(2, slot, || || async { Ok(DynamicImage::new_rgba8(3, 2)) })
                 .await
