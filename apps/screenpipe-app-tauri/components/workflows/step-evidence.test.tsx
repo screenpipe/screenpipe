@@ -18,7 +18,7 @@ describe("missing attached screenshots", () => {
   it("automatically shows an exact source preview without changing evidence or starting replay", async () => {
     const preview = { ...stage.screenshot!, visualVerified: false };
     const load = vi.fn().mockResolvedValue(preview);
-    const recording = vi.fn();
+    const recording = vi.fn().mockResolvedValue(null);
     const open = vi.fn().mockResolvedValue(undefined);
     const before = JSON.stringify(bare);
     render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={{ loadWorkflowScreenshot: load, loadWorkflowRecording: recording, openCapturedMoment: open } as unknown as WorkflowsPlatform} />);
@@ -27,8 +27,9 @@ describe("missing attached screenshots", () => {
     expect(load).toHaveBeenCalledWith(bare.evidence[0].timestamp, bare.evidence[0].app, expect.any(AbortSignal));
     expect(recording).not.toHaveBeenCalled();
     expect(JSON.stringify(bare)).toBe(before);
-    fireEvent.click(screen.getByRole("button", { name: `Open recording for ${stage.name}` }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith(preview.frameId, preview.timestamp));
+    play();
+    await waitFor(() => expect(recording).toHaveBeenCalledWith(preview.timestamp, preview.app));
+    expect(open).not.toHaveBeenCalled();
   });
   it("replaces legacy embedded previews with the recorder frame", async () => {
     Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
@@ -137,24 +138,32 @@ describe("step evidence media", () => {
     expect(screen.queryByRole("region", { name: `Sources for ${stage.name}` })).not.toBeInTheDocument();
   });
 
-  it("opens verified captures in native Timeline without loading an inline video", async () => {
+  it("plays inline when the desktop also provides native Timeline navigation", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
-    const load = vi.fn();
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/clip.mp4", frameId: 123, timestamp: stage.screenshot!.timestamp, offsetSeconds: 2 });
     render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ openCapturedMoment: open, loadWorkflowRecording: load } as unknown as WorkflowsPlatform} />);
-    fireEvent.click(screen.getByRole("button", { name: `Open recording for ${stage.name}` }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith(stage.screenshot!.frameId, stage.screenshot!.timestamp));
     expect(load).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Local recording")).toBeNull();
+    play();
+    expect(await screen.findByLabelText("Local recording")).toBeVisible();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open captured moment" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(123, stage.screenshot!.timestamp));
   });
 
-  it("resolves legacy captures, opens Timeline and releases the temporary media", async () => {
+  it("replays an attached capture without matching text evidence", async () => {
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/clip.mp4", frameId: stage.screenshot!.frameId, timestamp: stage.screenshot!.timestamp, offsetSeconds: 0 });
+    render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, evidence: [] }} platform={{ loadWorkflowRecording: load } as unknown as WorkflowsPlatform} />);
+    play();
+    expect(await screen.findByLabelText("Local recording")).toBeVisible();
+    expect(load).toHaveBeenCalledWith(stage.screenshot!.timestamp, stage.screenshot!.app);
+  });
+
+  it("keeps Timeline navigation for hosts without an inline recording loader", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
-    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/legacy.mp4", frameId: 123, timestamp: stage.evidence[0].timestamp });
-    const release = vi.fn().mockResolvedValue(undefined);
-    render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, screenshot: null }} platform={{ openCapturedMoment: open, loadWorkflowRecording: load, releaseWorkflowRecording: release } as unknown as WorkflowsPlatform} />);
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ openCapturedMoment: open } as unknown as WorkflowsPlatform} />);
     fireEvent.click(screen.getByRole("button", { name: `Open recording for ${stage.name}` }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith(123, stage.evidence[0].timestamp));
-    expect(release).toHaveBeenCalledWith("https://fixture.invalid/legacy.mp4");
+    await waitFor(() => expect(open).toHaveBeenCalledWith(stage.screenshot!.frameId, stage.screenshot!.timestamp));
+    expect(screen.queryByLabelText("Local recording")).toBeNull();
   });
 
   it("loads only on request and releases the media when closed", async () => {
@@ -165,13 +174,35 @@ describe("step evidence media", () => {
     play();
     const video = await screen.findByLabelText("Local recording");
     expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("preload", "metadata");
     Object.defineProperty(video, "duration", { value: 30 });
     fireEvent.loadedMetadata(video);
     expect((video as HTMLVideoElement).currentTime).toBe(2);
     fireEvent.loadedData(video);
+    const pause = vi.spyOn(video as HTMLVideoElement, "pause").mockImplementation(() => {});
+    (video as HTMLVideoElement).currentTime = 20;
+    fireEvent.timeUpdate(video);
+    expect(pause).not.toHaveBeenCalled();
+    fireEvent.play(video);
+    expect((video as HTMLVideoElement).currentTime).toBe(20);
     close();
     await waitFor(() => expect(release).toHaveBeenCalledWith("https://fixture.invalid/clip.mp4"));
     expect(screen.queryByLabelText("Local recording")).toBeNull();
+  });
+
+  it("does not time out while a metadata-only player waits for the user to play", async () => {
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/clip.mp4", timestamp: stage.evidence[0].timestamp, frameId: 1, offsetSeconds: 2 });
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowRecording: load } as unknown as WorkflowsPlatform} />);
+    play();
+    const video = await screen.findByLabelText("Local recording");
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(video, "duration", { value: 30 });
+      fireEvent.loadedMetadata(video);
+      act(() => vi.advanceTimersByTime(13000));
+      expect(screen.getByLabelText("Local recording")).toBe(video);
+      expect(screen.queryByText(/could not decode/)).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 
   it("shows a failed load and retries on request", async () => {
@@ -182,6 +213,28 @@ describe("step evidence media", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("keeps the source image and Timeline available after a video decode failure", async () => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/broken.mp4", frameId: 123, timestamp: stage.screenshot!.timestamp, offsetSeconds: 0 });
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowRecording: load, openCapturedMoment: open } as unknown as WorkflowsPlatform} />);
+    play();
+    fireEvent.error(await screen.findByLabelText("Local recording"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot be played");
+    expect(screen.getByRole("img", { name: `Captured moment for ${stage.name}` })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open captured moment" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(stage.screenshot!.frameId, stage.screenshot!.timestamp));
+  });
+
+  it.each([-1, NaN, Infinity, 30])("rejects invalid or expired video offset %s", async offsetSeconds => {
+    const load = vi.fn().mockResolvedValue({ kind: "video", url: "https://fixture.invalid/clip.mp4", frameId: 123, timestamp: stage.screenshot!.timestamp, offsetSeconds });
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowRecording: load } as unknown as WorkflowsPlatform} />);
+    play();
+    const video = await screen.findByLabelText("Local recording");
+    Object.defineProperty(video, "duration", { value: 30 });
+    fireEvent.loadedMetadata(video);
+    expect(await screen.findByRole("alert")).toHaveTextContent("offset is outside");
   });
 
   it("does not fabricate screenshots or offer playback without a source", () => {

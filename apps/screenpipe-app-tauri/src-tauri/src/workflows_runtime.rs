@@ -537,14 +537,17 @@ pub async fn load_workflow_recording(app: AppHandle, timestamp: String, app_name
     let video = frame.get("video_chunk_id").and_then(Value::as_i64).filter(|id| *id > 0);
     let offset = frame.get("video_offset_seconds").and_then(Value::as_str)
         .and_then(|text| text.parse::<f64>().ok()).filter(|n| n.is_finite() && *n >= 0.0);
-    let is_video = video.is_some() && offset.is_some();
-    let path = if is_video { format!("/frames/preview-media/{}", video.unwrap()) }
-        else { format!("/frames/{frame_id}/thumbnail?width=1280&quality=80&fallback=false") };
+    if let (Some(chunk_id), Some(offset_seconds)) = (video, offset) {
+        let url = crate::workflows_media::publish(&endpoint.base_url, chunk_id, endpoint.api_key.clone()).await?;
+        return Ok(json!({"kind":"video", "url":url, "timestamp":frame["timestamp"],
+            "frameId":frame_id, "offsetSeconds":offset_seconds, "matchDistanceSeconds":distance}));
+    }
+    let path = format!("/frames/{frame_id}/thumbnail?width=1280&quality=80&fallback=false");
     let mut response = apply_auth(&endpoint, client.get(format!("{}{path}", endpoint.base_url)).timeout(Duration::from_secs(20)))
         .send().await.map_err(|_| "Could not load this local recording")?;
     if !response.status().is_success() { return Err("This recording is no longer available".to_string()); }
     let mime = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    if (is_video && mime != "video/mp4") || (!is_video && !matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp")) {
+    if !matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp") {
         return Err("Unsupported recording format".to_string());
     }
     const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -557,9 +560,8 @@ pub async fn load_workflow_recording(app: AppHandle, timestamp: String, app_name
         bytes.extend_from_slice(&chunk);
     }
     if bytes.is_empty() { return Ok(Value::Null); }
-    let url = if is_video { crate::workflows_media::publish(bytes).await? }
-        else { format!("data:{mime};base64,{}", BASE64.encode(bytes)) };
-    Ok(json!({"kind":if is_video {"video"} else {"image"}, "url":url,
+    let url = format!("data:{mime};base64,{}", BASE64.encode(bytes));
+    Ok(json!({"kind":"image", "url":url,
         "timestamp":frame["timestamp"], "frameId":frame_id, "offsetSeconds":offset.unwrap_or(0.0), "matchDistanceSeconds":distance}))
 }
 

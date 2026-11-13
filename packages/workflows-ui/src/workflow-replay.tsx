@@ -41,15 +41,17 @@ function RecordingVideo({ media, poster, failed }: { media: WorkflowRecording; p
     const timer = setTimeout(() => failed("This video could not decode. Use the captured image or open this moment in Screenpipe."), 12000);
     return () => clearTimeout(timer);
   }, [ready, failed]);
-  return <><video controls muted playsInline preload="auto" poster={poster} aria-label={ui("Local recording")}
+  return <><video controls muted playsInline preload="metadata" poster={poster} aria-label={ui("Local recording")}
     onLoadedMetadata={(event) => {
       const video = event.currentTarget;
-      if (!Number.isFinite(video.duration) || media.offsetSeconds >= video.duration) { failed("The recorded offset is outside this video. Try another captured moment."); return; }
+      if (!Number.isFinite(video.duration) || !Number.isFinite(media.offsetSeconds) || media.offsetSeconds < 0 || media.offsetSeconds >= video.duration) { failed("The recorded offset is outside this video. Try another captured moment."); return; }
       video.currentTime = media.offsetSeconds;
+      // Metadata and a valid seek are sufficient to show the controls. With
+      // metadata-only preload, waiting for a decoded frame can time out before
+      // the user presses play.
+      setReady(true);
     }}
     onLoadedData={() => setReady(true)} onSeeked={() => setReady(true)}
-    onTimeUpdate={(event) => { if (event.currentTarget.currentTime >= media.offsetSeconds + 12) event.currentTarget.pause(); }}
-    onPlay={(event) => { if (event.currentTarget.currentTime >= media.offsetSeconds + 12) event.currentTarget.currentTime = media.offsetSeconds; }}
     onError={() => failed("This video cannot be played here. Try another captured moment.")} src={media.url} />
     {!ready && <p role="status">Preparing video…</p>}</>;
 }
@@ -101,7 +103,7 @@ export function WorkflowReplay({ workflow, loadRecording, releaseRecording, open
   return <section className={`${styles.replay} ph-no-capture ph-mask`} aria-label={ui("Workflow recording replay")}>
       <div className={styles.replayMedia}>
         {loading ? <p role="status">Loading local recording…</p> : media?.kind === "video" ? <RecordingVideo
-          key={media.url} media={media} poster={matchingImage?.dataUrl || undefined} failed={videoFailed} />
+          key={`${media.url}:${media.offsetSeconds}`} media={media} poster={matchingImage?.dataUrl || undefined} failed={videoFailed} />
           : media?.kind === "image" || matchingImage?.dataUrl ? <img src={media?.url ?? matchingImage?.dataUrl} alt={ui("Captured moment for {value1}", { value1: moment.stage.name })} />
           : <p>{loadRecording ? ui("No playable recording for this moment.") : ui("Open the desktop app to play this recording.")}</p>}
       </div>
