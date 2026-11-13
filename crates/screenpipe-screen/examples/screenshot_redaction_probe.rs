@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
         get_monitor_by_id(id).await
     }
     .ok_or_else(|| anyhow::anyhow!("missing monitor"))?;
+    #[cfg(target_os = "macos")]
+    let _source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor.id());
     let filters = match mode {
         "exclude" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         "none" => WindowFilters::new(&[], &[], &[]),

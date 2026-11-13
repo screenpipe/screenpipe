@@ -834,6 +834,10 @@ impl VisionManager {
 
             // Abort the task
             handle.abort();
+            // Stop sampling immediately even if the old task is still inside
+            // native IPC. Its source-owner guard handles delayed cancellation.
+            #[cfg(target_os = "macos")]
+            screenpipe_screen::stream_invalidation::release_screenshot_stream(monitor_id);
 
             // Wait for it to finish with a timeout — if the capture task is stuck
             // in a spawn_blocking AX tree walk, cancellation can be delayed.

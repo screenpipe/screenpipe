@@ -499,6 +499,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_screenshot_source_failure_and_recovery_survive_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        // Actual INFO/WARN output from the disposable macOS app acceptance run.
+        let emitted = include_str!(
+            "../../../../crates/screenpipe-screen/tests/fixtures/cached-screenshot-source-diagnostic.txt"
+        );
+        tokio::fs::write(root.path().join("screenpipe-app.2026-11-13.1.log"), emitted)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.path().join("screenpipe-app.2026-11-13.log"),
+            "contact=cache-fixture@screenpipe.test\n",
+        )
+        .await
+        .unwrap();
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "desktop scene changed during privacy capture",
+            "window-filtered capture recovered after scene change",
+            "monitor_id=1",
+            "screenshot_outcome=\"retrying\"",
+            "screenshot_outcome=\"captured\"",
+            "next stream frame unavailable",
+            "screenshot_outcome=\"waiting_for_stream\"",
+            "cached_frame_available=false",
+        ] {
+            assert!(
+                report.contains(evidence),
+                "missing collected support evidence: {evidence}"
+            );
+        }
+        assert!(!report.contains("cache-fixture@screenpipe.test"));
+        println!("CACHE_SOURCE_COLLECTED_SUPPORT={report}");
+    }
+
+    #[tokio::test]
     async fn enterprise_retention_failure_survives_support_redaction() {
         let root = tempfile::tempdir().unwrap();
         let emitted = include_str!(

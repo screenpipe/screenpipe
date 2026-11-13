@@ -14,7 +14,7 @@ use crate::metrics::PipelineMetrics;
 use crate::microsoft::perform_ocr_windows;
 use crate::monitor::get_monitor_by_id;
 use crate::ocr_cache::{WindowCacheKey, WindowOcrCache};
-use crate::screenshot_privacy::capture_monitor_image_filtered;
+use crate::screenshot_privacy::capture_monitor_frame_filtered;
 use crate::tesseract::perform_ocr_tesseract;
 use crate::utils::{capture_windows, OcrEngine};
 use anyhow::Result;
@@ -163,6 +163,8 @@ pub async fn continuous_capture(
     activity_feed: ActivityFeedOption,
     metrics: Arc<PipelineMetrics>,
 ) -> Result<(), ContinuousCaptureError> {
+    #[cfg(target_os = "macos")]
+    let _screenshot_source = crate::screenshot_privacy::own_cached_source(monitor_id);
     let mut frame_counter: u64 = 0;
 
     // Initialize optimized frame comparer with all optimizations enabled:
@@ -201,11 +203,12 @@ pub async fn continuous_capture(
     const MAX_CONSECUTIVE_FAILURES: u32 = 30;
 
     loop {
-        // 3. Capture monitor screenshot and wall-clock time atomically.
+        // 3. Preserve the selected native frame's own time on macOS.
         //    Window capture is deferred until after frame comparison to skip
         //    expensive per-window work on unchanged frames.
+        #[cfg(not(target_os = "macos"))]
         let captured_at = Utc::now();
-        let (image, _capture_duration) = {
+        let (image, _capture_duration, captured_at) = {
             let mut last_err = None;
             let mut captured = None;
 
@@ -218,7 +221,7 @@ pub async fn continuous_capture(
                 } else {
                     get_excluded_sck_window_ids(&window_filters, ExclusionSources::default())
                 };
-                match capture_monitor_image_filtered(
+                match capture_monitor_frame_filtered(
                     &monitor,
                     &window_filters,
                     ExclusionSources::default(),
@@ -235,7 +238,11 @@ pub async fn continuous_capture(
                             );
                         }
                         consecutive_capture_failures = 0;
-                        captured = Some(result);
+                        #[cfg(target_os = "macos")]
+                        let frame_at = result.captured_at;
+                        #[cfg(not(target_os = "macos"))]
+                        let frame_at = captured_at;
+                        captured = Some((result.image, result.duration, frame_at));
                         break;
                     }
                     Err(e) => {

@@ -24,6 +24,9 @@ pub(crate) mod stream;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "macos")]
+pub use stream::{own_source as own_cached_source, SourceOwner as CachedSourceOwner};
+
 /// The caller must withhold the screenshot on error; accessibility collection
 /// can continue under its independent filters. `excluded_ids` additionally
 /// constrains source selection for URL/incognito policies.

@@ -1046,6 +1046,11 @@ pub(crate) async fn event_driven_capture_loop(
         monitor_id, device_name
     );
 
+    // The producer outlives individual events, but never its monitor's task.
+    // This also runs on cancellation, early return, and task panic.
+    #[cfg(target_os = "macos")]
+    let _screenshot_source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor_id);
+
     let screenshots_disabled_by_config = config.disable_screenshots;
     let focused_window_screenshots = config.focused_window_screenshots;
     let mut screenshot_disabled = screenshots_disabled_by_config;

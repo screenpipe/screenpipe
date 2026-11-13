@@ -18,6 +18,36 @@ use tokio::sync::Notify;
 
 static SLOTS: Lazy<Mutex<HashMap<u32, Arc<Slot>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+static SOURCE_OWNERS: Lazy<Mutex<HashMap<u32, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static NEXT_SOURCE_OWNER: AtomicU64 = AtomicU64::new(0);
+
+/// Own the background screenshot source for one monitor recording session.
+/// Source recreation inside that session does not release its ownership.
+pub struct SourceOwner {
+    id: u32,
+    token: u64,
+}
+
+/// A replacement recording task retires the previous session's cached source.
+/// Dropping an older task can never stop the replacement task's source.
+pub fn own_source(id: u32) -> SourceOwner {
+    let token = NEXT_SOURCE_OWNER.fetch_add(1, Ordering::Relaxed);
+    let mut owners = SOURCE_OWNERS.lock().unwrap_or_else(|e| e.into_inner());
+    owners.insert(id, token);
+    invalidate(id);
+    SourceOwner { id, token }
+}
+
+impl Drop for SourceOwner {
+    fn drop(&mut self) {
+        let mut owners = SOURCE_OWNERS.lock().unwrap_or_else(|e| e.into_inner());
+        if owners.get(&self.id) == Some(&self.token) {
+            owners.remove(&self.id);
+            invalidate(self.id);
+        }
+    }
+}
+
 pub(super) struct Slot {
     id: u32,
     active: AtomicBool,
@@ -544,6 +574,34 @@ mod tests {
                 Some(now + chrono::Duration::milliseconds(milliseconds)),
             );
         }
+    }
+
+    #[test]
+    fn recording_owner_follows_source_recreation_and_stops_its_producer() {
+        let id = 4_000_010_001;
+        let owner = own_source(id);
+        let first = slot(id);
+        invalidate(id);
+        let recreated = slot(id);
+        assert!(!first.is_active());
+        assert!(recreated.is_active());
+        drop(owner);
+        assert!(!recreated.is_active());
+        assert!(existing_slot(id).is_none());
+    }
+
+    #[test]
+    fn exiting_old_recording_task_does_not_stop_the_replacement_owner() {
+        let id = 4_000_010_002;
+        let first_owner = own_source(id);
+        let first = slot(id);
+        let replacement_owner = own_source(id);
+        let replacement = slot(id);
+        assert!(!first.is_active());
+        drop(first_owner);
+        assert!(replacement.is_active());
+        drop(replacement_owner);
+        assert!(!replacement.is_active());
     }
 
     #[tokio::test]

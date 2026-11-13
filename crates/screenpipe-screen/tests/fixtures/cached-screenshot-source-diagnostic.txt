@@ -1,0 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+2026-11-13T21:07:12.208438Z  WARN screenpipe_screen::screenshot_privacy::macos: window-filtered capture reselecting after scene change monitor_id=1 error=desktop scene changed during privacy capture (identity, geometry or stacking) screenshot_outcome="retrying"
+2026-11-13T21:07:13.602222Z  INFO screenpipe_screen::screenshot_privacy::macos: window-filtered capture recovered after scene change monitor_id=1 retries=1 elapsed_ms=2500 screenshot_outcome="captured"
+2026-11-13T21:10:56.213944Z  WARN screenpipe_screen::screenshot_privacy::macos: continuous screenshot source could not prepare the next frame monitor_id=1 error=window-filtered capture timed out while reselecting (elapsed_ms=5044, native_budget_ms=5000, queue_budget_ms=1000); next stream frame unavailable; the producer will retry scene preparation screenshot_outcome="waiting_for_stream" cached_frame_available=false
