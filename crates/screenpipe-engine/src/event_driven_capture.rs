@@ -3266,8 +3266,9 @@ async fn do_capture(
         .then(get_foreground_window_identity_fresh)
         .flatten();
 
-    // Explicit window patterns use fresh positive selection at the capture
-    // boundary below. Other policies retain the existing bounded resolution.
+    // Positive-selection sources resolve exclusions in their producer and
+    // retain the policy with each prepared frame. Do not gate cached pixels on
+    // a fresh event-time exclusion observation. Legacy sources still resolve here.
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
     // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
     // deduped so the persistent stream isn't needlessly recreated when
@@ -3279,7 +3280,9 @@ async fn do_capture(
     // frame's pixels (like `screenshot_disabled`; the a11y walk continues and
     // applies its own independent window filtering) rather than storing a
     // frame that may contain a window the user asked to hide.
-    let storage_exclusions = if screenshot_disabled || params.window_filters.has_window_patterns() {
+    let storage_exclusions = if screenshot_disabled
+        || screenpipe_screen::screenshot_privacy::uses_positive_selection(&params.window_filters)
+    {
         Some(Vec::new())
     } else {
         storage_excluded_sck_window_ids(
@@ -3332,8 +3335,8 @@ async fn do_capture(
     } else {
         let excluded_ids = storage_exclusions.unwrap_or_default();
 
-        // Resolve positive window surfaces at the capture boundary, after any
-        // focus-settle delay. Never substitute monitor pixels on policy failure.
+        // macOS selects a prepared stream frame with its own policy and scene.
+        // Other platforms retain their existing positive-selection boundary.
         match capture_monitor_frame_filtered(
             params.monitor,
             &params.window_filters,

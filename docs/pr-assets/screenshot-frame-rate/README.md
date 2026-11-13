@@ -3,9 +3,9 @@
 
 # Screenshot sampling: default and VM measurements
 
-The default is **2 fps**. The setting controls background sampling and applies on the next screenshot without restarting recording. Saved screenshots keep their existing activity and capture-frequency rules. HD video has its own frame rate. Effective sampling is at least the configured idle recording rate (`ceil(1000 / idleCaptureIntervalMs)` fps). A faster idle pin raises sampling rather than slowing the promised recording cadence; live sampling edits below that minimum are rejected.
+The default is **2 fps**. The setting controls background sampling and applies to the producer without restarting recording. Saved screenshots keep their existing activity and capture-frequency rules. The macOS cache now owns each frame's policy, scene, native buffers, blackout operations, and any foreground-restoration layers. Events render that prepared frame; an empty cache waits for the producer. There is no event-time freshness fence or native monitor-snapshot fallback. HD video has its own frame rate. Effective sampling is at least the configured idle recording rate (`ceil(1000 / idleCaptureIntervalMs)` fps). A faster idle pin raises sampling rather than slowing the promised recording cadence; live sampling edits below that minimum are rejected.
 
-At roughly 3.5–4 screenshot requests per second, 24/30 fps did not provide a consistent fresh-request latency advantage that justifies making either the default. Two fps preserves the previous native preview cadence, with cost close to 1 fps in these VMs. Higher rates remain available.
+**Historical measurements below use the earlier freshness/fallback implementation.** They support the initial inexpensive 2 fps preference, but do not measure the new frame-owned cache. Higher sampling can improve temporal alignment by reducing frame age; the old fresh-snapshot latency comparison is not a measurement of that benefit. Two fps preserves the previous native preview cadence and was close to 1 fps in those VMs.
 
 ## Moving-screen comparison
 
@@ -31,7 +31,7 @@ All **16 trials / 1,920 requests** completed, with zero failed trials or missed 
 
 Producer setup took 165–234 ms, first-frame arrival 172–250 ms, and teardown 3–16 ms. Those startup/stop costs are paid when the source changes, rather than on every screenshot. At 2 fps, fresh acquisition p95 was 48.03 ms static / 52.48 ms moving; including JPEG it was 55.75 / 57.00 ms. At 24 fps, acquisition was 48.12 / 53.20 ms and total 57.59 / 58.27 ms.
 
-The fresh lookup in this API harness happens immediately after its request boundary; it had **zero cache hits** and used native snapshots. Production can use a background frame that arrives while current privacy checks run, but its cache-hit rate was not measured here. Earlier permissive cached-read microsecond timings are not fresh-capture timings. Screenshot-only was faster and cheaper than combining a producer with fresh snapshots in this isolated harness. The old product already had a separate 2 fps visual-preview producer, which the new source replaces; the screenshot-only baseline excludes that existing product cost. These results do not establish a general battery saving from persistent capture.
+The fresh lookup in this API harness happens immediately after its request boundary; it had **zero cache hits** and used native snapshots. That implementation could use a background frame arriving during fresh privacy checks, but its production hit rate was not measured. The current implementation removes that event-time gate and the monitor-snapshot fallback. Earlier permissive cached-read microsecond timings are not fresh-capture timings. Screenshot-only was faster and cheaper than combining a producer with fresh snapshots in this isolated harness. The old product already had a separate 2 fps visual-preview producer, which the new source replaces; the screenshot-only baseline excludes that existing product cost. These results do not establish a general battery saving from persistent capture.
 
 [Full static/moving matrix](macos/matrix-summary.csv), [per-request and aggregate data](macos/analysis.json), [raw process samples](macos/raw/), [native harness](macos/native-demand-harness.swift), [runner](macos/run-native-matrix.py). The runner uses the owned guest paths from this experiment and is intended for a disposable VM.
 
@@ -53,7 +53,7 @@ The supported native E2E builds used synthetic Standard-account fixtures. This t
 - Mac pause held the screenshot count at 53 through the pause; resume advanced it to 54. Windows native pause completed in 570 ms, held 6 frames for five seconds, then advanced to 7 after resume.
 - Windows UI default/persistence and live changes passed. Seven retained privacy JPEGs preserved allowed cyan and had zero sampled forbidden magenta at four-pixel stride; this was a sampled check. Windows HD remains unsupported.
 
-The Mac sharing-control fix uses the observed AXButton title `WindowSharingSessionButton`, native window ID, and PID. A window title or size alone never excludes content. Unknown windows remain content; unavailable classification suspends the optional producer and preserves same-policy native snapshots with diagnostic evidence. The visual probe shares the screenshot source, and the retired legacy preview was confirmed inactive. HD retains its separate owner.
+The Mac sharing-control fix uses the observed AXButton title `WindowSharingSessionButton`, native window ID, and PID. A window title or size alone never excludes content. Unknown windows remain content. The current producer retries unavailable classification with diagnostics; an already prepared frame retains its own classification. Events can continue selecting that frame. Before the first usable frame, events wait for the stream. The visual probe shares the screenshot source, and the retired legacy preview was confirmed inactive. HD retains its separate owner.
 
 The existing 750 ms app-switch settle remains unchanged. No retrospective history/ring buffer or event-time frame selection was added. The delay experiment did not establish that 750 ms is the necessary minimum.
 
@@ -61,12 +61,18 @@ The existing 750 ms app-switch settle remains unchanged. No retrospective histor
 
 - Windows current library: 11 WGC units passed (3 desktop-only tests ignored); all 6 snapshot-writer units passed. Seven production-source hashes match the integration checkout. The actual Windows production logger output for an induced failure/recovery was replayed as a rotated app log through the Mac normal collector: HRESULT, FPS, ticks, cause and outcome survived; the fixture email was redacted. This is induced-failure evidence, not older-OS hardware acceptance.
 - Mac `cargo test --profile debug-dev -p screenpipe-a11y sharing_control --lib`: 1 passed.
-- Mac `cargo test --profile debug-dev -p screenpipe-screen screenshot_privacy --lib`: 38 passed, including source cancellation, privacy fences, reselection, and snapshot-only fallback heartbeat. Earlier full screen-crate run: 244 passed, 3 ignored, including duplicate-timestamp durable writes.
+- Mac `cargo test --profile debug-dev -p screenpipe-screen screenshot_privacy --lib`: 38 passed after the cache ownership change, including empty-cache waiting, event cancellation versus pause, native timestamps, retained blackout/foreground/Dock rendering, and cached scene/policy ownership after live-scene changes. Earlier full screen-crate run: 244 passed, 3 ignored, including duplicate-timestamp durable writes.
 - Mac supported queued E2E app build passed; bindings generation/check, component test (1), typecheck, and config tests (2) passed.
 - `bun run test:tauri induced_wgc_interval_failure_and_recovery_reach_normal_redacted_collector -- --nocapture`: 1 main-binary test passed on Mac. The Windows wrapper encountered its existing build-script file lock; no raw-Tauri fallback was used.
 - `bun test evals/coding-agent/graders/capture-cadence.test.js`: 4 passed. Its calibration: 10 passed. The adapter now mocks the additional visual cards and shared default without changing grading assertions.
 - Additional unchanged settings-restart/privacy graders could not load their pre-existing stale adapters (`invalidateEnterpriseBuildStatus` / `gt-react`); their unrelated product modules were unchanged.
 
-Before: fixed native preview rate, event-only snapshot acquisition. After: live configurable background sampling, a policy-validated native cache, and fresh same-policy demand fallback, with separate HD cadence.
+Before: event → fresh privacy/scene check → timestamp-gated cache lookup → native monitor snapshot on miss.
+
+After: continuous native stream → producer-owned policy/scene and native layers → prepared cache → event selects and renders its frame. A user policy change or pause invalidates its source generation; a later desktop scene never reauthorizes a cached frame. Pixel conversion stays on the serialized consumer worker. HD keeps its separate owner and cadence.
+
+Window-layer sampling for Dock alpha and foreground restoration occurs during producer preparation, never during event rendering. Stream generations include window identities, geometry, stacking, opacity, and selection verdicts, so a queued callback cannot acquire a different scene's blackout plan. Scene changes can restart that native generation while a previously prepared frame remains usable.
 
 ![Screenshot frame rate default: 2 fps](macos/setting-default.png)
+
+Production status: not live; draft PR #7917 is unmerged. No migrations, environment variables, secrets, cloud services, or feature flags are required. Delivery requires review/merge, signed consumer and Enterprise release builds, then human publication in Admin Releases. No release or publication was requested or performed.

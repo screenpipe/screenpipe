@@ -553,9 +553,9 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | screen-capture-windowing | screenpipe-screen | src/ocr_cache.rs | source | 15 | 0 | 15 |
 | screen-windows-ocr | screenpipe-screen | src/ocr_worker.rs | source | 3 | 0 | 3 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy.rs | source | 5 | 0 | 5 |
-| screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/macos.rs | source | 16 | 0 | 16 |
+| screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/macos.rs | source | 19 | 0 | 19 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/scene.rs | source | 8 | 0 | 8 |
-| screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/stream.rs | source | 9 | 0 | 9 |
+| screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/stream.rs | source | 6 | 0 | 6 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_privacy/windows.rs | source | 5 | 1 | 6 |
 | screen-capture-windowing | screenpipe-screen | src/screenshot_rate.rs | source | 3 | 0 | 3 |
 | screen-capture-windowing | screenpipe-screen | src/snapshot_writer.rs | source | 6 | 0 | 6 |

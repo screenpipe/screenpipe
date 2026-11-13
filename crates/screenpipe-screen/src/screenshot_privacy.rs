@@ -3,8 +3,9 @@
 
 //! Window policies must constrain the source of pixels, not just frame metadata.
 //! A negative list resolved before capture cannot cover windows created later.
-//! Filtered captures therefore include only freshly verified window surfaces,
-//! and never fall back to an unfiltered monitor capture.
+//! Filtered captures include only verified window surfaces. Cached macOS frames
+//! retain their producer policy and scene; event handling never reauthorizes
+//! those pixels against a later desktop or falls back to a monitor screenshot.
 
 use crate::capture_screenshot_by_window::{ExclusionSources, WindowFilters};
 use crate::monitor::SafeMonitor;
