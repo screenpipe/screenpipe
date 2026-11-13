@@ -108,12 +108,14 @@ pub fn detect_tier() -> DeviceTier {
 /// Database configuration tuned per device tier.
 ///
 /// Controls SQLite PRAGMA values and connection pool sizes.
-/// `Default` returns the High-tier values matching the previous hardcoded settings.
+/// `Default` returns the High-tier values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DbConfig {
     /// SQLite `mmap_size` pragma in bytes.
     pub mmap_size: u64,
-    /// SQLite `cache_size` pragma in KiB (negative value = KiB).
+    /// Per-connection SQLite `cache_size` in KiB (negative pragma value = KiB).
+    /// Tier defaults divide an aggregate page-cache budget across both pools;
+    /// SQLite allocation overhead and active statements can exceed this budget.
     pub cache_size_kb: u64,
     /// Max connections in the read pool.
     pub read_pool_max: u32,
@@ -128,41 +130,41 @@ impl DbConfig {
     pub fn for_tier(tier: DeviceTier) -> Self {
         match tier {
             DeviceTier::High => Self::default(),
-            DeviceTier::Mid => Self {
-                mmap_size: 0,          // disabled — see DbConfig::default (prevents DB corruption)
-                cache_size_kb: 32_000, // 32 MB
-                read_pool_max: 12,
-                read_pool_min: 2,
-                write_pool_max: 6,
-            },
-            DeviceTier::Low => Self {
-                mmap_size: 0,         // disabled — see DbConfig::default (prevents DB corruption)
-                cache_size_kb: 8_000, // 8 MB
-                read_pool_max: 5,
-                read_pool_min: 1,
-                write_pool_max: 4,
-            },
+            DeviceTier::Mid => Self::with_cache_budget(128_000, 12, 2, 6),
+            DeviceTier::Low => Self::with_cache_budget(64_000, 5, 1, 4),
+        }
+    }
+
+    fn with_cache_budget(
+        cache_budget_kb: u64,
+        read_pool_max: u32,
+        read_pool_min: u32,
+        write_pool_max: u32,
+    ) -> Self {
+        // cache_size applies independently to every connection. Pools remain
+        // alive for WAL safety, so idle connections retain their page caches.
+        let connections = u64::from(read_pool_max) + u64::from(write_pool_max);
+        Self {
+            mmap_size: 0,
+            cache_size_kb: cache_budget_kb / connections,
+            read_pool_max,
+            read_pool_min,
+            write_pool_max,
         }
     }
 }
 
 impl Default for DbConfig {
-    /// High-tier defaults — identical to the previous hardcoded values.
+    /// High-tier defaults with an aggregate 250 MiB page-cache budget.
     fn default() -> Self {
-        Self {
-            // mmap disabled (0): memory-mapped I/O maps the DB file *writably*
-            // into screenpipe's address space, where a stray write from any
-            // native code (capture, CoreAudio, ONNX/PII models, sqlite_vec)
-            // can silently scribble onto DB pages and corrupt the file on disk
-            // ("database disk image is malformed"). Buffered I/O through the
-            // page cache below is the safe default and the integrity win is
-            // worth the small read-throughput cost for a capture product.
-            mmap_size: 0,
-            cache_size_kb: 64_000, // 64 MB
-            read_pool_max: 27,
-            read_pool_min: 3,
-            write_pool_max: 8,
-        }
+        // mmap disabled (0): memory-mapped I/O maps the DB file *writably*
+        // into screenpipe's address space, where a stray write from any
+        // native code (capture, CoreAudio, ONNX/PII models, sqlite_vec)
+        // can silently scribble onto DB pages and corrupt the file on disk
+        // ("database disk image is malformed"). Buffered I/O through the
+        // page cache below is the safe default and the integrity win is
+        // worth the small read-throughput cost for a capture product.
+        Self::with_cache_budget(256_000, 27, 3, 8)
     }
 }
 
