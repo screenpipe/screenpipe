@@ -23,9 +23,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 110 | 353 | 295.6 | 15 | 125 | 85% |
+| windows | 111 | 354 | 296.1 | 15 | 125 | 85% |
 | macos | 140 | 378 | 305.8 | 17 | 134 | 88% |
-| linux | 98 | 311 | 265.0 | 14 | 122 | 80% |
+| linux | 99 | 312 | 265.5 | 14 | 122 | 80% |
 
 ## Runtime Results
 
@@ -43,16 +43,16 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 10 specs / 14 tests / 6.2 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 37 specs / 87 tests / 71.3 pts | 51 specs / 116 tests / 90.8 pts | 35 specs / 86 tests / 70.8 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 30 specs / 122 tests / 102.5 pts | 41 specs / 120 tests / 102.4 pts | 25 specs / 90 tests / 80.7 pts |
+| local-api | 31 specs / 123 tests / 103.0 pts | 41 specs / 120 tests / 102.4 pts | 26 specs / 91 tests / 81.2 pts |
 | notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 9 specs / 40 tests / 35.8 pts | 11 specs / 44 tests / 39.2 pts | 9 specs / 40 tests / 35.8 pts |
-| os-integration | 8 specs / 37 tests / 31.9 pts | 17 specs / 36 tests / 23.8 pts | 3 specs / 20 tests / 15.8 pts |
+| os-integration | 9 specs / 38 tests / 32.4 pts | 17 specs / 36 tests / 23.8 pts | 4 specs / 21 tests / 16.3 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
-| real-ui-e2e | 81 specs / 243 tests / 206.3 pts | 99 specs / 262 tests / 221.8 pts | 75 specs / 219 tests / 192.4 pts |
+| real-ui-e2e | 82 specs / 244 tests / 206.8 pts | 99 specs / 262 tests / 221.8 pts | 76 specs / 220 tests / 192.9 pts |
 | settings | 15 specs / 42 tests / 39.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 11 specs / 47 tests / 38.3 pts | 11 specs / 32 tests / 31.1 pts | 8 specs / 25 tests / 24.1 pts |
-| tauri-command | 26 specs / 73 tests / 59.4 pts | 38 specs / 96 tests / 77.8 pts | 25 specs / 74 tests / 60.3 pts |
+| tauri-command | 27 specs / 74 tests / 59.9 pts | 38 specs / 96 tests / 77.8 pts | 26 specs / 75 tests / 60.7 pts |
 | window-lifecycle | 22 specs / 71 tests / 59.5 pts | 23 specs / 55 tests / 40.9 pts | 16 specs / 44 tests / 34.4 pts |
 
 ## Critical Feature Matrix
@@ -192,7 +192,7 @@ pass/fail/skip counts.
 | meeting-calendar-url-match.spec.ts | windows, macos, linux | real-ui-e2e, local-api, tauri-command | meeting-calendar-association | high | strong | real-user-flow | 1 | Runs the production calendar matcher and DB write with the reported back-to-back boundary shape: an outgoing URL-less event overlaps a target event starting in 40 seconds whose normalized Meet room exactly matches the detector URL. Verifies the persisted title and attendees, then proves the visible Meetings row uses the target rather than the outgoing event. |
 | meeting-chat-panel.spec.ts | macos | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 3 | Seeds a settled meeting and walks the chat rail disclosure ladder in the real app: rest shows one line plus one chip and no send button, focus peeks open with suggestions, typing hides the chip and reveals send, Escape collapses while keeping the draft, status precedence names why the composer is disabled, and a 720x620 window produces no horizontal overflow. Captures a screenshot per state. |
 | meeting-note-bottom-click.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 3 | Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line. |
-| meeting-overlay-pin.spec.ts | macos | real-ui-e2e, local-api, tauri-command, os-integration | meeting-notes, meeting-overlay-stream, shortcut-overlay | medium | partial | real-user-flow | 1 | Pins the native macOS live-transcript card against a real started meeting: it opens on hover, stays visible after the pointer leaves, and the authoritative stop edge hides it and clears the pin, asserted on the AppKit panel's observed visibility. Hover and the pin toggle are driven through the controller entry points the tracking area and pin button use, because AppKit delivers no synthetic hover to a nonactivating panel. The Windows/Linux reminder webview renders the sign-in gate under E2E seeds, so that surface is covered by component tests instead. |
+| meeting-overlay-pin.spec.ts | windows, macos, linux | real-ui-e2e, local-api, tauri-command, os-integration | meeting-notes, meeting-overlay-stream, shortcut-overlay | medium | partial | real-user-flow | 1 | Starts a fictional meeting and verifies pinning survives pointer exit until the authoritative stop edge. macOS asserts AppKit panel visibility through its existing controller entry points. Windows/Linux drive the real reminder webview with an isolated paid fixture, preserving the same enter, pin, exit, and meeting-end assertions and restoring the original account. |
 | meeting-overlay-stream.spec.ts | windows, macos, linux | local-api, tauri-command | meeting-notes, meeting-overlay-stream | high | strong | mixed | 1 | Starts a real isolated meeting, verifies bounded snapshot plus deterministic delta/final transcript frames, and proves the stream clears on the authoritative stop edge. |
 | meeting-replay-player.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, meeting-replay | high | strong | real-user-flow | 1 | Seeds four stored frames, wraps their exact timestamps in an ended meeting, reopens it from the previous-meetings list, and verifies deduped screen-only playback with an explicit No audio state, pause stability, unobscured frame layout, and a review screenshot. |
 | meeting-restart-live-transcription.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | command | 2 | Opens an auto-detected meeting, runs the full stop_screenpipe/spawn_screenpipe restart the health overlay's RESTART button uses, and asserts the meeting is still open afterwards so live transcription has something to reattach to. |

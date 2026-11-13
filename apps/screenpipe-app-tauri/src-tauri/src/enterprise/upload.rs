@@ -737,6 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn mode_resolve_refuses_direct_mode_without_destination_pin() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
         let prior_allow = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED").ok();
 
@@ -791,6 +792,7 @@ mod tests {
 
     #[tokio::test]
     async fn mode_resolve_surfaces_rejected_saved_key_for_account_recovery() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         for status in [401, 403] {
             let server = wiremock::MockServer::start().await;
             wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -815,6 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn mode_resolve_keeps_transient_control_plane_failures_fail_closed() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -976,6 +979,7 @@ mod tests {
 
     #[test]
     fn pinned_hosts_env_parsing_handles_lists_and_absence() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
         let prior_legacy = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST").ok();
 
@@ -1018,6 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_rollout_destination_pin_is_enforced_through_upload_completion() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let names = [
             "SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS",
             "SCREENPIPE_ENTERPRISE_UPLOAD_DESTINATION_HOST",
@@ -1151,6 +1156,7 @@ mod tests {
 
     #[test]
     fn direct_upload_fails_closed_without_pin_and_allows_explicit_escape_hatch() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
         let prior_allow = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED").ok();
 
@@ -1194,6 +1200,7 @@ mod tests {
 
     #[test]
     fn from_env_direct_mode_refuses_to_start_without_pin() {
+        let _env_guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let prior_pin = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS").ok();
         let prior_allow = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_ALLOW_UNPINNED").ok();
         let prior_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();

@@ -2087,7 +2087,9 @@
     {
       "spec": "meeting-overlay-pin.spec.ts",
       "platforms": [
-        "macos"
+        "windows",
+        "macos",
+        "linux"
       ],
       "layers": [
         "real-ui-e2e",
@@ -2103,7 +2105,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "ux": "real-user-flow",
-      "notes": "Pins the native macOS live-transcript card against a real started meeting: it opens on hover, stays visible after the pointer leaves, and the authoritative stop edge hides it and clears the pin, asserted on the AppKit panel's observed visibility. Hover and the pin toggle are driven through the controller entry points the tracking area and pin button use, because AppKit delivers no synthetic hover to a nonactivating panel. The Windows/Linux reminder webview renders the sign-in gate under E2E seeds, so that surface is covered by component tests instead."
+      "notes": "Starts a fictional meeting and verifies pinning survives pointer exit until the authoritative stop edge. macOS asserts AppKit panel visibility through its existing controller entry points. Windows/Linux drive the real reminder webview with an isolated paid fixture, preserving the same enter, pin, exit, and meeting-end assertions and restoring the original account."
     },
     {
       "spec": "meeting-overlay-stream.spec.ts",
