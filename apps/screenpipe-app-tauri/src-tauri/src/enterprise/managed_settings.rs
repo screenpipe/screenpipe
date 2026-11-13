@@ -168,19 +168,45 @@ fn parse(def: &Definition, raw: &Value) -> Option<Value> {
     }
 }
 
+static UPDATE_POLICY_CONTRACT: Lazy<Value> = Lazy::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../lib/enterprise/app-update-policy-contract.json"
+    ))
+    .expect("the shared update policy contract must be valid")
+});
+
 /// Match the server/frontend update-policy defaults. Native refresh owns this
 /// independently of recording, so a broken or paused recorder can still update.
 pub(crate) fn update_policy_settings(raw: &Value, current: &Value) -> Value {
-    let mode = match raw["mode"].as_str() {
-        Some(mode @ ("auto_detect" | "screenpipe" | "mdm" | "manual")) => mode,
-        _ => "auto_detect",
-    };
-    let default_auto_update = raw["default_auto_update"].as_bool().unwrap_or(false);
-    let allow_employee_override = raw["allow_employee_override"].as_bool().unwrap_or(true);
+    let defaults = &UPDATE_POLICY_CONTRACT["default"];
+    let mode = raw["mode"]
+        .as_str()
+        .filter(|mode| {
+            UPDATE_POLICY_CONTRACT["modes"]
+                .as_array()
+                .expect("update modes must be an array")
+                .iter()
+                .any(|allowed| allowed.as_str() == Some(*mode))
+        })
+        .unwrap_or_else(|| {
+            defaults["mode"]
+                .as_str()
+                .expect("update mode default must be a string")
+        });
+    let default_auto_update = raw["default_auto_update"].as_bool().unwrap_or_else(|| {
+        defaults["default_auto_update"]
+            .as_bool()
+            .expect("update default must be boolean")
+    });
+    let allow_employee_override = raw["allow_employee_override"].as_bool().unwrap_or_else(|| {
+        defaults["allow_employee_override"]
+            .as_bool()
+            .expect("update override default must be boolean")
+    });
     let mut next = current.clone();
     next["enterpriseAppUpdatePolicy"] = json!({
         "mode": mode, "default_auto_update": default_auto_update,
-        "allow_employee_override": allow_employee_override, "channel": "enterprise",
+        "allow_employee_override": allow_employee_override, "channel": defaults["channel"],
     });
     next["autoUpdate"] = json!(if allow_employee_override {
         current["autoUpdate"]
@@ -525,7 +551,7 @@ mod tests {
         assert!(settings.auto_update);
         assert_eq!(saved["settings"]["personalPreference"], "preserve");
         assert_eq!(saved["settings"]["disableVision"], initial["disableVision"]);
-        assert_eq!(saved["settings"][PENDING_RESTART], initial[PENDING_RESTART]);
+        assert_eq!(saved["settings"][PENDING_RESTART], false);
         persist_update_policy_store(store.as_ref(), &auto, root.path(), || {
             panic!("identical poll rewrote settings")
         })
@@ -554,7 +580,7 @@ mod tests {
         persist_update_policy_store(store.as_ref(), &Value::Null, root.path(), save).unwrap();
         assert_eq!(
             store.get("settings").unwrap()["enterpriseAppUpdatePolicy"],
-            json!({"mode":"auto_detect","default_auto_update":false,"allow_employee_override":true,"channel":"enterprise"})
+            json!({"mode":"screenpipe","default_auto_update":false,"allow_employee_override":true,"channel":"enterprise"})
         );
     }
 

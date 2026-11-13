@@ -2008,7 +2008,7 @@ mod imp {
             .ok_or("enterprise authorization superseded by a newer policy refresh")?
     }
 
-    fn revoke_current_policy(app: &tauri::AppHandle, request: u64, reason: &str) {
+    fn revoke_current_policy(app: &tauri::AppHandle, request: u64, reason: &'static str) {
         crate::enterprise::managed_settings::POLICY_REFRESH.apply(request, || {
             crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
                 app, reason,
@@ -2645,6 +2645,7 @@ mod imp {
             NATIVE_POLICY_STARTUP_DELAY, RECORDING_DISABLED_BY_ADMIN_CODE,
         };
         use std::collections::HashMap;
+        use tauri::Manager;
 
         async fn native_health_fixture(
             status: axum::http::StatusCode,

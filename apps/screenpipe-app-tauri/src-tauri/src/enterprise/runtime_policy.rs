@@ -72,15 +72,30 @@ pub(crate) fn queue_saved_files(app: &tauri::AppHandle) {
     });
 }
 
+static AI_PRESET_CONTRACT: once_cell::sync::Lazy<Value> = once_cell::sync::Lazy::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../lib/enterprise-ai-preset-contract.json"
+    ))
+    .expect("the shared AI preset contract must be valid")
+});
+
+fn contract_contains(key: &str, value: &str) -> bool {
+    AI_PRESET_CONTRACT[key]
+        .as_array()
+        .expect("AI provider contract must be an array")
+        .iter()
+        .any(|allowed| allowed.as_str() == Some(value))
+}
+
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().trim().to_string()
 }
 
 fn managed(preset: &Value) -> bool {
     preset["enterpriseManaged"] == true
-        || preset["id"]
-            .as_str()
-            .is_some_and(|id| id.starts_with("enterprise-managed"))
+        || preset["id"].as_str().is_some_and(|id| {
+            id.starts_with(AI_PRESET_CONTRACT["managed_prefix"].as_str().unwrap())
+        })
 }
 
 /// Preserve employee presets when restricted so relaxing policy restores their
@@ -101,38 +116,36 @@ pub(crate) fn ai_settings(raw: &Value, current: &Value) -> Value {
     let mut owned = Vec::new();
     for (index, preset) in source.iter().enumerate() {
         let provider = text(preset, "provider");
-        if !matches!(
-            provider.as_str(),
-            "openai"
-                | "openai-chatgpt"
-                | "anthropic"
-                | "native-ollama"
-                | "custom"
-                | "screenpipe-cloud"
-        ) {
+        if !contract_contains("providers", &provider) {
             continue;
         }
-        let model = if provider == "screenpipe-cloud" && text(preset, "model").is_empty() {
-            "screenpipe-cloud".to_string()
-        } else {
-            text(preset, "model")
-        };
+        let model = preset
+            .get("model")
+            .and_then(Value::as_str)
+            .map(|model| model.trim().to_string())
+            .unwrap_or_else(|| {
+                if provider == "screenpipe-cloud" {
+                    "screenpipe-cloud".into()
+                } else {
+                    String::new()
+                }
+            });
         if model.is_empty() {
             continue;
         }
-        let id = if text(preset, "id").is_empty() {
-            if legacy {
-                "enterprise-managed".to_string()
-            } else {
-                format!("enterprise-managed-{}", index + 1)
-            }
-        } else {
-            text(preset, "id")
-        };
-        let key = if matches!(
-            provider.as_str(),
-            "screenpipe-cloud" | "native-ollama" | "openai-chatgpt"
-        ) {
+        let id = preset
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|id| id.trim().to_string())
+            .unwrap_or_else(|| {
+                let prefix = AI_PRESET_CONTRACT["managed_prefix"].as_str().unwrap();
+                if legacy {
+                    prefix.to_string()
+                } else {
+                    format!("{prefix}-{}", index + 1)
+                }
+            });
+        let key = if contract_contains("keyless_providers", &provider) {
             String::new()
         } else {
             preset
@@ -146,9 +159,9 @@ pub(crate) fn ai_settings(raw: &Value, current: &Value) -> Value {
         owned.push(json!({
             "id": id, "provider": provider, "model": model,
             "url": if provider == "screenpipe-cloud" { String::new() } else { text(preset, "url") },
-            "prompt": text(preset, "prompt"), "apiKey": key,
-            "maxContextChars": preset.get("max_context_chars").or_else(|| preset.get("maxContextChars")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or(json!(512000)),
-            "maxTokens": preset.get("max_tokens").or_else(|| preset.get("maxTokens")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or(json!(4096)),
+            "prompt": text(preset, "prompt"), "apiKey": if key.is_empty() { Value::Null } else { json!(key) },
+            "maxContextChars": preset.get("max_context_chars").or_else(|| preset.get("maxContextChars")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_context_chars"].clone()),
+            "maxTokens": preset.get("max_tokens").or_else(|| preset.get("maxTokens")).filter(|v| v.as_i64().is_some_and(|n| n != 0)).cloned().unwrap_or_else(|| AI_PRESET_CONTRACT["default_max_tokens"].clone()),
             "enterpriseManaged": true, "defaultPreset": false,
         }));
     }
@@ -188,6 +201,8 @@ pub(crate) fn ai_settings(raw: &Value, current: &Value) -> Value {
                 .any(|p| text(p, "id").eq_ignore_ascii_case(&text(preset, "id")))
             {
                 allowed.push(preset.clone());
+            } else {
+                suppressed.push(preset.clone());
             }
         } else {
             suppressed.push(preset.clone());
@@ -446,6 +461,24 @@ mod tests {
         let restored = ai_settings(&json!({}), &restricted);
         assert_eq!(restored["aiPresets"], current["aiPresets"]);
         assert_eq!(restored["unrelated"], 7);
+    }
+
+    #[test]
+    fn managed_models_preserve_colliding_personal_presets_and_keyless_auth() {
+        let personal = json!({"id":"company","provider":"custom","model":"personal-model","prompt":"personal instructions","defaultPreset":true});
+        let current = json!({"aiPresets":[personal]});
+        let raw = json!({"version":2,"allow_screenpipe_cloud":false,"allow_employee_custom_presets":true,"lock_default_preset":true,"default_preset_id":"company","managed_presets":[{"id":"company","provider":"openai-chatgpt","model":"company-model","api_key":"discard-keyless-input","max_context_chars":128000,"max_tokens":8192}]});
+        let next = ai_settings(&raw, &current);
+        let settings: crate::store::SettingsStore = serde_json::from_value(next.clone()).unwrap();
+        assert_eq!(settings.ai_presets.len(), 1);
+        assert_eq!(settings.ai_presets[0].model, "company-model");
+        assert!(settings.ai_presets[0].api_key.is_none());
+        assert!(settings.ai_presets[0].default_preset);
+        assert_eq!(settings.ai_presets[0].max_context_chars, 128000);
+        assert_eq!(settings.ai_presets[0].max_tokens, 8192);
+        assert_eq!(next["enterpriseSuppressedAiPresets"], json!([personal]));
+        let restored = ai_settings(&json!({}), &next);
+        assert_eq!(restored["aiPresets"], json!([personal]));
     }
 
     #[test]
