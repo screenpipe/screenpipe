@@ -1593,144 +1593,185 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
         server
     };
 
-    // Initialize pipe manager
-    screenpipe_core::health_diagnostics::startup_phase("starting_pipes");
-    let pipes_dir = local_data_dir.join("pipes");
-    std::fs::create_dir_all(&pipes_dir).ok();
-
-    let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
-    let pi_executor = std::sync::Arc::new(
-        screenpipe_core::agents::pi::PiExecutor::new(user_token.clone())
-            .with_api_auth_key(config.api_auth_key.clone()),
-    );
-
-    // Workflow event classifier — opt-in cloud feature. Polls recent activity
-    // and emits `WorkflowEvent`s on the bus so pipes with `trigger.events`
-    // frontmatter can run. Routed through the gateway by default; self-host
-    // can override with SCREENPIPE_EVENT_CLASSIFIER_URL.
-    if config.enable_workflow_events {
-        let classifier_url =
-            std::env::var("SCREENPIPE_EVENT_CLASSIFIER_URL").unwrap_or_else(|_| {
-                screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL.to_string()
-            });
-        let token = user_token.clone().unwrap_or_default();
-        let port = config.port;
-        tokio::spawn(async move {
-            screenpipe_engine::workflow_classifier::start_workflow_classifier(
-                classifier_url,
-                token,
-                port,
-                std::time::Duration::from_secs(30),
-            )
-            .await;
-        });
-    }
-
-    let mut agent_executors: std::collections::HashMap<
-        String,
-        std::sync::Arc<dyn screenpipe_core::agents::AgentExecutor>,
-    > = std::collections::HashMap::new();
-    agent_executors.insert("pi".to_string(), pi_executor.clone());
-    agent_executors.insert(
-        "acp".to_string(),
-        std::sync::Arc::new(screenpipe_core::agents::acp::AcpExecutor::new(
-            user_token.clone(),
-            screenpipe_core::agents::pi::SCREENPIPE_API_URL.to_string(),
-            config.port,
-            config.api_auth_key.clone(),
-        )),
-    );
-    let cloud_agent_executor = std::sync::Arc::new(
-        screenpipe_core::agents::cloud::CloudAgentExecutor::new(
-            config.port,
-            config.api_auth_key.clone(),
-        )
-        .with_secret_store(server.secret_store.clone()),
-    );
-    agent_executors.insert("cloud-agent".to_string(), cloud_agent_executor);
-
-    // Create pipe store backed by the main SQLite DB
-    let pipe_store: Option<std::sync::Arc<dyn screenpipe_core::pipes::PipeStore>> =
-        Some(std::sync::Arc::new(
-            screenpipe_engine::pipe_store::SqlitePipeStore::new(db.clone()),
-        ));
-
-    let mut pipe_manager = screenpipe_core::pipes::PipeManager::new(
-        pipes_dir,
-        agent_executors,
-        pipe_store,
-        config.port,
-    );
-    let mcp_session_access = screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
-    pipe_manager.set_mcp_session_access(mcp_session_access.clone());
-    // Wire pipe permission token registry (bridges PipeManager ↔ server middleware)
-    pipe_manager.set_token_registry(std::sync::Arc::new(
-        screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
-            server.pipe_permissions.clone(),
-        ),
-    ));
-    let (event_runs_active, event_runs_peak) = pipe_manager.event_run_concurrency();
-    pipe_manager.set_on_run_complete(std::sync::Arc::new(
-        move |pipe_name, execution_id, trigger_type, success, duration_secs, error_type| {
-            let mut props = serde_json::json!({
-                "pipe": pipe_name,
-                "execution_id": execution_id,
-                "trigger_type": trigger_type,
-                "telemetry_schema_version": 2,
-                "success": success,
-                "duration_secs": duration_secs,
-                // Concurrency of event-triggered runs: live count as this run
-                // completes plus the process-lifetime peak. This makes the
-                // EVENT_TRIGGERED_CONCURRENCY_LIMIT behavior observable.
-                "event_runs_active": event_runs_active.load(std::sync::atomic::Ordering::Relaxed),
-                "event_runs_peak": event_runs_peak.load(std::sync::atomic::Ordering::Relaxed),
-            });
-            if let Some(et) = error_type {
-                props["error_type"] = serde_json::Value::String(et.to_string());
+    // The isolated Mastra comparison owns agent execution outside the recorder.
+    // Omit the manager entirely: no startup recovery, scheduler, executors or
+    // /pipes routes. The default recording startup remains unchanged.
+    let server = if record_args.disable_pipes {
+        info!("Pipe execution disabled; recording and data APIs only");
+        if let Some(path) = &record_args.agent_permissions_file {
+            let permissions: Vec<screenpipe_core::pipes::permissions::PipePermissions> =
+                serde_json::from_slice(
+                    &std::fs::read(path).context("read external agent API permissions")?,
+                )
+                .context("parse external agent API permissions")?;
+            for permissions in permissions {
+                let token = permissions
+                    .pipe_token
+                    .as_deref()
+                    .filter(|token| {
+                        token
+                            .strip_prefix("sp_pipe_")
+                            .is_some_and(|suffix| !suffix.is_empty())
+                    })
+                    .context("external agent permission requires a scoped API token")?
+                    .to_owned();
+                anyhow::ensure!(
+                    !permissions.pipe_name.trim().is_empty(),
+                    "external agent identity is required"
+                );
+                anyhow::ensure!(
+                    !server.pipe_permissions.contains_key(&token),
+                    "duplicate external agent API token"
+                );
+                server
+                    .pipe_permissions
+                    .insert(token, std::sync::Arc::new(permissions));
             }
-            // Keep the legacy event name so existing dashboards continue to work.
-            analytics::capture_event_nonblocking("pipe_scheduled_run", props);
-        },
-    ));
-    // Give scheduled runs the same Live View target authority the foreground
-    // refresh button sends, so a Pipe feeding several dashboards refreshes all
-    // of them instead of leaving the ones it skipped stale until a manual click.
-    {
-        let screenpipe_dir_for_live_views = local_data_dir.clone();
-        pipe_manager.set_scheduled_run_context(std::sync::Arc::new(move |pipe_name: &str| {
-            screenpipe_engine::live_views::scheduled_live_view_run_context_for_dir(
-                &screenpipe_dir_for_live_views,
-                pipe_name,
-                chrono::Local::now(),
-            )
-            .map(|context| screenpipe_engine::pipes_api::format_run_context(&context))
-        }));
-    }
-    // Inject local API key so pipe subprocesses can authenticate to localhost
-    if config.api_auth {
-        pipe_manager.set_local_api_key(config.api_auth_key.clone());
-    }
-    pipe_manager.install_builtin_pipes().ok();
-    if let Err(e) = pipe_manager.load_pipes().await {
-        tracing::warn!("failed to load pipes: {}", e);
-    }
-    // Mark any executions left 'running' from a previous crash as failed
-    pipe_manager.startup_recovery().await;
-    if let Err(e) = pipe_manager.start_scheduler().await {
-        tracing::warn!("failed to start pipe scheduler: {}", e);
-    }
-    let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
-    let server = server
-        .with_pipe_manager(shared_pipe_manager.clone())
-        .with_mcp_session_access(mcp_session_access)
-        .with_high_fps_controller(high_fps_controller.clone());
-
-    // Install pi agent in background
-    tokio::spawn(async move {
-        if let Err(e) = pi_executor.ensure_installed().await {
-            tracing::warn!("pi agent install failed: {}", e);
         }
-    });
+        server.with_high_fps_controller(high_fps_controller.clone())
+    } else {
+        // Initialize pipe manager
+        screenpipe_core::health_diagnostics::startup_phase("starting_pipes");
+        let pipes_dir = local_data_dir.join("pipes");
+        std::fs::create_dir_all(&pipes_dir).ok();
+
+        let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
+        let pi_executor = std::sync::Arc::new(
+            screenpipe_core::agents::pi::PiExecutor::new(user_token.clone())
+                .with_api_auth_key(config.api_auth_key.clone()),
+        );
+
+        // Workflow event classifier — opt-in cloud feature. Polls recent activity
+        // and emits `WorkflowEvent`s on the bus so pipes with `trigger.events`
+        // frontmatter can run. Routed through the gateway by default; self-host
+        // can override with SCREENPIPE_EVENT_CLASSIFIER_URL.
+        if config.enable_workflow_events {
+            let classifier_url =
+                std::env::var("SCREENPIPE_EVENT_CLASSIFIER_URL").unwrap_or_else(|_| {
+                    screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL.to_string()
+                });
+            let token = user_token.clone().unwrap_or_default();
+            let port = config.port;
+            tokio::spawn(async move {
+                screenpipe_engine::workflow_classifier::start_workflow_classifier(
+                    classifier_url,
+                    token,
+                    port,
+                    std::time::Duration::from_secs(30),
+                )
+                .await;
+            });
+        }
+
+        let mut agent_executors: std::collections::HashMap<
+            String,
+            std::sync::Arc<dyn screenpipe_core::agents::AgentExecutor>,
+        > = std::collections::HashMap::new();
+        agent_executors.insert("pi".to_string(), pi_executor.clone());
+        agent_executors.insert(
+            "acp".to_string(),
+            std::sync::Arc::new(screenpipe_core::agents::acp::AcpExecutor::new(
+                user_token.clone(),
+                screenpipe_core::agents::pi::SCREENPIPE_API_URL.to_string(),
+                config.port,
+                config.api_auth_key.clone(),
+            )),
+        );
+        let cloud_agent_executor = std::sync::Arc::new(
+            screenpipe_core::agents::cloud::CloudAgentExecutor::new(
+                config.port,
+                config.api_auth_key.clone(),
+            )
+            .with_secret_store(server.secret_store.clone()),
+        );
+        agent_executors.insert("cloud-agent".to_string(), cloud_agent_executor);
+
+        // Create pipe store backed by the main SQLite DB
+        let pipe_store: Option<std::sync::Arc<dyn screenpipe_core::pipes::PipeStore>> =
+            Some(std::sync::Arc::new(
+                screenpipe_engine::pipe_store::SqlitePipeStore::new(db.clone()),
+            ));
+
+        let mut pipe_manager = screenpipe_core::pipes::PipeManager::new(
+            pipes_dir,
+            agent_executors,
+            pipe_store,
+            config.port,
+        );
+        let mcp_session_access =
+            screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
+        pipe_manager.set_mcp_session_access(mcp_session_access.clone());
+        // Wire pipe permission token registry (bridges PipeManager ↔ server middleware)
+        pipe_manager.set_token_registry(std::sync::Arc::new(
+            screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
+                server.pipe_permissions.clone(),
+            ),
+        ));
+        let (event_runs_active, event_runs_peak) = pipe_manager.event_run_concurrency();
+        pipe_manager.set_on_run_complete(std::sync::Arc::new(
+            move |pipe_name, execution_id, trigger_type, success, duration_secs, error_type| {
+                let mut props = serde_json::json!({
+                    "pipe": pipe_name,
+                    "execution_id": execution_id,
+                    "trigger_type": trigger_type,
+                    "telemetry_schema_version": 2,
+                    "success": success,
+                    "duration_secs": duration_secs,
+                    // Concurrency of event-triggered runs: live count as this run
+                    // completes plus the process-lifetime peak. This makes the
+                    // EVENT_TRIGGERED_CONCURRENCY_LIMIT behavior observable.
+                    "event_runs_active": event_runs_active.load(std::sync::atomic::Ordering::Relaxed),
+                    "event_runs_peak": event_runs_peak.load(std::sync::atomic::Ordering::Relaxed),
+                });
+                if let Some(et) = error_type {
+                    props["error_type"] = serde_json::Value::String(et.to_string());
+                }
+                // Keep the legacy event name so existing dashboards continue to work.
+                analytics::capture_event_nonblocking("pipe_scheduled_run", props);
+            },
+        ));
+        // Give scheduled runs the same Live View target authority the foreground
+        // refresh button sends, so a Pipe feeding several dashboards refreshes all
+        // of them instead of leaving the ones it skipped stale until a manual click.
+        {
+            let screenpipe_dir_for_live_views = local_data_dir.clone();
+            pipe_manager.set_scheduled_run_context(std::sync::Arc::new(move |pipe_name: &str| {
+                screenpipe_engine::live_views::scheduled_live_view_run_context_for_dir(
+                    &screenpipe_dir_for_live_views,
+                    pipe_name,
+                    chrono::Local::now(),
+                )
+                .map(|context| screenpipe_engine::pipes_api::format_run_context(&context))
+            }));
+        }
+        // Inject local API key so pipe subprocesses can authenticate to localhost
+        if config.api_auth {
+            pipe_manager.set_local_api_key(config.api_auth_key.clone());
+        }
+        pipe_manager.install_builtin_pipes().ok();
+        if let Err(e) = pipe_manager.load_pipes().await {
+            tracing::warn!("failed to load pipes: {}", e);
+        }
+        // Mark any executions left 'running' from a previous crash as failed
+        pipe_manager.startup_recovery().await;
+        if let Err(e) = pipe_manager.start_scheduler().await {
+            tracing::warn!("failed to start pipe scheduler: {}", e);
+        }
+        let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
+        let server = server
+            .with_pipe_manager(shared_pipe_manager.clone())
+            .with_mcp_session_access(mcp_session_access)
+            .with_high_fps_controller(high_fps_controller.clone());
+
+        // Install pi agent in background
+        tokio::spawn(async move {
+            if let Err(e) = pi_executor.ensure_installed().await {
+                tracing::warn!("pi agent install failed: {}", e);
+            }
+        });
+
+        server
+    };
 
     // print screenpipe in gradient
     println!("\n\n{}", DISPLAY.truecolor(147, 112, 219).bold());
