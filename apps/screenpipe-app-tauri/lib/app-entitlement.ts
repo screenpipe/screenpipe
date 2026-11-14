@@ -720,9 +720,20 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
           }
         : null;
 
+  // The desktop store's Rust `User.credits` is `{ amount }`. Persisting a bare
+  // number (as /api/user may return) makes every settings load fail.
+  const rawCredits = rawUser?.credits;
+  const credits =
+    typeof rawCredits === "number" && Number.isFinite(rawCredits)
+      ? { amount: Math.trunc(rawCredits) }
+      : rawCredits && typeof rawCredits === "object" && !Array.isArray(rawCredits)
+        ? rawCredits
+        : null;
+
   return {
     ...rawUser,
     token,
+    credits,
     app_entitled: appEntitled,
     subscription_plan: subscriptionPlan,
     entitlement,
