@@ -73,23 +73,30 @@ pub(super) struct Producer {
 }
 
 impl Producer {
-    fn update_policy(&self, policy: Policy) {
+    fn update_policy(&self, policy: Policy) -> Arc<Policy> {
+        let mut admitted = None;
         self.policy.send_if_modified(|current| {
-            if **current == policy {
-                return false;
+            let changed = **current != policy;
+            if changed {
+                // Retire prepared pixels under the old policy while the display
+                // stream continues independently of redaction configuration.
+                self.frames.send_replace(None);
+                *current = Arc::new(policy);
             }
-            // Retire prepared pixels under the old policy while the display
-            // stream continues independently of redaction configuration.
-            self.frames.send_replace(None);
-            *current = Arc::new(policy.clone());
-            true
+            admitted = Some(current.clone());
+            changed
         });
+        admitted.expect("policy update synchronously observes the admitted generation")
     }
 
-    fn render(&self, frame: &PreparedFrame) -> anyhow::Result<CapturedPixels> {
+    fn render(
+        &self,
+        requested: &Arc<Policy>,
+        frame: &PreparedFrame,
+    ) -> anyhow::Result<CapturedPixels> {
         let current = self.policy.borrow();
         ensure!(
-            Arc::ptr_eq(&current, &frame.policy),
+            Arc::ptr_eq(&current, &frame.policy) && Arc::ptr_eq(requested, &frame.policy),
             "screenshot redaction policy changed before rendering"
         );
         frame.render()
@@ -135,11 +142,11 @@ pub(super) async fn capture_filtered(
             })
             .clone()
     };
-    producer.update_policy(policy);
+    let requested_policy = producer.update_policy(policy);
     let frame = selected_frame(&slot, producer.frames.subscribe()).await?;
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot capture invalidated");
-        let rendered = producer.render(&frame)?;
+        let rendered = producer.render(&requested_policy, &frame)?;
         ensure!(
             slot.is_active(),
             "screenshot capture invalidated during rendering"
@@ -242,7 +249,7 @@ pub(super) async fn cached_preview(id: u32) -> anyhow::Result<Option<DynamicImag
     };
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot preview invalidated");
-        Ok(Some(producer.render(&frame)?.image))
+        Ok(Some(producer.render(&frame.policy, &frame)?.image))
     })
     .await
 }
@@ -1283,10 +1290,11 @@ mod tests {
         assert!(producer.frames.borrow().is_none());
         producer.publish(prepared.clone());
         assert!(producer.frames.borrow().is_none());
-        assert!(producer.render(&prepared).is_err());
+        assert!(producer.render(&old_policy, &prepared).is_err());
         let mut next = prepared;
         next.policy = producer.policy.borrow().clone();
-        assert!(producer.render(&next).is_ok());
+        assert!(producer.render(&old_policy, &next).is_err());
+        assert!(producer.render(&next.policy, &next).is_ok());
         producer.publish(next);
         assert!(producer.frames.borrow().is_some());
     }
