@@ -32,11 +32,11 @@ pub use linux::{
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
-    cached_monitor_status, e2e_arm_sck_lookup_hang_fault, get_capture_backend, get_default_monitor,
-    get_monitor_by_id, invalidate_monitor_lookup_cache, is_screen_capture_supported, list_monitors,
-    list_monitors_cached, list_monitors_detailed, macos_version,
-    secs_since_capture_backend_fallback, set_sck_capture_max_width, CaptureConfiguration,
-    HdCapture,
+    cached_monitor_status, e2e_arm_sck_lookup_hang_fault, focus_stable_id, get_capture_backend,
+    get_default_monitor, get_monitor_by_id, invalidate_monitor_lookup_cache,
+    is_screen_capture_supported, list_monitors, list_monitors_cached, list_monitors_detailed,
+    macos_version, secs_since_capture_backend_fallback, set_sck_capture_max_width,
+    CaptureConfiguration, HdCapture,
 };
 
 /// Seconds since capture last fell back off its primary backend, if ever.
@@ -46,6 +46,14 @@ pub use macos::{
 #[cfg(not(target_os = "macos"))]
 pub fn secs_since_capture_backend_fallback() -> Option<u64> {
     None
+}
+/// Stable id that focus resolution should use for `monitor`.
+///
+/// Only macOS can describe one display differently across its two capture
+/// backends; elsewhere the monitor's own stable id is already canonical.
+#[cfg(not(target_os = "macos"))]
+pub fn focus_stable_id(monitor: &SafeMonitor) -> String {
+    monitor.stable_id()
 }
 #[cfg(target_os = "windows")]
 pub use windows::{

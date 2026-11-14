@@ -814,6 +814,30 @@ fn last_known_monitor_list() -> Vec<SafeMonitor> {
         .unwrap_or_default()
 }
 
+/// Stable id that focus resolution should use for `monitor`.
+///
+/// The focus tracker resolves the cursor against [`last_known_monitor_list`],
+/// but a capture loop keeps the `SafeMonitor` it started with. The two can
+/// describe one CGDirectDisplayID differently: sck-rs names it
+/// `Display {id}` while the CoreGraphics fallback names it
+/// `Display #{model}`, and a scaling or arrangement change alters the
+/// size/origin part of the id without restarting the loop. Comparing those
+/// raw ids made every monitor permanently unfocused (#7678). Describe the
+/// display from the same last-known topology the tracker reads, so both sides
+/// of the comparison come from one snapshot. A display absent from that
+/// topology keeps its own identity.
+pub fn focus_stable_id(monitor: &SafeMonitor) -> String {
+    let guard = MONITOR_LOOKUP_CACHE
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .last_known
+        .as_ref()
+        .and_then(|cached| cached.monitors.iter().find(|m| m.id() == monitor.id()))
+        .unwrap_or(monitor)
+        .stable_id()
+}
+
 /// Mark the cached enumeration stale for capture lookups.
 ///
 /// Capture lookups must re-enumerate after a display change, but the focus
@@ -1188,6 +1212,107 @@ mod tests {
             cached_xcap: None,
             prefer_xcap_fallback: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// A monitor as each macOS backend describes the same display: sck-rs
+    /// names it `Display {CGDirectDisplayID}`, the CoreGraphics/xcap fallback
+    /// `Display #{model number}`.
+    fn backend_monitor(id: u32, name: &str, width: u32, height: u32) -> SafeMonitor {
+        let mut monitor = cache_test_monitor(id);
+        monitor.monitor_data = Arc::new(MonitorData {
+            width,
+            height,
+            name: name.to_string(),
+            ..(*monitor.monitor_data).clone()
+        });
+        monitor
+    }
+
+    /// #7678: a capture loop keeps the `SafeMonitor` it started with, while
+    /// the focus tracker resolves against the latest topology. Once the two
+    /// describe the same display differently, every stable id differs and no
+    /// frame is ever attributed to the focused app until restart.
+    #[test]
+    fn focus_identity_follows_last_known_topology_for_the_same_display() {
+        let _guard = lock_lookup_cache_tests();
+        clear_monitor_lookup_cache();
+
+        let sck = backend_monitor(1, "Display 1", 1512, 982);
+        let cg_fallback = backend_monitor(1, "Display #41191", 1512, 982);
+        let rescaled = backend_monitor(1, "Display 1", 1728, 1117);
+        let external = backend_monitor(2, "Display 2", 1920, 1080);
+
+        // Root cause: the raw stable ids disagree for one physical display.
+        assert_ne!(sck.stable_id(), cg_fallback.stable_id());
+        assert_ne!(sck.stable_id(), rescaled.stable_id());
+
+        // Before discovery, a monitor keeps its own identity.
+        assert_eq!(focus_stable_id(&cg_fallback), cg_fallback.stable_id());
+
+        // Loop started on the CoreGraphics fallback; topology is SCK again.
+        store_monitor_lookup_cache(&[sck.clone(), external.clone()]);
+        assert_eq!(focus_stable_id(&cg_fallback), sck.stable_id());
+        assert_eq!(focus_stable_id(&sck), sck.stable_id());
+
+        // Loop started on SCK; topology fell back to CoreGraphics.
+        store_monitor_lookup_cache(&[cg_fallback.clone(), external.clone()]);
+        assert_eq!(focus_stable_id(&sck), cg_fallback.stable_id());
+
+        // Display scaling changed without a new CGDirectDisplayID.
+        store_monitor_lookup_cache(&[rescaled.clone(), external.clone()]);
+        assert_eq!(focus_stable_id(&sck), rescaled.stable_id());
+
+        // Capture-lookup invalidation retains geometry for focus resolution,
+        // so the identity must survive it like the tracker's geometry does.
+        invalidate_monitor_lookup_cache();
+        assert_eq!(focus_stable_id(&sck), rescaled.stable_id());
+
+        // Distinct displays are never merged, and a display absent from the
+        // topology keeps its own identity.
+        assert_eq!(focus_stable_id(&external), external.stable_id());
+        let gone = backend_monitor(9, "Display 9", 800, 600);
+        assert_eq!(focus_stable_id(&gone), gone.stable_id());
+
+        clear_monitor_lookup_cache();
+    }
+
+    /// Native, read-only: enumerate this Mac's real displays through both
+    /// backends and check the fallback identity resolves to the SCK one.
+    /// Needs Screen Recording for ScreenCaptureKit; captures nothing.
+    /// `cargo test -p screenpipe-screen --lib native_backends_share_focus_identity -- --ignored --nocapture`
+    #[test]
+    #[ignore = "native: needs real displays and Screen Recording permission"]
+    fn native_backends_share_focus_identity() {
+        let _guard = lock_lookup_cache_tests();
+        clear_monitor_lookup_cache();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        // Production path: the monitor watcher's enumeration fills the
+        // topology that focus resolution reads.
+        let sck = runtime
+            .block_on(list_monitors_detailed())
+            .expect("ScreenCaptureKit enumeration (Screen Recording permission?)");
+        let cg = enumerate_xcap_monitors().expect("CoreGraphics enumeration");
+        assert!(!sck.is_empty(), "no displays");
+
+        for fallback in &cg {
+            let Some(primary) = sck.iter().find(|m| m.id() == fallback.id()) else {
+                continue;
+            };
+            println!(
+                "display {}: sck={} cg={} focus(cg)={}",
+                fallback.id(),
+                primary.stable_id(),
+                fallback.stable_id(),
+                focus_stable_id(fallback)
+            );
+            assert_eq!(focus_stable_id(fallback), primary.stable_id());
+            assert_eq!(focus_stable_id(primary), primary.stable_id());
+        }
+        clear_monitor_lookup_cache();
     }
 
     fn read_focus_monitor_cache() -> Vec<SafeMonitor> {
