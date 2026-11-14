@@ -271,7 +271,7 @@ impl sc::stream::OutputImpl for Receiver {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct Key {
     pub width: usize,
     pub height: usize,
@@ -312,11 +312,11 @@ impl Drop for NativeStream {
     }
 }
 
-pub(super) async fn frame(
+async fn source(
     slot: &Arc<Slot>,
     filter: &sc::ContentFilter,
     key: Key,
-) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
+) -> Result<Arc<NativeStream>> {
     ensure!(
         slot.active.load(Ordering::Acquire),
         "screenshot stream invalidated"
@@ -328,14 +328,8 @@ pub(super) async fn frame(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let (native, previous_revision) = if let Some(native) = existing.filter(|s| s.key == key) {
-        let revision = native
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .revision;
-        (native, Some(revision))
+    if let Some(native) = existing.filter(|s| s.key == key) {
+        Ok(native)
     } else {
         let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
         drop(removed);
@@ -400,10 +394,27 @@ pub(super) async fn frame(
             legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
             "persistent whole-display screenshot stream started"
         );
-        (native, None)
-    };
+        Ok(native)
+    }
+}
+
+pub(super) async fn start(slot: &Arc<Slot>, filter: &sc::ContentFilter, key: Key) -> Result<()> {
+    source(slot, filter, key).await.map(|_| ())
+}
+
+pub(super) async fn frame(
+    slot: &Arc<Slot>,
+    filter: &sc::ContentFilter,
+    key: Key,
+) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
+    let native = source(slot, filter, key).await?;
+    let previous_revision = native
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .revision;
     // Producer preparation brackets a new callback with its scene observations.
-    // A just-started generation may already have received its first sample.
     // Events never wait for this revision: they select the prepared-frame cache.
     // The stream owns only its display filter; each prepared frame owns its
     // redaction scene. Native PTS is alignment metadata only.
@@ -433,7 +444,7 @@ pub(super) async fn frame(
                 suspend(slot);
                 return Err(anyhow!("screenshot stream stopped: {error}"));
             }
-            if previous_revision.is_none_or(|revision| state.revision != revision) {
+            if state.revision != previous_revision {
                 state.image()
             } else {
                 None

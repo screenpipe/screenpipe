@@ -934,6 +934,38 @@ async fn prepare(
         .find(|d| d.display_id().0 == id)
         .ok_or_else(|| anyhow!("filtered display disappeared"))?;
     let frame = display.frame();
+    // Capture the display, not a selection of every visible window. A persistent
+    // inclusion filter makes macOS replace each selected window's traffic lights
+    // with sharing controls. Privacy is applied by the frame's compositor below,
+    // before any pixels leave this module for preview, OCR, or persistence.
+    let mut filter = sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new());
+    // SCDisplay dimensions are logical points on Retina displays. Preserve the
+    // native pixel density before applying the user's explicit resolution cap.
+    let scale = filter.point_pixel_scale() as f64;
+    ensure!(
+        scale.is_finite() && scale > 0.0,
+        "invalid display pixel scale"
+    );
+    let nw = (frame.size.width * scale).round() as usize;
+    let nh = (frame.size.height * scale).round() as usize;
+    ensure!(
+        nw > 0 && nh > 0 && nw <= 16384 && nh <= 16384,
+        "invalid display dimensions"
+    );
+    let cap = crate::monitor::sck_capture_max_width() as usize;
+    let width = if cap == 0 { nw } else { nw.min(cap) };
+    let height = (nh * width / nw).max(1);
+    if api::macos_available("14.2") {
+        filter.set_include_menu_bar(true);
+    }
+    let key = super::stream::Key {
+        width,
+        height,
+        fps: super::stream::frame_rate(),
+    };
+    // Start capture before collecting privacy metadata. A failed scene lookup
+    // may delay redaction, but cannot prevent the display source from running.
+    super::stream::start(stream_slot, &filter, key).await?;
     let before = snapshot(frame)?;
     let available = content.windows();
     let native = |surface: &Surface| {
@@ -983,44 +1015,12 @@ async fn prepare(
         .zip(allowed)
         .filter(|(surface, _)| !controls.ids.contains(&(surface.id, surface.pid)))
         .unzip();
-    // Capture the display, not a selection of every visible window. A persistent
-    // inclusion filter makes macOS replace each selected window's traffic lights
-    // with sharing controls. Privacy is applied by the frame's compositor below,
-    // before any pixels leave this module for preview, OCR, or persistence.
-    let mut filter = sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new());
-    // SCDisplay dimensions are logical points on Retina displays. Preserve the
-    // native pixel density before applying the user's explicit resolution cap.
-    let scale = filter.point_pixel_scale() as f64;
-    ensure!(
-        scale.is_finite() && scale > 0.0,
-        "invalid display pixel scale"
-    );
-    let nw = (frame.size.width * scale).round() as usize;
-    let nh = (frame.size.height * scale).round() as usize;
-    ensure!(
-        nw > 0 && nh > 0 && nw <= 16384 && nh <= 16384,
-        "invalid display dimensions"
-    );
-    let cap = crate::monitor::sck_capture_max_width() as usize;
-    let width = if cap == 0 { nw } else { nw.min(cap) };
-    let height = (nh * width / nw).max(1);
     let scene = Arc::new(SceneMetadata {
         surfaces: before.clone(),
         allowed: allowed.clone(),
     });
-    if api::macos_available("14.2") {
-        filter.set_include_menu_bar(true);
-    }
-    let (pixels, mut captured_at, mut native_timestamp) = super::stream::frame(
-        stream_slot,
-        &filter,
-        super::stream::Key {
-            width,
-            height,
-            fps: super::stream::frame_rate(),
-        },
-    )
-    .await?;
+    let (pixels, mut captured_at, mut native_timestamp) =
+        super::stream::frame(stream_slot, &filter, key).await?;
     // Even a fully excluded scene keeps recording. Only its downstream output
     // is black; no raw pixels from that scene enter preview, OCR or storage.
     let base = allowed.iter().any(|ok| *ok).then_some(pixels);
