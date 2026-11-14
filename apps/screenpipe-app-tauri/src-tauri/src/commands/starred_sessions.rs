@@ -157,88 +157,56 @@ pub(crate) fn hide(app: &tauri::AppHandle) -> Result<(), String> {
 // visibility is independent: dismissing controls must never end a session.
 static TOGGLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn toggle_body(
-    rows: &[serde_json::Value],
-    now: chrono::DateTime<chrono::Utc>,
-) -> serde_json::Value {
-    let active = rows.iter().find(|row| {
-        let start = row["start"]
-            .as_str()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
-        let end = row["end"]
-            .as_str()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
-        matches!((start, end), (Some(start), Some(end)) if start <= now && end > now)
-    });
-    if let Some(active) = active {
-        let mut row = active.clone();
-        let start = chrono::DateTime::parse_from_rfc3339(row["start"].as_str().unwrap()).unwrap();
-        row["end"] = serde_json::json!(
-            now.max(start.with_timezone(&chrono::Utc) + chrono::Duration::milliseconds(1))
-        );
-        row
-    } else {
-        serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(), "start": now,
-            "end": now + chrono::Duration::minutes(60), "hd_requested": false, "revision": 0
-        })
-    }
-}
-
-fn toggle_saved_session(app: &tauri::AppHandle) -> Result<(), String> {
+fn open_focused_session(app: &tauri::AppHandle) -> Result<(), String> {
     let _guard = TOGGLE_LOCK.lock().map_err(|e| e.to_string())?;
+    let settings =
+        crate::store::SettingsStore::get(app)?.ok_or("Recording settings are unavailable")?;
+    if !crate::recording::recording_access_allowed(app, &settings) {
+        return Err("Recording is unavailable under your account or workspace policy.".into());
+    }
     let api = crate::recording::local_api_context_from_app(app);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now();
-    let result: serde_json::Value = api
-        .apply_auth_blocking(client.get(api.url("/starred-sessions")).query(&[
-            ("start_time", now.to_rfc3339()),
-            (
-                "end_time",
-                (now + chrono::Duration::milliseconds(1)).to_rfc3339(),
-            ),
-        ]))
+    // Start is idempotent while a draft exists. A second star press only opens
+    // the same controls; Pause and Finish belong to that recording's dialog.
+    let response = api
+        .apply_auth_blocking(
+            client
+                .post(api.url("/focused-recordings/start"))
+                .json(&serde_json::json!({"id":uuid::Uuid::new_v4().to_string()})),
+        )
         .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
-    let rows = result["data"]
-        .as_array()
-        .ok_or("Could not read starred sessions")?;
-    let body = toggle_body(rows, now);
-    api.apply_auth_blocking(client.post(api.url("/starred-sessions")).json(&body))
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
-    let until = body["end"]
-        .as_str()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|date| date.timestamp_millis())
-        .unwrap_or(0);
-    crate::native_shortcut_reminder::set_starred_until(until);
+    let success = response.status().is_success();
+    let result: serde_json::Value = response.json().map_err(|e| e.to_string())?;
+    if !success {
+        return Err(result["error"]
+            .as_str()
+            .unwrap_or("Could not start recording. Try again.")
+            .to_owned());
+    }
+    let until = if result["phase"] == "recording" {
+        result["captureUntil"].as_i64().unwrap_or(0)
+    } else {
+        0
+    };
+    crate::native_shortcut_reminder::set_focused_until(until);
     let _ = app.emit("starred-sessions-changed", ());
     Ok(())
 }
 
-/// Both the global shortcut and overlay button start/stop the saved session.
+/// Both the global shortcut and overlay button start or reopen focused capture.
 /// HTTP stays off the UI thread, and every press reads the latest persisted state.
 pub(crate) fn toggle(app: &tauri::AppHandle) -> Result<(), String> {
     let app = app.clone();
     std::thread::Builder::new()
         .name("starred-session-toggle".into())
         .spawn(move || {
-            if let Err(error) = toggle_saved_session(&app) {
-                tracing::warn!("could not toggle starred session: {error}");
-                crate::notifications::client::send(
-                    "Could not update starred session",
-                    "Try again. Your saved sessions have not been removed.",
-                );
+            if let Err(error) = open_focused_session(&app) {
+                tracing::warn!("could not open focused recording: {error}");
+                crate::notifications::client::send("Could not start focused recording", &error);
                 return;
             }
             let handle = app.clone();
@@ -364,35 +332,6 @@ pub async fn hide_starred_sessions(app_handle: tauri::AppHandle) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn shortcut_starts_for_an_hour_and_second_press_ends_the_same_session() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T17:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let mut first = toggle_body(&[], now);
-        assert_eq!(first["revision"], 0);
-        assert_eq!(first["hd_requested"], false);
-        assert_eq!(
-            chrono::DateTime::parse_from_rfc3339(first["end"].as_str().unwrap()).unwrap(),
-            now + chrono::Duration::minutes(60)
-        );
-        first["revision"] = serde_json::json!(1);
-        let stopped = toggle_body(&[first.clone()], now + chrono::Duration::minutes(1));
-        assert_eq!(stopped["id"], first["id"]);
-        assert_eq!(stopped["revision"], 1);
-        assert_eq!(
-            chrono::DateTime::parse_from_rfc3339(stopped["end"].as_str().unwrap()).unwrap(),
-            now + chrono::Duration::minutes(1)
-        );
-        let next = toggle_body(&[stopped], now + chrono::Duration::minutes(2));
-        assert_ne!(next["id"], first["id"]);
-        let immediate = toggle_body(&[first], now);
-        assert_eq!(
-            chrono::DateTime::parse_from_rfc3339(immediate["end"].as_str().unwrap()).unwrap(),
-            now + chrono::Duration::milliseconds(1)
-        );
-    }
-
     #[test]
     fn starred_panel_hugs_trigger_and_stays_on_its_display() {
         assert_eq!(

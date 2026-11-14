@@ -49,9 +49,10 @@ pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, ActivityActionDraft,
     ActivityActionRecord, ActivityEvidenceDraft, ActivityEvidenceRecord, ActivityIntervalDraft,
     ActivityIntervalRecord, ActivityLedgerObservation, ActivityTaskDraft, DatabaseManager,
-    DeleteTimeRangeResult, ImmediateTx, NewMeetingTranscriptSegment, SemanticActor,
-    SemanticActorAlias, SemanticActorReference, SemanticAttachResult, SemanticCleanupResult,
-    SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult, StarredSession,
+    DeleteTimeRangeResult, FocusedAction, FocusedInterval, FocusedMedia, FocusedPhase,
+    FocusedRecording, ImmediateTx, NewMeetingTranscriptSegment, SemanticActor, SemanticActorAlias,
+    SemanticActorReference, SemanticAttachResult, SemanticCleanupResult, SemanticContextQuery,
+    SemanticFrameContext, SemanticProjectionWriteResult, StarredSession,
     MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_ROOM_CHANGED,
     MEETING_END_REASON_SHUTDOWN,
 };

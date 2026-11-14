@@ -35,6 +35,7 @@ pub(crate) fn stamp(t: DateTime<Utc>) -> String {
 #[derive(OaSchema, Serialize)]
 pub(crate) struct StarredSession {
     pub id: String,
+    pub name: Option<String>,
     pub start: String,
     pub end: String,
     pub hd_requested: bool,
@@ -45,6 +46,7 @@ impl From<screenpipe_db::StarredSession> for StarredSession {
     fn from(s: screenpipe_db::StarredSession) -> Self {
         Self {
             id: s.id,
+            name: s.name,
             start: s.start,
             end: s.end,
             hd_requested: s.hd_requested,

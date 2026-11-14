@@ -80,6 +80,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn focused_save_hands_off_local_starred_segments_once() {
+        let (app, db) = setup_test_app().await;
+        let now = Utc::now().timestamp_millis();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut recording = screenpipe_db::FocusedRecording::new(id.clone(), now - 60000, false);
+        recording
+            .apply(
+                screenpipe_db::FocusedAction::Rename {
+                    name: "Fixture workflow".into(),
+                },
+                now - 60000,
+            )
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Pause, now - 50000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Resume, now - 20000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Finish, now - 10000)
+            .unwrap();
+        assert!(db.save_focused_recording(&mut recording, 0).await.unwrap());
+        let body = serde_json::json!({"action":"submit","revision":recording.revision,"requestId":uuid::Uuid::new_v4().to_string()});
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/focused-recordings/{id}/action"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let saved: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(saved["phase"], "submitted");
+        }
+        let sessions = db
+            .list_starred_sessions("1970", "2100", 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions
+            .iter()
+            .all(|s| s.name.as_deref() == Some("Fixture workflow")));
+        let mut actual: Vec<_> = sessions.iter().map(|s| (DateTime::parse_from_rfc3339(&s.start).unwrap().timestamp_millis(), DateTime::parse_from_rfc3339(&s.end).unwrap().timestamp_millis())).collect();
+        actual.sort();
+        let expected: Vec<_> = recording.intervals.iter().map(|i| (i.start, i.end.unwrap())).collect();
+        assert_eq!(actual, expected, "local Save must not include the paused gap");
+    }
+
+    #[tokio::test]
     async fn starred_search_paginates_union_and_summary_includes_empty_sessions() {
         let (app, db) = setup_test_app().await;
         let base = Utc::now() - Duration::hours(2);
