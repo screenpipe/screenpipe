@@ -923,6 +923,13 @@ mod tests {
                         .into()
                 }),
         );
+        failure.push_str(
+            &std::env::var("SCREENPIPE_THINKING_REPORT_FIXTURE")
+                .map(|path| std::fs::read_to_string(path).unwrap())
+                .unwrap_or_else(|_| {
+                    "Pi stderr: [screenpipe-thinking-binding] outcome=request_accepted_without_block reason=prefix_binding_mismatch path=messages.1.content.0 request_id=req_fixture\n".into()
+                }),
+        );
         let current = logs.path().join("screenpipe-app.2026-10-01.log");
         std::fs::write(&current, failure).unwrap();
         std::fs::rename(&current, logs.path().join("screenpipe-app.2026-10-01.1.log"))
@@ -970,6 +977,8 @@ mod tests {
         assert!(report.contains(
             "pipe 'daily-summary' error: The system cannot find the file specified. (os error 2)"
         ));
+        assert!(report.contains("[screenpipe-thinking-binding] outcome=request_accepted_without_block"));
+        assert!(report.contains("reason=prefix_binding_mismatch path=messages.1.content.0 request_id=req_fixture"));
         assert!(!report.contains("private-person"));
         assert!(!report.contains("hunter2"));
     }

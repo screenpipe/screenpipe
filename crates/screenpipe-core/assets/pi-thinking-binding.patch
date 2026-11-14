@@ -1,0 +1,83 @@
+--- a/anthropic-messages.js
++++ b/anthropic-messages.js
+@@ -1,3 +1,31 @@
++// screenpipe — AI that knows everything you've seen, said, or heard
++// https://screenpipe.com
++// screenpipe-thinking-binding-v1
++// Screenpipe compacts and prunes history. Native Anthropic thinking signatures
++// are prefix-bound: let the API discard invalid reasoning, preserving chat/tool
++// content and valid reasoning. Keep compatible third-party endpoints unchanged.
++const screenpipeThinkingBindingBeta = "thinking-binding-controls-2026-08-01";
++function screenpipeUsesThinkingBinding(model) {
++    return new URL(model.baseUrl).hostname === "api.anthropic.com";
++}
++function screenpipeThinkingBindingHeaders(headers, model) {
++    if (!screenpipeUsesThinkingBinding(model)) return headers;
++    const merged = new Headers(headers);
++    const betas = new Set((merged.get("anthropic-beta") ?? "").split(",").map(value => value.trim()).filter(Boolean));
++    betas.add(screenpipeThinkingBindingBeta);
++    merged.set("anthropic-beta", [...betas].join(","));
++    return Object.fromEntries(merged);
++}
++function screenpipeReportThinkingDrops(transformations, requestId) {
++    for (const entry of transformations ?? []) {
++        if (entry.type !== "thinking_dropped" || ![
++            "prefix_binding_mismatch", "model_binding_mismatch", "organization_binding_mismatch", "end_user_binding_mismatch",
++        ].includes(entry.reason) || !/^messages\.\d+\.content\.\d+$/.test(entry.path)) continue;
++        // Stderr reaches ordinary app logs and the redacted support bundle.
++        // Never include thinking, signatures, user text, or tool payloads.
++        console.warn(`[screenpipe-thinking-binding] outcome=request_accepted_without_block reason=${entry.reason} path=${entry.path} request_id=${requestId ?? "unknown"}`);
++    }
++}
+ import Anthropic from "@anthropic-ai/sdk";
+ import { calculateCost } from "../models.js";
+ import { splitDeferredTools } from "../utils/deferred-tools.js";
+@@ -365,6 +393,12 @@
+             if (nextParams !== undefined) {
+                 params = nextParams;
+             }
++            if (!options?.client && screenpipeUsesThinkingBinding(model) &&
++                (params.thinking?.type === "adaptive" || params.thinking?.type === "enabled")) {
++                params.thinking = { ...params.thinking, block_binding: params.thinking.block_binding ?? {
++                    prefix_mismatch_behavior: "drop_block",
++                } };
++            }
+             const requestOptions = {
+                 ...(options?.signal ? { signal: options.signal } : {}),
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+@@ -379,6 +413,10 @@
+             stream.push({ type: "start", partial: output });
+             const blocks = output.content;
+             for await (const event of iterateAnthropicEvents(response, options?.signal)) {
++                if (event.type === "message_start" || event.type === "message_delta") {
++                    screenpipeReportThinkingDrops(event.message?.input_transformations ?? event.input_transformations,
++                        response.headers.get("request-id"));
++                }
+                 if (event.type === "message_start") {
+                     output.responseId = event.message.id;
+                     // Capture initial token usage from message_start event
+@@ -674,13 +712,13 @@
+             baseURL: model.baseUrl,
+             dangerouslyAllowBrowser: true,
+             fetch,
+-            defaultHeaders: mergeHeaders({
++            defaultHeaders: screenpipeThinkingBindingHeaders(mergeHeaders({
+                 accept: "application/json",
+                 "anthropic-dangerous-direct-browser-access": "true",
+                 "anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
+                 "user-agent": `claude-cli/${claudeCodeVersion}`,
+                 "x-app": "cli",
+-            }, model.headers, optionsHeaders),
++            }, model.headers, optionsHeaders), model),
+         });
+         return { client, isOAuthToken: true };
+     }
+@@ -697,7 +735,7 @@
+         baseURL: model.baseUrl,
+         dangerouslyAllowBrowser: true,
+         fetch,
+-        defaultHeaders,
++        defaultHeaders: screenpipeThinkingBindingHeaders(defaultHeaders, model),
+     });
+     return { client, isOAuthToken: false };
+ }
