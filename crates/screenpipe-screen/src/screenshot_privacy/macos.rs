@@ -68,8 +68,30 @@ struct Policy {
 }
 
 pub(super) struct Producer {
-    policy: Arc<Policy>,
+    policy: watch::Sender<Arc<Policy>>,
     frames: watch::Sender<Option<Arc<PreparedFrame>>>,
+}
+
+impl Producer {
+    fn update_policy(&self, policy: Policy) {
+        self.policy.send_if_modified(|current| {
+            if **current == policy {
+                return false;
+            }
+            // Retire prepared pixels under the old policy while the display
+            // stream continues independently of redaction configuration.
+            self.frames.send_replace(None);
+            *current = Arc::new(policy.clone());
+            true
+        });
+    }
+
+    fn publish(&self, frame: PreparedFrame) {
+        let current = self.policy.borrow();
+        if Arc::ptr_eq(&current, &frame.policy) {
+            self.frames.send_replace(Some(Arc::new(frame)));
+        }
+    }
 }
 
 pub(super) async fn capture_filtered(
@@ -91,35 +113,28 @@ pub(super) async fn capture_filtered(
         sources,
         excluded_ids,
     };
-    let (slot, producer) = loop {
-        let slot = super::stream::slot(monitor.id());
-        let producer = {
-            let mut entry = slot.producer.lock().unwrap_or_else(|e| e.into_inner());
-            match entry.as_ref() {
-                Some(producer) if *producer.policy == policy => Some(producer.clone()),
-                Some(_) => None,
-                None => {
-                    let (frames, _) = watch::channel(None);
-                    let producer = Arc::new(Producer {
-                        policy: Arc::new(policy.clone()),
-                        frames,
-                    });
-                    *entry = Some(producer.clone());
-                    tokio::spawn(produce(monitor.id(), slot.clone(), producer.clone()));
-                    Some(producer)
-                }
-            }
-        };
-        if let Some(producer) = producer {
-            break (slot, producer);
-        }
-        // A user configuration change starts a new policy generation. Scene
-        // changes within that generation never revoke an already owned frame.
-        super::stream::invalidate(monitor.id());
+    let slot = super::stream::slot(monitor.id());
+    let producer = {
+        let mut entry = slot.producer.lock().unwrap_or_else(|e| e.into_inner());
+        entry
+            .get_or_insert_with(|| {
+                let (frames, _) = watch::channel(None);
+                let (policy, _) = watch::channel(Arc::new(policy.clone()));
+                let producer = Arc::new(Producer { policy, frames });
+                tokio::spawn(produce(monitor.id(), slot.clone(), producer.clone()));
+                producer
+            })
+            .clone()
     };
+    producer.update_policy(policy);
     let frame = selected_frame(&slot, producer.frames.subscribe()).await?;
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot capture invalidated");
+        let current = producer.policy.borrow();
+        ensure!(
+            Arc::ptr_eq(&current, &frame.policy),
+            "screenshot redaction policy changed before rendering"
+        );
         let rendered = frame.render()?;
         ensure!(
             slot.is_active(),
@@ -170,7 +185,7 @@ async fn produce(id: u32, slot: Arc<super::stream::Slot>, producer: Arc<Producer
             _ = &mut cancelled => break,
             result = capture_with_scene_retries(id, worker.clone(), || {
                 let slot = slot.clone();
-                let policy = producer.policy.clone();
+                let policy = producer.policy.borrow().clone();
                 move || async move { prepare(id, policy, &slot).await }
             }) => result,
         };
@@ -183,7 +198,7 @@ async fn produce(id: u32, slot: Arc<super::stream::Slot>, producer: Arc<Producer
                         "continuous screenshot source recovered"
                     );
                 }
-                producer.frames.send_replace(Some(Arc::new(frame)));
+                producer.publish(frame);
             }
             Err(error) => {
                 let cause = format!("{error:#}");
@@ -193,9 +208,9 @@ async fn produce(id: u32, slot: Arc<super::stream::Slot>, producer: Arc<Producer
                         "continuous screenshot source could not prepare the next frame");
                     failure = Some(cause);
                 }
-                // A previously prepared frame keeps its own policy and scene.
-                // Native failure reopens only the source, never a snapshot API.
-                super::stream::suspend(&slot);
+                // Redaction/scene failures cannot stop the display stream. A
+                // previously prepared frame keeps its own policy and scene;
+                // native stream errors are recovered by the source itself.
             }
         }
         let cadence = Duration::from_secs_f64(1.0 / super::stream::frame_rate() as f64);
@@ -819,12 +834,6 @@ pub(super) struct SceneMetadata {
     allowed: Vec<bool>,
 }
 
-impl PartialEq for SceneMetadata {
-    fn eq(&self, other: &Self) -> bool {
-        self.allowed == other.allowed && same_composition(&self.surfaces, &other.surfaces)
-    }
-}
-
 #[derive(Clone)]
 struct PreparedFrame {
     policy: Arc<Policy>,
@@ -999,26 +1008,22 @@ async fn prepare(
         surfaces: before.clone(),
         allowed: allowed.clone(),
     });
-    let (base, mut captured_at, mut native_timestamp) = if !allowed.iter().any(|ok| *ok) {
-        super::stream::suspend(stream_slot);
-        (None, chrono::Utc::now(), false)
-    } else {
-        if api::macos_available("14.2") {
-            filter.set_include_menu_bar(true);
-        }
-        let (pixels, captured_at, native_timestamp) = super::stream::frame(
-            stream_slot,
-            &filter,
-            super::stream::Key {
-                width,
-                height,
-                fps: super::stream::frame_rate(),
-                scene: scene.clone(),
-            },
-        )
-        .await?;
-        (Some(pixels), captured_at, native_timestamp)
-    };
+    if api::macos_available("14.2") {
+        filter.set_include_menu_bar(true);
+    }
+    let (pixels, mut captured_at, mut native_timestamp) = super::stream::frame(
+        stream_slot,
+        &filter,
+        super::stream::Key {
+            width,
+            height,
+            fps: super::stream::frame_rate(),
+        },
+    )
+    .await?;
+    // Even a fully excluded scene keeps recording. Only its downstream output
+    // is black; no raw pixels from that scene enter preview, OCR or storage.
+    let base = allowed.iter().any(|ok| *ok).then_some(pixels);
     let bounds = Rect {
         x: 0,
         y: 0,
@@ -1253,6 +1258,29 @@ mod tests {
             captured_at: at,
             native_timestamp: true,
         }
+    }
+
+    #[test]
+    fn policy_updates_retire_prepared_frames_and_reject_in_flight_old_policy() {
+        let prepared = prepared_for_test(chrono::Utc::now());
+        let old_policy = prepared.policy.clone();
+        let (policy, _) = watch::channel(old_policy.clone());
+        let (frames, _) = watch::channel(None);
+        let producer = Producer { policy, frames };
+        producer.publish(prepared.clone());
+        producer.update_policy((*old_policy).clone());
+        assert!(producer.frames.borrow().is_some());
+        assert!(Arc::ptr_eq(&producer.policy.borrow(), &old_policy));
+        let mut changed = (*old_policy).clone();
+        changed.excluded_ids.push(42);
+        producer.update_policy(changed);
+        assert!(producer.frames.borrow().is_none());
+        producer.publish(prepared.clone());
+        assert!(producer.frames.borrow().is_none());
+        let mut next = prepared;
+        next.policy = producer.policy.borrow().clone();
+        producer.publish(next);
+        assert!(producer.frames.borrow().is_some());
     }
 
     #[tokio::test]

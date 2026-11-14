@@ -276,7 +276,6 @@ pub(super) struct Key {
     pub width: usize,
     pub height: usize,
     pub fps: u32,
-    pub scene: Arc<super::macos::SceneMetadata>,
 }
 
 struct NativeStream {
@@ -406,8 +405,8 @@ pub(super) async fn frame(
     // Producer preparation brackets a new callback with its scene observations.
     // A just-started generation may already have received its first sample.
     // Events never wait for this revision: they select the prepared-frame cache.
-    // This generation owns its display filter and redaction scene. Reuse its
-    // retained image regardless of age; native PTS is alignment metadata only.
+    // The stream owns only its display filter; each prepared frame owns its
+    // redaction scene. Native PTS is alignment metadata only.
     // The producer validates the scene before publishing pixels with its plan.
     // A fixed clock anchor also keeps a repeated native PTS identical across
     // cache reads; selecting the frame again cannot give it a new timestamp.
@@ -429,6 +428,9 @@ pub(super) async fn frame(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(error) = &state.error {
+                let error = error.clone();
+                drop(state);
+                suspend(slot);
                 return Err(anyhow!("screenshot stream stopped: {error}"));
             }
             if previous_revision.is_none_or(|revision| state.revision != revision) {
