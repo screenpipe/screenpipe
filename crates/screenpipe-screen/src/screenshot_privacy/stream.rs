@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Persistent positive-selection screenshot source. This owns no HD handles,
+//! Persistent whole-display screenshot source. This owns no HD handles,
 //! encoder, or recording cadence. Native callbacks retain one IOSurface; pixel
 //! conversion remains on the existing screenshot worker, at the save cadence.
 
@@ -275,8 +275,6 @@ impl sc::stream::OutputImpl for Receiver {
 pub(super) struct Key {
     pub width: usize,
     pub height: usize,
-    pub menu_bar: bool,
-    pub windows: Vec<(u32, i32)>,
     pub fps: u32,
     pub scene: Arc<super::macos::SceneMetadata>,
 }
@@ -325,7 +323,7 @@ pub(super) async fn frame(
         "screenshot stream invalidated"
     );
     // This is called by the scene producer, never by an event consumer. A new
-    // native generation owns its positive filter for its entire lifetime.
+    // native generation captures the whole display for its entire lifetime.
     let existing = slot
         .stream
         .lock()
@@ -398,15 +396,17 @@ pub(super) async fn frame(
             width = native.key.width,
             height = native.key.height,
             fps = native.key.fps,
+            capture_scope = "display",
+            redaction_stage = "after_capture",
             legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
-            "persistent positive-selection screenshot stream started"
+            "persistent whole-display screenshot stream started"
         );
         (native, None)
     };
     // Producer preparation brackets a new callback with its scene observations.
     // A just-started generation may already have received its first sample.
     // Events never wait for this revision: they select the prepared-frame cache.
-    // This generation owns its positive filter and window scene. Reuse its
+    // This generation owns its display filter and redaction scene. Reuse its
     // retained image regardless of age; native PTS is alignment metadata only.
     // The producer validates the scene before publishing pixels with its plan.
     // A fixed clock anchor also keeps a repeated native PTS identical across

@@ -22,8 +22,9 @@
 //!   done exactly this in production: the call never returns and the thread
 //!   looks alive. Bound every platform call and treat "no frame produced" as
 //!   the failure signal, not "no error returned".
-//! - Respect capture exclusions and privacy gates before pixels are read, not
-//!   after. Filtering later means the frame already existed.
+//! - Respect capture exclusions and privacy gates before pixels leave the
+//!   privacy compositor for preview, OCR, or persistence. macOS captures the
+//!   whole display internally and applies redaction before returning it.
 
 #[cfg(target_os = "macos")]
 pub mod apple;
