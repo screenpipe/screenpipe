@@ -1,11 +1,11 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Window policies must constrain the source of pixels, not just frame metadata.
-//! A negative list resolved before capture cannot cover windows created later.
-//! Filtered captures include only verified window surfaces. Cached macOS frames
-//! retain their producer policy and scene; event handling never reauthorizes
-//! those pixels against a later desktop or falls back to a monitor screenshot.
+//! Window policies constrain returned pixels, not just frame metadata. macOS
+//! captures the whole display and redacts it before preview, OCR, or persistence;
+//! other backends compose verified window surfaces. Cached macOS frames retain
+//! their producer policy and validated scene; event handling never reauthorizes
+//! those pixels against a later desktop or uses an unredacted fallback.
 
 use crate::capture_screenshot_by_window::{ExclusionSources, WindowFilters};
 use crate::monitor::SafeMonitor;
@@ -29,7 +29,7 @@ pub use stream::{own_source as own_cached_source, SourceOwner as CachedSourceOwn
 
 /// The caller must withhold the screenshot on error; accessibility collection
 /// can continue under its independent filters. `excluded_ids` additionally
-/// constrains source selection for URL/incognito policies.
+/// constrains the returned pixels for URL/incognito policies.
 pub async fn capture_monitor_image_filtered(
     monitor: &SafeMonitor,
     filters: &WindowFilters,
@@ -83,7 +83,7 @@ pub async fn capture_monitor_frame_filtered(
     fresh: bool,
 ) -> anyhow::Result<CapturedFrame> {
     let start = Instant::now();
-    // macOS 14+ uses the same positive-selection stream with or without window
+    // macOS 14+ uses the same redacted display stream with or without window
     // patterns. Keep the older OS and other platforms' existing native paths.
     if !uses_positive_selection(filters) {
         let (image, duration) =

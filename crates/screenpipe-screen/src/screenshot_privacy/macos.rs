@@ -767,23 +767,6 @@ fn output_rect(
     }
 }
 
-fn needs_occlusion_mask(
-    surfaces: &[Surface],
-    allowed: &[bool],
-    index: usize,
-    display: cidre::cg::Rect,
-    width: u32,
-    height: u32,
-) -> bool {
-    let rect = output_rect(&surfaces[index], display, width, height);
-    surfaces[..index]
-        .iter()
-        .zip(&allowed[..index])
-        .any(|(below, allowed)| {
-            *allowed && output_rect(below, display, width, height).intersects(rect)
-        })
-}
-
 #[derive(Clone)]
 struct LayerImage {
     pixels: super::stream::NativeFrame,
@@ -991,19 +974,11 @@ async fn prepare(
         .zip(allowed)
         .filter(|(surface, _)| !controls.ids.contains(&(surface.id, surface.pid)))
         .unzip();
-    let selected: Vec<_> = before
-        .iter()
-        .zip(&allowed)
-        .filter_map(|(s, ok)| {
-            if *ok {
-                native(s).map(|w| w.retained())
-            } else {
-                None
-            }
-        })
-        .collect();
-    let windows = ns::Array::from_slice_retained(&selected);
-    let mut filter = sc::ContentFilter::with_display_including_windows(display, &windows);
+    // Capture the display, not a selection of every visible window. A persistent
+    // inclusion filter makes macOS replace each selected window's traffic lights
+    // with sharing controls. Privacy is applied by the frame's compositor below,
+    // before any pixels leave this module for preview, OCR, or persistence.
+    let mut filter = sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new());
     // SCDisplay dimensions are logical points on Retina displays. Preserve the
     // native pixel density before applying the user's explicit resolution cap.
     let scale = filter.point_pixel_scale() as f64;
@@ -1024,29 +999,19 @@ async fn prepare(
         surfaces: before.clone(),
         allowed: allowed.clone(),
     });
-    let (base, mut captured_at, mut native_timestamp) = if selected.is_empty() {
+    let (base, mut captured_at, mut native_timestamp) = if !allowed.iter().any(|ok| *ok) {
         super::stream::suspend(stream_slot);
         (None, chrono::Utc::now(), false)
     } else {
-        let menu_bar = before.iter().zip(&allowed).any(|(s, ok)| {
-            *ok && s.layer == 24 && s.app == "Window Server" && s.title == "Menubar"
-        });
         if api::macos_available("14.2") {
-            filter.set_include_menu_bar(menu_bar);
+            filter.set_include_menu_bar(true);
         }
-        let mut windows: Vec<_> = selected
-            .iter()
-            .map(|w| (w.id(), w.owning_app().map_or(0, |a| a.process_id())))
-            .collect();
-        windows.sort_unstable();
         let (pixels, captured_at, native_timestamp) = super::stream::frame(
             stream_slot,
             &filter,
             super::stream::Key {
                 width,
                 height,
-                menu_bar,
-                windows,
                 fps: super::stream::frame_rate(),
                 scene: scene.clone(),
             },
@@ -1062,16 +1027,11 @@ async fn prepare(
     };
     let mut operations = Vec::new();
     let mut redacted = Vec::<Rect>::new();
-    for (index, (surface, ok)) in before.iter().zip(&allowed).enumerate() {
+    for (surface, ok) in before.iter().zip(&allowed) {
         let rect = output_rect(surface, frame, width as u32, height as u32);
         if !*ok {
-            // Native positive selection already omits excluded pixels, over
-            // our black canvas. Mask only selected content underneath this
-            // surface. An excluded bottommost wallpaper needs no mask; erasing
-            // it again otherwise forces recapture of every foreground window.
-            if !needs_occlusion_mask(&before, &allowed, index, frame, width as u32, height as u32) {
-                continue;
-            }
+            // The source contains the full display. Mask every excluded surface,
+            // including bottommost backgrounds with no allowed window beneath.
             // The system Dock owns a display-sized transparent overlay. Its
             // rectangle is not its visible coverage. Use only native alpha as
             // a mask; none of this excluded surface's RGB enters the output.
@@ -1389,53 +1349,38 @@ mod tests {
     }
 
     #[test]
-    fn excluded_background_masks_only_selected_content_behind_it() {
-        let display = cidre::cg::Rect {
-            origin: cidre::cg::Point { x: 0.0, y: 0.0 },
-            size: cidre::cg::Size {
-                width: 1600.0,
-                height: 1000.0,
-            },
-        };
-        let private = surface("Dock", "Wallpaper-");
-        let mut public = surface("TextEdit", "Public");
-        public.id += 1;
-        assert!(!needs_occlusion_mask(
-            &[private.clone(), public.clone()],
-            &[false, true],
-            0,
-            display,
-            1600,
-            1000
-        ));
-        assert!(needs_occlusion_mask(
-            &[public.clone(), private.clone()],
-            &[true, false],
-            1,
-            display,
-            1600,
-            1000
-        ));
-        public.x = 900.0;
-        assert!(!needs_occlusion_mask(
-            &[public.clone(), private.clone()],
-            &[true, false],
-            1,
-            display,
-            1600,
-            1000
-        ));
-        // Preserve masking at fractional positions that share an output pixel.
-        public.x = 799.5;
-        public.width = 1.0;
-        assert!(needs_occlusion_mask(
-            &[public, private],
-            &[true, false],
-            1,
-            display,
-            1600,
-            1000
-        ));
+    fn full_display_pixels_are_redacted_before_returning_an_excluded_background() {
+        use super::super::scene::Rect;
+        let at = chrono::Utc::now();
+        let mut frame = prepared_for_test(at);
+        // Unlike an inclusion-filtered source, the raw display contains the
+        // excluded background even when no allowed content is underneath it.
+        frame.base = Some(solid_buffer(8, 8, [255, 0, 255, 255]));
+        frame.operations = vec![
+            Draw::Black(Rect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            }),
+            Draw::Restore(
+                Rect {
+                    x: 2,
+                    y: 2,
+                    width: 4,
+                    height: 4,
+                },
+                LayerImage {
+                    pixels: solid_buffer(4, 4, [255, 255, 0, 255]),
+                    captured_at: at,
+                    native_timestamp: true,
+                },
+            ),
+        ];
+        let pixels = frame.render().unwrap().image.into_rgba8();
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(3, 3).0, [0, 255, 255, 255]);
+        assert!(pixels.pixels().all(|pixel| pixel.0 != [255, 0, 255, 255]));
     }
 
     #[test]
