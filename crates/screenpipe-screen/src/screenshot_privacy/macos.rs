@@ -86,6 +86,15 @@ impl Producer {
         });
     }
 
+    fn render(&self, frame: &PreparedFrame) -> anyhow::Result<CapturedPixels> {
+        let current = self.policy.borrow();
+        ensure!(
+            Arc::ptr_eq(&current, &frame.policy),
+            "screenshot redaction policy changed before rendering"
+        );
+        frame.render()
+    }
+
     fn publish(&self, frame: PreparedFrame) {
         let current = self.policy.borrow();
         if Arc::ptr_eq(&current, &frame.policy) {
@@ -130,12 +139,7 @@ pub(super) async fn capture_filtered(
     let frame = selected_frame(&slot, producer.frames.subscribe()).await?;
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot capture invalidated");
-        let current = producer.policy.borrow();
-        ensure!(
-            Arc::ptr_eq(&current, &frame.policy),
-            "screenshot redaction policy changed before rendering"
-        );
-        let rendered = frame.render()?;
+        let rendered = producer.render(&frame)?;
         ensure!(
             slot.is_active(),
             "screenshot capture invalidated during rendering"
@@ -226,17 +230,19 @@ pub(super) async fn cached_preview(id: u32) -> anyhow::Result<Option<DynamicImag
     let Some(slot) = super::stream::existing_slot(id) else {
         return Ok(None);
     };
-    let frame = {
+    let (producer, frame) = {
         let producer = slot.producer.lock().unwrap_or_else(|e| e.into_inner());
         let Some(producer) = producer.as_ref() else {
             return Ok(None);
         };
         let frame = producer.frames.borrow().clone();
-        frame.ok_or_else(|| anyhow!("continuous screenshot source has no prepared preview yet"))?
+        let frame = frame
+            .ok_or_else(|| anyhow!("continuous screenshot source has no prepared preview yet"))?;
+        (producer.clone(), frame)
     };
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot preview invalidated");
-        Ok(Some(frame.render()?.image))
+        Ok(Some(producer.render(&frame)?.image))
     })
     .await
 }
@@ -1277,8 +1283,10 @@ mod tests {
         assert!(producer.frames.borrow().is_none());
         producer.publish(prepared.clone());
         assert!(producer.frames.borrow().is_none());
+        assert!(producer.render(&prepared).is_err());
         let mut next = prepared;
         next.policy = producer.policy.borrow().clone();
+        assert!(producer.render(&next).is_ok());
         producer.publish(next);
         assert!(producer.frames.borrow().is_some());
     }
