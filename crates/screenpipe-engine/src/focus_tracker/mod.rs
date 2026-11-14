@@ -71,6 +71,12 @@ pub trait FocusTracker: Send + Sync {
     fn current(&self) -> Option<MonitorIdentity>;
     /// Subscribe to focus-change events. Broadcast so multiple consumers OK.
     fn subscribe(&self) -> broadcast::Receiver<FocusEvent>;
+    /// True while the cursor sits in a dead-zone gap between displays and
+    /// attribution is retained from the previously focused display (#7678).
+    /// Default false; only the macOS tracker reports it today.
+    fn cursor_in_gap(&self) -> bool {
+        false
+    }
     /// Stop the tracker (idempotent). Called on shutdown.
     fn stop(&self);
 }
