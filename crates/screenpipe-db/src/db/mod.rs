@@ -472,7 +472,9 @@ mod planner_stats_tests;
 pub mod privacy_exports;
 pub mod privacy_release;
 mod starred;
-pub use focused::{FocusedAction, FocusedInterval, FocusedMedia, FocusedPhase, FocusedRecording};
+pub use focused::{
+    FocusedAction, FocusedAudioChunk, FocusedInterval, FocusedMedia, FocusedPhase, FocusedRecording,
+};
 pub use starred::StarredSession;
 mod outputs;
 mod search;

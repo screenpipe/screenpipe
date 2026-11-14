@@ -1183,8 +1183,13 @@ impl SCServer {
                 axum::routing::post(crate::routes::focused::act),
             )
             .route(
+                "/focused-recordings/:id/audio",
+                get(crate::routes::focused::audio_manifest),
+            )
+            .route(
                 "/focused-recordings/:id/audio/:chunk",
-                axum::routing::post(crate::routes::focused::audio),
+                axum::routing::post(crate::routes::focused::audio)
+                    .get(crate::routes::focused::audio_chunk),
             )
             .route(
                 "/privacy/status",
