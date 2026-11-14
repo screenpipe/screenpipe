@@ -39,21 +39,23 @@ mod tests {
     }
 
     async fn setup_test_app() -> (Router, Arc<DatabaseManager>) {
-        let unique_suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
-        let screenpipe_dir = std::env::temp_dir().join(format!(
-            "screenpipe-endpoint-test-{}-{unique_suffix}",
-            std::process::id()
-        ));
-
         let db = Arc::new(
             DatabaseManager::new("sqlite::memory:", Default::default())
                 .await
                 .unwrap(),
         );
 
+        (
+            setup_test_app_with_db(db.clone(), Default::default()).await,
+            db,
+        )
+    }
+
+    async fn setup_test_app_with_db(
+        db: Arc<DatabaseManager>,
+        history: screenpipe_engine::history_access::HistoryAccessPolicy,
+    ) -> Router {
+        let screenpipe_dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let audio_manager = Arc::new(
             AudioManagerBuilder::new()
                 .is_disabled(true)
@@ -63,7 +65,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let app = SCServer::new(
+        let mut app = SCServer::new(
             db.clone(),
             SocketAddr::from(([127, 0, 0, 1], 23948)),
             screenpipe_dir,
@@ -74,9 +76,328 @@ mod tests {
             "balanced".to_string(),
         );
 
-        let router = app.create_router().await;
+        app.history_access = history;
         init();
-        (router, db)
+        app.create_router().await
+    }
+
+    // Missing retrieval, reordering fragments, or bypassing read policy must fail this test.
+    #[tokio::test]
+    async fn focused_narration_is_retrievable_after_restart_with_pause_boundaries() {
+        use screenpipe_db::{FocusedAction, FocusedRecording};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db.sqlite");
+        let db = Arc::new(
+            DatabaseManager::new(path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap(),
+        );
+        let now = Utc::now().timestamp_millis() - 60_000;
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = "ffffffff-ffff-4fff-8fff-ffffffffffff".to_owned();
+        let second = "00000000-0000-4000-8000-000000000000".to_owned();
+        let chunks: Vec<String> = (0..3).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let mut recording = FocusedRecording::new(id.clone(), now, true);
+        assert!(db.save_focused_recording(&mut recording, 0).await.unwrap());
+        for (index, bytes) in [b"container header".as_slice(), b"continuation"]
+            .iter()
+            .enumerate()
+        {
+            assert!(db
+                .save_focused_audio(
+                    &id,
+                    &chunks[index],
+                    &first,
+                    index as i64,
+                    now + index as i64 * 1000,
+                    now + (index as i64 + 1) * 1000,
+                    "audio/webm;codecs=opus",
+                    bytes
+                )
+                .await
+                .unwrap());
+        }
+        recording.apply(FocusedAction::Pause, now + 2000).unwrap();
+        recording.apply(FocusedAction::Resume, now + 5000).unwrap();
+        let revision = recording.revision;
+        assert!(db
+            .save_focused_recording(&mut recording, revision)
+            .await
+            .unwrap());
+        assert!(db
+            .save_focused_audio(
+                &id,
+                &chunks[2],
+                &second,
+                0,
+                now + 5000,
+                now + 6000,
+                "audio/mp4",
+                b"resumed stream"
+            )
+            .await
+            .unwrap());
+        recording.apply(FocusedAction::Finish, now + 6000).unwrap();
+        recording
+            .apply(
+                FocusedAction::Rename {
+                    name: "Test workflow".into(),
+                },
+                now + 6000,
+            )
+            .unwrap();
+        recording.apply(FocusedAction::Submit, now + 6000).unwrap();
+        let revision = recording.revision;
+        assert!(db
+            .save_focused_recording(&mut recording, revision)
+            .await
+            .unwrap());
+        db.close().await;
+        drop(db);
+
+        let db = Arc::new(
+            DatabaseManager::new(path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap(),
+        );
+        let history = screenpipe_engine::history_access::HistoryAccessPolicy::unrestricted();
+        let app = setup_test_app_with_db(db.clone(), history.clone()).await;
+        let manifest_uri = format!("/focused-recordings/{id}/audio");
+        let get = |uri: String| Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = app
+            .clone()
+            .oneshot(get(manifest_uri.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest["intervals"],
+            serde_json::to_value(&recording.intervals).unwrap()
+        );
+        assert_eq!(manifest["chunks"].as_array().unwrap().len(), 3);
+        for (index, expected) in [
+            b"container header".as_slice(),
+            b"continuation",
+            b"resumed stream",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(manifest["chunks"][index]["id"], chunks[index]);
+            assert_eq!(
+                manifest["chunks"][index]["streamId"],
+                if index == 2 {
+                    second.as_str()
+                } else {
+                    first.as_str()
+                }
+            );
+            assert_eq!(
+                manifest["chunks"][index]["start"],
+                now + [0, 1000, 5000][index]
+            );
+            assert_eq!(
+                manifest["chunks"][index]["end"],
+                now + [1000, 2000, 6000][index]
+            );
+
+            assert_eq!(
+                manifest["chunks"][index]["sequence"],
+                if index == 1 { 1 } else { 0 }
+            );
+            let uri = format!("/focused-recordings/{id}/audio/{}", chunks[index]);
+            let response = app.clone().oneshot(get(uri)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()["content-type"],
+                if index == 2 {
+                    "audio/mp4"
+                } else {
+                    "audio/webm;codecs=opus"
+                }
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                *expected
+            );
+        }
+        let chunk_uri = format!("{manifest_uri}/{}", chunks[0]);
+        // Even an explicitly permitted pipe cannot retrieve user-only narration.
+        let permissions: screenpipe_core::pipes::permissions::PipePermissions =
+            serde_json::from_value(serde_json::json!({
+                "pipe_name":"test", "allow_rules":[], "deny_rules":[],
+                "use_default_allowlist":true, "time_range":null, "days":null
+            }))
+            .unwrap();
+        let pipe_app = app.clone().layer(axum::Extension(Arc::new(permissions)));
+        for uri in [&manifest_uri, &chunk_uri] {
+            assert_eq!(
+                pipe_app
+                    .clone()
+                    .oneshot(get(uri.clone()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        db.execute_raw_sql_write(&format!(
+            "UPDATE focused_recordings SET body=json_set(body,'$.phase','deleted') WHERE id='{id}'"
+        ))
+        .await
+        .unwrap();
+        for uri in [&manifest_uri, &chunk_uri] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(get(uri.clone()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        db.execute_raw_sql_write(&format!("UPDATE focused_recordings SET body=json_set(body,'$.phase','submitted') WHERE id='{id}'")).await.unwrap();
+
+        let other_id = uuid::Uuid::new_v4().to_string();
+        let mut other = FocusedRecording::new(other_id.clone(), now, false);
+        other.apply(FocusedAction::Finish, now + 1000).unwrap();
+        assert!(db.save_focused_recording(&mut other, 0).await.unwrap());
+        assert_eq!(
+            app.clone()
+                .oneshot(get(format!(
+                    "/focused-recordings/{other_id}/audio/{}",
+                    chunks[0]
+                )))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        // Change the live policy after router construction; both routes must enforce it.
+        db.execute_raw_sql_write(&format!(
+            "UPDATE focused_recordings SET body=json_set(body,'$.createdAt',0) WHERE id='{id}'"
+        ))
+        .await
+        .unwrap();
+        history.set_last_24_hours(true);
+        for uri in [&manifest_uri, &chunk_uri] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(get(uri.clone()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        history.set_last_24_hours(false);
+        db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
+            identity: "test".into(),
+            text: true,
+            images: true,
+        })
+        .await
+        .unwrap();
+        let protected = db.protected_reads().await.unwrap();
+        assert!(protected.protected_reads_enabled());
+        let app = setup_test_app_with_db(protected, history).await;
+        for uri in [&manifest_uri, &chunk_uri] {
+            let response = app.clone().oneshot(get(uri.clone())).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            if uri == &chunk_uri {
+                assert_eq!(bytes.as_ref(), b"container header");
+            } else {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                    manifest
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn focused_save_hands_off_local_starred_segments_once() {
+        let (app, db) = setup_test_app().await;
+        let now = Utc::now().timestamp_millis();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut recording = screenpipe_db::FocusedRecording::new(id.clone(), now - 60000, false);
+        recording
+            .apply(
+                screenpipe_db::FocusedAction::Rename {
+                    name: "Fixture workflow".into(),
+                },
+                now - 60000,
+            )
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Pause, now - 50000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Resume, now - 20000)
+            .unwrap();
+        recording
+            .apply(screenpipe_db::FocusedAction::Finish, now - 10000)
+            .unwrap();
+        assert!(db.save_focused_recording(&mut recording, 0).await.unwrap());
+        let body = serde_json::json!({"action":"submit","revision":recording.revision,"requestId":uuid::Uuid::new_v4().to_string()});
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/focused-recordings/{id}/action"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let saved: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(saved["phase"], "submitted");
+        }
+        let sessions = db
+            .list_starred_sessions("1970", "2100", 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions
+            .iter()
+            .all(|s| s.name.as_deref() == Some("Fixture workflow")));
+        let mut actual: Vec<_> = sessions
+            .iter()
+            .map(|s| {
+                (
+                    DateTime::parse_from_rfc3339(&s.start)
+                        .unwrap()
+                        .timestamp_millis(),
+                    DateTime::parse_from_rfc3339(&s.end)
+                        .unwrap()
+                        .timestamp_millis(),
+                )
+            })
+            .collect();
+        actual.sort();
+        let expected: Vec<_> = recording
+            .intervals
+            .iter()
+            .map(|i| (i.start, i.end.unwrap()))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "local Save must not include the paused gap"
+        );
     }
 
     #[tokio::test]

@@ -216,7 +216,8 @@
     "typescript": "^5.9.3",
     "unplugin": "2.3.11",
     "vitest": "^1.6.1",
-    "wdio-video-reporter": "^6.0.0"
+    "wdio-video-reporter": "^6.0.0",
+    "ws": "^8.21.3"
   },
   "packageManager": "bun@1.3.10",
   "trustedDependencies": [

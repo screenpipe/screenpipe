@@ -1171,6 +1171,27 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .route(
+                "/focused-recordings/current",
+                get(crate::routes::focused::current),
+            )
+            .route(
+                "/focused-recordings/start",
+                axum::routing::post(crate::routes::focused::start),
+            )
+            .route(
+                "/focused-recordings/:id/action",
+                axum::routing::post(crate::routes::focused::act),
+            )
+            .route(
+                "/focused-recordings/:id/audio",
+                get(crate::routes::focused::audio_manifest),
+            )
+            .route(
+                "/focused-recordings/:id/audio/:chunk",
+                axum::routing::post(crate::routes::focused::audio)
+                    .get(crate::routes::focused::audio_chunk),
+            )
+            .route(
                 "/privacy/status",
                 get(crate::routes::privacy_release::status),
             )
