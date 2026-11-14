@@ -131,10 +131,29 @@ mod tests {
         assert!(sessions
             .iter()
             .all(|s| s.name.as_deref() == Some("Fixture workflow")));
-        let mut actual: Vec<_> = sessions.iter().map(|s| (DateTime::parse_from_rfc3339(&s.start).unwrap().timestamp_millis(), DateTime::parse_from_rfc3339(&s.end).unwrap().timestamp_millis())).collect();
+        let mut actual: Vec<_> = sessions
+            .iter()
+            .map(|s| {
+                (
+                    DateTime::parse_from_rfc3339(&s.start)
+                        .unwrap()
+                        .timestamp_millis(),
+                    DateTime::parse_from_rfc3339(&s.end)
+                        .unwrap()
+                        .timestamp_millis(),
+                )
+            })
+            .collect();
         actual.sort();
-        let expected: Vec<_> = recording.intervals.iter().map(|i| (i.start, i.end.unwrap())).collect();
-        assert_eq!(actual, expected, "local Save must not include the paused gap");
+        let expected: Vec<_> = recording
+            .intervals
+            .iter()
+            .map(|i| (i.start, i.end.unwrap()))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "local Save must not include the paused gap"
+        );
     }
 
     #[tokio::test]
