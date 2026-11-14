@@ -485,18 +485,10 @@ mod tests {
         tokio::fs::write(
             root.path().join("screenpipe.2026-11-05.1.log"),
             format!("{emitted}\npassword=hunter2\n"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::write(
-            root.path().join("screenpipe.2026-11-05.log"),
-            "INFO recorder restarted\n",
-        )
-        .await
-        .unwrap();
-        let report = collect_redacted_from_dirs(&[root.path().to_path_buf()])
-            .await
-            .unwrap();
+        ).await.unwrap();
+        tokio::fs::write(root.path().join("screenpipe.2026-11-05.log"), "INFO recorder restarted\n")
+            .await.unwrap();
+        let report = collect_redacted_from_dirs(&[root.path().to_path_buf()]).await.unwrap();
         assert!(report.contains("window-filtered screenshot withheld"));
         assert!(report.contains("window privacy policy changed during capture"));
         assert!(report.contains("monitor_id=2"));
@@ -587,14 +579,8 @@ mod tests {
     #[tokio::test]
     async fn recording_stop_failure_keeps_trigger_cause_and_outcome_in_support_bundle() {
         let root = tempfile::tempdir().unwrap();
-        crate::capture_session::record_stop_failure(
-            root.path(),
-            "update",
-            &["vision_stop_timeout".into()],
-        );
-        let report = collect_redacted_from_dirs(&[root.path().to_owned()])
-            .await
-            .unwrap();
+        crate::capture_session::record_stop_failure(root.path(), "update", &["vision_stop_timeout".into()]);
+        let report = collect_redacted_from_dirs(&[root.path().to_owned()]).await.unwrap();
         assert!(report.contains("capture_stop_failed"));
         assert!(report.contains("trigger=update"));
         assert!(report.contains("vision_stop_timeout"));
@@ -619,11 +605,7 @@ mod tests {
             &event,
             &serde_json::json!({"ok": true, "recording_event_error": "persistence_failed", "recording_event_storage_code": "42P01"}),
         );
-        crate::enterprise::recording_events::acknowledge(
-            &path,
-            &event,
-            &serde_json::json!({"recording_event_error":"expectation_state_mismatch"}),
-        );
+        crate::enterprise::recording_events::acknowledge(&path, &event, &serde_json::json!({"recording_event_error":"expectation_state_mismatch"}));
         let report = collect_redacted_from_dirs(&[root.path().to_owned()])
             .await
             .unwrap();
@@ -1079,7 +1061,9 @@ mod tests {
             "installer_migration_failed: operation=copy_enterprise_config windows_result=5"
         ));
         assert!(report.contains("recovery=original_app_relaunch_result_0"));
-        assert!(report.contains("uninstaller_app_data_cleanup_failed: operation=remove_directory"));
+        assert!(report.contains(
+            "uninstaller_app_data_cleanup_failed: operation=remove_directory"
+        ));
         assert!(report.contains("path=current_profile_screenpipe_data"));
         assert!(report.contains("windows_result=145 outcome=data_retained"));
         assert!(!report.contains("private-person@example.com"));
