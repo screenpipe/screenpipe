@@ -501,7 +501,7 @@ mod tests {
     #[tokio::test]
     async fn cached_screenshot_source_failure_and_recovery_survive_support_collection() {
         let root = tempfile::tempdir().unwrap();
-        // Actual INFO/WARN output from the disposable macOS app acceptance run.
+        // Actual INFO/WARN output from the disposable macOS source recovery run.
         let emitted = include_str!(
             "../../../../crates/screenpipe-screen/tests/fixtures/cached-screenshot-source-diagnostic.txt"
         );
@@ -535,6 +535,15 @@ mod tests {
                 "missing collected support evidence: {evidence}"
             );
         }
+        assert_eq!(
+            report
+                .matches("persistent whole-display screenshot stream started")
+                .count(),
+            1,
+            "redaction failure and recovery must retain the single native source"
+        );
+        assert!(report.contains("capture_scope=\"display\""));
+        assert!(report.contains("continuous screenshot source recovered"));
         assert!(!report.contains("cache-fixture@screenpipe.test"));
         println!("CACHE_SOURCE_COLLECTED_SUPPORT={report}");
     }
