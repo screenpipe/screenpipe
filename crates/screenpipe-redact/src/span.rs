@@ -45,13 +45,25 @@ pub enum SpanLabel {
     Sensitive,
     /// Explicit dollar / USD amounts in text. Regex-only, opt-in; no image coverage.
     DollarAmount,
+    /// A human face in a photo / video frame (biometric PII). Phase 4 visual
+    /// class: emitted by the deterministic visual-PII detector's OS-backed
+    /// face provider, never by a text adapter or the 12-class RF-DETR head.
+    Face,
+    /// A profile picture / account avatar shown in a UI. Phase 4 visual class,
+    /// detected from the already-captured accessibility tree (zero-ML,
+    /// zero-OCR, cross-platform).
+    Avatar,
+    /// A QR / 2D barcode that may encode PII (vCard, signed URL, token).
+    /// Phase 4 visual class, detected from pixel finder patterns with no
+    /// decoding and no OCR.
+    QrCode,
 }
 
 impl SpanLabel {
     /// Every variant, in canonical order. Used by the Enterprise Strict
     /// preset so "all classes" is one reviewed constant rather than a
     /// hand-maintained list that silently drifts when a label is added.
-    pub const ALL: [SpanLabel; 14] = [
+    pub const ALL: [SpanLabel; 17] = [
         Self::Person,
         Self::Email,
         Self::Phone,
@@ -66,6 +78,9 @@ impl SpanLabel {
         Self::Secret,
         Self::Sensitive,
         Self::DollarAmount,
+        Self::Face,
+        Self::Avatar,
+        Self::QrCode,
     ];
 
     /// Stable replacement placeholder, e.g. `[EMAIL]`. Kept short so
@@ -86,6 +101,9 @@ impl SpanLabel {
             Self::Secret => "[SECRET]",
             Self::Sensitive => "[SENSITIVE]",
             Self::DollarAmount => "[DOLLAR_AMOUNT]",
+            Self::Face => "[FACE]",
+            Self::Avatar => "[AVATAR]",
+            Self::QrCode => "[QR_CODE]",
         }
     }
 
@@ -110,6 +128,9 @@ impl SpanLabel {
             "secret" => Self::Secret,
             "sensitive" => Self::Sensitive,
             "dollar_amount" => Self::DollarAmount,
+            "face" => Self::Face,
+            "avatar" => Self::Avatar,
+            "qr_code" => Self::QrCode,
             _ => return None,
         })
     }
@@ -456,6 +477,25 @@ mod tests {
         );
         assert_eq!(SpanLabel::from_wire("nonsense"), None);
         assert_eq!(SpanLabel::from_wire(""), None);
+    }
+
+    #[test]
+    fn phase4_visual_labels_round_trip_and_have_placeholders() {
+        for (wire, label, placeholder) in [
+            ("face", SpanLabel::Face, "[FACE]"),
+            ("avatar", SpanLabel::Avatar, "[AVATAR]"),
+            ("qr_code", SpanLabel::QrCode, "[QR_CODE]"),
+        ] {
+            assert_eq!(SpanLabel::from_wire(wire), Some(label), "parse {wire}");
+            assert_eq!(label.placeholder(), placeholder, "placeholder {wire}");
+            assert!(SpanLabel::ALL.contains(&label), "ALL missing {wire}");
+        }
+        assert_eq!(SpanLabel::ALL.len(), 17);
+        // ALL must stay duplicate-free so "allow everything" is unambiguous.
+        let mut seen = std::collections::HashSet::new();
+        for label in SpanLabel::ALL {
+            assert!(seen.insert(label), "duplicate label {label:?} in ALL");
+        }
     }
 
     #[test]

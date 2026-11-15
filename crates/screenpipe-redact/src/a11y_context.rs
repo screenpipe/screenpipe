@@ -461,8 +461,22 @@ fn looks_like_masked_secret(value: &str) -> bool {
     let is_mask = |c: char| matches!(c, '•' | '●' | '·' | '＊' | '*');
     let lower = t.to_ascii_lowercase();
     let credential_prefix = [
-        "sk-", "sk_", "github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
-        "glpat-", "whsec_", "rk_live_", "akia", "asia", "xox", "aiza", "bearer ",
+        "sk-",
+        "sk_",
+        "github_pat_",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "glpat-",
+        "whsec_",
+        "rk_live_",
+        "akia",
+        "asia",
+        "xox",
+        "aiza",
+        "bearer ",
     ]
     .iter()
     .any(|prefix| lower.starts_with(prefix));

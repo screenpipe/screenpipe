@@ -37,8 +37,10 @@
 //! Keeping them parallel lets each adapter focus on its own modality
 //! and lets us advertise the right `unavailable` reason cleanly.
 
+pub mod ep_parity;
 pub mod frame_redactor;
 pub mod secret_continuation;
+pub mod visual_pii;
 pub mod worker;
 
 use std::path::Path;
