@@ -48,6 +48,26 @@ pub enum SpanLabel {
 }
 
 impl SpanLabel {
+    /// Every variant, in canonical order. Used by the Enterprise Strict
+    /// preset so "all classes" is one reviewed constant rather than a
+    /// hand-maintained list that silently drifts when a label is added.
+    pub const ALL: [SpanLabel; 14] = [
+        Self::Person,
+        Self::Email,
+        Self::Phone,
+        Self::Address,
+        Self::Url,
+        Self::Company,
+        Self::Repo,
+        Self::Handle,
+        Self::Channel,
+        Self::Id,
+        Self::Date,
+        Self::Secret,
+        Self::Sensitive,
+        Self::DollarAmount,
+    ];
+
     /// Stable replacement placeholder, e.g. `[EMAIL]`. Kept short so
     /// downstream search / display doesn't get visually noisy.
     pub fn placeholder(&self) -> &'static str {

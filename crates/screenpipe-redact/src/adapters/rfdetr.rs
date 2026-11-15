@@ -99,7 +99,7 @@ const NUM_QUERIES: usize = 300;
 /// Class index → [`SpanLabel`]. Order is fixed by the training pipeline:
 /// `screenpipe-pii-bench-image/src/score.py::CANONICAL_LABELS`.
 #[cfg(feature = "onnx-cpu")]
-const CLASSES: [SpanLabel; NUM_CLASSES] = [
+pub(crate) const CLASSES: [SpanLabel; NUM_CLASSES] = [
     SpanLabel::Person,  // 0
     SpanLabel::Email,   // 1
     SpanLabel::Phone,   // 2
