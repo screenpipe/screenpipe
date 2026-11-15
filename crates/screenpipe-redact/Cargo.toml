@@ -69,6 +69,14 @@ name = "rfdetr_ep_probe"
 path = "examples/rfdetr_ep_probe.rs"
 required-features = ["onnx-cpu"]
 
+# Phase 4 cross-platform EP parity harness. Build with the target's EP
+# feature (onnx-coreml / onnx-directml / onnx-cpu) on each platform, emit a
+# receipt, then compare receipts offline. See examples/rfdetr_ep_parity.rs.
+[[example]]
+name = "rfdetr_ep_parity"
+path = "examples/rfdetr_ep_parity.rs"
+required-features = ["onnx-cpu"]
+
 [[example]]
 name = "onnx_text_memory_probe"
 path = "examples/onnx_text_memory_probe.rs"

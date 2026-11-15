@@ -318,6 +318,12 @@ fn wire_label(label: SpanLabel) -> &'static str {
         SpanLabel::Secret => "secret",
         SpanLabel::Sensitive => "sensitive",
         SpanLabel::DollarAmount => "sensitive",
+        // Phase 4 visual-PII classes (never emitted by a text adapter, but
+        // the label map stays exhaustive so these evals compile on the full
+        // taxonomy).
+        SpanLabel::Face => "face",
+        SpanLabel::Avatar => "avatar",
+        SpanLabel::QrCode => "qr_code",
     }
 }
 

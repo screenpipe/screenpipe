@@ -905,6 +905,7 @@ async fn policy_identity_overhead() {
     db.close().await;
 }
 
+#[cfg(feature = "onnx-cpu")]
 #[tokio::test]
 #[ignore = "manual real-model before/after equivalence and step latency"]
 async fn resumable_model_windows() {
