@@ -72,9 +72,11 @@
 
 mod a11y_context;
 pub mod adapters;
+pub mod dictionary;
 pub mod image;
 pub mod ocr_json;
 pub mod pipeline;
+pub mod policy;
 pub mod pseudonym;
 pub mod redaction_map;
 pub mod sessions;
@@ -85,9 +87,13 @@ mod cache;
 mod error;
 mod span;
 
+pub use dictionary::{
+    DictionaryEntry, DictionaryError, TenantDictionary, TENANT_DICTIONARY_SUBTYPE,
+};
 pub use error::RedactError;
 pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
 pub use pipeline::{Pipeline, PipelineConfig};
+pub use policy::{RedactionPreset, ENTERPRISE_STRICT_MIN_SCORE};
 pub use pseudonym::Pseudonymizer;
 pub use redaction_map::RedactionMap;
 pub use span::{RedactedSpan, SpanLabel, TextRedactionPolicy};

@@ -31,6 +31,7 @@ use tokio::{sync::Mutex, time::Instant};
 use crate::{
     adapters::regex::{self as regex_adapter, RegexRedactor},
     cache::{cache_key, RedactionCache},
+    dictionary::TenantDictionary,
     pseudonym::Pseudonymizer,
     span::TextRedactionPolicy,
     RedactError, RedactedSpan, RedactionMap, RedactionOutput, Redactor,
@@ -303,6 +304,9 @@ pub struct Pipeline {
     /// tokens instead of static `[LABEL]` placeholders (issue #4206,
     /// opt-in). `None` keeps the historic behavior.
     pseudonyms: Option<Arc<Pseudonymizer>>,
+    /// Opt-in zero-ML tenant literals. `None` (the default) adds no work to
+    /// the pre-pass. See [`crate::TenantDictionary`].
+    dictionary: Option<Arc<TenantDictionary>>,
 }
 
 impl Pipeline {
@@ -329,6 +333,7 @@ impl Pipeline {
             cache: RedactionCache::with_defaults(),
             ai_failure_circuit: None,
             pseudonyms: None,
+            dictionary: None,
         }
     }
 
@@ -342,7 +347,43 @@ impl Pipeline {
             cache: RedactionCache::with_defaults(),
             ai_failure_circuit,
             pseudonyms: None,
+            dictionary: None,
         }
+    }
+
+    /// Attach a zero-ML tenant dictionary. Dictionary spans are added in the
+    /// shared regex pre-pass (before any model call), so every redaction
+    /// entry point — `redact`, `redact_complete`, the required-session path
+    /// and the batched path — sees them, and the resulting
+    /// [`RedactionMap`](crate::RedactionMap) propagates them to derived
+    /// copies of the same screen content.
+    ///
+    /// An empty or absent dictionary is a strict no-op: no allocation and no
+    /// scan in the per-text path.
+    pub fn with_dictionary(mut self, dictionary: Option<TenantDictionary>) -> Self {
+        self.dictionary = dictionary.filter(|dict| !dict.is_empty()).map(Arc::new);
+        self
+    }
+
+    /// Regex pre-pass + tenant dictionary + policy filter. Shared by all
+    /// redaction entry points so dictionary hits never depend on which path
+    /// the caller used. Dictionary spans are `Secret` (always allowed) and
+    /// are dropped when they overlap a regex span — the deterministic
+    /// detector wins, avoiding double placeholders for the same bytes.
+    fn apply_pre_pass(&self, mut regex_out: RedactionOutput) -> RedactionOutput {
+        if let Some(dict) = self.dictionary.as_deref() {
+            for span in dict.find_spans(&regex_out.input) {
+                let overlaps = regex_out
+                    .spans
+                    .iter()
+                    .any(|existing| existing.start < span.end && span.start < existing.end);
+                if !overlaps {
+                    regex_out.spans.push(span);
+                }
+            }
+            regex_out.spans.sort_by_key(|span| (span.start, span.end));
+        }
+        apply_policy(regex_out, &self.cfg.policy, self.pseudonyms.as_deref())
     }
 
     /// Render redacted spans as stable per-install pseudonym tokens
@@ -390,8 +431,10 @@ impl Pipeline {
                 continue;
             }
 
-            let regex_out = regex_adapter::redact_one_with_policy(text, &self.cfg.policy);
-            let current = apply_policy(regex_out, &self.cfg.policy, self.pseudonyms.as_deref());
+            let current = self.apply_pre_pass(regex_adapter::redact_one_with_policy(
+                text,
+                &self.cfg.policy,
+            ));
             let want_ai = current.input.chars().count() >= self.cfg.ai_min_chars
                 && current.spans.len() < self.cfg.ai_skip_if_regex_spans;
 
@@ -537,11 +580,7 @@ impl<P: std::borrow::Borrow<Pipeline> + Send> crate::RequiredRedaction for Requi
             if let Some(hit) = p.cache.get(&self.key).await {
                 return Ok(Some((*hit).clone()));
             }
-            let current = apply_policy(
-                regex_adapter::redact_one(&self.text),
-                &p.cfg.policy,
-                p.pseudonyms.as_deref(),
-            );
+            let current = p.apply_pre_pass(regex_adapter::redact_one(&self.text));
             self.attempt = match &p.ai_failure_circuit {
                 Some(circuit) => Some(circuit.begin_attempt().await.ok_or_else(|| {
                     RedactError::Unavailable("required PII model is backing off".into())
@@ -601,13 +640,17 @@ impl Redactor for Pipeline {
 
     fn policy_identity(&self) -> String {
         format!(
-            "{}:{}:{:?}:{}:{}:pseudonyms={}:ai={}",
+            "{}:{}:{:?}:{}:{}:pseudonyms={}:dict={}:ai={}",
             self.name(),
             self.version(),
             self.cfg.policy,
             self.cfg.ai_min_chars,
             self.cfg.ai_skip_if_regex_spans,
             self.pseudonyms.is_some(),
+            self.dictionary
+                .as_ref()
+                .map(|dict| dict.fingerprint())
+                .unwrap_or(0),
             self.ai
                 .as_ref()
                 .map(|ai| ai.policy_identity())
@@ -624,11 +667,10 @@ impl Redactor for Pipeline {
         if let Some(hit) = self.cache.get(&key).await {
             return Ok((*hit).clone());
         }
-        let mut current = apply_policy(
-            regex_adapter::redact_one_with_policy(text, &self.cfg.policy),
+        let mut current = self.apply_pre_pass(regex_adapter::redact_one_with_policy(
+            text,
             &self.cfg.policy,
-            self.pseudonyms.as_deref(),
-        );
+        ));
         if let Some(ai) = self.ai.as_ref().filter(|_| {
             current.input.chars().count() >= self.cfg.ai_min_chars
                 && current.spans.len() < self.cfg.ai_skip_if_regex_spans
@@ -700,12 +742,14 @@ impl Redactor for Pipeline {
                 continue;
             }
 
-            let regex_out = regex_adapter::redact_one_with_policy(text, &self.cfg.policy);
-            // Apply policy to the regex pass: drop non-allowed labels +
-            // re-render `redacted` from `input` so the AI fallback sees
-            // a string with only allowed-class placeholders (currently:
-            // only `[SECRET]`). Spans remain anchored to the original.
-            let mut current = apply_policy(regex_out, &self.cfg.policy, self.pseudonyms.as_deref());
+            // Shared pre-pass: regex detections + tenant dictionary literals,
+            // then policy filter + re-render `redacted` from `input` so the AI
+            // fallback sees a string with only allowed-class placeholders
+            // (currently: only `[SECRET]`). Spans remain anchored to the original.
+            let mut current = self.apply_pre_pass(regex_adapter::redact_one_with_policy(
+                text,
+                &self.cfg.policy,
+            ));
 
             // Decide whether to run the AI fallback.
             let want_ai = self.ai.is_some()
@@ -1379,6 +1423,149 @@ mod tests {
             let scrubbed = crate::redact_tree_json(derived, &map).unwrap().unwrap();
             assert!(!scrubbed.contains("Marcus Chen"));
             assert!(scrubbed.contains("[PERSON]"));
+        }
+    }
+
+    // ---- Phase 3: zero-ML tenant dictionary integration -------------------
+
+    use crate::RedactionPreset;
+
+    fn tenant_dict(values: &[&str]) -> TenantDictionary {
+        TenantDictionary::from_values(
+            &values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[tokio::test]
+    async fn tenant_dictionary_is_a_no_op_by_default() {
+        let p = Pipeline::regex_only();
+        let out = p
+            .redact("Notes about Project Falcon and the Q3 plan")
+            .await
+            .unwrap();
+        assert!(out.redacted.contains("Project Falcon"));
+        assert!(!out.redacted.contains("[SECRET]"));
+    }
+
+    #[tokio::test]
+    async fn tenant_dictionary_redacts_literals_without_any_model() {
+        let p = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Project Falcon"])));
+        assert!(!p.provides_model_detection());
+        let input = "Notes about project FALCON and the Q3 plan";
+        let out = p.redact(input).await.unwrap();
+        assert_eq!(out.redacted, "Notes about [SECRET] and the Q3 plan");
+        assert_eq!(out.spans.len(), 1);
+        let span = &out.spans[0];
+        assert_eq!(span.text, "project FALCON");
+        assert_eq!(&input[span.start..span.end], "project FALCON");
+        assert_eq!(span.label, crate::SpanLabel::Secret);
+        assert_eq!(
+            span.subtype.as_deref(),
+            Some(crate::TENANT_DICTIONARY_SUBTYPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn tenant_dictionary_applies_on_every_redaction_path() {
+        let p = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Falcon"])));
+        assert_eq!(p.redact("Falcon").await.unwrap().redacted, "[SECRET]");
+        assert_eq!(
+            p.redact_complete("Falcon").await.unwrap().redacted,
+            "[SECRET]"
+        );
+        let batch = p
+            .redact_batch(&["Falcon".to_owned(), "Nimbus".to_owned()])
+            .await
+            .unwrap();
+        assert_eq!(batch[0].redacted, "[SECRET]");
+        assert_eq!(batch[1].redacted, "Nimbus");
+    }
+
+    #[tokio::test]
+    async fn tenant_dictionary_is_preset_independent() {
+        for preset in [RedactionPreset::Default, RedactionPreset::EnterpriseStrict] {
+            let p = Pipeline::regex_only_with_policy(preset.text_policy())
+                .with_dictionary(Some(tenant_dict(&["Falcon"])));
+            let out = p.redact("Falcon").await.unwrap();
+            assert_eq!(
+                out.redacted, "[SECRET]",
+                "preset {preset:?} dropped the tenant literal"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dictionary_span_does_not_double_mask_a_regex_span() {
+        let p = Pipeline::regex_only_with_policy(RedactionPreset::EnterpriseStrict.text_policy())
+            .with_dictionary(Some(tenant_dict(&["alice@example.com"])));
+        let out = p.redact("Mail alice@example.com today").await.unwrap();
+        assert_eq!(out.redacted.matches("[EMAIL]").count(), 1);
+        assert!(!out.redacted.contains("[SECRET]"));
+    }
+
+    #[tokio::test]
+    async fn dictionary_hits_propagate_to_derived_copies() {
+        let p = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Falcon"])));
+        let (out, map) = p
+            .redact_with_map("Owner: Falcon")
+            .await
+            .unwrap()
+            .expect("span-aware pipeline must emit a RedactionMap");
+        assert_eq!(out.redacted, "Owner: [SECRET]");
+        let derived = r#"[{"text":"Owner: Falcon"}]"#;
+        let scrubbed = crate::redact_tree_json(derived, &map).unwrap().unwrap();
+        assert!(!scrubbed.contains("Falcon"));
+        assert!(scrubbed.contains("[SECRET]"));
+    }
+
+    #[test]
+    fn policy_identity_tracks_the_dictionary_without_leaking_values() {
+        let plain = Pipeline::regex_only();
+        let first = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Falcon"])));
+        let same = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Falcon"])));
+        let other = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&["Nimbus"])));
+        assert_ne!(plain.policy_identity(), first.policy_identity());
+        assert_eq!(first.policy_identity(), same.policy_identity());
+        assert_ne!(first.policy_identity(), other.policy_identity());
+        assert!(!first.policy_identity().contains("Falcon"));
+    }
+
+    #[tokio::test]
+    async fn empty_dictionary_is_a_strict_no_op() {
+        let plain = Pipeline::regex_only();
+        let empty = Pipeline::regex_only().with_dictionary(Some(TenantDictionary::empty()));
+        assert_eq!(plain.policy_identity(), empty.policy_identity());
+        assert_eq!(empty.redact("Falcon").await.unwrap().redacted, "Falcon");
+    }
+
+    /// Aggregate eval for the PR body: 1,000 synthetic frames, one tenant
+    /// literal each, zero model calls. Proves the hook is exhaustive on
+    /// literal values without loading any detector.
+    #[tokio::test]
+    async fn tenant_dictionary_eval_all_literals_caught_with_zero_model_calls() {
+        let literals = ["Falcon", "Nimbus", "Project Atlas", "vault-7"];
+        let p = Pipeline::regex_only().with_dictionary(Some(tenant_dict(&literals)));
+        assert!(!p.provides_model_detection());
+        let corpus: Vec<String> = (0..1_000)
+            .map(|i| format!("daily note {i}: {} was discussed today", literals[i % 4]))
+            .collect();
+        let outputs = p.redact_batch(&corpus).await.unwrap();
+        assert_eq!(outputs.len(), 1_000);
+        let caught = outputs
+            .iter()
+            .filter(|out| out.redacted.contains("[SECRET]"))
+            .count();
+        assert_eq!(caught, 1_000, "every tenant literal must be masked");
+        for out in &outputs {
+            for literal in literals {
+                assert!(
+                    !out.redacted.contains(literal),
+                    "tenant literal leaked into rendered text"
+                );
+            }
         }
     }
 }
