@@ -103,9 +103,7 @@ impl ParityReceipt {
         probe_sha256: String,
         mut regions: Vec<RegionRecord>,
     ) -> Self {
-        regions.sort_by(|a, b| {
-            (a.bbox, &a.label, a.score_q).cmp(&(b.bbox, &b.label, b.score_q))
-        });
+        regions.sort_by(|a, b| (a.bbox, &a.label, a.score_q).cmp(&(b.bbox, &b.label, b.score_q)));
         let region_count = regions.len();
         Self {
             schema: SCHEMA_VERSION,
@@ -241,7 +239,10 @@ pub fn compare_all(receipts: &[ParityReceipt]) -> ParityReport {
     }
     for r in receipts {
         if r.schema != SCHEMA_VERSION {
-            notes.push(format!("{}: schema {} != {}", r.ep, r.schema, SCHEMA_VERSION));
+            notes.push(format!(
+                "{}: schema {} != {}",
+                r.ep, r.schema, SCHEMA_VERSION
+            ));
         }
         if !r.is_well_formed() {
             notes.push(format!(
@@ -342,7 +343,11 @@ mod tests {
         ];
         let receipts = vec![receipt("cpu", base_regions()), receipt("coreml", drifted)];
         let report = compare_all(&receipts);
-        assert!(report.ok(), "expected parity under small drift\n{}", report.render());
+        assert!(
+            report.ok(),
+            "expected parity under small drift\n{}",
+            report.render()
+        );
     }
 
     #[test]
@@ -352,9 +357,16 @@ mod tests {
             RegionRecord::new("secret", [10, 20, 100, 30], 0.83),
             RegionRecord::new("phone", [200, 40, 160, 28], 0.51), // wrong label
         ];
-        let receipts = vec![receipt("cpu", base_regions()), receipt("directml", diverged)];
+        let receipts = vec![
+            receipt("cpu", base_regions()),
+            receipt("directml", diverged),
+        ];
         let report = compare_all(&receipts);
-        assert!(!report.ok(), "divergence must be detected\n{}", report.render());
+        assert!(
+            !report.ok(),
+            "divergence must be detected\n{}",
+            report.render()
+        );
         // cpu -> directml recall should be 1/3.
         let cpu_to_dml = report
             .pairs

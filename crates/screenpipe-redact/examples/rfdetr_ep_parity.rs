@@ -44,7 +44,7 @@ use image::{Rgb, RgbImage};
 use sha2::{Digest, Sha256};
 
 use screenpipe_redact::adapters::rfdetr::{RfdetrConfig, RfdetrRedactor};
-use screenpipe_redact::image::ep_parity::{compare_all, active_ep, ParityReceipt, RegionRecord};
+use screenpipe_redact::image::ep_parity::{active_ep, compare_all, ParityReceipt, RegionRecord};
 use screenpipe_redact::image::visual_pii::{
     detect_visual_pii, FaceRegionProvider, VisualPiiConfig,
 };
@@ -75,7 +75,11 @@ fn draw_finder(img: &mut RgbImage, ox: u32, oy: u32, m: u32) {
     ];
     for (ry, row) in pattern.iter().enumerate() {
         for (rx, ch) in row.bytes().enumerate() {
-            let c = if ch == b'1' { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) };
+            let c = if ch == b'1' {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([255, 255, 255])
+            };
             for dy in 0..m {
                 for dx in 0..m {
                     img.put_pixel(ox + rx as u32 * m + dx, oy + ry as u32 * m + dy, c);
@@ -156,15 +160,22 @@ async fn emit(out_path: &Path, model_path: Option<&Path>) -> Result<()> {
             conf_threshold: PARITY_CONF_THRESHOLD,
             ..RfdetrConfig::default()
         };
-        let bytes = std::fs::read(&cfg.model_path)
-            .with_context(|| format!("read model {} (pass an explicit path)", cfg.model_path.display()))?;
+        let bytes = std::fs::read(&cfg.model_path).with_context(|| {
+            format!(
+                "read model {} (pass an explicit path)",
+                cfg.model_path.display()
+            )
+        })?;
         (cfg, sha256_hex(&bytes))
     };
 
     // (1) W16A32 RF-DETR detections through the production adapter (the EP
     //     under test). `load` is used so no network access occurs.
     let redactor = RfdetrRedactor::load(cfg).context("load rfdetr (onnx-cpu feature)")?;
-    let model_regions = redactor.detect(&probe_path).await.context("rfdetr detect")?;
+    let model_regions = redactor
+        .detect(&probe_path)
+        .await
+        .context("rfdetr detect")?;
 
     // (2) Deterministic visual-PII detections (featureless, EP-independent).
     let vcfg = VisualPiiConfig::enterprise();
@@ -178,7 +189,12 @@ async fn emit(out_path: &Path, model_path: Option<&Path>) -> Result<()> {
         .with_context(|| format!("write receipt {}", out_path.display()))?;
 
     // Text-free summary for CI / PR bodies.
-    println!("ep={} model_sha256={} probe_sha256={}", receipt.ep, &receipt.model_sha256[..16], &receipt.probe_sha256[..16]);
+    println!(
+        "ep={} model_sha256={} probe_sha256={}",
+        receipt.ep,
+        &receipt.model_sha256[..16],
+        &receipt.probe_sha256[..16]
+    );
     println!(
         "regions: {} total ({} rfdetr + {} visual: qr/avatar/face deterministic)",
         receipt.region_count,

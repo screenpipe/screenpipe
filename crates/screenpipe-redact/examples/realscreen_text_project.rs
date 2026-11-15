@@ -212,7 +212,10 @@ impl SecretShieldRules {
             return true;
         }
         let token = span.text.trim_matches(|c: char| {
-            matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':')
+            matches!(
+                c,
+                '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':'
+            )
         });
         if token.is_empty() {
             return false;
@@ -242,12 +245,19 @@ impl SecretShieldRules {
             }
         }
         // Promote bare high-entropy alphanumeric model-detected `Id` (>=16 chars, mixed char classes) to `Secret`
-        if span.label == SpanLabel::Id && token.len() >= 16 && self.high_entropy_candidate.is_match(token) {
+        if span.label == SpanLabel::Id
+            && token.len() >= 16
+            && self.high_entropy_candidate.is_match(token)
+        {
             let has_lower = token.chars().any(|c| c.is_ascii_lowercase());
             let has_upper = token.chars().any(|c| c.is_ascii_uppercase());
             let has_digit = token.chars().any(|c| c.is_ascii_digit());
             let classes = usize::from(has_lower) + usize::from(has_upper) + usize::from(has_digit);
-            if classes >= 3 || self.hex32.is_match(token) || self.hex40.is_match(token) || self.hex64.is_match(token) {
+            if classes >= 3
+                || self.hex32.is_match(token)
+                || self.hex40.is_match(token)
+                || self.hex64.is_match(token)
+            {
                 span.label = SpanLabel::Secret;
             }
         }
@@ -287,7 +297,9 @@ fn merge_spans(
                 continue;
             }
         }
-        let overlaps = kept.iter_mut().find(|r| ai.start < r.end && ai.end > r.start);
+        let overlaps = kept
+            .iter_mut()
+            .find(|r| ai.start < r.end && ai.end > r.start);
         match overlaps {
             None => kept.push(ai),
             Some(existing) => {
@@ -358,23 +370,17 @@ fn project_spans_to_regions(
             let bbox_opt = if block.multi_word {
                 let rel_start = span.start.saturating_sub(block.byte_start);
                 let rel_end = (span.end - block.byte_start).min(block.text.len());
-                narrow_multi_word_bbox(
-                    block,
-                    rel_start,
-                    rel_end,
-                    img_w as f32,
-                    img_h as f32,
-                )
-                .and_then(|(nl, nw)| {
-                    to_padded_pixel_bbox(
-                        nl,
-                        block.bounds.top,
-                        nw,
-                        block.bounds.height,
-                        img_w,
-                        img_h,
-                    )
-                })
+                narrow_multi_word_bbox(block, rel_start, rel_end, img_w as f32, img_h as f32)
+                    .and_then(|(nl, nw)| {
+                        to_padded_pixel_bbox(
+                            nl,
+                            block.bounds.top,
+                            nw,
+                            block.bounds.height,
+                            img_w,
+                            img_h,
+                        )
+                    })
             } else {
                 to_padded_pixel_bbox(
                     block.bounds.left,
@@ -501,7 +507,11 @@ async fn main() -> anyhow::Result<()> {
     let mut text_times: Vec<f64> = Vec::with_capacity(frames.len());
 
     for (i, frame) in frames.iter().enumerate() {
-        let id = frame.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let id = frame
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if done_ids.contains(&id) {
             continue;
         }
@@ -592,17 +602,32 @@ mod tests {
             WordEntry {
                 text: "Send".into(),
                 line: Some(0),
-                bounds: NormBounds { left: 0.10, top: 0.20, width: 0.05, height: 0.03 },
+                bounds: NormBounds {
+                    left: 0.10,
+                    top: 0.20,
+                    width: 0.05,
+                    height: 0.03,
+                },
             },
             WordEntry {
                 text: "alice@example.com".into(),
                 line: Some(0),
-                bounds: NormBounds { left: 0.16, top: 0.20, width: 0.18, height: 0.03 },
+                bounds: NormBounds {
+                    left: 0.16,
+                    top: 0.20,
+                    width: 0.18,
+                    height: 0.03,
+                },
             },
             WordEntry {
                 text: "now".into(),
                 line: Some(0),
-                bounds: NormBounds { left: 0.35, top: 0.20, width: 0.04, height: 0.03 },
+                bounds: NormBounds {
+                    left: 0.35,
+                    top: 0.20,
+                    width: 0.04,
+                    height: 0.03,
+                },
             },
         ];
         let (doc, blocks) = build_document(&entries);
@@ -620,17 +645,32 @@ mod tests {
             WordEntry {
                 text: "1847".into(),
                 line: Some(1),
-                bounds: NormBounds { left: 0.10, top: 0.40, width: 0.04, height: 0.02 },
+                bounds: NormBounds {
+                    left: 0.10,
+                    top: 0.40,
+                    width: 0.04,
+                    height: 0.02,
+                },
             },
             WordEntry {
                 text: "Fictional".into(),
                 line: Some(1),
-                bounds: NormBounds { left: 0.15, top: 0.40, width: 0.08, height: 0.02 },
+                bounds: NormBounds {
+                    left: 0.15,
+                    top: 0.40,
+                    width: 0.08,
+                    height: 0.02,
+                },
             },
             WordEntry {
                 text: "Lane".into(),
                 line: Some(1),
-                bounds: NormBounds { left: 0.24, top: 0.40, width: 0.04, height: 0.02 },
+                bounds: NormBounds {
+                    left: 0.24,
+                    top: 0.40,
+                    width: 0.04,
+                    height: 0.02,
+                },
             },
         ];
         let (adoc, ablocks) = build_document(&addr_entries);
@@ -642,7 +682,11 @@ mod tests {
             text: adoc.clone(),
         }];
         let aproj = project_spans_to_regions(&spans, &ablocks, 1000, 1000);
-        assert_eq!(aproj.len(), 1, "same-line words of one span must coalesce into one bar");
+        assert_eq!(
+            aproj.len(),
+            1,
+            "same-line words of one span must coalesce into one bar"
+        );
         assert_eq!(aproj[0].bbox, [97, 397, 186, 27]);
     }
 
@@ -657,7 +701,10 @@ mod tests {
             subtype: None,
             text: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
         };
-        assert!(!sh.apply(doc, &mut s1), "anchored git commit sha should be suppressed");
+        assert!(
+            !sh.apply(doc, &mut s1),
+            "anchored git commit sha should be suppressed"
+        );
 
         let mut s2 = RedactedSpan {
             start: 51,
@@ -667,6 +714,10 @@ mod tests {
             text: "aB9xK2mP7qR4tV8wY1zN".into(),
         };
         assert!(sh.apply(doc, &mut s2));
-        assert_eq!(s2.label, SpanLabel::Secret, "bare 20-char 3-class token promoted to Secret");
+        assert_eq!(
+            s2.label,
+            SpanLabel::Secret,
+            "bare 20-char 3-class token promoted to Secret"
+        );
     }
 }

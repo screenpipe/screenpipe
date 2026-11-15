@@ -70,7 +70,11 @@ pub struct VisualPiiConfig {
 impl Default for VisualPiiConfig {
     /// Shipped behavior: all visual detectors off.
     fn default() -> Self {
-        Self { detect_qr: false, detect_avatars: false, detect_faces: false }
+        Self {
+            detect_qr: false,
+            detect_avatars: false,
+            detect_faces: false,
+        }
     }
 }
 
@@ -79,7 +83,11 @@ impl VisualPiiConfig {
     /// tenant would choose; it is *not* wired into
     /// [`crate::RedactionPreset::Default`].
     pub fn enterprise() -> Self {
-        Self { detect_qr: true, detect_avatars: true, detect_faces: true }
+        Self {
+            detect_qr: true,
+            detect_avatars: true,
+            detect_faces: true,
+        }
     }
 
     /// Cheap short-circuit so callers can skip the whole scan.
@@ -130,7 +138,11 @@ pub fn detect_visual_pii(
 
     if cfg.detect_qr {
         for bbox in qr_regions(rgb) {
-            out.push(ImageRegion { bbox, label: SpanLabel::QrCode, score: DETECTED_SCORE });
+            out.push(ImageRegion {
+                bbox,
+                label: SpanLabel::QrCode,
+                score: DETECTED_SCORE,
+            });
         }
     }
     if cfg.detect_avatars {
@@ -139,7 +151,11 @@ pub fn detect_visual_pii(
     if cfg.detect_faces {
         if let Some(provider) = faces {
             for bbox in provider.face_regions(rgb) {
-                out.push(ImageRegion { bbox, label: SpanLabel::Face, score: DETECTED_SCORE });
+                out.push(ImageRegion {
+                    bbox,
+                    label: SpanLabel::Face,
+                    score: DETECTED_SCORE,
+                });
             }
         }
     }
@@ -200,9 +216,10 @@ fn qr_regions(rgb: &RgbImage) -> Vec<[u32; 4]> {
                 continue;
             }
             let expected = [m, m, 3.0 * m, m, m];
-            let ratio_ok = r.iter().zip(expected).all(|((_, len, _), e)| {
-                (*len as f32 - e).abs() <= 0.5 * e + 1.0
-            });
+            let ratio_ok = r
+                .iter()
+                .zip(expected)
+                .all(|((_, len, _), e)| (*len as f32 - e).abs() <= 0.5 * e + 1.0);
             if !ratio_ok {
                 continue;
             }
@@ -218,7 +235,10 @@ fn qr_regions(rgb: &RgbImage) -> Vec<[u32; 4]> {
     // ~7*m rows at one x. Bucket by coarse x, then split on y gaps.
     let mut buckets: BTreeMap<i32, Vec<(f32, f32, f32)>> = BTreeMap::new();
     for hit in hits {
-        buckets.entry((hit.0 / 4.0).round() as i32).or_default().push(hit);
+        buckets
+            .entry((hit.0 / 4.0).round() as i32)
+            .or_default()
+            .push(hit);
     }
     let mut finders: Vec<(f32, f32, f32)> = Vec::new(); // (cx, cy, m)
     for (_, mut v) in buckets {
@@ -318,11 +338,19 @@ fn qr_regions(rgb: &RgbImage) -> Vec<[u32; 4]> {
 }
 
 fn iou(a: [u32; 4], b: [u32; 4]) -> f32 {
-    let ix = (a[0] + a[2]).min(b[0] + b[2]).saturating_sub(a[0].max(b[0]));
-    let iy = (a[1] + a[3]).min(b[1] + b[3]).saturating_sub(a[1].max(b[1]));
+    let ix = (a[0] + a[2])
+        .min(b[0] + b[2])
+        .saturating_sub(a[0].max(b[0]));
+    let iy = (a[1] + a[3])
+        .min(b[1] + b[3])
+        .saturating_sub(a[1].max(b[1]));
     let inter = (ix as u64) * (iy as u64);
     let uni = (a[2] as u64) * (a[3] as u64) + (b[2] as u64) * (b[3] as u64) - inter;
-    if uni == 0 { 0.0 } else { inter as f32 / uni as f32 }
+    if uni == 0 {
+        0.0
+    } else {
+        inter as f32 / uni as f32
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,12 +365,20 @@ fn normalized_bounds(v: &Value) -> Option<(f32, f32, f32, f32)> {
             .and_then(Value::as_f64)
             .map(|x| x as f32)
     };
-    let b = (get("left", "x")?, get("top", "y")?,
-             get("width", "w")?, get("height", "h")?);
+    let b = (
+        get("left", "x")?,
+        get("top", "y")?,
+        get("width", "w")?,
+        get("height", "h")?,
+    );
     let finite = [b.0, b.1, b.2, b.3].into_iter().all(f32::is_finite);
     if !finite
-        || b.0 < 0.0 || b.1 < 0.0 || b.2 <= 0.0 || b.3 <= 0.0
-        || b.0 + b.2 > 1.001 || b.1 + b.3 > 1.001
+        || b.0 < 0.0
+        || b.1 < 0.0
+        || b.2 <= 0.0
+        || b.3 <= 0.0
+        || b.0 + b.2 > 1.001
+        || b.1 + b.3 > 1.001
     {
         return None;
     }
@@ -351,7 +387,15 @@ fn normalized_bounds(v: &Value) -> Option<(f32, f32, f32, f32)> {
 
 fn looks_like_avatar(obj: &serde_json::Map<String, Value>) -> bool {
     let mut text = String::new();
-    for key in ["role", "description", "label", "id", "class", "name", "title"] {
+    for key in [
+        "role",
+        "description",
+        "label",
+        "id",
+        "class",
+        "name",
+        "title",
+    ] {
         if let Some(s) = obj.get(key).and_then(Value::as_str) {
             text.push_str(&s.to_ascii_lowercase());
             text.push(' ');
@@ -384,10 +428,7 @@ fn walk_a11y(
             if let Some((left, top, bw, bh)) = obj.get("bounds").and_then(normalized_bounds) {
                 // Avatars are small UI elements; reject full-screen nodes so
                 // a stray "avatar" label can never mask the whole frame.
-                if looks_like_avatar(obj)
-                    && bw <= 0.5 && bh <= 0.5
-                    && bw >= 0.002 && bh >= 0.002
-                {
+                if looks_like_avatar(obj) && bw <= 0.5 && bh <= 0.5 && bw >= 0.002 && bh >= 0.002 {
                     const PAD: u32 = 2;
                     let x1 = ((left * w as f32).floor().max(0.0) as u32).saturating_sub(PAD);
                     let y1 = ((top * h as f32).floor().max(0.0) as u32).saturating_sub(PAD);
@@ -418,11 +459,15 @@ fn walk_a11y(
 }
 
 fn avatar_regions(a11y_json: Option<&str>, w: u32, h: u32) -> Vec<ImageRegion> {
-    let Some(raw) = a11y_json else { return Vec::new() };
+    let Some(raw) = a11y_json else {
+        return Vec::new();
+    };
     if w == 0 || h == 0 || raw.len() > 256 * 1024 {
         return Vec::new();
     }
-    let Ok(root) = serde_json::from_str::<Value>(raw) else { return Vec::new() };
+    let Ok(root) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut budget = MAX_A11Y_NODES;
     walk_a11y(&root, w, h, 0, &mut budget, &mut out);
@@ -437,17 +482,15 @@ mod tests {
     /// Draw one canonical 7x7 QR finder pattern with `m` px per module.
     fn draw_finder(img: &mut RgbImage, ox: u32, oy: u32, m: u32) {
         let pattern = [
-            "1111111",
-            "1000001",
-            "1011101",
-            "1011101",
-            "1011101",
-            "1000001",
-            "1111111",
+            "1111111", "1000001", "1011101", "1011101", "1011101", "1000001", "1111111",
         ];
         for (ry, row) in pattern.iter().enumerate() {
             for (rx, ch) in row.bytes().enumerate() {
-                let c = if ch == b'1' { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) };
+                let c = if ch == b'1' {
+                    Rgb([0, 0, 0])
+                } else {
+                    Rgb([255, 255, 255])
+                };
                 for dy in 0..m {
                     for dx in 0..m {
                         img.put_pixel(ox + rx as u32 * m + dx, oy + ry as u32 * m + dy, c);
@@ -465,16 +508,35 @@ mod tests {
         draw_finder(&mut img, 30, 30, m);
         draw_finder(&mut img, 30 + span, 30, m);
         draw_finder(&mut img, 30, 30 + span, m);
-        let regions = detect_visual_pii(&img, None, None, &VisualPiiConfig {
-            detect_qr: true, ..VisualPiiConfig::default()
-        });
-        assert_eq!(regions.len(), 1, "expected exactly one QR region, got {regions:?}");
+        let regions = detect_visual_pii(
+            &img,
+            None,
+            None,
+            &VisualPiiConfig {
+                detect_qr: true,
+                ..VisualPiiConfig::default()
+            },
+        );
+        assert_eq!(
+            regions.len(),
+            1,
+            "expected exactly one QR region, got {regions:?}"
+        );
         assert_eq!(regions[0].label, SpanLabel::QrCode);
         assert_eq!(regions[0].score, 1.0);
         let [x, y, bw, bh] = regions[0].bbox;
-        assert!(x <= 30 && y <= 30, "bbox must start at/above the top-left finder: {regions:?}");
-        assert!(x + bw >= 30 + span, "bbox must reach the top-right finder: {regions:?}");
-        assert!(y + bh >= 30 + span, "bbox must reach the bottom-left finder: {regions:?}");
+        assert!(
+            x <= 30 && y <= 30,
+            "bbox must start at/above the top-left finder: {regions:?}"
+        );
+        assert!(
+            x + bw >= 30 + span,
+            "bbox must reach the top-right finder: {regions:?}"
+        );
+        assert!(
+            y + bh >= 30 + span,
+            "bbox must reach the bottom-left finder: {regions:?}"
+        );
     }
 
     #[test]
@@ -488,10 +550,19 @@ mod tests {
                 }
             }
         }
-        let regions = detect_visual_pii(&img, None, None, &VisualPiiConfig {
-            detect_qr: true, ..VisualPiiConfig::default()
-        });
-        assert!(regions.is_empty(), "false positive on ordinary UI: {regions:?}");
+        let regions = detect_visual_pii(
+            &img,
+            None,
+            None,
+            &VisualPiiConfig {
+                detect_qr: true,
+                ..VisualPiiConfig::default()
+            },
+        );
+        assert!(
+            regions.is_empty(),
+            "false positive on ordinary UI: {regions:?}"
+        );
     }
 
     #[test]
@@ -514,13 +585,26 @@ mod tests {
             {"role":"AXStaticText","description":"ordinary label",
              "bounds":{"x":0.5,"y":0.2,"w":0.2,"h":0.05}}
         ]}"#;
-        let regions = detect_visual_pii(&img, Some(a11y), None, &VisualPiiConfig {
-            detect_avatars: true, ..VisualPiiConfig::default()
-        });
-        assert_eq!(regions.len(), 1, "only the avatar node should fire: {regions:?}");
+        let regions = detect_visual_pii(
+            &img,
+            Some(a11y),
+            None,
+            &VisualPiiConfig {
+                detect_avatars: true,
+                ..VisualPiiConfig::default()
+            },
+        );
+        assert_eq!(
+            regions.len(),
+            1,
+            "only the avatar node should fire: {regions:?}"
+        );
         assert_eq!(regions[0].label, SpanLabel::Avatar);
         let [x, y, w, h] = regions[0].bbox;
-        assert!(x <= 20 && y <= 20 && w >= 16 && h >= 8, "unexpected bbox {regions:?}");
+        assert!(
+            x <= 20 && y <= 20 && w >= 16 && h >= 8,
+            "unexpected bbox {regions:?}"
+        );
     }
 
     struct OneFace;
@@ -533,7 +617,10 @@ mod tests {
     #[test]
     fn face_provider_hook_emits_face_label() {
         let img = RgbImage::from_pixel(100, 100, Rgb([255, 255, 255]));
-        let cfg = VisualPiiConfig { detect_faces: true, ..VisualPiiConfig::default() };
+        let cfg = VisualPiiConfig {
+            detect_faces: true,
+            ..VisualPiiConfig::default()
+        };
         // No provider -> zero regions (no fake detector).
         assert!(detect_visual_pii(&img, None, None, &cfg).is_empty());
         // With a provider -> one Face region.

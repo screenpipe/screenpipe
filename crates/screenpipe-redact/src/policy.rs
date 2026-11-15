@@ -60,11 +60,7 @@ const DETECTOR_CLASSES: [SpanLabel; 12] = [
 /// `adapters::rfdetr::CLASSES` in the feature-gated test below. Enterprise
 /// Strict admits them so a visual detection is never dropped by the policy
 /// filter; [`RedactionPreset::Default`] remains secrets-only.
-const VISUAL_CLASSES: [SpanLabel; 3] = [
-    SpanLabel::QrCode,
-    SpanLabel::Avatar,
-    SpanLabel::Face,
-];
+const VISUAL_CLASSES: [SpanLabel; 3] = [SpanLabel::QrCode, SpanLabel::Avatar, SpanLabel::Face];
 
 /// Image score floor for [`RedactionPreset::EnterpriseStrict`]. Matches the
 /// `@0.30` column of the canonical sealed ship-gate scorecard so the preset
@@ -169,7 +165,10 @@ mod tests {
     #[test]
     fn strict_covers_all_detector_classes_and_lowers_the_floor() {
         let image = RedactionPreset::EnterpriseStrict.image_policy();
-        assert_eq!(image.allow.len(), DETECTOR_CLASSES.len() + VISUAL_CLASSES.len());
+        assert_eq!(
+            image.allow.len(),
+            DETECTOR_CLASSES.len() + VISUAL_CLASSES.len()
+        );
         for class in DETECTOR_CLASSES {
             assert!(image.allow.contains(&class), "missing {class:?}");
         }
@@ -181,12 +180,18 @@ mod tests {
     fn strict_admits_the_phase4_visual_classes() {
         let image = RedactionPreset::EnterpriseStrict.image_policy();
         for class in VISUAL_CLASSES {
-            assert!(image.allow.contains(&class), "missing visual class {class:?}");
+            assert!(
+                image.allow.contains(&class),
+                "missing visual class {class:?}"
+            );
         }
         // Default must NOT admit them: opt-in stays opt-in.
         let default = RedactionPreset::Default.image_policy();
         for class in VISUAL_CLASSES {
-            assert!(!default.allow.contains(&class), "default leaked visual class {class:?}");
+            assert!(
+                !default.allow.contains(&class),
+                "default leaked visual class {class:?}"
+            );
         }
     }
 

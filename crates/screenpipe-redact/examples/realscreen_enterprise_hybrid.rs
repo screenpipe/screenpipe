@@ -31,34 +31,227 @@ const GLYPH_PAD_PX: i32 = 3;
 
 static UI_STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "settings", "dashboard", "overview", "inbox", "projects", "issues", "views", "cycles",
-        "search", "filter", "filters", "display", "notifications", "billing", "integrations",
-        "members", "preferences", "cancel", "save", "close", "edit", "share", "export", "import",
-        "loading", "active", "completed", "backlog", "todo", "triage", "urgent", "high", "medium",
-        "low", "status", "priority", "assignee", "labels", "created", "updated", "due", "date",
-        "name", "email", "phone", "address", "company", "organization", "workspace", "team",
-        "teams", "general", "security", "profile", "account", "home", "back", "next", "previous",
-        "submit", "continue", "confirm", "delete", "remove", "add", "new", "create", "open",
-        "view", "all", "none", "help", "docs", "documentation", "support", "feedback", "logout",
-        "sign", "login", "file", "files", "folder", "history", "chat", "chats", "messages",
-        "channels", "threads", "thread", "activity", "analytics", "reports", "logs", "metrics",
-        "traces", "alerts", "incidents", "deployments", "environments", "variables", "secrets",
-        "tokens", "keys", "webhooks", "localhost", "http", "https", "true", "false", "null",
-        "undefined", "error", "warning", "info", "debug", "success", "failed", "pending",
-        "running", "stopped", "online", "offline", "today", "yesterday", "tomorrow", "monday",
-        "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february",
-        "march", "april", "may", "june", "july", "august", "september", "october", "november",
-        "december", "chrome", "google", "apple", "macos", "windows", "linux", "github", "gitlab",
-        "linear", "slack", "discord", "notion", "figma", "stripe", "supabase", "cloudflare",
-        "vercel", "aws", "gcp", "azure", "openai", "anthropic", "claude", "chatgpt", "codex",
-        "cursor", "vscode", "terminal", "screenpipe", "password", "password:", "passcode",
-        "master password", "enter password", "api key", "api-key", "api keys", "secret key",
-        "access token", "client secret", "username", "software update", "airdrop", "continuity",
-        "airdrop & continuity", "applecare", "applecare & warranty", "full disk access",
-        "privacy & security", "make", "shared", "scoped", "pricing", "free", "pro", "enterprise",
-        "get started", "download", "sign in", "unlock", "log out", "permissions", "read only",
-        "restricted", "hcaptcha", "opencode", "tinfoil", "dayflow", "pieces", "pieces?",
-        "bitwarden", "1password", "keychain", "http 401", "http 200", "http 403", "http 404",
+        "settings",
+        "dashboard",
+        "overview",
+        "inbox",
+        "projects",
+        "issues",
+        "views",
+        "cycles",
+        "search",
+        "filter",
+        "filters",
+        "display",
+        "notifications",
+        "billing",
+        "integrations",
+        "members",
+        "preferences",
+        "cancel",
+        "save",
+        "close",
+        "edit",
+        "share",
+        "export",
+        "import",
+        "loading",
+        "active",
+        "completed",
+        "backlog",
+        "todo",
+        "triage",
+        "urgent",
+        "high",
+        "medium",
+        "low",
+        "status",
+        "priority",
+        "assignee",
+        "labels",
+        "created",
+        "updated",
+        "due",
+        "date",
+        "name",
+        "email",
+        "phone",
+        "address",
+        "company",
+        "organization",
+        "workspace",
+        "team",
+        "teams",
+        "general",
+        "security",
+        "profile",
+        "account",
+        "home",
+        "back",
+        "next",
+        "previous",
+        "submit",
+        "continue",
+        "confirm",
+        "delete",
+        "remove",
+        "add",
+        "new",
+        "create",
+        "open",
+        "view",
+        "all",
+        "none",
+        "help",
+        "docs",
+        "documentation",
+        "support",
+        "feedback",
+        "logout",
+        "sign",
+        "login",
+        "file",
+        "files",
+        "folder",
+        "history",
+        "chat",
+        "chats",
+        "messages",
+        "channels",
+        "threads",
+        "thread",
+        "activity",
+        "analytics",
+        "reports",
+        "logs",
+        "metrics",
+        "traces",
+        "alerts",
+        "incidents",
+        "deployments",
+        "environments",
+        "variables",
+        "secrets",
+        "tokens",
+        "keys",
+        "webhooks",
+        "localhost",
+        "http",
+        "https",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "error",
+        "warning",
+        "info",
+        "debug",
+        "success",
+        "failed",
+        "pending",
+        "running",
+        "stopped",
+        "online",
+        "offline",
+        "today",
+        "yesterday",
+        "tomorrow",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "chrome",
+        "google",
+        "apple",
+        "macos",
+        "windows",
+        "linux",
+        "github",
+        "gitlab",
+        "linear",
+        "slack",
+        "discord",
+        "notion",
+        "figma",
+        "stripe",
+        "supabase",
+        "cloudflare",
+        "vercel",
+        "aws",
+        "gcp",
+        "azure",
+        "openai",
+        "anthropic",
+        "claude",
+        "chatgpt",
+        "codex",
+        "cursor",
+        "vscode",
+        "terminal",
+        "screenpipe",
+        "password",
+        "password:",
+        "passcode",
+        "master password",
+        "enter password",
+        "api key",
+        "api-key",
+        "api keys",
+        "secret key",
+        "access token",
+        "client secret",
+        "username",
+        "software update",
+        "airdrop",
+        "continuity",
+        "airdrop & continuity",
+        "applecare",
+        "applecare & warranty",
+        "full disk access",
+        "privacy & security",
+        "make",
+        "shared",
+        "scoped",
+        "pricing",
+        "free",
+        "pro",
+        "enterprise",
+        "get started",
+        "download",
+        "sign in",
+        "unlock",
+        "log out",
+        "permissions",
+        "read only",
+        "restricted",
+        "hcaptcha",
+        "opencode",
+        "tinfoil",
+        "dayflow",
+        "pieces",
+        "pieces?",
+        "bitwarden",
+        "1password",
+        "keychain",
+        "http 401",
+        "http 200",
+        "http 403",
+        "http 404",
         "onboard in hours",
     ]
     .into_iter()
@@ -69,8 +262,7 @@ static HANDLE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:^|[^\w.])(@[A-Za-z0-9_][A-Za-z0-9_.-]{1,30})\b").unwrap());
 static CHANNEL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:^|[^\w/])(#[a-z][a-z0-9_-]{2,32})\b").unwrap());
-static HEX_COLOR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^#[0-9a-fA-F]{3,8}$").unwrap());
+static HEX_COLOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^#[0-9a-fA-F]{3,8}$").unwrap());
 static MASKED_SECRET_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?:sk-(?:proj-|ant-|live_|test_)?[•●*·xX]{3,}[A-Za-z0-9_-]*|(?:gh[pousr]_|AKIA|whsec_|rk_live_)[•●*·xX]{3,}[A-Za-z0-9_-]*|\b[A-Za-z0-9._+-]{2,16}[•●*]{3,16}|[•●]{6,48})").unwrap()
 });
@@ -183,7 +375,8 @@ fn clean_visible_leaf_a11y(raw_nodes: &[CaptureNode]) -> Vec<LeafNode> {
                     let lead_spaces = line_str.chars().take_while(|c| *c == ' ').count() as f32;
                     let max_cols = ((b.width * 1600.0) / 7.5).max(40.0);
                     let x_shift = (lead_spaces / max_cols).min(0.65) * b.width;
-                    let w_frac = ((lt.chars().count() as f32 + 2.0) / max_cols).clamp(0.04, 1.0 - (x_shift / b.width.max(1e-4)));
+                    let w_frac = ((lt.chars().count() as f32 + 2.0) / max_cols)
+                        .clamp(0.04, 1.0 - (x_shift / b.width.max(1e-4)));
                     let rb = NormBounds {
                         left: b.left + x_shift,
                         top: b.top + (li as f32) * row_h,
@@ -360,7 +553,18 @@ fn project_span_in_node(
     let n_chars = txt.chars().count();
     if n_chars > max_multiline_chars {
         // For huge paragraphs, only fire if a pixel proposal inside `node` confirms geometry.
-        return snap_only_in_large_container(bx, by, bw, bh, txt, s0, s1, pixel_proposals, img_w, img_h);
+        return snap_only_in_large_container(
+            bx,
+            by,
+            bw,
+            bh,
+            txt,
+            s0,
+            s1,
+            pixel_proposals,
+            img_w,
+            img_h,
+        );
     }
 
     // Compute horizontal glyph stroke contrast |I[y, x+1] - I[y, x]| inside container
@@ -436,7 +640,8 @@ fn project_span_in_node(
         for ry in y0..y1 {
             let row_off = (by as usize + ry) * w_usize + bx as usize;
             for rx in 0..(bw_u - 1) {
-                let d = (gray[row_off + rx] as i16 - gray[row_off + rx + 1] as i16).unsigned_abs() as u8;
+                let d = (gray[row_off + rx] as i16 - gray[row_off + rx + 1] as i16).unsigned_abs()
+                    as u8;
                 if d > col_max[rx] {
                     col_max[rx] = d;
                 }
@@ -464,7 +669,11 @@ fn project_span_in_node(
         let (ix0, ix1) = band_ink[0];
         let (y0, y1) = bands[0];
         let iw = (ix1 - ix0) as f32;
-        let u0 = if s0 == 0 { 0.0 } else { str_rel_width(&txt[..s0]) };
+        let u0 = if s0 == 0 {
+            0.0
+        } else {
+            str_rel_width(&txt[..s0])
+        };
         let u1 = str_rel_width(&txt[..s1]);
         let xs = bx as f32 + ix0 as f32 + (u0 / tot_u) * iw - GLYPH_PAD_PX as f32;
         let xe = bx as f32 + ix0 as f32 + (u1 / tot_u) * iw + GLYPH_PAD_PX as f32;
@@ -480,7 +689,10 @@ fn project_span_in_node(
         }
     } else {
         // Greedy word wrap across detected ink bands
-        let caps: Vec<f32> = band_ink.iter().map(|(a, b)| ((b - a) as f32).max(20.0)).collect();
+        let caps: Vec<f32> = band_ink
+            .iter()
+            .map(|(a, b)| ((b - a) as f32).max(20.0))
+            .collect();
         let tot_cap: f32 = caps.iter().sum::<f32>().max(1.0);
         let mut tok_lines: Vec<(usize, usize, usize)> = Vec::new();
         let mut cur_k = 0usize;
@@ -518,7 +730,11 @@ fn project_span_in_node(
                 let ov_e = s1.min(le);
                 if ov_e > ov_s && txt.is_char_boundary(ov_s) && txt.is_char_boundary(ov_e) {
                     let lu = str_rel_width(&txt[ls..le]);
-                    let lu0 = if ov_s <= ls { 0.0 } else { str_rel_width(&txt[ls..ov_s]) };
+                    let lu0 = if ov_s <= ls {
+                        0.0
+                    } else {
+                        str_rel_width(&txt[ls..ov_s])
+                    };
                     let lu1 = str_rel_width(&txt[ls..ov_e]);
                     let (ix0, ix1) = band_ink[k];
                     let (y0, y1) = bands[k];
@@ -633,8 +849,27 @@ fn trim_entity(s: &str) -> &str {
     s.trim_matches(|c: char| {
         matches!(
             c,
-            ' ' | '\t' | '\n' | '\r' | ',' | '.' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']'
-                | '{' | '}' | '<' | '>' | '"' | '\'' | '`' | '|'
+            ' ' | '\t'
+                | '\n'
+                | '\r'
+                | ','
+                | '.'
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '"'
+                | '\''
+                | '`'
+                | '|'
         )
     })
 }
@@ -911,8 +1146,16 @@ async fn main() -> anyhow::Result<()> {
                     // Standalone field label ("Password:", "API key", "Secret key") is NEVER a secret itself
                     if matches!(
                         low_mt.as_str(),
-                        "password" | "password:" | "passcode" | "master password" | "enter password"
-                            | "api key" | "api-key" | "api keys" | "secret key" | "access token"
+                        "password"
+                            | "password:"
+                            | "passcode"
+                            | "master password"
+                            | "enter password"
+                            | "api key"
+                            | "api-key"
+                            | "api keys"
+                            | "secret key"
+                            | "access token"
                             | "client secret"
                     ) {
                         continue;
@@ -925,8 +1168,10 @@ async fn main() -> anyhow::Result<()> {
                     {
                         continue;
                     }
-                    if matches!(pr.label.as_str(), "company" | "person" | "date" | "id" | "url" | "repo")
-                        && pr.score < 0.70
+                    if matches!(
+                        pr.label.as_str(),
+                        "company" | "person" | "date" | "id" | "url" | "repo"
+                    ) && pr.score < 0.70
                         && (UI_STOPWORDS.contains(low_mt.as_str()) || HEX_COLOR_RE.is_match(mt))
                     {
                         continue;
@@ -978,7 +1223,9 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                         let val_trim = trim_entity(&doc[new_start..s.end]);
-                        if val_trim.len() < 4 || UI_STOPWORDS.contains(val_trim.to_lowercase().as_str()) {
+                        if val_trim.len() < 4
+                            || UI_STOPWORDS.contains(val_trim.to_lowercase().as_str())
+                        {
                             continue;
                         }
                         s.start = new_start;
@@ -1106,16 +1353,9 @@ async fn main() -> anyhow::Result<()> {
             for (_low, (ent_str, ent_lbl)) in &discovered_entities {
                 for node in &nodes {
                     for (ms, me) in find_whole_word_matches(&node.text, ent_str) {
-                        for bb in project_span_in_node(
-                            gray,
-                            img_w,
-                            img_h,
-                            node,
-                            ms,
-                            me,
-                            raw_pix,
-                            180,
-                        ) {
+                        for bb in
+                            project_span_in_node(gray, img_w, img_h, node, ms, me, raw_pix, 180)
+                        {
                             regions.push(OutRegion {
                                 label: ent_lbl.clone(),
                                 score: 0.56,
@@ -1131,7 +1371,10 @@ async fn main() -> anyhow::Result<()> {
         if use_pixel && !raw_pix.is_empty() {
             let mut anchors: Vec<(&PixelRegion, [f32; 384])> = Vec::new();
             for pr in raw_pix {
-                if pr.score >= 0.56 && (11.0..=30.0).contains(&pr.bbox[3]) && (32.0..=210.0).contains(&pr.bbox[2]) {
+                if pr.score >= 0.56
+                    && (11.0..=30.0).contains(&pr.bbox[3])
+                    && (32.0..=210.0).contains(&pr.bbox[2])
+                {
                     if let Some(patch) = sample_patch_32x12(gray, img_w, img_h, pr.bbox) {
                         anchors.push((pr, patch));
                         if anchors.len() >= 24 {

@@ -29,7 +29,11 @@ fn draw_finder(img: &mut RgbImage, ox: u32, oy: u32, m: u32) {
     ];
     for (ry, row) in pattern.iter().enumerate() {
         for (rx, ch) in row.bytes().enumerate() {
-            let c = if ch == b'1' { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) };
+            let c = if ch == b'1' {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([255, 255, 255])
+            };
             for dy in 0..m {
                 for dx in 0..m {
                     img.put_pixel(ox + rx as u32 * m + dx, oy + ry as u32 * m + dy, c);
@@ -80,12 +84,22 @@ fn visual_pii_emits_all_three_classes_deterministically() {
     let cfg = VisualPiiConfig::enterprise();
     let a = detect_visual_pii(&img, Some(A11Y), Some(&OneFace), &cfg);
     let b = detect_visual_pii(&img, Some(A11Y), Some(&OneFace), &cfg);
-    assert_eq!(records(&a), records(&b), "visual-PII detection must be bit-identical run-to-run");
+    assert_eq!(
+        records(&a),
+        records(&b),
+        "visual-PII detection must be bit-identical run-to-run"
+    );
 
     let has = |l: SpanLabel| a.iter().any(|r| r.label == l);
-    assert!(has(SpanLabel::QrCode), "QrCode finder triad not detected: {a:?}");
+    assert!(
+        has(SpanLabel::QrCode),
+        "QrCode finder triad not detected: {a:?}"
+    );
     assert!(has(SpanLabel::Avatar), "a11y avatar not detected: {a:?}");
-    assert!(has(SpanLabel::Face), "Face provider hook not emitted: {a:?}");
+    assert!(
+        has(SpanLabel::Face),
+        "Face provider hook not emitted: {a:?}"
+    );
     assert_eq!(a.iter().filter(|r| r.label == SpanLabel::Face).count(), 2);
     // All deterministic detections are certain, so the strict @0.30 policy
     // (min_score 0.30) will never drop them.
@@ -95,14 +109,25 @@ fn visual_pii_emits_all_three_classes_deterministically() {
 #[test]
 fn default_config_is_a_complete_noop_even_with_all_signals_present() {
     let img = frame_with_qr();
-    assert!(detect_visual_pii(&img, Some(A11Y), Some(&OneFace), &VisualPiiConfig::default()).is_empty());
+    assert!(detect_visual_pii(
+        &img,
+        Some(A11Y),
+        Some(&OneFace),
+        &VisualPiiConfig::default()
+    )
+    .is_empty());
     assert!(NoopFaceRegionProvider.face_regions(&img).is_empty());
 }
 
 #[test]
 fn ep_parity_accepts_equivalent_receipts_from_three_providers() {
     let img = frame_with_qr();
-    let regions = detect_visual_pii(&img, Some(A11Y), Some(&OneFace), &VisualPiiConfig::enterprise());
+    let regions = detect_visual_pii(
+        &img,
+        Some(A11Y),
+        Some(&OneFace),
+        &VisualPiiConfig::enterprise(),
+    );
     let rc = records(&regions);
     let sha = "c2b645b9f4084aebb503805722e53c8de0c023e67b77b69e46a7ce9de014522a".to_string();
     let probe = "d".repeat(64);
@@ -111,14 +136,23 @@ fn ep_parity_accepts_equivalent_receipts_from_three_providers() {
         .map(|ep| ParityReceipt::new(*ep, sha.clone(), probe.clone(), rc.clone()))
         .collect();
     let report = compare_all(&receipts);
-    assert!(report.ok(), "equivalent EPs must be in parity:\n{}", report.render());
+    assert!(
+        report.ok(),
+        "equivalent EPs must be in parity:\n{}",
+        report.render()
+    );
     assert_eq!(report.pairs.len(), 6);
 }
 
 #[test]
 fn ep_parity_rejects_a_divergent_provider() {
     let img = frame_with_qr();
-    let regions = detect_visual_pii(&img, Some(A11Y), Some(&OneFace), &VisualPiiConfig::enterprise());
+    let regions = detect_visual_pii(
+        &img,
+        Some(A11Y),
+        Some(&OneFace),
+        &VisualPiiConfig::enterprise(),
+    );
     let mut rc = records(&regions);
     let sha = "c2b645b9f4084aebb503805722e53c8de0c023e67b77b69e46a7ce9de014522a".to_string();
     let probe = "d".repeat(64);
@@ -131,5 +165,9 @@ fn ep_parity_rejects_a_divergent_provider() {
     }
     let bad = ParityReceipt::new("directml", sha, probe, rc);
     let report = compare_all(&[good, bad]);
-    assert!(!report.ok(), "divergent provider must be caught:\n{}", report.render());
+    assert!(
+        !report.ok(),
+        "divergent provider must be caught:\n{}",
+        report.render()
+    );
 }
