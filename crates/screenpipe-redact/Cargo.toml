@@ -199,3 +199,18 @@ features = ["metal"]
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies.screenpipe-rfdetr-mlx]
 path = "../screenpipe-rfdetr-mlx"
 optional = true
+
+[[example]]
+name = "realscreen_detect"
+path = "examples/realscreen_detect.rs"
+required-features = ["onnx-cpu"]
+
+[[example]]
+name = "realscreen_text_project"
+path = "examples/realscreen_text_project.rs"
+required-features = ["onnx-cpu"]
+
+[[example]]
+name = "realscreen_enterprise_hybrid"
+path = "examples/realscreen_enterprise_hybrid.rs"
+required-features = ["onnx-cpu"]
