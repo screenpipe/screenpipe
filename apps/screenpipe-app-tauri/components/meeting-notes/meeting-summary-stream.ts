@@ -35,7 +35,10 @@ function joinBlocks(blocks: Record<number, string>): string {
 }
 
 function summaryDraftFromAssistantText(text: string): string | null {
-  const heading = /^#{1,6}[\t ]+summary[\t ]*(?:\r?\n|$)/gim;
+  // The heading may be glued to narration (`…context.## Summary`). It still
+  // has to end the line: `## Summary of the meeting` is not a heading. Saved
+  // notes keep the stricter whole-line reader in meeting-workspace.tsx.
+  const heading = /#{1,6}[\t ]+summary[\t ]*(?:\r?\n|$)/gim;
   let match: RegExpExecArray | null;
   let latest: RegExpExecArray | null = null;
   while ((match = heading.exec(text)) !== null) latest = match;
