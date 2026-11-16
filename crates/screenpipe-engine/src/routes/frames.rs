@@ -248,7 +248,16 @@ pub struct FramePreviewSamplesQuery {
     pub browser_domain: Option<String>,
     #[serde(default = "default_preview_sample_limit")]
     pub limit: usize,
+    /// Point each sample at the high-frame-rate recording of the same display
+    /// when one covers that moment. Off by default so hover previews keep
+    /// their existing lightweight sources.
+    #[serde(default)]
+    pub prefer_hd: bool,
 }
+
+/// HD index rows are written once per second; two seconds tolerates one
+/// missed marker without reaching into a different moment.
+const HD_PREVIEW_MATCH_TOLERANCE_SECS: i64 = 2;
 
 #[derive(Clone, Debug, Serialize, OaSchema, PartialEq, Eq)]
 pub struct FramePreviewSample {
@@ -446,10 +455,30 @@ pub async fn get_frame_preview_samples(
         });
     }
     let frames = first_preview_frame_per_bucket(frames);
+    let mut frames = evenly_sample_preview_frames(frames, query.limit);
+    if query.prefer_hd {
+        // At most `limit` (<= 8) indexed lookups; a failed lookup keeps the
+        // sample's original source instead of failing the preview.
+        for frame in &mut frames {
+            let Ok(Some((chunk_id, offset_seconds, path))) = state
+                .db
+                .get_hd_recording_near_frame(frame.frame_id, HD_PREVIEW_MATCH_TOLERANCE_SECS)
+                .await
+            else {
+                continue;
+            };
+            if tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|metadata| metadata.is_file())
+            {
+                frame.source = FramePreviewSource::Video;
+                frame.video_chunk_id = Some(chunk_id);
+                frame.video_offset_seconds = Some(format!("{offset_seconds:.6}"));
+            }
+        }
+    }
 
-    Ok(JsonResponse(FramePreviewSamplesResponse {
-        frames: evenly_sample_preview_frames(frames, query.limit),
-    }))
+    Ok(JsonResponse(FramePreviewSamplesResponse { frames }))
 }
 
 fn parse_single_byte_range(value: &str, file_len: u64) -> Option<(u64, u64)> {

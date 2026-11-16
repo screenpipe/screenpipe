@@ -724,6 +724,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preview_prefers_hd_recording_of_the_same_display_only_when_asked() {
+        let (app, db) = setup_test_app().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let snapshot = temp_dir.path().join("sparse.jpg");
+        let hd = temp_dir.path().join("hd.mp4");
+        let other = temp_dir.path().join("other-display.mp4");
+        for path in [&snapshot, &hd, &other] {
+            std::fs::write(path, b"media").unwrap();
+        }
+        // Sparse, app-attributed screenshots on display A: one covered by the
+        // HD recording, one 30 s later that the recording does not cover.
+        for timestamp in ["2026-08-20T10:00:10Z", "2026-08-20T10:00:40Z"] {
+            sqlx::query(
+                "INSERT INTO frames (timestamp, app_name, snapshot_path, focused, device_name) \
+                 VALUES (?1, 'Arc', ?2, 1, 'display-a')",
+            )
+            .bind(timestamp)
+            .bind(snapshot.to_string_lossy().as_ref())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        let hd_chunk = db
+            .insert_video_chunk_with_fps(hd.to_string_lossy().as_ref(), "display-a", 20.0)
+            .await
+            .unwrap();
+        let other_chunk = db
+            .insert_video_chunk_with_fps(other.to_string_lossy().as_ref(), "display-b", 20.0)
+            .await
+            .unwrap();
+        // HD index rows have no app attribution. Display B has the closest
+        // timestamp and must never be chosen for a display A moment.
+        for (chunk, offset, timestamp, device) in [
+            (hd_chunk, 180, "2026-08-20T10:00:09Z", "display-a"),
+            (hd_chunk, 200, "2026-08-20T10:00:10.500Z", "display-a"),
+            (other_chunk, 60, "2026-08-20T10:00:10Z", "display-b"),
+            (other_chunk, 660, "2026-08-20T10:00:40Z", "display-b"),
+        ] {
+            sqlx::query(
+                "INSERT INTO frames (video_chunk_id, offset_index, timestamp, focused, device_name) \
+                 VALUES (?1, ?2, ?3, 1, ?4)",
+            )
+            .bind(chunk)
+            .bind(offset)
+            .bind(timestamp)
+            .bind(device)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let base = "/frames/preview-samples?start_time=2026-08-20T10%3A00%3A00Z&end_time=2026-08-20T10%3A01%3A00Z&app_name=Arc&limit=6";
+        let mut payloads = Vec::new();
+        for uri in [base.to_string(), format!("{base}&prefer_hd=true")] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            payloads.push(
+                serde_json::from_slice::<serde_json::Value>(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap(),
+            );
+        }
+
+        // Default: unchanged sparse screenshots.
+        assert_eq!(payloads[0]["frames"].as_array().unwrap().len(), 2);
+        assert_eq!(payloads[0]["frames"][0]["source"], "snapshot");
+        assert!(payloads[0]["frames"][0].get("video_chunk_id").is_none());
+
+        // Opt-in: the covered moment plays display A's HD recording at the
+        // nearest index row (frame 200 at 20 fps = 10 s); the attributed frame
+        // id is kept for Timeline navigation.
+        let frames = payloads[1]["frames"].as_array().unwrap();
+        assert_eq!(frames[0]["frame_id"], payloads[0]["frames"][0]["frame_id"]);
+        assert_eq!(frames[0]["source"], "video");
+        assert_eq!(frames[0]["video_chunk_id"], hd_chunk);
+        assert_eq!(frames[0]["video_offset_seconds"], "10.000000");
+        // The uncovered moment stays a screenshot even though display B has an
+        // HD row at that exact time.
+        assert_eq!(frames[1]["source"], "snapshot");
+        assert!(frames[1].get("video_chunk_id").is_none());
+
+        // A recording whose file is gone falls back to the screenshot.
+        std::fs::remove_file(&hd).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}&prefer_hd=true"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["frames"][0]["source"], "snapshot");
+    }
+
+    #[tokio::test]
     async fn activity_preview_uses_linked_event_when_frame_attribution_is_blank() {
         let (app, db) = setup_test_app().await;
         let temp_dir = tempfile::tempdir().unwrap();

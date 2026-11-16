@@ -11,6 +11,7 @@ fn recording_preview_request_respects_recorder_contract() {
     let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(url.path(), "/frames/preview-samples");
     assert_eq!(query["limit"], "8");
+    assert_eq!(query["prefer_hd"], "true");
     assert_eq!(query["app_name"], "Arc & Notes");
     let start = DateTime::parse_from_rfc3339(&query["start_time"]).unwrap().with_timezone(&Utc);
     let end = DateTime::parse_from_rfc3339(&query["end_time"]).unwrap().with_timezone(&Utc);

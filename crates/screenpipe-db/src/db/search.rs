@@ -1689,6 +1689,62 @@ impl DatabaseManager {
         Ok(rows)
     }
 
+    /// Find the high-frame-rate recording that covers an attributed frame.
+    ///
+    /// HD index rows carry no app attribution (the HD recorder skips OCR and
+    /// accessibility), so they are matched through an attributed frame from
+    /// the same display: same `device_name`, nearest timestamp within
+    /// `tolerance_secs`. Returns the chunk, the offset in seconds, and the
+    /// local file path. Never matches by time alone across displays.
+    pub async fn get_hd_recording_near_frame(
+        &self,
+        frame_id: i64,
+        tolerance_secs: i64,
+    ) -> Result<Option<(i64, f64, String)>, SqlxError> {
+        let mut connection = self.acquire_read().await?;
+        let Some((at, device_name)) = sqlx::query_as::<_, (DateTime<Utc>, String)>(
+            "SELECT timestamp, device_name FROM frames \
+             WHERE id = ?1 AND device_name IS NOT NULL AND device_name != ''",
+        )
+        .bind(frame_id)
+        .fetch_optional(&mut *connection)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let tolerance = chrono::Duration::seconds(tolerance_secs.max(0));
+        // Bounded by the timestamp index: at one index row per second and
+        // display this reads a handful of rows.
+        let rows = sqlx::query_as::<_, (DateTime<Utc>, i64, f64, String)>(
+            r#"
+            SELECT hd.timestamp, vc.id,
+                   CAST(hd.offset_index AS REAL) / MAX(COALESCE(vc.fps, 0.5), 0.001),
+                   vc.file_path
+            FROM frames hd
+            JOIN video_chunks vc ON vc.id = hd.video_chunk_id
+            WHERE hd.timestamp >= ?1
+              AND hd.timestamp <= ?2
+              AND hd.device_name = ?3
+              AND hd.id != ?4
+              AND (hd.app_name IS NULL OR hd.app_name = '')
+              AND NULLIF(hd.snapshot_path, '') IS NULL
+              AND vc.file_path NOT LIKE 'cloud://%'
+            ORDER BY hd.timestamp, hd.id
+            LIMIT 64
+            "#,
+        )
+        .bind(at - tolerance)
+        .bind(at + tolerance)
+        .bind(&device_name)
+        .bind(frame_id)
+        .fetch_all(&mut *connection)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .min_by_key(|(timestamp, ..)| (*timestamp - at).num_milliseconds().abs())
+            .map(|(_, chunk_id, offset_seconds, path)| (chunk_id, offset_seconds, path)))
+    }
+
     pub async fn get_video_chunk_path(&self, chunk_id: i64) -> Result<Option<String>, SqlxError> {
         sqlx::query_scalar(
             "SELECT file_path FROM video_chunks WHERE id = ?1 AND file_path NOT LIKE 'cloud://%'",

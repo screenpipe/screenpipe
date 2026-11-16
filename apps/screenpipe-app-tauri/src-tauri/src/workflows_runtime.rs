@@ -513,7 +513,10 @@ fn recording_preview_url(base_url: &str, at: DateTime<Utc>, app_name: &str) -> R
         .append_pair("end_time", &(at + ChronoDuration::minutes(2)).to_rfc3339())
         .append_pair("app_name", app_name.trim())
         // The recorder's preview API permits at most eight samples.
-        .append_pair("limit", "8");
+        .append_pair("limit", "8")
+        // Play the high-frame-rate recording of that display when one exists.
+        // Recorders without this option ignore it and return the sparse source.
+        .append_pair("prefer_hd", "true");
     Ok(url)
 }
 
