@@ -399,7 +399,7 @@ Never access Screenpipe's live db.sqlite, db.sqlite-wal, or db.sqlite-shm direct
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
 - for a connection returned with mcp=true (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive), use `sp_mcp_list_tools` then `sp_mcp_call` (with its `mcp_server_id`) to actually use it — not the connection proxy.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
-- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard.
+- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard. A turn that asks you to design a dashboard for review uses `screenpipe_live_view` and `screenpipe_live_view_propose` instead, and those tools are already registered.
 - screenpipe seeds on-demand task guides in `.pi/skills/*/SKILL.md` under your working directory. When tool descriptions are not enough for specialized work, read only the closest matching skill. Do not enumerate or preload unrelated skills. If the task already supplies a complete tool workflow, use that narrower contract instead of loading a general skill.
 Do not curl localhost for these; call the tools.";
 
@@ -3639,12 +3639,15 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
 
 /// The bare screenpipe tool name behind whatever an adapter puts on the wire.
 ///
-/// Tool identity reaches the desktop in three shapes and they must all compare
+/// Tool identity reaches the desktop in four shapes and they must all compare
 /// equal: raw Pi sends the bare name (`search-content`), stdio ACP agents send
-/// `mcp__screenpipe__search-content`, and http-only agents (Cursor, Copilot)
-/// send the bundled server's underscored form,
-/// `mcp__screenpipe-tools__frame_context`. Returns `None` for a human title
-/// like "Read /a/b.ts", which is a native agent step and not an MCP tool.
+/// `mcp__screenpipe__search-content`, http-only agents (Cursor, Copilot) send
+/// `mcp__screenpipe-tools__frame_context`, and Cursor's permission id is
+/// `<server>-<tool>` (`screenpipe-tools-screenpipe_live_view`). Returns `None`
+/// for a human title like "Read /a/b.ts", which is a native agent step and not
+/// an MCP tool. Cursor's ACP permission title joins the id and the tool with
+/// `": "` (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`); that
+/// joined string is split in `scoped_tool_name` before it gets here.
 fn normalized_tool_name(title: &str) -> Option<String> {
     let title = title.trim();
     if title.is_empty() {
@@ -3654,7 +3657,12 @@ fn normalized_tool_name(title: &str) -> Option<String> {
         // `mcp__<server>__<tool>`; the server name itself may contain no `__`.
         Some(("mcp", rest)) => rest.split_once("__").map(|(_, tool)| tool)?,
         Some(_) => return None,
-        None => title,
+        // Cursor joins the MCP server and tool with one hyphen. The server
+        // name contains hyphens too, so only peel the known server prefix.
+        None => title
+            .strip_prefix("screenpipe-tools-")
+            .filter(|tool| !tool.is_empty())
+            .unwrap_or(title),
     };
     let bare = bare.trim();
     // A tool name is a single identifier. Anything with whitespace is a human
@@ -3669,7 +3677,26 @@ fn normalized_tool_name(title: &str) -> Option<String> {
 /// name) are refused too: a scoped surface answers from the evidence in its own
 /// turn, so a file read or a skill load is out of contract by construction.
 fn scoped_tool_allowed(allowlist: &[String], title: Option<&str>) -> bool {
-    normalized_tool_name(title.unwrap_or("")).is_some_and(|name| allowlist.contains(&name))
+    scoped_tool_name(title.unwrap_or("")).is_some_and(|name| allowlist.contains(&name))
+}
+
+/// The tool a permission title names, or `None` when it names no single tool.
+///
+/// Cursor's MCP approval title is `${registeredName}: ${toolName}`
+/// (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`). The joined
+/// string contains a space, so it is not itself a tool id. Both halves must
+/// name the same tool: a title is agent-supplied text, and accepting either
+/// half alone would approve a native step whose description merely ends in
+/// `: <allowlisted tool>`.
+fn scoped_tool_name(title: &str) -> Option<String> {
+    let title = title.trim();
+    if let Some(name) = normalized_tool_name(title) {
+        return Some(name);
+    }
+    let (registered, tool) = title.split_once(": ")?;
+    let registered = normalized_tool_name(registered)?;
+    let tool = normalized_tool_name(tool)?;
+    (registered == tool).then_some(tool)
 }
 
 /// A short, readable heading for a permission prompt, from the tool's `kind`.
@@ -5559,6 +5586,16 @@ mod tests {
             normalized_tool_name("mcp__screenpipe-tools__frame_context").as_deref(),
             Some("frame-context")
         );
+        // Cursor's permission title is `<server>-<tool>`, not the mcp__ form.
+        // Missing this cancelled every Live View read as "User rejected".
+        assert_eq!(
+            normalized_tool_name("screenpipe-tools-screenpipe_live_view").as_deref(),
+            Some("screenpipe-live-view")
+        );
+        assert_eq!(
+            normalized_tool_name("screenpipe-tools-screenpipe_live_view_propose").as_deref(),
+            Some("screenpipe-live-view-propose")
+        );
 
         // Human titles are native agent steps, not MCP tools.
         assert_eq!(normalized_tool_name("Read /a/b.ts"), None);
@@ -5578,6 +5615,41 @@ mod tests {
         assert!(scoped_tool_allowed(
             &allowlist,
             Some("mcp__screenpipe-tools__get_meeting")
+        ));
+        let live_view = vec!["screenpipe-live-view".to_owned()];
+        assert!(scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view")
+        ));
+        // Cursor's ACP permission title is `${registeredName}: ${toolName}`.
+        // The space used to make the whole string look like a human title, so
+        // every Live View call came back "User rejected MCP ... Cancelled".
+        assert!(scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view: screenpipe_live_view")
+        ));
+        let propose = vec!["screenpipe-live-view-propose".to_owned()];
+        assert!(scoped_tool_allowed(
+            &propose,
+            Some("screenpipe-tools-screenpipe_live_view_propose: screenpipe_live_view_propose")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("Read `src/main.rs`: notes")
+        ));
+        // Agent-supplied text that only ends in an allowlisted tool name is
+        // not that tool: both halves of a joined title must agree.
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("rm -rf ~: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("Shell: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view: get_meeting")
         ));
 
         // A screenpipe tool outside the list, another MCP server, a native step,

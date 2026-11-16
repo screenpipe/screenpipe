@@ -408,6 +408,7 @@ describe("buildLiveViewGenerationPrompt", () => {
     expect(prompt).toContain('"id":"daily","revision":7');
     expect(prompt).toContain("action=values");
     expect(prompt).toContain("screenpipe_live_view_propose");
+    expect(prompt).toContain("Do not read files, search source code, or load skills");
     expect(prompt).toContain(
       "Do not restate, remove, or update unrelated Blocks",
     );
