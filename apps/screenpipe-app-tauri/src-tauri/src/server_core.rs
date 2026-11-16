@@ -397,6 +397,13 @@ impl ServerCore {
             message
         })?;
 
+        // Recovery and fresh hybrid initialization happen before the database
+        // opens, and fresh initialization can take minutes on slower devices.
+        crate::health::set_boot_phase(
+            "migrating_database",
+            Some("updating database — this may take several minutes on large installs"),
+        );
+
         screenpipe_db::storage::recover_interrupted_compaction(
             &local_data_dir,
             config.db_config.clone(),
@@ -422,10 +429,6 @@ impl ServerCore {
                 .map_err(|e| e.to_string())?
                 .to_string_lossy()
                 .into_owned();
-        crate::health::set_boot_phase(
-            "migrating_database",
-            Some("updating database — this may take several minutes on large installs"),
-        );
 
         // DB init with bounded retry on lock contention.
         //

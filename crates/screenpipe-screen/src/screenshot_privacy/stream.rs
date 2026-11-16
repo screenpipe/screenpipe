@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Persistent positive-selection screenshot source. This owns no HD handles,
+//! Persistent whole-display screenshot source. This owns no HD handles,
 //! encoder, or recording cadence. Native callbacks retain one IOSurface; pixel
 //! conversion remains on the existing screenshot worker, at the save cadence.
 
@@ -271,14 +271,11 @@ impl sc::stream::OutputImpl for Receiver {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct Key {
     pub width: usize,
     pub height: usize,
-    pub menu_bar: bool,
-    pub windows: Vec<(u32, i32)>,
     pub fps: u32,
-    pub scene: Arc<super::macos::SceneMetadata>,
 }
 
 struct NativeStream {
@@ -315,30 +312,24 @@ impl Drop for NativeStream {
     }
 }
 
-pub(super) async fn frame(
+async fn source(
     slot: &Arc<Slot>,
     filter: &sc::ContentFilter,
     key: Key,
-) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
+) -> Result<Arc<NativeStream>> {
     ensure!(
         slot.active.load(Ordering::Acquire),
         "screenshot stream invalidated"
     );
     // This is called by the scene producer, never by an event consumer. A new
-    // native generation owns its positive filter for its entire lifetime.
+    // native generation captures the whole display for its entire lifetime.
     let existing = slot
         .stream
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let (native, previous_revision) = if let Some(native) = existing.filter(|s| s.key == key) {
-        let revision = native
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .revision;
-        (native, Some(revision))
+    if let Some(native) = existing.filter(|s| s.key == key) {
+        Ok(native)
     } else {
         let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
         drop(removed);
@@ -398,16 +389,35 @@ pub(super) async fn frame(
             width = native.key.width,
             height = native.key.height,
             fps = native.key.fps,
+            capture_scope = "display",
+            redaction_stage = "after_capture",
             legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
-            "persistent positive-selection screenshot stream started"
+            "persistent whole-display screenshot stream started"
         );
-        (native, None)
-    };
+        Ok(native)
+    }
+}
+
+pub(super) async fn start(slot: &Arc<Slot>, filter: &sc::ContentFilter, key: Key) -> Result<()> {
+    source(slot, filter, key).await.map(|_| ())
+}
+
+pub(super) async fn frame(
+    slot: &Arc<Slot>,
+    filter: &sc::ContentFilter,
+    key: Key,
+) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
+    let native = source(slot, filter, key).await?;
+    let previous_revision = native
+        .shared
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .revision;
     // Producer preparation brackets a new callback with its scene observations.
-    // A just-started generation may already have received its first sample.
     // Events never wait for this revision: they select the prepared-frame cache.
-    // This generation owns its positive filter and window scene. Reuse its
-    // retained image regardless of age; native PTS is alignment metadata only.
+    // The stream owns only its display filter; each prepared frame owns its
+    // redaction scene. Native PTS is alignment metadata only.
     // The producer validates the scene before publishing pixels with its plan.
     // A fixed clock anchor also keeps a repeated native PTS identical across
     // cache reads; selecting the frame again cannot give it a new timestamp.
@@ -429,9 +439,12 @@ pub(super) async fn frame(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(error) = &state.error {
+                let error = error.clone();
+                drop(state);
+                suspend(slot);
                 return Err(anyhow!("screenshot stream stopped: {error}"));
             }
-            if previous_revision.is_none_or(|revision| state.revision != revision) {
+            if state.revision != previous_revision {
                 state.image()
             } else {
                 None

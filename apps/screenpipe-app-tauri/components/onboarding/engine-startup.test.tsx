@@ -489,6 +489,63 @@ describe("onboarding engine startup", () => {
     }
   });
 
+  it("keeps showing database preparation beyond the generic stuck timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.spawnScreenpipe.mockImplementation(() => new Promise(() => {}));
+      mocks.localFetch.mockRejectedValue(new Error("engine not listening yet"));
+      mocks.getBootPhase.mockResolvedValue({
+        phase: "migrating_database",
+        message: "updating database — this may take several minutes on large installs",
+        error: null,
+        sinceEpochSecs: 1,
+      });
+
+      render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+      // Deliver the initial IPC phase before advancing through the stuck
+      // deadline; one large jump keeps React on the initial generic phase.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STUCK_TIMEOUT_MS + 1000);
+      });
+
+      expect(
+        screen.getByText(
+          "updating database — this may take several minutes on large installs",
+        ),
+      ).toBeInTheDocument();
+      expect(mocks.handleNextSlide).not.toHaveBeenCalled();
+      expect(
+        mocks.capture.mock.calls.some(
+          ([name]) => name === "onboarding_engine_stuck",
+        ),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows an originating database preparation error immediately", async () => {
+    mocks.localFetch.mockRejectedValue(new Error("engine not listening yet"));
+    mocks.getBootPhase.mockResolvedValue({
+      phase: "error",
+      message: null,
+      error: "failed to initialize new history storage: access denied",
+      sinceEpochSecs: 1,
+    });
+
+    render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+
+    expect(
+      await screen.findByText(
+        "failed to initialize new history storage: access denied",
+      ),
+    ).toBeInTheDocument();
+    expect(mocks.handleNextSlide).not.toHaveBeenCalled();
+  });
+
   // The server binds after the audio manager is built, so the first health poll
   // fails by construction. The very first real firing of this event in
   // production was a TimeoutError at 2.0s from a Windows user who then reached

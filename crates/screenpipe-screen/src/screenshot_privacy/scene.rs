@@ -1,8 +1,9 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Pixel operations for native, positively selected window surfaces. Rectangles
-//! use output pixels; no operation reads an unfiltered monitor image.
+//! Pixel operations for screenshot redaction and native window composition.
+//! Rectangles use output pixels. macOS redacts a captured display here before
+//! returning it; other backends compose positively selected window surfaces.
 use image::{Rgba, RgbaImage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

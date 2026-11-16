@@ -909,6 +909,83 @@ async fn interrupted_initialization_resumes_its_recorded_generation() {
     }
 }
 
+#[cfg(feature = "storage-fault-injection")]
+#[tokio::test]
+async fn reserve_probe_failure_resumes_same_generation_and_persists_recording() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("履歴 storage");
+    std::fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let failed = std::process::Command::new(env!("CARGO_BIN_EXE_screenpipe-storage"))
+        .arg("init")
+        .arg(&root)
+        .env("SCREENPIPE_STORAGE_AVAILABLE_SPACE", "error")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    let error = String::from_utf8_lossy(&failed.stderr);
+    assert!(error.contains("disk-space probe failed"), "{error}");
+    assert!(error.contains("raw_os_error=Some(5)"), "{error}");
+    assert!(
+        error.contains("source retained; outcome=recording_blocked"),
+        "{error}"
+    );
+    assert!(
+        error.contains(
+            "recovery=restore access to the storage drive or data folder, then retry startup"
+        ),
+        "{error}"
+    );
+    assert!(!error.contains("available_bytes=0"), "{error}");
+
+    let journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("storage-init.json")).unwrap()).unwrap();
+    let generation = journal["generation"].as_str().unwrap().to_owned();
+    let generation_path = root.join("storage").join(&generation);
+    assert!(generation_path.exists());
+
+    let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
+        .await
+        .unwrap();
+    let active = screenpipe_db::storage::StorageDescriptor::read(&root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.generation, generation);
+    seed(&db, 1, Some("recording after probe restoration"), None).await;
+    db.close().await;
+
+    let reopened =
+        DatabaseManager::new(root.join("db.sqlite").to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+    assert_eq!(
+        reopened
+            .frame_payloads(&[1], Projection::Search)
+            .await
+            .unwrap()[&1]
+            .text(),
+        "recording after probe restoration"
+    );
+    reopened.close().await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_default_fresh_bootstrap_supports_canonical_unicode_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("画面 履歴");
+    std::fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let available = fs2::available_space(&root).expect("Windows free-space probe");
+    assert!(available > 0, "Windows probe returned no usable bytes");
+
+    let db = DatabaseManager::new_hybrid(&root, Default::default(), Default::default())
+        .await
+        .expect("default fresh bootstrap on canonical Unicode path");
+    seed(&db, 1, Some("unicode bootstrap recording"), None).await;
+    db.close().await;
+}
+
 #[cfg(all(windows, feature = "storage-fault-injection"))]
 #[tokio::test]
 #[ignore = "requires writable C:\\ and administrative access to \\\\localhost\\c$"]
