@@ -38,7 +38,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(unix)]
+use std::process::ChildStdin;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -101,8 +103,6 @@ fn scrub_runtime_env(command: &mut std::process::Command) {
 
 #[cfg(windows)]
 const WRAPPED_COMMAND_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND";
-#[cfg(windows)]
-const WRAPPED_ARGS_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_ARGS_JSON";
 
 pub fn is_process_guard_mode() -> bool {
     std::env::args_os().any(|arg| arg == PROCESS_GUARD_ARG)
@@ -158,7 +158,7 @@ pub fn run_process_guard() -> Result<i32, String> {
     );
     let program = env_nonempty(WRAPPED_COMMAND_ENV)
         .ok_or("Windows ACP process guard has no wrapped command")?;
-    let args = parse_json_env::<Vec<String>>(WRAPPED_ARGS_ENV)?.unwrap_or_default();
+    let args = wrapped_process_args(std::env::args())?;
     let mut child = windows_target_command(&program, &args)?
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -169,6 +169,18 @@ pub fn run_process_guard() -> Result<i32, String> {
         .wait()
         .map_err(|error| format!("failed waiting for wrapped ACP command '{program}': {error}"))?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(windows)]
+fn wrapped_process_args(args: impl IntoIterator<Item = String>) -> Result<Vec<String>, String> {
+    let mut wrapped = args
+        .into_iter()
+        .skip_while(|arg| arg != PROCESS_GUARD_ARG)
+        .skip(1);
+    match wrapped.next().as_deref() {
+        Some("--") => Ok(wrapped.collect()),
+        _ => Err("Windows ACP process guard argument separator is missing".into()),
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -518,7 +530,6 @@ fn is_process_guard_env(name: &str) -> bool {
     #[cfg(windows)]
     {
         name.eq_ignore_ascii_case(WRAPPED_COMMAND_ENV)
-            || name.eq_ignore_ascii_case(WRAPPED_ARGS_ENV)
     }
     #[cfg(not(windows))]
     {
@@ -1180,19 +1191,22 @@ fn supervised_command(program: &str, args: &[String]) -> Result<Command, String>
 
     #[cfg(windows)]
     {
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate ACP process guard executable: {error}"))?;
-        let mut command = Command::new(executable);
-        command
-            .arg(PROCESS_GUARD_ARG)
-            .env(WRAPPED_COMMAND_ENV, program)
-            .env(
-                WRAPPED_ARGS_ENV,
-                serde_json::to_string(args)
-                    .map_err(|error| format!("failed to encode wrapped ACP arguments: {error}"))?,
-            );
+        let mut command = guarded_command(program)?;
+        command.args(args);
         Ok(command)
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn guarded_command(program: &str) -> Result<Command, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate process guard executable: {error}"))?;
+    let mut command = Command::new(executable);
+    command
+        .arg(PROCESS_GUARD_ARG)
+        .arg("--")
+        .env(WRAPPED_COMMAND_ENV, program);
+    Ok(command)
 }
 
 #[cfg(windows)]
@@ -5417,6 +5431,37 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{AgentCapabilities, ContentChunk, SessionUpdate};
     use agent_client_protocol::Channel;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_guard_transport_preserves_separator_quotes_and_metacharacters() {
+        let expected = vec![
+            "--".to_string(),
+            "two words".to_string(),
+            "quoted=\"value\"".to_string(),
+            "&|<>^%PATH%".to_string(),
+        ];
+        let mut argv = vec![
+            "screenpipe.exe".to_string(),
+            PROCESS_GUARD_ARG.to_string(),
+            "--".to_string(),
+        ];
+        argv.extend(expected.clone());
+        assert_eq!(wrapped_process_args(argv).unwrap(), expected);
+
+        let command = guarded_command("fixture program.exe").unwrap();
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new(PROCESS_GUARD_ARG),
+                std::ffi::OsStr::new("--")
+            ]
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == WRAPPED_COMMAND_ENV
+                && value == Some(std::ffi::OsStr::new("fixture program.exe"))
+        }));
+    }
 
     #[test]
     fn claude_auth_overrides_shared_profile_and_secure_storage() {

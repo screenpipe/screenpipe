@@ -1775,6 +1775,47 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
+    async fn windows_pipe_containment_failure_survives_rotation_and_support_redaction() {
+        // The process lifecycle is exercised on Windows. This representative
+        // assignment failure exercises the actual support collection boundary.
+        let logs = tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-11-16.log");
+        let cause = "Access is denied. (os error 5)";
+        let failure = format!(
+            "failed to contain pi process 731: {cause}; process-state observation: live child observed; cleanup request: accepted; reap: completed"
+        );
+        std::fs::write(
+            &current,
+            format!(
+                "ERROR pipe 'digital-clone' error: {failure}\ncontact=private-person@example.com\n"
+            ),
+        )
+        .unwrap();
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-11-16.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "screenpipe restarted; digital-clone remains disabled\n",
+        )
+        .unwrap();
+
+        let report = collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+            .await
+            .unwrap();
+        for evidence in [
+            "pipe 'digital-clone' error:",
+            failure.as_str(),
+            "screenpipe restarted; digital-clone remains disabled",
+        ] {
+            assert!(report.contains(evidence), "support report lost {evidence}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
     async fn pi_compaction_failure_survives_rotation_and_support_redaction() {
         let install = tempdir().unwrap();
         let runtime = install
