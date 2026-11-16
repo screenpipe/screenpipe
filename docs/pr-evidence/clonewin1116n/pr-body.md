@@ -11,7 +11,9 @@
   user/agent code starts. The argv transport preserves a leading literal `--`,
   spaces, quotes, and shell metacharacters.
 - Removes the duplicate Digital Clone Store package/proposal. Canonical Store
-  source and preparation already merged in monorepo#2409 at `8fa81238`.
+  ownership remains monorepo#2409. An offline follow-up patch against canonical
+  commit `1c3492653f1c9ee0bc46af0e9a9b8216cabe11ad` completes the remaining
+  Windows package work without adding another core runtime/package fork.
 
 ## Historical intent
 
@@ -42,10 +44,13 @@ the exact argv `--`, `two words`, `quoted="value"`, and `&|<>^%PATH%`; the targe
 received all four values exactly. No command line, window title/content,
 credential, or broad process telemetry was added.
 
-Console-popup history remains unreproduced: earlier #7961/#2409 observations
-found zero visible windows both before and after. This PR therefore describes
-the no-window/guard work as defensive and does not claim an original-red popup
-regression.
+The focused canonical-package rerun exercised the actual embedded v7 and patched
+runtimes on Windows 11/Bun 1.3.10 with an empty loopback-only fixture. Both
+completed `context`, detached `launch`, and all 11 `maintain` phases. EnumWindows
+observation found 2 visible child-window events for v7 and 0 for the patch. The
+patch sets the supported `windowsHide: true` option on every Bun maintenance
+child as well as the already-hidden detached Node child. This is package/fixture
+evidence, not a full-app, live-cloud, customer, or standard-user result.
 
 Post-auth consumer QA used the normal browser-to-app callback for the authorized
 internal account. The app authenticated, started its engine on fallback port
@@ -57,6 +62,14 @@ customer state was changed. The focused 12-second post-auth recording is
 `C:\screenpipe-worker\results\clonewin1116r2\acceptance.mp4` (H.264,
 1024x768, decodable). Because onboarding remained on mandatory checkout, the
 real-app scoped Pipe run/support-report acceptance could not be completed.
+The r2 real-app blocker recording and results remain preserved and were not
+overwritten.
+
+Root subsequently revoked the uniquely matched run-created QA session and
+deleted its private staging. No login, billing, account, or session mutation was
+performed in the package follow-up. The actual guest token was High Mandatory
+Level (`S-1-16-12288`) administrator context, so these Windows observations are
+explicitly not standard-user proof.
 
 ## Tests
 
@@ -68,15 +81,34 @@ real-app scoped Pipe run/support-report acceptance could not be completed.
 - `cargo fmt --all -- --check` - passed.
 - `cd apps/screenpipe-app-tauri && bun install --frozen-lockfile` - passed.
 - `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` - passed on the final synchronized source via the supported build queue; the warm `debug-dev` build completed in 2m26s.
+- Canonical package `bun install --frozen-lockfile` - passed with Bun 1.3.10.
+- Canonical package `bun run test -- lib/digital-clone-windows-source.test.ts lib/pipe-source-validation.test.ts` - passed (2 files, 12 tests).
+- Real `validatePipeSubmission` against the complete generated payload - passed; normalized source 65,528/65,536 bytes, restricted permissions derived from source.
+- Offline preparation regeneration - passed and matched the proposed `pipe.md`; edited v7 input and output overwrite protections passed.
+- `git -c core.autocrlf=false apply --check --whitespace=error-all digital-clone-canonical.patch` - passed; applying to a fresh extraction reproduced all four LF proposal file hashes.
 
 The prior updater mismatch was VM state, not a source pin defect:
 `package.json` has no `@tauri-apps/plugin-updater`, but an extraneous installed
 2.10.0 directory remained after frozen install. Quarantining only that generated
 directory allowed the normal build to compile Rust updater 2.11.0 successfully.
 
-Canonical monorepo follow-up could not be inspected or opened because the task's
-GitHub App installation returns HTTP 404 for `screenpipe/monorepo`. No personal
-credential or access workaround was used.
+The immutable canonical archive for commit
+`1c3492653f1c9ee0bc46af0e9a9b8216cabe11ad` was retrieved through managed
+identity and verified as SHA-256
+`22b17994aae3d1c5f5e8a76052b8b208fd531e32c97ba1cff434788c28204caa`.
+The complete validated payload, clean-applying patch, package evidence, native
+observation receipt, and focused `acceptance.mp4` are privately retained under
+`windows-autonomous/clonewin1116r3/`. The package patch discloses that
+screenpipe-cloud sends screen content and local AI chat logs to Screenpipe cloud
+and that local presets do not upload, while preserving completion/privacy text,
+detached behavior, v7 fixture pinning, and offline hash/overwrite protections.
+
+No monorepo PR can be opened because the screenpipe-windows-development GitHub
+App installation returns HTTP 404 for `screenpipe/monorepo`; no personal or host
+credential was substituted. Exact GitHub UI intervention: a Screenpipe
+organization owner must add `screenpipe/monorepo` to that App installation's
+selected repositories. This access change is distinct from later Store
+submission/human approval and app publication.
 
 The callback JWT exposed no Clerk `sid`/`session_id` claim. The uploaded
 `qa-session-proof.json` therefore records the exact Clerk user ID, token JTI,
@@ -86,8 +118,11 @@ the token JTI as a Clerk session ID.
 
 ## Production status
 
-Unmerged and unreleased. The normal consumer app build passes; merge and human
-Admin Releases publication remain pending. Store approval/publication remains
-human-only and uses monorepo#2409. No migration, environment, deployment,
-version, release tag, publication pointer, customer account, or billing change
-is included.
+Draft, unmerged, and unreleased. Core native source revision
+`c3aac0a9cbdc63b3567b64bbee8231d9ee018360` remains the passed code revision;
+this documentation-only follow-up does not invalidate its targeted tests or
+normal consumer native build, and no app rebuild/onboarding retry was performed.
+Full-app Pipe/support-report acceptance remains blocked by the hosted
+mandatory-card screen. Store approval/publication remains human-only and uses
+monorepo#2409. No migration, environment, deployment, version, release tag,
+publication pointer, permission, customer account, or billing change is included.
