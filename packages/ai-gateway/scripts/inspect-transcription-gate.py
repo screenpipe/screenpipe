@@ -111,3 +111,40 @@ if route_events:
     print("transcription_route_event_shape", json.dumps(sorted(sample) if isinstance(sample, dict) else type(sample).__name__), flush=True)
 for (day, route, code), count in sorted(route_counts.items(), key=lambda item: tuple(str(part) for part in item[0])):
     print("transcription_route", json.dumps({"day": day, "route": route, "status": code, "count": count}), flush=True)
+
+# Post-deploy window: the last hour fits under the event limit, so these counts are complete.
+recent = now - 3600 * 1000
+for label, flt in [("gate_rejected", {"key": "$metadata.message", "operation": "includes", "type": "string", "value": "transcription gate rejected"}),
+                   ("cost_control", {"key": "$metadata.message", "operation": "includes", "type": "string", "value": "transcription cost control unavailable"})]:
+    status, recent_logs = post(
+        f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/observability/telemetry/query", token,
+        {"queryId": f"transcription-{label}-{now}", "dry": True, "view": "events", "timeframe": {"from": recent, "to": now},
+         "parameters": {"datasets": ["cloudflare-workers"], "filterCombination": "and", "filters": [
+             {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"}, flt]}, "limit": 2000})
+    logs = recent_logs.get("result", {}).get("events", {}).get("events", [])
+    tally = {}
+    for event in logs:
+        message = str(event.get("source", {}).get("message", "") if isinstance(event.get("source"), dict) else "")
+        reason = re.search(r'"reason":\s*"(\w+)"', message)
+        tier = re.search(r'"tier":\s*"(\w+)"', message)
+        key = (event.get("$workers", {}).get("scriptVersion", {}).get("id"), reason.group(1) if reason else "none", tier.group(1) if tier else "none")
+        tally[key] = tally.get(key, 0) + 1
+    print("recent_hour", label, status, len(logs), json.dumps([{"version": k[0], "reason": k[1], "tier": k[2], "count": v} for k, v in sorted(tally.items(), key=lambda i: str(i[0]))]), flush=True)
+status, recent_routes = post(
+    f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/observability/telemetry/query", token,
+    {"queryId": f"transcription-routes-hour-{now}", "dry": True, "view": "events", "timeframe": {"from": recent, "to": now},
+     "parameters": {"datasets": ["cloudflare-workers"], "filterCombination": "and", "filters": [
+         {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"},
+         {"key": "$metadata.trigger", "operation": "regex", "type": "string", "value": "/v1/(listen|realtime|voice/transcribe)"}]}, "limit": 2000})
+hour_counts = {}
+for event in recent_routes.get("result", {}).get("events", {}).get("events", []):
+    meta = event.get("$metadata", {})
+    if meta.get("type") not in (None, "cf-worker-event"):
+        continue
+    response = event.get("$workers", {}).get("event", {}).get("response", {})
+    route = re.search(r"/v1/(listen|realtime|voice/transcribe)", str(meta.get("trigger", "")))
+    key = (event.get("$workers", {}).get("scriptVersion", {}).get("id"), route.group(0) if route else "other", response.get("status") if isinstance(response, dict) else None)
+    hour_counts[key] = hour_counts.get(key, 0) + 1
+print("recent_hour_routes", status, len(recent_routes.get("result", {}).get("events", {}).get("events", [])), flush=True)
+for key, count in sorted(hour_counts.items(), key=lambda i: tuple(str(p) for p in i[0])):
+    print("recent_hour_route", json.dumps({"version": key[0], "route": key[1], "status": key[2], "count": count}), flush=True)
