@@ -88,10 +88,12 @@ status, routes = post(
          {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"},
          {"key": "$metadata.trigger", "operation": "regex", "type": "string",
           "value": "/v1/(listen|realtime|voice/transcribe)"}]},
-     "limit": 5000},
+     "limit": 2000},
 )
 route_events = routes.get("result", {}).get("events", {}).get("events", [])
 print("transcription_route_status", status, len(route_events), flush=True)
+if status != 200:
+    print("transcription_route_errors", json.dumps([{"code": e.get("code"), "message": str(e.get("message", ""))[:200]} for e in routes.get("errors", []) if isinstance(e, dict)]), flush=True)
 route_counts = {}
 for event in route_events:
     meta = event.get("$metadata", {})
