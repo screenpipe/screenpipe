@@ -41,7 +41,7 @@ since = now - hours * 3600 * 1000
 status, telemetry = post(
     f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/observability/telemetry/query",
     token,
-    {"queryId": "transcription-gate-7888", "dry": True, "view": "events",
+    {"queryId": f"transcription-gate-7888-{now}", "dry": True, "view": "events",
      "timeframe": {"from": since, "to": now},
      "parameters": {"datasets": ["cloudflare-workers"], "filterCombination": "and", "filters": [
          {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"},
@@ -82,7 +82,7 @@ for (version, reason, tier), count in sorted(counts.items(), key=lambda item: -i
 status, routes = post(
     f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/observability/telemetry/query",
     token,
-    {"queryId": "transcription-routes-7888", "dry": True, "view": "events",
+    {"queryId": f"transcription-routes-7888-{now}", "dry": True, "view": "events",
      "timeframe": {"from": since, "to": now},
      "parameters": {"datasets": ["cloudflare-workers"], "filterCombination": "and", "filters": [
          {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"},
@@ -109,5 +109,5 @@ for event in route_events:
 if route_events:
     sample = route_events[0].get("$workers", {}).get("event", {})
     print("transcription_route_event_shape", json.dumps(sorted(sample) if isinstance(sample, dict) else type(sample).__name__), flush=True)
-for (day, route, code), count in sorted(route_counts.items()):
+for (day, route, code), count in sorted(route_counts.items(), key=lambda item: tuple(str(part) for part in item[0])):
     print("transcription_route", json.dumps({"day": day, "route": route, "status": code, "count": count}), flush=True)
