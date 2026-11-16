@@ -212,14 +212,14 @@ pub fn apply_custom_provider_compat(provider: &mut serde_json::Value) {
 /// NOT this path: the desktop app manages its own pi sidecar
 /// (src-tauri/src/pi.rs) at Normal.
 #[cfg(windows)]
-pub(crate) const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
+const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
 
 /// Owns a Windows Job Object configured to terminate all assigned processes
 /// when the handle closes. Keeping this guard alive for a Pi run makes process
 /// cleanup deterministic even after the original bun/pi parent exits: MCP
 /// servers and helper grandchildren remain in the job and are killed on drop.
 #[cfg(windows)]
-pub(crate) struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
+struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 // SAFETY: Windows kernel handles may be closed from any thread. This guard has
@@ -228,7 +228,7 @@ unsafe impl Send for KillOnDropJob {}
 
 #[cfg(windows)]
 impl KillOnDropJob {
-    pub(crate) fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
+    fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
         use std::mem::{size_of, zeroed};
         use std::ptr;
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -277,62 +277,22 @@ impl KillOnDropJob {
             Ok(Self(handle))
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn assign_pid(&self, pid: u32) -> std::io::Result<()> {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-        };
-        unsafe {
-            let process = OpenProcess(
-                PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
-                0,
-                pid,
-            );
-            if process.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            let assigned = AssignProcessToJobObject(self.0, process);
-            let error = (assigned == 0).then(std::io::Error::last_os_error);
-            CloseHandle(process);
-            error.map_or(Ok(()), Err)
-        }
-    }
 }
 
 #[cfg(windows)]
 impl Drop for KillOnDropJob {
     fn drop(&mut self) {
         unsafe {
-            use std::mem::{size_of, zeroed};
-            use windows_sys::Win32::System::JobObjects::{
-                JobObjectBasicAccountingInformation, QueryInformationJobObject, TerminateJobObject,
-                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-            };
-            TerminateJobObject(self.0, 1);
-            // TerminateJobObject is asynchronous with respect to process
-            // teardown. Do not publish execution completion while descendants
-            // can still be observed as running.
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            while std::time::Instant::now() < deadline {
-                let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = zeroed();
-                if QueryInformationJobObject(
-                    self.0,
-                    JobObjectBasicAccountingInformation,
-                    &mut accounting as *mut _ as *mut std::ffi::c_void,
-                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                    std::ptr::null_mut(),
-                ) == 0
-                    || accounting.ActiveProcesses == 0
-                {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes CloseHandle the native
+            // termination request for every process still assigned to the job.
+            // Stop remains asynchronous; callers must not treat guard drop as
+            // proof that Windows has finished process teardown.
+            if windows_sys::Win32::Foundation::CloseHandle(self.0) == 0 {
+                error!(
+                    "failed to close Windows process cleanup job: {}",
+                    std::io::Error::last_os_error()
+                );
             }
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
         }
     }
 }
@@ -4065,12 +4025,12 @@ fn build_async_command(path: &str) -> Result<tokio::process::Command> {
 
 #[cfg(windows)]
 fn guarded_async_command(program: &str) -> Result<tokio::process::Command> {
-    #[cfg(all(feature = "acp", not(test)))]
+    #[cfg(feature = "acp")]
     {
         let command = super::acp::guarded_command(program).map_err(anyhow::Error::msg)?;
         return Ok(tokio::process::Command::from(command));
     }
-    #[cfg(any(not(feature = "acp"), test))]
+    #[cfg(not(feature = "acp"))]
     {
         Ok(crate::no_window::no_window_command_async(program))
     }
@@ -4946,23 +4906,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn pi_launch_error_display_preserves_windows_io_cause() {
-        let missing = std::env::temp_dir().join(format!(
-            "screenpipe-missing-pi-{}-{}.exe",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut command = build_async_command(missing.to_str().unwrap()).unwrap();
-        let io_error = command.spawn().unwrap_err();
-        assert_eq!(io_error.raw_os_error(), Some(2));
-        assert!(io_error.to_string().contains("os error 2"));
-    }
-
     #[test]
     fn windows_bash_launcher_detection_rejects_wsl_shims() {
         assert!(is_windows_bash_launcher(r#"C:\Windows\System32\bash.exe"#));
@@ -5460,36 +5403,72 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn windows_process_is_running(pid: u32) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
+    struct WindowsProcessHandle(windows_sys::Win32::Foundation::HANDLE);
 
-        unsafe {
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if process.is_null() {
-                return false;
+    #[cfg(windows)]
+    unsafe impl Send for WindowsProcessHandle {}
+
+    #[cfg(windows)]
+    impl WindowsProcessHandle {
+        fn open(pid: u32) -> std::io::Result<Self> {
+            const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+            let handle = unsafe {
+                windows_sys::Win32::System::Threading::OpenProcess(
+                    windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION
+                        | windows_sys::Win32::System::Threading::PROCESS_TERMINATE
+                        | SYNCHRONIZE_ACCESS,
+                    0,
+                    pid,
+                )
+            };
+            if handle.is_null() {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(Self(handle))
             }
-            let mut exit_code = 0;
-            let ok = GetExitCodeProcess(process, &mut exit_code) != 0;
-            CloseHandle(process);
-            ok && exit_code == STILL_ACTIVE as u32
+        }
+
+        fn is_signaled(&self) -> std::io::Result<bool> {
+            match unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.0, 0) } {
+                windows_sys::Win32::Foundation::WAIT_OBJECT_0 => Ok(true),
+                windows_sys::Win32::Foundation::WAIT_TIMEOUT => Ok(false),
+                _ => Err(std::io::Error::last_os_error()),
+            }
+        }
+
+        async fn wait_signaled(&self) -> std::io::Result<()> {
+            let handle = self.0 as usize;
+            tokio::task::spawn_blocking(move || {
+                let result = unsafe {
+                    windows_sys::Win32::System::Threading::WaitForSingleObject(
+                        handle as _,
+                        windows_sys::Win32::System::Threading::INFINITE,
+                    )
+                };
+                if result == windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            })
+            .await
+            .expect("process wait worker panicked")
+        }
+
+        fn terminate(&self) -> std::io::Result<()> {
+            if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.0, 1) } == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         }
     }
 
     #[cfg(windows)]
-    fn terminate_windows_process(pid: u32) {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-        };
-
-        unsafe {
-            let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !process.is_null() {
-                TerminateProcess(process, 1);
-                CloseHandle(process);
+    impl Drop for WindowsProcessHandle {
+        fn drop(&mut self) {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.0);
             }
         }
     }
@@ -5536,56 +5515,50 @@ mod tests {
             ready_path.exists(),
             "grandchild did not commit its simulated 32 MB payload"
         );
+        let grandchild = WindowsProcessHandle::open(grandchild_pid).expect("open grandchild");
         assert!(
-            windows_process_is_running(grandchild_pid),
-            "grandchild exited before cleanup could be tested"
+            !grandchild.is_signaled().unwrap(),
+            "grandchild exited early"
         );
 
         (grandchild_pid, job)
     }
 
     #[cfg(windows)]
-    async fn wait_for_windows_process_exit(pid: u32) -> bool {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-        while windows_process_is_running(pid) && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-        !windows_process_is_running(pid)
-    }
-
-    #[cfg(windows)]
     #[tokio::test]
-    async fn windows_job_prevents_orphaned_grandchildren() {
+    async fn windows_job_close_eventually_signals_owned_grandchildren_only() {
         // BEFORE: Windows leaves the descendant running after its immediate
         // parent exits. This is the leak mechanism the production guard fixes.
         let (unmanaged_pid, unmanaged_job) = spawn_parent_with_lingering_grandchild(false).await;
         assert!(unmanaged_job.is_none());
+        let unmanaged = WindowsProcessHandle::open(unmanaged_pid).expect("open unmanaged child");
         assert!(
-            windows_process_is_running(unmanaged_pid),
-            "unmanaged reproduction did not leave the expected orphan"
+            !unmanaged.is_signaled().unwrap(),
+            "unmanaged reproduction exited"
         );
         eprintln!(
             "before: unmanaged grandchild {unmanaged_pid} remained alive with 32 MB committed after parent exit"
         );
-        terminate_windows_process(unmanaged_pid);
-        assert!(
-            wait_for_windows_process_exit(unmanaged_pid).await,
-            "failed to clean up unmanaged reproduction process {unmanaged_pid}"
-        );
-
         // AFTER: the same tree joins a kill-on-close Job Object. The parent
         // still exits normally, but dropping the guard reaps the descendant.
         let (managed_pid, managed_job) = spawn_parent_with_lingering_grandchild(true).await;
-        drop(managed_job.expect("managed run should return a job guard"));
-        let managed_exited = wait_for_windows_process_exit(managed_pid).await;
-        eprintln!(
-            "after: managed grandchild {managed_pid} alive={}",
-            !managed_exited
-        );
+        let managed = WindowsProcessHandle::open(managed_pid).expect("open managed child");
         assert!(
-            managed_exited,
-            "grandchild {managed_pid} survived closing its job object"
+            !managed.is_signaled().unwrap(),
+            "managed fixture exited early"
         );
+        drop(managed_job.expect("managed run should return a job guard"));
+        managed.wait_signaled().await.expect("wait managed fixture");
+        eprintln!("after: managed grandchild {managed_pid} process handle signaled");
+        assert!(
+            !unmanaged.is_signaled().unwrap(),
+            "closing one Job terminated an unrelated real process"
+        );
+        unmanaged.terminate().expect("terminate unmanaged fixture");
+        unmanaged
+            .wait_signaled()
+            .await
+            .expect("wait unmanaged fixture");
     }
 
     #[test]

@@ -1,67 +1,93 @@
-# Fix Windows Pipe process cleanup and Digital Clone popups
+# Finish Windows descendant cancellation
 
 ## Summary
 
-- Persist a Pipe's disabled state first, request cancellation, and wait until
-  its execution releases the process-tree guard before returning.
-- Fail closed when Windows Job Object assignment fails, instead of running a
-  Pipe/agent or managed Pi installer without descendant cleanup.
-- Preserve pending-stop behavior for work disabled before a child PID exists.
-- Include a complete, hash-checked Digital Clone store submission proposal with
-  hidden Windows launches and accurate Screenpipe Cloud disclosure.
+- Builds on already-merged #7961. Its lifecycle mutex, current-enabled recheck,
+  stop-before-PID sentinel, queued cancellation, and tests remain unchanged.
+- Retains each Windows Pi/installer tree in a kill-on-close Job and fails closed
+  if Job assignment fails. Closing the Job is an asynchronous OS termination
+  request; this change does not claim that `pipe disable` waits for teardown.
+- Routes production Windows Pi launches through the existing ACP guard before
+  user/agent code starts. The argv transport preserves a leading literal `--`,
+  spaces, quotes, and shell metacharacters.
+- Removes the duplicate Digital Clone Store package/proposal. Canonical Store
+  source and preparation already merged in monorepo#2409 at `8fa81238`.
 
 ## Historical intent
 
-- `3139299b` (`fix: cancel queued workflows promptly when quitting`) introduced
-  pending cancellation for queued work. This change reuses its execution-handle
-  notification and stop-before-PID sentinel.
-- `a71e821de9` / PR #7622 hid only the built-in sub-agent extension and added
-  privacy-limited native popup metadata. It did not cover Digital Clone's
-  detached `clone.js maintain` launcher and is not treated as a reproduction or
-  proof of this report.
-- Pi uses the existing ACP self-Job wrapper, which establishes containment
-  before it launches user/agent code. The executor retains its Job guard until
-  cancellation has dropped the exact future.
+- #5161 intentionally treated nested-Job assignment as best effort because a
+  parent Job can forbid breakaway/nesting. That fallback is replaced only for
+  these owned background Pi trees: continuing uncontained would make disable
+  unable to stop descendants, so assignment failure terminates the child and is
+  returned with its native cause.
+- #7961 is the source of truth for pipe admission/disable behavior. This PR does
+  not duplicate or reverse that work.
+- monorepo#2409 is the source of truth for Digital Clone Store content. No
+  Store submission or publication is performed here.
 
 ## Before / after evidence
 
-Base: `8e40b9b4644649ffda5cd3783ef979ee3034fa6e`
+Base: `173a28003aed99b6c52fd1fc99b057ab8c0c8b64`
 
-Configuration: consumer Windows 11, default consumer Tauri configuration, no
-enterprise feature. Native wrapper used the repository `debug-dev` profile and
-machine-wide build queue.
+Before, a Windows Pi root could exit while a descendant retained inherited
+output or continued working. PID-only cleanup could no longer identify that
+owned tree. After, the retained Job handle covers the tree and Job close asks
+Windows to terminate its remaining members. The native test holds real process
+handles and waits for their signaled state; it also proves an unrelated real
+process remains unsignaled. It proves eventual Job cleanup, not synchronous
+disable completion.
 
-- Before: `enable_pipe(name, false)` only wrote `enabled: false`; it did not call
-  `stop_pipe`. Job assignment errors logged a warning and continued with an
-  uncontained process. Digital Clone v7 launches `clone.js maintain` with
-  `detached: true` and no `windowsHide`.
-- After: focused core tests prove durable disable waiting, pending-stop delivery,
-  queued cancellation, unrelated-pipe survival, reload persistence, and
-  descendant cleanup after the parent exits. A strict store payload and exact
-  source/runtime artifacts are included under
-  `docs/pr-evidence/clonewin1116n/digital-clone-store-proposal/`.
+The normal non-test `screenpipe-app.exe` process-guard entry was exercised with
+the exact argv `--`, `two words`, `quoted="value"`, and `&|<>^%PATH%`; the target
+received all four values exactly. No command line, window title/content,
+credential, or broad process telemetry was added.
+
+Console-popup history remains unreproduced: earlier #7961/#2409 observations
+found zero visible windows both before and after. This PR therefore describes
+the no-window/guard work as defensive and does not claim an original-red popup
+regression.
+
+Post-auth consumer QA used the normal browser-to-app callback for the authorized
+internal account. The app authenticated, started its engine on fallback port
+3130, reached healthy recording, and persisted `has_payment_method: false`.
+Onboarding could not be completed without a billing mutation: the live hosted
+page exposed only card fields and `START 7 DAY TRIAL`; the required
+`CONTINUE WITH FREE - NO CARD` action was absent. No card, subscription, or
+customer state was changed. The focused 12-second post-auth recording is
+`C:\screenpipe-worker\results\clonewin1116r2\acceptance.mp4` (H.264,
+1024x768, decodable). Because onboarding remained on mandatory checkout, the
+real-app scoped Pipe run/support-report acceptance could not be completed.
 
 ## Tests
 
-- `cargo test -p screenpipe-core --features acp disabling_dead_parent_drops_executor_guard_and_preserves_other_pipe -- --nocapture` — passed (1 passed); real manager disable, dead root, live descendant, unrelated running pipe, and disabled reload state.
-- `cargo test -p screenpipe-core --features acp windows_job_prevents_orphaned_grandchildren -- --nocapture` — passed (1 passed); unmanaged child remained alive, managed child was gone after Job close.
-- `cargo test -p screenpipe-core --features acp pi_launch_error_display_preserves_windows_io_cause -- --nocapture` — passed (1 passed).
-- `cargo test -p screenpipe-core --features acp stop_notification_covers_pending_and_waiting_stops -- --nocapture` — passed (1 passed).
-- `cargo test -p screenpipe-core --features acp stopped_scheduled_queue_drains_without_launching_or_waiting_for_active_run -- --nocapture` — passed (1 passed).
-- `cargo test -p screenpipe-core --features acp --test no_console_flash -- --nocapture` — passed (2 passed).
-- `bun run docs/pr-evidence/clonewin1116n/build-store-proposal.ts` — passed; proposal source 65,517 bytes.
-- `bun run docs/pr-evidence/clonewin1116n/verify-store-proposal.ts` — passed with Bun 1.3.10; bootstrap/setup/context/direct-maintain/async-launch complete, visible console false.
-- `cargo fmt --all -- --check` — passed.
-- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` — blocked before compilation by the checked-in dependency mismatch: Rust `tauri-plugin-updater` 2.11.0 versus JS `@tauri-apps/plugin-updater` 2.10.0. The supported queue acquired and released normally; no fallback build was used.
+- `cargo test -p screenpipe-core --features acp windows_guard_transport_preserves_separator_quotes_and_metacharacters --no-fail-fast -- --nocapture` - passed.
+- `cargo test -p screenpipe-core --features acp windows_job_close_eventually_signals_owned_grandchildren_only -- --nocapture` - passed; real signaled handles and unrelated-process survival.
+- `cargo test -p screenpipe-core --features acp disabling_pipe_requests_stop_before_pid_is_available -- --nocapture` - passed (#7961 behavior).
+- `cargo test -p screenpipe-core --features acp stopped_scheduled_queue_drains_without_launching_or_waiting_for_active_run -- --nocapture` - passed (#7961 behavior).
+- `cargo test -p screenpipe-core --features acp --test no_console_flash -- --nocapture` - passed (2 tests).
+- `cargo fmt --all -- --check` - passed.
+- `cd apps/screenpipe-app-tauri && bun install --frozen-lockfile` - passed.
+- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` - passed via the supported build queue; `debug-dev` app built in 11m31s.
 
-The fixture is native Windows process proof, not a continuous desktop recording
-or authenticated production-app demonstration. Full real-app support-report
-collection and packaged app observation remain blocked by the dependency
-mismatch above. No customer account or production credential was used.
+The prior updater mismatch was VM state, not a source pin defect:
+`package.json` has no `@tauri-apps/plugin-updater`, but an extraneous installed
+2.10.0 directory remained after frozen install. Quarantining only that generated
+directory allowed the normal build to compile Rust updater 2.11.0 successfully.
+
+Canonical monorepo follow-up could not be inspected or opened because the task's
+GitHub App installation returns HTTP 404 for `screenpipe/monorepo`. No personal
+credential or access workaround was used.
+
+The callback JWT exposed no Clerk `sid`/`session_id` claim. The uploaded
+`qa-session-proof.json` therefore records the exact Clerk user ID, token JTI,
+timestamps and artifact hashes, but leaves `sessionId` null for root to match
+against its pre-login session snapshot before revocation; it does not relabel
+the token JTI as a Clerk session ID.
 
 ## Production status
 
-Unmerged, unsubmitted, and unreleased. Pending payload submission and human
-review in `/admin/pipes`, a Windows consumer app build, merge, and human Admin
-Releases publication. No release/version/publication pointer was changed. No
-secrets, environment changes, or data migrations are expected.
+Unmerged and unreleased. The normal consumer app build passes; merge and human
+Admin Releases publication remain pending. Store approval/publication remains
+human-only and uses monorepo#2409. No migration, environment, deployment,
+version, release tag, publication pointer, customer account, or billing change
+is included.
