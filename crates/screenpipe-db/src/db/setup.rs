@@ -6,6 +6,42 @@ use super::*;
 use std::io::Read;
 use std::path::Path;
 
+#[derive(Debug)]
+enum BootstrapDiskReserveFailure {
+    BelowReserve { available_bytes: u64 },
+    Probe(std::io::Error),
+}
+
+fn bootstrap_disk_reserve_sample(
+    sample: std::io::Result<u64>,
+    reserve_bytes: u64,
+) -> Result<(), BootstrapDiskReserveFailure> {
+    match sample {
+        Ok(available_bytes) if available_bytes < reserve_bytes => {
+            Err(BootstrapDiskReserveFailure::BelowReserve { available_bytes })
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(BootstrapDiskReserveFailure::Probe(error)),
+    }
+}
+
+fn bootstrap_disk_reserve_error(
+    failure: BootstrapDiskReserveFailure,
+    reserve_bytes: u64,
+) -> SqlxError {
+    let detail = match failure {
+        BootstrapDiskReserveFailure::BelowReserve { available_bytes } => format!(
+            "offline construction reached disk reserve: available_bytes={available_bytes}, required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=free space until available_bytes >= required_bytes, then retry"
+        ),
+        BootstrapDiskReserveFailure::Probe(error) => format!(
+            "offline construction disk-space probe failed: error_kind={:?}, raw_os_error={:?}, cause={error}; required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=restore access to the storage drive or data folder, then retry startup",
+            error.kind(),
+            error.raw_os_error(),
+        ),
+    };
+    crate::storage::storage_error(detail)
+}
+
 const SQLITE_HEADER_BYTES: usize = 100;
 
 /// How long a connection waits on a lock before SQLite returns `SQLITE_BUSY`.
@@ -526,8 +562,8 @@ impl DatabaseManager {
                     let root = storage.root.clone();
                     let reserve = storage.descriptor.budget.disk_reserve_bytes;
                     let mut checked = std::time::Instant::now() - Duration::from_secs(1);
-                    let exhausted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let progress_exhausted = Arc::clone(&exhausted);
+                    let reserve_failure = Arc::new(std::sync::Mutex::new(None));
+                    let progress_failure = Arc::clone(&reserve_failure);
                     conn.lock_handle()
                         .await?
                         .set_progress_handler(10_000, move || {
@@ -535,28 +571,44 @@ impl DatabaseManager {
                                 return true;
                             }
                             checked = std::time::Instant::now();
-                            let available = fs2::available_space(&root).unwrap_or(0);
-                            let proceed = available >= reserve;
-                            progress_exhausted
-                                .store(!proceed, std::sync::atomic::Ordering::Relaxed);
-                            proceed
+                            match bootstrap_disk_reserve_sample(
+                                crate::storage::available_space(&root),
+                                reserve,
+                            ) {
+                                Ok(()) => true,
+                                Err(failure) => {
+                                    let mut originating = progress_failure
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    if originating.is_none() {
+                                        *originating = Some(failure);
+                                    }
+                                    false
+                                }
+                            }
                         });
                     // This generation is unpublished. Each construction step
                     // commits before the next checkpoint; the lifecycle journal
                     // rebuilds an interrupted schema from its intact source.
                     let construction =
                         crate::storage::schema::bootstrap(&mut conn, &storage.descriptor).await;
-                    conn.lock_handle().await?.remove_progress_handler();
-                    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    let failure = reserve_failure
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    let remove_handler = conn.lock_handle().await.map(|mut handle| {
+                        handle.remove_progress_handler();
+                    });
+                    let cleanup = sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
                         "PRAGMA temp_store={temp_store}"
                     )))
                     .execute(&mut *conn)
-                    .await?;
-                    if exhausted.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err(crate::storage::storage_error(
-                            "offline construction reached disk reserve; source remains intact",
-                        ));
+                    .await;
+                    if let Some(failure) = failure {
+                        return Err(bootstrap_disk_reserve_error(failure, reserve));
                     }
+                    remove_handler?;
+                    cleanup?;
                     construction?;
                 }
                 crate::storage::schema::verify(&mut conn, &storage.descriptor).await?;
@@ -1210,6 +1262,39 @@ mod shutdown_tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn bootstrap_reserve_distinguishes_boundaries_and_probe_errors() {
+        let reserve = 2 * 1024 * 1024 * 1024;
+
+        let below = bootstrap_disk_reserve_sample(Ok(reserve - 1), reserve)
+            .expect_err("below reserve must stop construction");
+        let below = bootstrap_disk_reserve_error(below, reserve).to_string();
+        assert!(below.contains(&format!("available_bytes={}", reserve - 1)));
+        assert!(below.contains(&format!("required_bytes={reserve}")));
+        assert!(below.contains(&format!("reserve_bytes={reserve} (bytes)")));
+        assert!(below.contains("source retained; outcome=recording_blocked"));
+        assert!(below.contains("recovery=free space"));
+
+        bootstrap_disk_reserve_sample(Ok(reserve), reserve)
+            .expect("exact reserve must permit construction");
+        bootstrap_disk_reserve_sample(Ok(reserve + 1), reserve)
+            .expect("above reserve must permit construction");
+
+        let injected = std::io::Error::from_raw_os_error(5);
+        let expected_kind = format!("error_kind={:?}", injected.kind());
+        let probe = bootstrap_disk_reserve_sample(Err(injected), reserve)
+            .expect_err("an unavailable probe must fail closed");
+        let probe = bootstrap_disk_reserve_error(probe, reserve).to_string();
+        assert!(probe.contains("disk-space probe failed"));
+        assert!(probe.contains(&expected_kind));
+        assert!(probe.contains("raw_os_error=Some(5)"));
+        assert!(probe.contains("cause="));
+        assert!(!probe.contains("available_bytes=0"));
+        assert!(probe.contains(
+            "recovery=restore access to the storage drive or data folder, then retry startup"
+        ));
+    }
 
     #[tokio::test]
     async fn startup_rebuilds_missing_speaker_tables_with_current_schema() {

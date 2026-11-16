@@ -298,6 +298,7 @@ e2e = [
   "screenpipe-screen/e2e",
   "screenpipe-engine/e2e",
 ]
+storage-fault-injection = ["screenpipe-db/storage-fault-injection"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
