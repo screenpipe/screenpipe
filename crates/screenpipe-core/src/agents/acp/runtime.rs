@@ -38,7 +38,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(unix)]
+use std::process::ChildStdin;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -101,8 +103,6 @@ fn scrub_runtime_env(command: &mut std::process::Command) {
 
 #[cfg(windows)]
 const WRAPPED_COMMAND_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND";
-#[cfg(windows)]
-const WRAPPED_ARGS_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_ARGS_JSON";
 
 pub fn is_process_guard_mode() -> bool {
     std::env::args_os().any(|arg| arg == PROCESS_GUARD_ARG)
@@ -158,7 +158,11 @@ pub fn run_process_guard() -> Result<i32, String> {
     );
     let program = env_nonempty(WRAPPED_COMMAND_ENV)
         .ok_or("Windows ACP process guard has no wrapped command")?;
-    let args = parse_json_env::<Vec<String>>(WRAPPED_ARGS_ENV)?.unwrap_or_default();
+    let args = std::env::args()
+        .skip_while(|arg| arg != PROCESS_GUARD_ARG)
+        .skip(1)
+        .skip_while(|arg| arg == "--")
+        .collect::<Vec<_>>();
     let mut child = windows_target_command(&program, &args)?
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -518,7 +522,6 @@ fn is_process_guard_env(name: &str) -> bool {
     #[cfg(windows)]
     {
         name.eq_ignore_ascii_case(WRAPPED_COMMAND_ENV)
-            || name.eq_ignore_ascii_case(WRAPPED_ARGS_ENV)
     }
     #[cfg(not(windows))]
     {
@@ -1180,19 +1183,22 @@ fn supervised_command(program: &str, args: &[String]) -> Result<Command, String>
 
     #[cfg(windows)]
     {
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate ACP process guard executable: {error}"))?;
-        let mut command = Command::new(executable);
-        command
-            .arg(PROCESS_GUARD_ARG)
-            .env(WRAPPED_COMMAND_ENV, program)
-            .env(
-                WRAPPED_ARGS_ENV,
-                serde_json::to_string(args)
-                    .map_err(|error| format!("failed to encode wrapped ACP arguments: {error}"))?,
-            );
+        let mut command = guarded_command(program)?;
+        command.args(args);
         Ok(command)
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn guarded_command(program: &str) -> Result<Command, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate process guard executable: {error}"))?;
+    let mut command = Command::new(executable);
+    command
+        .arg(PROCESS_GUARD_ARG)
+        .arg("--")
+        .env(WRAPPED_COMMAND_ENV, program);
+    Ok(command)
 }
 
 #[cfg(windows)]

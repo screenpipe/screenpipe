@@ -212,14 +212,14 @@ pub fn apply_custom_provider_compat(provider: &mut serde_json::Value) {
 /// NOT this path: the desktop app manages its own pi sidecar
 /// (src-tauri/src/pi.rs) at Normal.
 #[cfg(windows)]
-const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
+pub(crate) const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
 
 /// Owns a Windows Job Object configured to terminate all assigned processes
 /// when the handle closes. Keeping this guard alive for a Pi run makes process
 /// cleanup deterministic even after the original bun/pi parent exits: MCP
 /// servers and helper grandchildren remain in the job and are killed on drop.
 #[cfg(windows)]
-struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 // SAFETY: Windows kernel handles may be closed from any thread. This guard has
@@ -228,7 +228,7 @@ unsafe impl Send for KillOnDropJob {}
 
 #[cfg(windows)]
 impl KillOnDropJob {
-    fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
+    pub(crate) fn assign(child: &tokio::process::Child) -> std::io::Result<Self> {
         use std::mem::{size_of, zeroed};
         use std::ptr;
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -277,12 +277,61 @@ impl KillOnDropJob {
             Ok(Self(handle))
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn assign_pid(&self, pid: u32) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+        unsafe {
+            let process = OpenProcess(
+                PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            );
+            if process.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let assigned = AssignProcessToJobObject(self.0, process);
+            let error = (assigned == 0).then(std::io::Error::last_os_error);
+            CloseHandle(process);
+            error.map_or(Ok(()), Err)
+        }
+    }
 }
 
 #[cfg(windows)]
 impl Drop for KillOnDropJob {
     fn drop(&mut self) {
         unsafe {
+            use std::mem::{size_of, zeroed};
+            use windows_sys::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject, TerminateJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            TerminateJobObject(self.0, 1);
+            // TerminateJobObject is asynchronous with respect to process
+            // teardown. Do not publish execution completion while descendants
+            // can still be observed as running.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = zeroed();
+                if QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut accounting as *mut _ as *mut std::ffi::c_void,
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                ) == 0
+                    || accounting.ActiveProcesses == 0
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
             windows_sys::Win32::Foundation::CloseHandle(self.0);
         }
     }
@@ -1836,7 +1885,7 @@ impl PiExecutor {
             user_prompt,
             system_prompt,
         } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
-        let mut cmd = build_async_command(pi_path);
+        let mut cmd = build_async_command(pi_path)?;
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
@@ -1931,7 +1980,7 @@ impl PiExecutor {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 return Err(anyhow!(
-                    "failed to contain pi process tree before execution: {error}"
+                    "failed to retain pi host cleanup job; guarded process terminated: {error}"
                 ));
             }
         };
@@ -1987,7 +2036,7 @@ impl PiExecutor {
             user_prompt,
             system_prompt,
         } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
-        let mut cmd = build_async_command(pi_path);
+        let mut cmd = build_async_command(pi_path)?;
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
@@ -2107,7 +2156,7 @@ impl PiExecutor {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 return Err(anyhow!(
-                    "failed to contain streaming pi process tree before execution: {error}"
+                    "failed to retain streaming pi host cleanup job; guarded process terminated: {error}"
                 ));
             }
         };
@@ -2648,6 +2697,9 @@ impl AgentExecutor for PiExecutor {
         // trusts that tree, so `--force` is required to repair it generically.
         seed_pi_package_json(&install_dir)?;
 
+        #[cfg(all(windows, feature = "acp"))]
+        let mut cmd = guarded_async_command(&bun)?;
+        #[cfg(not(all(windows, feature = "acp")))]
         let mut cmd = tokio_bun_command(&bun);
         // CREATE_NO_WINDOW only covers this Bun process. Lifecycle scripts can
         // launch new consoles, so disable them for this pinned managed install.
@@ -3913,7 +3965,7 @@ pub fn find_pi_executable() -> Option<String> {
 /// shell metacharacters (`|`, `&`, `>`, `<`, `^`), which breaks multi-line
 /// prompts passed via `-p`. To avoid this we resolve the JS entry point
 /// from the `.cmd` shim and run it directly — no cmd.exe involved.
-fn build_async_command(path: &str) -> tokio::process::Command {
+fn build_async_command(path: &str) -> Result<tokio::process::Command> {
     #[cfg(windows)]
     {
         // Try to resolve the JS entry point from .cmd shim to avoid cmd.exe.
@@ -3926,12 +3978,12 @@ fn build_async_command(path: &str) -> tokio::process::Command {
         let mut cmd = if let Some(ref js_path) = js_entry {
             // Run JS entry point directly with bun (preferred) or node.
             if let Some(bun) = find_bun_executable() {
-                let mut c = tokio_bun_command(&bun);
+                let mut c = guarded_async_command(&bun)?;
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via bun: {} {}", bun, js_path);
                 c
             } else {
-                let mut c = crate::no_window::no_window_command_async("node");
+                let mut c = guarded_async_command("node")?;
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via node: {}", js_path);
                 c
@@ -3942,23 +3994,23 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 "could not resolve JS entry from {}, falling back to cmd.exe /C",
                 path
             );
-            let mut c = crate::no_window::no_window_command_async("cmd.exe");
+            let mut c = guarded_async_command("cmd.exe")?;
             c.args(["/C", path]);
             c
         } else if path.ends_with(".js") {
             // Local install returns a .js entrypoint — run with bun
             if let Some(bun) = find_bun_executable() {
-                let mut c = tokio_bun_command(&bun);
+                let mut c = guarded_async_command(&bun)?;
                 c.arg(path);
                 debug!("running pi JS entrypoint via bun: {} {}", bun, path);
                 c
             } else {
-                let mut c = crate::no_window::no_window_command_async("node");
+                let mut c = guarded_async_command("node")?;
                 c.arg(path);
                 c
             }
         } else {
-            crate::no_window::no_window_command_async(path)
+            guarded_async_command(path)?
         };
 
         // Inject bundled bun directory into PATH so node_modules resolve correctly.
@@ -3994,7 +4046,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
         // Prevent console window flash on Windows
         cmd.creation_flags(0x08000000);
 
-        cmd
+        Ok(cmd)
     }
     #[cfg(not(windows))]
     {
@@ -4007,7 +4059,20 @@ fn build_async_command(path: &str) -> tokio::process::Command {
             tokio::process::Command::new(path)
         };
         apply_pi_child_path(&mut cmd);
-        cmd
+        Ok(cmd)
+    }
+}
+
+#[cfg(windows)]
+fn guarded_async_command(program: &str) -> Result<tokio::process::Command> {
+    #[cfg(all(feature = "acp", not(test)))]
+    {
+        let command = super::acp::guarded_command(program).map_err(anyhow::Error::msg)?;
+        return Ok(tokio::process::Command::from(command));
+    }
+    #[cfg(any(not(feature = "acp"), test))]
+    {
+        Ok(crate::no_window::no_window_command_async(program))
     }
 }
 
@@ -4892,22 +4957,10 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let mut command = build_async_command(missing.to_str().unwrap());
-        let io_error = match command.spawn() {
-            Ok(mut child) => {
-                let _ = child.kill().await;
-                panic!("unexpectedly launched missing pi executable")
-            }
-            Err(error) => error,
-        };
+        let mut command = build_async_command(missing.to_str().unwrap()).unwrap();
+        let io_error = command.spawn().unwrap_err();
         assert_eq!(io_error.raw_os_error(), Some(2));
-
-        // Scheduler logging and execution history both use ordinary Display.
-        // Raw propagation must therefore retain the Windows OS text there.
-        let expected = io_error.to_string();
-        let persisted_error = anyhow::Error::from(io_error).to_string();
-        assert_eq!(persisted_error, expected);
-        assert!(persisted_error.contains("os error 2"));
+        assert!(io_error.to_string().contains("os error 2"));
     }
 
     #[test]

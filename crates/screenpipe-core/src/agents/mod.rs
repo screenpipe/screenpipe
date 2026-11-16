@@ -55,6 +55,16 @@ pub struct ExecutionHandle {
     finished_notify: Arc<tokio::sync::Notify>,
 }
 
+/// Marks an execution complete only after the task that owns the executor
+/// future has finished unwinding and dropped all process-tree guards.
+pub struct ExecutionCompletionGuard(ExecutionHandle);
+
+impl Drop for ExecutionCompletionGuard {
+    fn drop(&mut self) {
+        self.0.mark_finished();
+    }
+}
+
 impl ExecutionHandle {
     pub fn new(shared_pid: SharedPid) -> Self {
         Self {
@@ -116,6 +126,10 @@ impl ExecutionHandle {
     pub fn mark_finished(&self) {
         self.finished.store(true, Ordering::SeqCst);
         self.finished_notify.notify_waiters();
+    }
+
+    pub fn completion_guard(&self) -> ExecutionCompletionGuard {
+        ExecutionCompletionGuard(self.clone())
     }
 
     pub fn is_finished(&self) -> bool {

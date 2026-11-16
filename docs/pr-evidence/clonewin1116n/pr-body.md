@@ -7,8 +7,8 @@
 - Fail closed when Windows Job Object assignment fails, instead of running a
   Pipe/agent or managed Pi installer without descendant cleanup.
 - Preserve pending-stop behavior for work disabled before a child PID exists.
-- Record the exact separate Digital Clone v7 store/runtime patch required for
-  its detached Bun launcher and accurate Screenpipe Cloud disclosure.
+- Include a complete, hash-checked Digital Clone store submission proposal with
+  hidden Windows launches and accurate Screenpipe Cloud disclosure.
 
 ## Historical intent
 
@@ -19,9 +19,9 @@
   privacy-limited native popup metadata. It did not cover Digital Clone's
   detached `clone.js maintain` launcher and is not treated as a reproduction or
   proof of this report.
-- Existing `no_window` command builders and Windows kill-on-close Job Objects
-  remain the process primitives; no second process-cleanup implementation was
-  added.
+- Pi uses the existing ACP self-Job wrapper, which establishes containment
+  before it launches user/agent code. The executor retains its Job guard until
+  cancellation has dropped the exact future.
 
 ## Before / after evidence
 
@@ -36,27 +36,32 @@ machine-wide build queue.
   uncontained process. Digital Clone v7 launches `clone.js maintain` with
   `detached: true` and no `windowsHide`.
 - After: focused core tests prove durable disable waiting, pending-stop delivery,
-  and descendant cleanup after the parent exits. The production-backed store
-  follow-up is specified in `docs/pr-evidence/clonewin1116n/store-patch.md` and
-  remains unapplied.
+  queued cancellation, unrelated-pipe survival, reload persistence, and
+  descendant cleanup after the parent exits. A strict store payload and exact
+  source/runtime artifacts are included under
+  `docs/pr-evidence/clonewin1116n/digital-clone-store-proposal/`.
 
 ## Tests
 
-- `cargo test -p screenpipe-core disabling_pipe_waits_for_pending_execution_cleanup -- --nocapture` — passed (1 passed).
-- `cargo test -p screenpipe-core windows_job_prevents_orphaned_grandchildren -- --nocapture` — passed (1 passed); unmanaged child remained alive, managed child was gone after Job close.
-- `cargo test -p screenpipe-core stop_notification_covers_pending_and_waiting_stops -- --nocapture` — passed (1 passed).
-- `cargo test -p screenpipe-core --test no_console_flash -- --nocapture` — passed (2 passed).
+- `cargo test -p screenpipe-core --features acp disabling_dead_parent_drops_executor_guard_and_preserves_other_pipe -- --nocapture` — passed (1 passed); real manager disable, dead root, live descendant, unrelated running pipe, and disabled reload state.
+- `cargo test -p screenpipe-core --features acp windows_job_prevents_orphaned_grandchildren -- --nocapture` — passed (1 passed); unmanaged child remained alive, managed child was gone after Job close.
+- `cargo test -p screenpipe-core --features acp pi_launch_error_display_preserves_windows_io_cause -- --nocapture` — passed (1 passed).
+- `cargo test -p screenpipe-core --features acp stop_notification_covers_pending_and_waiting_stops -- --nocapture` — passed (1 passed).
+- `cargo test -p screenpipe-core --features acp stopped_scheduled_queue_drains_without_launching_or_waiting_for_active_run -- --nocapture` — passed (1 passed).
+- `cargo test -p screenpipe-core --features acp --test no_console_flash -- --nocapture` — passed (2 passed).
+- `bun run docs/pr-evidence/clonewin1116n/build-store-proposal.ts` — passed; proposal source 65,517 bytes.
+- `bun run docs/pr-evidence/clonewin1116n/verify-store-proposal.ts` — passed with Bun 1.3.10; bootstrap/setup/context/direct-maintain/async-launch complete, visible console false.
 - `cargo fmt --all -- --check` — passed.
-- `git diff --check` — passed (Git emitted only LF/CRLF working-copy notices).
-- `cd apps/screenpipe-app-tauri && bun run test:tauri clonewin_process_cleanup -- --nocapture` — native queue and `pre_build.js` succeeded; compilation was manually stopped before test execution after the cold cache exceeded the task window. Not claimed as passed.
+- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` — blocked before compilation by the checked-in dependency mismatch: Rust `tauri-plugin-updater` 2.11.0 versus JS `@tauri-apps/plugin-updater` 2.10.0. The supported queue acquired and released normally; no fallback build was used.
 
-Real-app visible-window acceptance was not completed. The exact Digital Clone
-v7 after-case cannot pass until its separate store runtime patch is built and
-published; no production store mutation was authorized.
+The fixture is native Windows process proof, not a continuous desktop recording
+or authenticated production-app demonstration. Full real-app support-report
+collection and packaged app observation remain blocked by the dependency
+mismatch above. No customer account or production credential was used.
 
 ## Production status
 
-Unmerged and unreleased. Pending a Windows consumer app build, human Admin
-Releases publication, and a separately reviewed Digital Clone Pipe-store v8
-update. No release/version/publication pointer was changed. No secrets or data
-migrations are expected.
+Unmerged, unsubmitted, and unreleased. Pending payload submission and human
+review in `/admin/pipes`, a Windows consumer app build, merge, and human Admin
+Releases publication. No release/version/publication pointer was changed. No
+secrets, environment changes, or data migrations are expected.

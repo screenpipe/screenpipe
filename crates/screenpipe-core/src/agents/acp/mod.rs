@@ -20,6 +20,8 @@ pub use extensions::{
     is_portable_mcp_mode, npm_package_name_from_source, package_source_is_portable,
     run_portable_mcp_mode,
 };
+#[cfg(all(windows, not(test)))]
+pub(crate) use runtime::guarded_command;
 pub use runtime::{
     agent_cloud_routing, agent_download_pending, agent_install_status, cloud_routing_env,
     install_agent, is_forbidden_acp_env, is_known_agent, is_process_guard_mode, is_runtime_mode,
