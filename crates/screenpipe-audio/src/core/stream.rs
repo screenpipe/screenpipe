@@ -340,6 +340,13 @@ impl AudioStream {
         let _ = macos_input_vpio;
         let input_vpio = false;
 
+        #[cfg(target_os = "windows")]
+        let config = if input_aec {
+            super::device::with_aec_call_format(&cpal_audio_device, config)
+        } else {
+            config
+        };
+
         let audio_config = AudioStreamConfig::from(&config);
         let channels = config.channels();
 
@@ -1319,6 +1326,7 @@ mod windows_aec_hardware_tests {
     async fn aec_stream_opens_on_default_input() {
         let device = super::super::device::default_input_device().expect("default input");
         let (cpal_device, config) = get_cpal_device_and_config(&device).await.expect("config");
+        let config = super::super::device::with_aec_call_format(&cpal_device, config);
         let (tx, mut rx) = broadcast::channel(1024);
         let stream = build_input_stream(
             &cpal_device,
