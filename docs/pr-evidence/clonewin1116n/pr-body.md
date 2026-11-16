@@ -27,7 +27,7 @@
 
 ## Before / after evidence
 
-Base: `173a28003aed99b6c52fd1fc99b057ab8c0c8b64`
+Base: `a32b5b251f0b3599d1daf5746e3f2e4f8d978a93`
 
 Before, a Windows Pi root could exit while a descendant retained inherited
 output or continued working. PID-only cleanup could no longer identify that
@@ -67,7 +67,7 @@ real-app scoped Pipe run/support-report acceptance could not be completed.
 - `cargo test -p screenpipe-core --features acp --test no_console_flash -- --nocapture` - passed (2 tests).
 - `cargo fmt --all -- --check` - passed.
 - `cd apps/screenpipe-app-tauri && bun install --frozen-lockfile` - passed.
-- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` - passed via the supported build queue; `debug-dev` app built in 11m31s.
+- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` - passed on the final synchronized source via the supported build queue; the warm `debug-dev` build completed in 2m26s.
 
 The prior updater mismatch was VM state, not a source pin defect:
 `package.json` has no `@tauri-apps/plugin-updater`, but an extraneous installed
