@@ -18,7 +18,6 @@ pub mod mcp_access;
 pub mod permissions;
 pub mod preset_fallback;
 pub mod sync;
-pub(crate) mod trajectory;
 
 use crate::agents::{
     chat_destination::{
@@ -4435,26 +4434,11 @@ impl PipeManager {
             let drain_pipe_name = pipe_name.clone();
             let drain_exec_id = exec_id.unwrap_or(0);
             let drain_on_output = on_output.clone();
-            // Tee the full agent event stream to a per-run trajectory file
-            // (model-training/eval export). Best-effort: None on IO failure.
-            let mut drain_trajectory = trajectory::TrajectoryWriter::create(
-                &pipes_dir_for_log,
-                &drain_pipe_name,
-                drain_exec_id,
-                &run_model,
-                &prompt,
-            );
             tokio::spawn(async move {
                 while let Some(line) = line_rx.recv().await {
-                    if let Some(ref mut tw) = drain_trajectory {
-                        tw.append_line(&line);
-                    }
                     if let Some(ref cb) = drain_on_output {
                         cb(&drain_pipe_name, drain_exec_id, history_enabled, &line);
                     }
-                }
-                if let Some(tw) = drain_trajectory.take() {
-                    tw.finish();
                 }
                 // Channel closed — pipe process exited. Emit a done sentinel.
                 if let Some(ref cb) = drain_on_output {
@@ -5123,26 +5107,11 @@ impl PipeManager {
             } else {
                 None
             };
-            // Tee the full agent event stream to a per-run trajectory file
-            // (model-training/eval export). Best-effort: None on IO failure.
-            let mut drain_trajectory = trajectory::TrajectoryWriter::create(
-                &self.pipes_dir,
-                &drain_pipe_name,
-                drain_exec_id,
-                &run_model,
-                &prompt,
-            );
             tokio::spawn(async move {
                 while let Some(line) = line_rx.recv().await {
-                    if let Some(ref mut tw) = drain_trajectory {
-                        tw.append_line(&line);
-                    }
                     if let Some(ref cb) = drain_on_output {
                         cb(&drain_pipe_name, drain_exec_id, history_enabled, &line);
                     }
-                }
-                if let Some(tw) = drain_trajectory.take() {
-                    tw.finish();
                 }
                 // Channel closed — pipe process exited. Emit a done sentinel.
                 if let Some(ref cb) = drain_on_output {
@@ -7221,26 +7190,11 @@ impl PipeManager {
                         let sched_pipe_name = pipe_name.clone();
                         let sched_exec_id = exec_id.unwrap_or(0);
                         let sched_on_output = on_output.clone();
-                        // Tee the full agent event stream to a per-run
-                        // trajectory file (model-training/eval export).
-                        let mut sched_trajectory = trajectory::TrajectoryWriter::create(
-                            &pipes_dir_for_log,
-                            &sched_pipe_name,
-                            sched_exec_id,
-                            &model,
-                            &prompt,
-                        );
                         tokio::spawn(async move {
                             while let Some(line) = line_rx.recv().await {
-                                if let Some(ref mut tw) = sched_trajectory {
-                                    tw.append_line(&line);
-                                }
                                 if let Some(ref cb) = sched_on_output {
                                     cb(&sched_pipe_name, sched_exec_id, history_enabled, &line);
                                 }
-                            }
-                            if let Some(tw) = sched_trajectory.take() {
-                                tw.finish();
                             }
                             // Channel closed — pipe process exited. Emit a done sentinel.
                             if let Some(ref cb) = sched_on_output {
