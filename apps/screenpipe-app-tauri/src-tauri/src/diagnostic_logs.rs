@@ -305,6 +305,129 @@ async fn build_bundle(files: &[LogFile]) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "storage-fault-injection")]
+    #[tokio::test]
+    async fn probe_failure_child_writes_recovery_log() {
+        let Some(root) = std::env::var_os("SCREENPIPE_TEST_PROBE_FAILURE_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let error = match screenpipe_db::DatabaseManager::new_hybrid(
+            &root,
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("injected probe failure must interrupt fresh bootstrap")
+            }
+            Err(error) => error,
+        };
+        crate::recording::recovery_log::append(
+            &root,
+            "database_startup_failed",
+            &format!("Failed to initialize database: {error}"),
+        );
+    }
+
+    #[cfg(feature = "storage-fault-injection")]
+    #[tokio::test]
+    async fn fresh_bootstrap_probe_failure_survives_normal_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("diagnostic_logs::tests::probe_failure_child_writes_recovery_log")
+            .arg("--nocapture")
+            .env("SCREENPIPE_TEST_PROBE_FAILURE_ROOT", root.path())
+            .env("SCREENPIPE_STORAGE_AVAILABLE_SPACE", "error")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "probe failure child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        let injected = std::io::Error::from_raw_os_error(5);
+        for evidence in [
+            "database_startup_failed".to_owned(),
+            "offline construction disk-space probe failed".to_owned(),
+            format!("error_kind={:?}", injected.kind()),
+            "raw_os_error=Some(5)".to_owned(),
+            format!("cause={injected}"),
+            "required_bytes=2147483648".to_owned(),
+            "reserve_bytes=2147483648 (bytes)".to_owned(),
+            "source retained".to_owned(),
+            "outcome=recording_blocked".to_owned(),
+            "recovery=restore access to the storage drive or data folder".to_owned(),
+            "then retry startup".to_owned(),
+        ] {
+            assert!(
+                report.contains(&evidence),
+                "missing support evidence: {evidence}\n{report}"
+            );
+        }
+        assert!(!report.contains("available_bytes=0"));
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert!(root.path().join("storage-init.json").exists());
+    }
+
+    #[tokio::test]
+    async fn fresh_bootstrap_reserve_failure_survives_normal_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = screenpipe_db::storage::MigrationOptions::default();
+        options.budget.disk_reserve_bytes = u64::MAX;
+        let error = match screenpipe_db::DatabaseManager::new_hybrid(
+            root.path(),
+            Default::default(),
+            options,
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("test reserve must interrupt fresh bootstrap")
+            }
+            Err(error) => error,
+        };
+        let detail = format!("Failed to initialize database: {error}");
+        crate::recording::recovery_log::append(root.path(), "database_startup_failed", &detail);
+
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "database_startup_failed".to_owned(),
+            "offline construction reached disk reserve".to_owned(),
+            "available_bytes=".to_owned(),
+            format!("required_bytes={}", u64::MAX),
+            format!("reserve_bytes={} (bytes)", u64::MAX),
+            "source retained".to_owned(),
+            "outcome=recording_blocked".to_owned(),
+            "recovery=free space".to_owned(),
+            "then retry".to_owned(),
+        ] {
+            assert!(
+                report.contains(&evidence),
+                "missing support evidence: {evidence}\n{report}"
+            );
+        }
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert!(root.path().join("storage-init.json").exists());
+    }
+
     #[tokio::test]
     async fn storage_support_report_works_without_a_recording_engine() {
         let root = tempfile::tempdir().unwrap();

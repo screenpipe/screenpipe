@@ -3047,6 +3047,8 @@ pub struct PipeManager {
     logs: Arc<Mutex<HashMap<String, VecDeque<PipeRunLog>>>>,
     /// Currently running pipe PIDs.
     running: Arc<Mutex<HashMap<String, ExecutionHandle>>>,
+    /// Serializes enable/disable with manual and scheduled run admission.
+    lifecycle: Arc<Mutex<()>>,
     /// Currently running execution IDs (for stop API).
     running_execution_ids: Arc<Mutex<HashMap<String, i64>>>,
     /// Shutdown signal for the scheduler.
@@ -3115,6 +3117,7 @@ impl PipeManager {
             pipes: Arc::new(Mutex::new(HashMap::new())),
             logs: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
+            lifecycle: Arc::new(Mutex::new(())),
             running_execution_ids: Arc::new(Mutex::new(HashMap::new())),
             shutdown_tx: None,
             scheduler_handle: None,
@@ -3151,6 +3154,7 @@ impl PipeManager {
             pipes: self.pipes.clone(),
             logs: self.logs.clone(),
             running: self.running.clone(),
+            lifecycle: self.lifecycle.clone(),
             running_execution_ids: self.running_execution_ids.clone(),
             shutdown_tx: None,
             scheduler_handle: None,
@@ -4100,6 +4104,7 @@ impl PipeManager {
         run_context: Option<&str>,
         event_context: Option<BackgroundEventContext>,
     ) -> Result<Option<i64>> {
+        let lifecycle = self.lifecycle.lock().await;
         validate_pipe_identifier(name)?;
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
@@ -4132,6 +4137,7 @@ impl PipeManager {
             }
             running.insert(name.to_string(), handle);
         }
+        drop(lifecycle);
 
         // Defense-in-depth: check PID file (cross-process lock)
         if let Some(existing_pid) = read_pid_file(&self.pipes_dir, name) {
@@ -4746,6 +4752,7 @@ impl PipeManager {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PipeRunOutcome>> + Send + 'a>>
     {
         Box::pin(async move {
+            let lifecycle = self.lifecycle.lock().await;
             validate_pipe_identifier(name)?;
             let (config, body, _raw) = {
                 let pipes = self.pipes.lock().await;
@@ -4776,6 +4783,7 @@ impl PipeManager {
                 }
                 running.insert(name.to_string(), handle);
             }
+            drop(lifecycle);
 
             // Defense-in-depth: check PID file (cross-process lock)
             if let Some(existing_pid) = read_pid_file(&self.pipes_dir, name) {
@@ -5434,6 +5442,7 @@ impl PipeManager {
     /// Enable or disable a pipe. Pausing an untouched bundled task only changes
     /// its device-local override, preserving its bundled identity and quota slot.
     pub async fn enable_pipe(&self, name: &str, enabled: bool) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().await;
         validate_pipe_identifier(name)?;
         let pipe_md = self.pipes_dir.join(name).join("pipe.md");
         if !pipe_md.exists() {
@@ -5477,10 +5486,19 @@ impl PipeManager {
         };
 
         // Update in-memory
-        let mut pipes = self.pipes.lock().await;
-        if let Some(entry) = pipes.get_mut(name) {
-            entry.0.enabled = enabled;
-            entry.2 = new_content;
+        {
+            let mut pipes = self.pipes.lock().await;
+            if let Some(entry) = pipes.get_mut(name) {
+                entry.0.enabled = enabled;
+                entry.2 = new_content;
+            }
+        }
+
+        // Disabling is a lifecycle operation, not only a persisted setting.
+        // Request the stop after publishing the disabled state so a scheduler
+        // snapshot that was already due cannot admit another run.
+        if !enabled {
+            self.stop_pipe(name).await?;
         }
 
         info!(
@@ -6161,6 +6179,7 @@ impl PipeManager {
         let pipes = self.pipes.clone();
         let logs = self.logs.clone();
         let running = self.running.clone();
+        let lifecycle = self.lifecycle.clone();
         let running_execution_ids = self.running_execution_ids.clone();
         let executors = self.executors.clone();
         let pipes_dir = self.pipes_dir.clone();
@@ -6880,15 +6899,25 @@ impl PipeManager {
                     // earlier queue/PID guards.
                     let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
                     let handle = ExecutionHandle::new(shared_pid.clone());
+                    let lifecycle_guard = lifecycle.lock().await;
+                    let still_enabled = pipes
+                        .lock()
+                        .await
+                        .get(name)
+                        .is_some_and(|(current, _, _)| current.enabled);
                     let claimed = {
                         let mut active = running.lock().await;
-                        if crate::background_work::is_suspended() || active.contains_key(name) {
+                        if !still_enabled
+                            || crate::background_work::is_suspended()
+                            || active.contains_key(name)
+                        {
                             false
                         } else {
                             active.insert(name.clone(), handle.clone());
                             true
                         }
                     };
+                    drop(lifecycle_guard);
                     if !claimed {
                         queued_or_running.lock().await.remove(name);
                         if let (Some((event, key)), Some(store)) = (&event_claim, store.as_ref()) {
@@ -9552,6 +9581,77 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    struct WindowsLifecycleExecutor {
+        helper_pid_path: PathBuf,
+        parent_pid: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[cfg(windows)]
+    struct WindowsTestProcessGuard(Arc<std::sync::atomic::AtomicU32>);
+
+    #[cfg(windows)]
+    impl Drop for WindowsTestProcessGuard {
+        fn drop(&mut self) {
+            let pid = self.0.load(Ordering::SeqCst);
+            if pid != 0 {
+                let _ = crate::agents::pi::kill_process_group(pid);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[async_trait::async_trait]
+    impl AgentExecutor for WindowsLifecycleExecutor {
+        async fn run(
+            &self,
+            _prompt: &str,
+            _model: &str,
+            _working_dir: &Path,
+            _provider: Option<&str>,
+            _provider_url: Option<&str>,
+            _provider_api_key: Option<&str>,
+            shared_pid: Option<SharedPid>,
+            _continue_session: bool,
+        ) -> Result<AgentOutput> {
+            let pid_path = self.helper_pid_path.to_string_lossy().replace('\'', "''");
+            let script = format!(
+                "$helper = Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 60' -PassThru; Set-Content -LiteralPath '{pid_path}' -Value $helper.Id; Start-Sleep -Seconds 60"
+            );
+            let mut child = tokio::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .creation_flags(0x08000000 | 0x00004000)
+                .spawn()?;
+            let pid = child.id().expect("synthetic parent pid");
+            self.parent_pid.store(pid, Ordering::SeqCst);
+            if let Some(shared_pid) = shared_pid.as_ref() {
+                if crate::agents::install_spawned_pid(shared_pid, pid) {
+                    crate::agents::pi::kill_process_group(pid)?;
+                }
+            }
+            let status = child.wait().await?;
+            Ok(AgentOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: status.success(),
+                pid: Some(pid),
+            })
+        }
+
+        fn kill(&self, handle: &ExecutionHandle) -> Result<()> {
+            crate::agents::pi::kill_process_group(handle.current_pid())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn ensure_installed(&self) -> Result<()> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "windows-lifecycle-test"
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn source_events_serialize_context_and_acknowledge_their_own_delivery() {
         let temp = tempfile::tempdir().unwrap();
@@ -11560,6 +11660,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabling_pipe_requests_stop_before_pid_is_available() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let name = "disable-during-startup";
+        let pipe_dir = pipes_dir.join(name);
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nenabled: true\nschedule: manual\nagent: mock\nmodel: test\n---\nSynthetic lifecycle test.\n",
+        )
+        .unwrap();
+
+        let manager = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        manager.load_pipes().await.unwrap();
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        manager
+            .running
+            .lock()
+            .await
+            .insert(name.to_string(), handle.clone());
+
+        manager.enable_pipe(name, false).await.unwrap();
+
+        assert!(handle.stop_requested.load(Ordering::SeqCst));
+        assert_eq!(shared_pid.load(Ordering::SeqCst), STOP_REQUESTED_PID);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn disabling_running_pipe_kills_its_helper_tree_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let name = "synthetic-running-pipe";
+        let pipe_dir = pipes_dir.join(name);
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nenabled: true\nschedule: manual\nagent: synthetic\nmodel: fixture\n---\nNo network calls.\n",
+        )
+        .unwrap();
+
+        let helper_pid_path = temp.path().join("helper.pid");
+        let parent_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let _pipe_cleanup = WindowsTestProcessGuard(parent_pid.clone());
+        let executor = Arc::new(WindowsLifecycleExecutor {
+            helper_pid_path: helper_pid_path.clone(),
+            parent_pid: parent_pid.clone(),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("synthetic".into(), executor);
+        let manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+
+        let mut unrelated = tokio::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ])
+            .creation_flags(0x08000000 | 0x00004000)
+            .spawn()
+            .unwrap();
+        let unrelated_pid = unrelated.id().unwrap();
+        let _unrelated_cleanup =
+            WindowsTestProcessGuard(Arc::new(std::sync::atomic::AtomicU32::new(unrelated_pid)));
+
+        manager.start_pipe_background(name).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !helper_pid_path.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("synthetic helper did not start");
+        let helper_pid: u32 = std::fs::read_to_string(&helper_pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let parent_pid = manager.running.lock().await[name].current_pid();
+        assert!(is_process_alive(parent_pid));
+        assert!(is_process_alive(helper_pid));
+
+        manager.enable_pipe(name, false).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while is_process_alive(parent_pid) || is_process_alive(helper_pid) {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("disabled pipe left its parent or helper running");
+        assert!(
+            is_process_alive(unrelated_pid),
+            "disabling one pipe killed an unrelated process"
+        );
+
+        unrelated.kill().await.unwrap();
+        let _ = unrelated.wait().await;
+    }
+
+    #[tokio::test]
     async fn stop_notification_covers_pending_and_waiting_stops() {
         for stop_first in [true, false] {
             let handle = ExecutionHandle::new(Arc::new(std::sync::atomic::AtomicU32::new(0)));
@@ -11622,11 +11825,16 @@ mod tests {
             .collect();
         let mut completed =
             screenpipe_events::subscribe_to_event::<serde_json::Value>("pipe_completed:queued-1");
-        for (name, _) in &queued {
-            assert_eq!(
-                manager.stop_pipe(name).await.unwrap(),
-                PipeStopStatus::StopPending
-            );
+        for (index, (name, handle)) in queued.iter().enumerate() {
+            if index == 0 {
+                manager.enable_pipe(name, false).await.unwrap();
+                assert!(handle.stop_requested.load(Ordering::SeqCst));
+            } else {
+                assert_eq!(
+                    manager.stop_pipe(name).await.unwrap(),
+                    PipeStopStatus::StopPending
+                );
+            }
         }
         // The first executor deliberately retains its permit. All cancelled
         // followers must disappear without entering that executor at all.
