@@ -1916,19 +1916,23 @@ impl PiExecutor {
         #[cfg(windows)]
         cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
 
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
         let pid = child.id();
 
         #[cfg(windows)]
         let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
+            Ok(job) => job,
             Err(error) => {
-                warn!(
-                    "failed to assign pi process {} to cleanup job: {}",
+                error!(
+                    "refusing uncontained pi process {} after cleanup job assignment failed: {}",
                     pid.unwrap_or_default(),
                     error
                 );
-                None
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(anyhow!(
+                    "failed to contain pi process tree before execution: {error}"
+                ));
             }
         };
 
@@ -2093,14 +2097,18 @@ impl PiExecutor {
 
         #[cfg(windows)]
         let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
+            Ok(job) => job,
             Err(error) => {
-                warn!(
-                    "failed to assign pi process {} to cleanup job: {}",
+                error!(
+                    "refusing uncontained streaming pi process {} after cleanup job assignment failed: {}",
                     pid.unwrap_or_default(),
                     error
                 );
-                None
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(anyhow!(
+                    "failed to contain streaming pi process tree before execution: {error}"
+                ));
             }
         };
 
@@ -2651,7 +2659,7 @@ impl AgentExecutor for PiExecutor {
             cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
         }
 
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             anyhow!(
                 "pi installation failed: could not run bun at {}: {}",
                 bun,
@@ -2660,10 +2668,17 @@ impl AgentExecutor for PiExecutor {
         })?;
         #[cfg(windows)]
         let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
+            Ok(job) => job,
             Err(error) => {
-                warn!("failed to assign pi installer to cleanup job: {}", error);
-                None
+                error!(
+                    "refusing uncontained pi installer after cleanup job assignment failed: {}",
+                    error
+                );
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(anyhow!(
+                    "pi installation failed: could not contain installer process tree: {error}"
+                ));
             }
         };
         let output = child.wait_with_output().await.map_err(|e| {

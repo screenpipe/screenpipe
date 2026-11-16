@@ -52,6 +52,7 @@ pub struct ExecutionHandle {
     pub stop_requested: Arc<AtomicBool>,
     stop_notify: Arc<tokio::sync::Notify>,
     finished: Arc<AtomicBool>,
+    finished_notify: Arc<tokio::sync::Notify>,
 }
 
 impl ExecutionHandle {
@@ -62,6 +63,7 @@ impl ExecutionHandle {
             stop_requested: Arc::new(AtomicBool::new(false)),
             stop_notify: Arc::new(tokio::sync::Notify::new()),
             finished: Arc::new(AtomicBool::new(false)),
+            finished_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -113,10 +115,23 @@ impl ExecutionHandle {
 
     pub fn mark_finished(&self) {
         self.finished.store(true, Ordering::SeqCst);
+        self.finished_notify.notify_waiters();
     }
 
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
+    }
+
+    /// Wait until the executor has returned and released its process-tree
+    /// guard. The pre-armed notification avoids losing a completion between
+    /// the state check and the await.
+    pub async fn wait_until_finished(&self) {
+        let notified = self.finished_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_finished() {
+            notified.await;
+        }
     }
 }
 
