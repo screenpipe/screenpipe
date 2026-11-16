@@ -12,6 +12,7 @@ mod codec;
 mod command;
 pub mod diagnostics;
 mod faults;
+pub(crate) use faults::available_space;
 mod import;
 mod in_place;
 mod inventory;

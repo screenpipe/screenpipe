@@ -306,6 +306,53 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn fresh_bootstrap_reserve_failure_survives_normal_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = screenpipe_db::storage::MigrationOptions::default();
+        options.budget.disk_reserve_bytes = u64::MAX;
+        let error = match screenpipe_db::DatabaseManager::new_hybrid(
+            root.path(),
+            Default::default(),
+            options,
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("test reserve must interrupt fresh bootstrap")
+            }
+            Err(error) => error,
+        };
+        let detail = format!("Failed to initialize database: {error}");
+        crate::recording::recovery_log::append(root.path(), "database_startup_failed", &detail);
+
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "database_startup_failed".to_owned(),
+            "offline construction reached disk reserve".to_owned(),
+            "available_bytes=".to_owned(),
+            format!("required_bytes={}", u64::MAX),
+            format!("reserve_bytes={} (bytes)", u64::MAX),
+            "source retained".to_owned(),
+            "outcome=recording_blocked".to_owned(),
+            "recovery=free space".to_owned(),
+            "then retry".to_owned(),
+        ] {
+            assert!(
+                report.contains(&evidence),
+                "missing support evidence: {evidence}\n{report}"
+            );
+        }
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert!(root.path().join("storage-init.json").exists());
+    }
+
+    #[tokio::test]
     async fn storage_support_report_works_without_a_recording_engine() {
         let root = tempfile::tempdir().unwrap();
         let archive = root.path().join("storage/payloads");

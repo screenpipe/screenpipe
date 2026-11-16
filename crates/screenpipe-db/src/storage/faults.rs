@@ -42,3 +42,19 @@ pub(super) fn checkpoint(_name: &str) {
         }
     }
 }
+
+pub(crate) fn available_space(path: &std::path::Path) -> std::io::Result<u64> {
+    #[cfg(feature = "storage-fault-injection")]
+    if let Ok(value) = std::env::var("SCREENPIPE_STORAGE_AVAILABLE_SPACE") {
+        if value == "error" {
+            return Err(std::io::Error::from_raw_os_error(5));
+        }
+        return value.parse().map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid injected available space: {error}"),
+            )
+        });
+    }
+    fs2::available_space(path)
+}
