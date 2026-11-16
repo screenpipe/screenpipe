@@ -374,10 +374,10 @@ impl AudioStream {
         macos_input_vpio: bool,
     ) -> Result<tokio::task::JoinHandle<()>> {
         let device_name = device.name()?;
-        #[cfg(target_os = "windows")]
-        let use_aec = windows_input_aec;
 
         Ok(tokio::task::spawn_blocking(move || {
+            #[cfg(target_os = "windows")]
+            let mut aec_on = windows_input_aec;
             // Primary attempt: the "best" config get_cpal_device_and_config
             // picked (highest sample rate × most channels from
             // supported_input_configs). On Windows 11 24H2 WASAPI sometimes
@@ -453,6 +453,7 @@ impl AudioStream {
                                             macos_input_vpio,
                                         ) {
                                             Ok(s) => {
+                                                aec_on = false;
                                                 warn!(
                                                     "AEC disabled as last resort for {} — mic works but echo cancellation is off",
                                                     device_name
@@ -516,10 +517,10 @@ impl AudioStream {
                 }
 
                 #[cfg(target_os = "windows")]
-                if use_aec {
+                if aec_on {
                     info!(
                         device = %device_name,
-                        "screenpipe-audio: WASAPI microphone capture running with AEC enabled"
+                        "screenpipe-audio: WASAPI microphone capture running with AEC (communications mode)"
                     );
                 }
 
