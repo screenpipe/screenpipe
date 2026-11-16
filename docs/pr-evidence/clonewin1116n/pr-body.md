@@ -119,8 +119,9 @@ recorded in the package PR. The runtime SHA is unchanged.
 
 ## Core CI
 
-Checks for `05158a74` are running; the results below describe the previous
-completed run. Native validation above passed independently on `05158a74`.
+CI is being re-run for the final handoff revision; the results below describe
+the previous completed run. Native validation above passed independently on
+`05158a74`; subsequent commits change this handoff only.
 
 At exact `bf46ba81`, Vitest/Bun/typecheck and Windows/macOS build, core,
 integration, and Clippy checks passed. Windows CLI/workspace still fail
