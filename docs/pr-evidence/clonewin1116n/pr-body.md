@@ -23,7 +23,8 @@
 ## Review result and historical intent
 
 Starting head: `bf46ba81a3f300c6a6f1b8178558459773363225`.
-Reviewed production-code commit: `02a52325`.
+Native-validated production-code head: `05158a7478d3c43845501bfe2d2066f42aa43046`.
+This handoff-only follow-up does not change that tested source.
 
 The regression was confirmed on real Windows handles before changing the
 behavior. A process handle was awaited to `WAIT_OBJECT_0`; the existing
@@ -88,6 +89,17 @@ cloud, customer, or full onboarding evidence.
   stderr, and exit codes propagated exactly.
 - `cargo fmt --all -- --check` and `git diff --check` — passed.
 
+The built-app guard checks used these PowerShell commands:
+
+```powershell
+$env:SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND = 'powershell.exe'
+& 'C:\spdev\debug-dev\screenpipe-app.exe' --screenpipe-acp-process-guard -- -NoProfile -NonInteractive -Command "[Console]::Out.Write('guard-out-zero'); [Console]::Error.Write('guard-err-zero'); exit 0"
+$LASTEXITCODE # 0
+& 'C:\spdev\debug-dev\screenpipe-app.exe' --screenpipe-acp-process-guard -- -NoProfile -NonInteractive -Command "[Console]::Out.Write('guard-out-nonzero'); [Console]::Error.Write('guard-err-nonzero'); exit 23"
+$LASTEXITCODE # 23
+Remove-Item Env:SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND
+```
+
 A broad exploratory `windows_` test filter ran 10 relevant tests successfully
 but was not counted as passing because an unrelated pre-existing assertion
 compared a resolved `.CMD` path with `.cmd` case-sensitively.
@@ -105,7 +117,10 @@ passed. Its broader unit job has exactly the same 26 failures as exact main
 merge parent `fea7da25177dd8329ac873abd24b67c8a48c4743`; that baseline comparison is
 recorded in the package PR. The runtime SHA is unchanged.
 
-## Current core CI
+## Core CI
+
+Checks for `05158a74` are running; the results below describe the previous
+completed run. Native validation above passed independently on `05158a74`.
 
 At exact `bf46ba81`, Vitest/Bun/typecheck and Windows/macOS build, core,
 integration, and Clippy checks passed. Windows CLI/workspace still fail
@@ -119,8 +134,8 @@ baseline-reproduced failure. Advisory desktop E2E remains red.
 
 Both PRs are source-only, unmerged, and unreleased. Pending core/package merge,
 a versioned Windows release build/sign/upload, human Admin Releases publication,
-normal Store update submission, and human `/admin/pipes` approval. Live Store
-remains v7, SHA `3ae629da4bab55336fe2586a1a157011445fe85841d6202c95db02da6db4deb9`.
+normal Store update submission, and human `/admin/pipes` approval. Last Store
+readback was v7, SHA `3ae629da4bab55336fe2586a1a157011445fe85841d6202c95db02da6db4deb9`.
 No migration, new variable, secret, flag, dependent service deployment, or
 backfill is required. No publication, customer/account, billing, or recovery
 claim was made.
