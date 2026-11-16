@@ -197,6 +197,17 @@ pub fn input_device_is_bluetooth(bare_name: &str) -> Option<bool> {
         .flatten()
 }
 
+/// Channel count to request so a Windows AEC stream opens, or `None` to keep
+/// the default. Shapes are `(channels, sample_rate)`. The rate never changes:
+/// `AudioStreamConfig` is fixed before the capture thread starts and the
+/// fallback rungs reopen at the default rate, so another rate would reach the
+/// resampler unannounced.
+#[cfg(any(target_os = "windows", test))]
+fn aec_channels(default: (u16, u32), call_mode: (u16, u32)) -> Option<u16> {
+    let (channels, rate) = call_mode;
+    (channels > 0 && rate == default.1 && channels != default.0).then_some(channels)
+}
+
 /// PipeWire and PulseAudio expose the source's actual device bus in the
 /// `device.bus` property. Unlike a display name, this distinguishes a USB
 /// 2.4 GHz receiver from Bluetooth.
@@ -1839,6 +1850,36 @@ mod windows_com_audio {
                 println!("device '{name}': is_combo_headset={is_combo}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod aec_channels_tests {
+    use super::aec_channels;
+
+    #[test]
+    fn webcam_call_mode_drops_to_mono() {
+        assert_eq!(aec_channels((2, 48_000), (1, 48_000)), Some(1));
+    }
+
+    #[test]
+    fn same_shape_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (2, 48_000)), None);
+    }
+
+    #[test]
+    fn different_rate_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (1, 16_000)), None);
+    }
+
+    #[test]
+    fn zero_channels_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (0, 48_000)), None);
+    }
+
+    #[test]
+    fn mono_default_follows_stereo_call_mode() {
+        assert_eq!(aec_channels((1, 48_000), (2, 48_000)), Some(2));
     }
 }
 
