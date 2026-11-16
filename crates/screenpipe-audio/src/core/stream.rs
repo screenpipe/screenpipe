@@ -436,8 +436,8 @@ impl AudioStream {
                                 Ok(s) => Some(s),
                                 Err(fallback_err) => {
                                     // Last resort: disable Windows AEC and try again.
-                                    // Some USB mics (e.g. Logitech C922) reject AEC even
-                                    // at the shared-mode format — fall back to plain capture.
+                                    // A mic that rejects AEC even in its call-mode
+                                    // format falls back to plain capture.
                                     #[cfg(target_os = "windows")]
                                     if windows_input_aec {
                                         warn!(
@@ -791,9 +791,9 @@ fn is_wasapi_unsupported_format(err: &anyhow::Error) -> bool {
         // device's current shared-mode mix format is the safe retry.
         || s.to_ascii_lowercase().contains("0x887c001e")
         || s.to_lowercase().contains("unsupported format")
-        // WASAPI with AEC enabled rejects non-default configs with this message
-        // (seen on Logitech C922 and other USB mics). The existing fallback to
-        // default_input_config() already handles this correctly once we match it.
+        // WASAPI with AEC enabled rejects a config that is not the endpoint's
+        // call-mode format with this message (seen on Logitech C922 and other
+        // USB mics).
         || s.to_lowercase().contains("not supported by the device")
 }
 
