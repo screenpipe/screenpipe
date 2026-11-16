@@ -77,3 +77,35 @@ for (day, reason), count in sorted(by_day.items()):
     print("transcription_gate_day", json.dumps({"day": day, "reason": reason, "count": count}), flush=True)
 for (version, reason, tier), count in sorted(counts.items(), key=lambda item: -item[1]):
     print("transcription_gate", json.dumps({"version": version, "reason": reason, "tier": tier, "count": count}), flush=True)
+
+# Route health: every transcription invocation by day, route and response status.
+status, routes = post(
+    f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/observability/telemetry/query",
+    token,
+    {"queryId": "transcription-routes-7888", "dry": True, "view": "events",
+     "timeframe": {"from": since, "to": now},
+     "parameters": {"datasets": ["cloudflare-workers"], "filterCombination": "and", "filters": [
+         {"key": "$metadata.service", "operation": "eq", "type": "string", "value": "ai-proxy"},
+         {"key": "$metadata.trigger", "operation": "regex", "type": "string",
+          "value": "/v1/(listen|realtime|voice/transcribe)"}]},
+     "limit": 5000},
+)
+route_events = routes.get("result", {}).get("events", {}).get("events", [])
+print("transcription_route_status", status, len(route_events), flush=True)
+route_counts = {}
+for event in route_events:
+    meta = event.get("$metadata", {})
+    if meta.get("type") not in (None, "cf-worker-event"):
+        continue
+    workers_event = event.get("$workers", {}).get("event", {})
+    response = workers_event.get("response", {}) if isinstance(workers_event, dict) else {}
+    trigger = str(meta.get("trigger", ""))
+    route = re.search(r"/v1/(listen|realtime|voice/transcribe)", trigger)
+    day = datetime.datetime.fromtimestamp(event.get("timestamp", 0) / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+    key = (day, route.group(0) if route else "other", response.get("status") if isinstance(response, dict) else None)
+    route_counts[key] = route_counts.get(key, 0) + 1
+if route_events:
+    sample = route_events[0].get("$workers", {}).get("event", {})
+    print("transcription_route_event_shape", json.dumps(sorted(sample) if isinstance(sample, dict) else type(sample).__name__), flush=True)
+for (day, route, code), count in sorted(route_counts.items()):
+    print("transcription_route", json.dumps({"day": day, "route": route, "status": code, "count": count}), flush=True)
