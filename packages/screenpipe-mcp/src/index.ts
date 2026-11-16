@@ -45,6 +45,11 @@ import {
 } from "./time-normalization";
 import { createCallObserver, currentMcpRequestId, observeMcpError, observeSearchResult } from "./call-observation";
 import { formatSearchHit, searchContentCap, searchResultHeader } from "./search-result";
+import {
+  normalizeNonNegativeInt,
+  normalizePositiveInt,
+  zeroHitCoverageText,
+} from "./result-contracts";
 import { resolveScreenpipeApiBase } from "./api-base";
 
 initMcpTelemetry({ transport: "stdio" });
@@ -1637,11 +1642,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         observeSearchResult(results.length, false);
 
         if (results.length === 0) {
+          // A zero-hit reply is a successful result, not an error. Disclose the
+          // exact window and filters that were scanned so callers can widen the
+          // right knob instead of guessing or retrying the same query.
           return {
             content: [
               {
                 type: "text",
-                text: "No results found. Try: broader terms, different content_type, or wider time range.",
+                text: zeroHitCoverageText("search-content", {
+                  query: normalized.q as string | undefined,
+                  start_time: normalized.start_time as string | undefined,
+                  end_time: normalized.end_time as string | undefined,
+                  app: (normalized.app_name ?? normalized.app_names) as string | undefined,
+                  limit: normalized.limit as string | number | undefined,
+                  offset: normalized.offset as string | number | undefined,
+                  details: `content_type=${normalized.content_type ?? "all"}`,
+                }),
               },
             ],
           };
@@ -2144,9 +2160,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
       }
 
       case "get-meeting": {
-        const meetingId = args.id as number;
-        if (!meetingId) {
-          return { content: [{ type: "text", text: "Error: id is required" }] };
+        // Clients sometimes serialize integer ids as floats or numeric strings
+        // ("268.0"); the Rust route parses the path segment as i64 and 400s.
+        const meetingId = normalizePositiveInt(args.id);
+        if (meetingId === null) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: id must be a positive integer (received ${JSON.stringify(args.id)}).`,
+              },
+            ],
+          };
         }
         const response = await callAPI(`/meetings/${meetingId}`);
         const meeting = await response.json();
@@ -2159,7 +2184,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
             text += "\n\nTranscript: (no segments recorded for this meeting)";
           } else {
             // Cap the payload: long meetings can have hundreds of segments.
-            const offset = Math.max(0, (args.transcript_offset as number) || 0);
+            // Clients can serialize the offset as "400.0"; coerce it back to a
+            // whole number so slice() and the "more" hint stay correct.
+            const offset = normalizeNonNegativeInt(args.transcript_offset) ?? 0;
             const MAX_SEGMENTS = 200;
             const MAX_CHARS = 40_000;
             const page = segments.slice(offset, offset + MAX_SEGMENTS);
@@ -2263,7 +2290,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           ? data
           : (data.data ?? []);
         if (results.length === 0) {
-          return { content: [{ type: "text", text: "No keyword search results found." }] };
+          return {
+            content: [
+              {
+                type: "text",
+                text: zeroHitCoverageText("keyword-search", {
+                  query: queryStr,
+                  start_time: normalized.start_time as string | undefined,
+                  end_time: normalized.end_time as string | undefined,
+                  app: (normalized.app_name ?? normalized.app_names) as string | undefined,
+                  limit: normalized.limit as string | number | undefined,
+                  offset: normalized.offset as string | number | undefined,
+                  details: `fuzzy_match=${args.fuzzy_match ?? false}`,
+                }),
+              },
+            ],
+          };
         }
         qualifiedValue.searchResult();
         const formatted = results.map((r) => {
