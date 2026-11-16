@@ -1,0 +1,26 @@
+{
+  "providers": [
+    "openai",
+    "openai-chatgpt",
+    "anthropic",
+    "native-ollama",
+    "custom",
+    "screenpipe-cloud"
+  ],
+  "keyless_providers": [
+    "screenpipe-cloud",
+    "native-ollama",
+    "openai-chatgpt"
+  ],
+  "managed_prefix": "enterprise-managed",
+  "default_context_chars": 512000,
+  "default_max_tokens": 4096,
+  "default_policy": {
+    "version": 2,
+    "allow_screenpipe_cloud": true,
+    "allow_employee_custom_presets": true,
+    "lock_default_preset": false,
+    "default_preset_id": null,
+    "managed_presets": []
+  }
+}

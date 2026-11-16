@@ -649,6 +649,12 @@ private func testJoinScreenDetailChoice() {
 @main
 struct ShortcutReminderTests {
     static func main() {
+        expectClose(overlayExpandedWidth(simplified: false), 192, "full dock keeps its width")
+        expectClose(overlayExpandedWidth(simplified: true), 96, "simplified dock fits three controls")
+        for scale: CGFloat in [1, 1.5, 2] {
+            let hit = overlayHoverRect(in: NSRect(x: 0, y: 0, width: 400, height: 200), expanded: true, disclosureDown: true, horizontal: .center, scale: scale, simplified: true)
+            expectClose(hit.width, 96 * scale, "simplified hover width follows visible dock")
+        }
         expect(starredMinutesLeft(until: 3_600_000, now: 0) == 60, "new hour starts at 60 minutes")
         expect(starredMinutesLeft(until: 3_600_000, now: 59.9) == 60, "round up partial minute")
         expect(starredMinutesLeft(until: 3_600_000, now: 60) == 59, "minute boundary ticks down")

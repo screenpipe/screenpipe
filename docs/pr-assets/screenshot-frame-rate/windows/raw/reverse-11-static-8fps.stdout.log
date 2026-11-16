@@ -1,0 +1,6 @@
+wgc_cpu_probe: monitor=65537 duration=30s sample_interval=286ms requested_fps=8
+WGC_RATE_JSON={"callback_count":236,"callback_rate_hz":7.850091068540592,"completed_requests":105,"copy_count":105,"copy_rate_hz":3.4926252635456025,"delivery_rate_hz":3.4926252635456025,"duration_seconds":30.0633455,"failed_requests":0,"first_frame_ms":31.753200000000003,"frame_age":null,"frame_age_note":"WGC Direct3D11CaptureFrame SystemRelativeTime is not collected; request latency is a software proxy and is not native acquisition time","latency_ms_p50":3.3395,"latency_ms_p95":3.7277,"native_interval_attempts":1,"native_interval_failures":0,"native_interval_status":"Applied","native_interval_successes":1,"native_interval_ticks":1250000,"process_cpu_percent_one_core":1.9230228385593346,"requested_fps":8,"selection_interval_ms":286,"session_startup_ms":61.6321,"teardown_ms":14.5087}
+samples captured: 105 (failures: 0)
+wall time: 30.06s, process CPU time: 0.58s
+process CPU load: 1.9% of one core
+WGC callbacks: 236, GPU copies: 105, image requests: 105

@@ -29,7 +29,8 @@ const ManagedPolicyContext = createContext<ManagedPolicyContextValue | null>(
 );
 
 /**
- * Owns managed organization policy state and enforcement for this webview.
+ * Shares organization policy rendering state for this webview. Native code
+ * owns device enforcement even when no webview exists.
  * Consumers read the shared result instead of starting independent pollers.
  */
 export function ManagedPolicyProvider({ children }: { children: ReactNode }) {
