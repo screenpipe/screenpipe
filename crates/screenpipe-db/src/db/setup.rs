@@ -44,6 +44,17 @@ fn bootstrap_disk_reserve_error(
 
 const SQLITE_HEADER_BYTES: usize = 100;
 
+/// How long a connection waits on a lock before SQLite returns `SQLITE_BUSY`.
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the read pool waits for a connection, including opening one.
+///
+/// Opening a connection can itself wait on a lock for `SQLITE_BUSY_TIMEOUT`.
+/// When the two deadlines are equal the pool's fires first and a locked
+/// database is reported as `PoolTimedOut`, which startup treats as final
+/// instead of retrying as it does for a typed busy error (#7801).
+const READ_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+const _: () = assert!(READ_POOL_ACQUIRE_TIMEOUT.as_millis() > SQLITE_BUSY_TIMEOUT.as_millis());
+
 fn startup_not_a_database(detail: impl std::fmt::Display) -> SqlxError {
     SqlxError::Protocol(format!(
         "existing database failed bounded startup preflight: (code: 26) file is not a database: {detail}"
@@ -294,7 +305,7 @@ impl DatabaseManager {
             SqliteConnectOptions::new().filename(sqlite_file)
         };
         let mut connect_options = connect_options
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .pragma("cache_size", format!("-{}", config.cache_size_kb))
             .pragma("mmap_size", config.mmap_size.to_string());
         #[cfg(target_os = "macos")]
@@ -409,7 +420,7 @@ impl DatabaseManager {
             } else {
                 config.read_pool_min
             })
-            .acquire_timeout(Duration::from_secs(5));
+            .acquire_timeout(READ_POOL_ACQUIRE_TIMEOUT);
         // An unpublished index has no readers yet. Defer their connections
         // until schema construction is complete, rather than letting their
         // initialization overlap its DDL and checkpoints. The published
@@ -1685,5 +1696,74 @@ mod shutdown_tests {
             .await
             .expect("close should finish after writer returns")
             .expect("close task should not panic");
+    }
+}
+
+#[cfg(test)]
+mod lock_timeout_ordering_tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteJournalMode, SqlitePoolOptions};
+    use sqlx::{ConnectOptions, Connection};
+
+    /// Opens a pool on a database another connection holds exclusively locked
+    /// and returns the error. Opening a connection has to wait on that lock.
+    async fn open_pool_on_locked_database(busy: Duration, acquire: Duration) -> sqlx::Error {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("locked.sqlite"))
+            .create_if_missing(true);
+        let mut locker = options
+            .clone()
+            .journal_mode(SqliteJournalMode::Delete)
+            .connect()
+            .await
+            .expect("locker connect");
+        sqlx::query("CREATE TABLE probe (id INTEGER)")
+            .execute(&mut locker)
+            .await
+            .expect("create table");
+        sqlx::query("BEGIN EXCLUSIVE")
+            .execute(&mut locker)
+            .await
+            .expect("take lock");
+
+        let error = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(acquire)
+            .connect_with(
+                options
+                    .busy_timeout(busy)
+                    .journal_mode(SqliteJournalMode::Wal),
+            )
+            .await
+            .expect_err("opening must fail while the database is locked");
+        locker.close().await.expect("release lock");
+        error
+    }
+
+    /// #7801: with equal deadlines the pool gives up first and the lock is
+    /// hidden behind `PoolTimedOut`.
+    #[tokio::test]
+    async fn equal_deadlines_hide_a_locked_database_behind_pool_timeout() {
+        let busy = Duration::from_millis(400);
+        let error = open_pool_on_locked_database(busy, busy).await;
+        assert!(
+            matches!(error, sqlx::Error::PoolTimedOut),
+            "expected the masked error this guards against, got {error:?}"
+        );
+    }
+
+    /// With the production ratio between the two deadlines, the same lock is
+    /// reported as SQLite's own busy error, which startup retries.
+    #[tokio::test]
+    async fn production_deadline_ratio_reports_a_locked_database_as_busy() {
+        let busy = Duration::from_millis(400);
+        let acquire = busy
+            .mul_f64(READ_POOL_ACQUIRE_TIMEOUT.as_secs_f64() / SQLITE_BUSY_TIMEOUT.as_secs_f64());
+        let error = open_pool_on_locked_database(busy, acquire).await;
+        assert!(
+            crate::sqlite_error::is_sqlite_busy_error(&error),
+            "expected a typed busy error, got {error:?}"
+        );
     }
 }
