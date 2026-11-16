@@ -223,6 +223,19 @@ impl EnterpriseSyncConfig {
         }
         Ok(())
     }
+
+    /// Resolve fresh authorization for hosted diagnostics and recovery. Archive
+    /// destination admission belongs to uploads, not the support read posture.
+    /// Never reuse a readable policy after a failed refresh.
+    pub(super) async fn resolve_support_mode(&mut self) -> Result<(), EnterpriseSyncError> {
+        self.upload_mode = EnterpriseUploadMode::Blocked("support policy unresolved".into());
+        if let Some(mode) =
+            EnterpriseUploadMode::resolve_for_support(&self.license_key, &self.ingest_url).await?
+        {
+            self.upload_mode = mode;
+        }
+        Ok(())
+    }
 }
 
 // ─── Cursor (last-synced timestamp) ─────────────────────────────────────────
@@ -2545,7 +2558,7 @@ async fn fulfill_log_requests(
     // This worker owns a separate config from the recording sync loop. Resolve
     // its policy before polling: the startup clone is Blocked, and later policy
     // changes must also reach this worker while recording is unavailable.
-    if let Err(error) = cfg.resolve_upload_mode().await {
+    if let Err(error) = cfg.resolve_support_mode().await {
         debug!("log-requests: policy resolution failed: {error}");
         return None;
     }
@@ -3115,7 +3128,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn strict_customer_storage_never_collects_remote_diagnostic_logs() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::pin();
+        let _mode_env = UploadModeEnvGuard::clear();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -3150,7 +3163,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn readable_customer_storage_keeps_remote_diagnostic_logs_available() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::pin();
+        let _mode_env = UploadModeEnvGuard::clear();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(
@@ -3186,14 +3199,132 @@ pub(crate) mod tests {
         assert!(handled.is_none());
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn pin_failure_is_collected_without_uploading_recordings() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_readable",
+        );
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path(
+            "/api/enterprise/storage-binding/mode",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"desired_mode":"direct_upload"})),
+        )
+        .mount(&server)
+        .await;
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        let mut cursor = initialized_cursor();
+        cursor.save(&cfg.cursor_path).unwrap();
+        let checkpoint = std::fs::read(&cfg.cursor_path).unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let local = counting_local(
+            reads.clone(),
+            vec![vec![frame(
+                1,
+                "2026-08-04T00:01:00Z",
+                "private-app",
+                "private-recording",
+            )]],
+        );
+        let recovery = TestLicenseKeyRecovery::unavailable(reads.clone());
+        let http = enterprise_http_client();
+        let error = run_reported_sync_burst(&mut cfg, &mut cursor, &local, &http, &recovery)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("upload destination pin not configured"));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        wiremock::Mock::given(wiremock::matchers::path("/api/enterprise/upload-status"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(diagnostics::report(&cfg, &http, None)
+            .await
+            .unwrap()
+            .is_some());
+
+        let requested_at = "2026-08-04T00:02:00Z";
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"requested":true,"requested_at":requested_at}),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/logs"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"data":{
+                    "signedUrl":format!("{}/support-upload",server.uri()),
+                    "path":"logs/machine/enterprise-auto-dev-1/pin-failure.log"
+                }}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for (method, path) in [
+            ("PUT", "/support-upload"),
+            ("POST", "/api/logs/confirm"),
+            ("POST", "/api/enterprise/log-requests"),
+        ] {
+            wiremock::Mock::given(wiremock::matchers::method(method))
+                .and(wiremock::matchers::path(path))
+                .respond_with(wiremock::ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        assert_eq!(
+            fulfill_log_requests(&mut cfg, &http, None).await.as_deref(),
+            Some(requested_at)
+        );
+        let requests = server.received_requests().await.unwrap();
+        let report = requests
+            .iter()
+            .find(|r| r.url.path() == "/support-upload")
+            .unwrap();
+        let collected = String::from_utf8(report.body.clone()).unwrap();
+        assert!(collected.contains("upload destination pin not configured"));
+        assert!(collected.contains("pending data retained"));
+        assert!(!collected.contains("private-recording"));
+        assert!(requests.iter().all(|r| !matches!(
+            r.url.path(),
+            "/api/enterprise/upload-ticket"
+                | "/api/enterprise/upload-complete"
+                | "/api/enterprise/ingest"
+        )));
+        // A support refresh cannot turn the upload pin failure into admission.
+        assert!(
+            run_reported_sync_burst(&mut cfg, &mut cursor, &local, &http, &recovery)
+                .await
+                .is_err()
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(&cfg.cursor_path).unwrap(), checkpoint);
+    }
+
     #[tokio::test]
-    async fn log_requests_recover_initially_blocked_policy_after_lookup_failure() {
+    async fn log_requests_revoke_stale_readable_policy_and_recover_after_lookup_failure() {
         let _env_lock = ENV_LOCK.lock().unwrap();
         let _mode_env = UploadModeEnvGuard::clear();
         let server = wiremock::MockServer::start().await;
         let dir = TempDir::new().unwrap();
         let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
-        cfg.upload_mode = EnterpriseUploadMode::Blocked("startup policy unresolved".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::HostedIngest;
         let http = enterprise_http_client();
 
         wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -5214,8 +5345,8 @@ pub(crate) mod tests {
             Self(prior, None)
         }
 
-        /// Like `clear`, but also deploys an MDM destination pin for the
-        /// guard's lifetime — direct modes fail closed without one.
+        /// Like `clear`, but also deploys a destination pin for tests using
+        /// an explicit MDM upload-mode override.
         fn pin() -> Self {
             let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
             std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
@@ -6198,7 +6329,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn server_mode_resolution_covers_hosted_and_both_direct_modes() {
         let _env_lock = ENV_LOCK.lock().unwrap();
-        let _mode_env = UploadModeEnvGuard::pin();
+        let _mode_env = UploadModeEnvGuard::clear();
         for (desired_mode, expected_label) in [
             ("hosted_ingest", "hosted_ingest"),
             ("direct_upload_readable", "direct_readable"),

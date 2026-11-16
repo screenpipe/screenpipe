@@ -5,29 +5,31 @@
 type CacheEntry<T> = {
   value: T;
   expiresAt: number;
+  generation: number;
 };
 
-type TtlSingleFlightCacheOptions<T> = {
+type TtlCacheOptions<T> = {
   maxEntries: number;
   ttlForValue: (key: string, value: T) => number | null;
   now?: () => number;
 };
 
 /**
- * Small per-isolate TTL cache that coalesces concurrent loads for one key.
+ * Small per-isolate cache of completed values. Each miss owns its own loader.
  *
  * Values whose TTL policy returns null (or a non-positive duration) are passed
- * through without being cached. In-flight work is always removed after it
- * settles, so rejected or deliberately uncacheable lookups are retried.
+ * through without being cached. Never retain a request-owned promise here:
+ * Workers can cancel its owner before its continuations run, stranding later
+ * requests that await it. Cache only the value after the loader completes.
  */
-export class TtlSingleFlightCache<T> {
+export class TtlCache<T> {
   private readonly values = new Map<string, CacheEntry<T>>();
-  private readonly inFlight = new Map<string, Promise<T>>();
   private readonly maxEntries: number;
   private readonly ttlForValue: (key: string, value: T) => number | null;
   private readonly now: () => number;
+  private generation = 0;
 
-  constructor(options: TtlSingleFlightCacheOptions<T>) {
+  constructor(options: TtlCacheOptions<T>) {
     if (!Number.isInteger(options.maxEntries) || options.maxEntries < 1) {
       throw new Error('maxEntries must be a positive integer');
     }
@@ -50,35 +52,25 @@ export class TtlSingleFlightCache<T> {
       this.values.delete(key);
     }
 
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-
-    const pending = Promise.resolve()
-      .then(loader)
-      .then((value) => {
-        const ttlMs = this.ttlForValue(key, value);
-        if (ttlMs !== null && ttlMs > 0) {
-          this.store(key, value, ttlMs);
-        }
-        return value;
-      })
-      .finally(() => {
-        if (this.inFlight.get(key) === pending) {
-          this.inFlight.delete(key);
-        }
-      });
-
-    this.inFlight.set(key, pending);
-    return pending;
+    const startedAt = this.now();
+    const generation = ++this.generation;
+    const value = await loader();
+    const ttlMs = this.ttlForValue(key, value);
+    if (ttlMs !== null && ttlMs > 0) {
+      this.store(key, value, startedAt + ttlMs, generation);
+    }
+    return value;
   }
 
   clear(): void {
     this.values.clear();
-    this.inFlight.clear();
   }
 
-  private store(key: string, value: T, ttlMs: number): void {
+  private store(key: string, value: T, expiresAt: number, generation: number): void {
     const now = this.now();
+    // A slow older lookup must neither overwrite a newer result nor extend
+    // entitlement freshness by the amount of time it spent waiting upstream.
+    if (expiresAt <= now || (this.values.get(key)?.generation ?? 0) > generation) return;
     for (const [cachedKey, cached] of this.values) {
       if (cached.expiresAt <= now) this.values.delete(cachedKey);
     }
@@ -90,6 +82,6 @@ export class TtlSingleFlightCache<T> {
       this.values.delete(oldestKey);
     }
 
-    this.values.set(key, { value, expiresAt: now + ttlMs });
+    this.values.set(key, { value, expiresAt, generation });
   }
 }

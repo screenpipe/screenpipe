@@ -27,6 +27,36 @@ function tailItem() {
 }
 
 describe('AI gateway Tail Worker', () => {
+	it('exports canceled authentication work without inventing a response status', async () => {
+		const item = tailItem();
+		const { response, ...requestOnly } = item.event;
+		const canceled = { ...item, outcome: 'canceled', event: requestOnly, logs: [
+			{ message: ['screenpipe.ai-gateway-auth-stage {"stage":"clerk_verification"}'] },
+			{ message: ['screenpipe.ai-gateway-auth-stage {"stage":"entitlement_fetch"}'] },
+			{ message: ['private upstream payload'] },
+		] };
+		const event = normalizeTailItem(canceled)!;
+		expect(event).toMatchObject({ outcome: 'failure', severity: 'error', worker_outcome: 'canceled',
+			auth_stage: 'entitlement_fetch', path: '/v1/chat/completions' });
+		expect(event.status_code).toBeUndefined();
+		expect(shouldKeepAuditEvent(event)).toBe(true);
+		expect(normalizeTailItem({ ...canceled, outcome: 'ok' })).toBeNull();
+		expect(normalizeTailItem({ ...canceled, event: { ...requestOnly, response: { status: 0 } } })).toBeNull();
+		let pending: Promise<unknown> | undefined;
+		let body: unknown;
+		worker.tail([canceled], { AI_GATEWAY_DRAIN_KEY: 'synthetic-drain', COLLECTOR: {
+			async fetch(request: Request) {
+				body = await request.json();
+				return Response.json({ accepted: 1, forwarded: 1 });
+			},
+		} }, { waitUntil(promise) { pending = promise; } });
+		await pending;
+		expect(body).toMatchObject([{ outcome: 'failure', worker_outcome: 'canceled', auth_stage: 'entitlement_fetch' }]);
+		expect(JSON.stringify(body)).not.toContain('status_code');
+		expect(JSON.stringify(body)).not.toContain('private');
+		expect(JSON.stringify(body)).not.toContain('must-not-cross');
+	});
+
 	it('retains direct rescue attribution without forwarding arbitrary failure text', () => {
 		const item = tailItem();
 		item.event.response.status = 200;

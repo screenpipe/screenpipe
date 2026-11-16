@@ -1526,6 +1526,12 @@ fn create_dynamic_menu(
     let search_shortcut = &data.search_shortcut;
     let chat_shortcut = &data.chat_shortcut;
 
+    if crate::enterprise_policy::is_simplified_ui() {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("star_session", ui_text("Star / end work session")).build(app)?
+        ).item(&PredefinedMenuItem::separator(app)?);
+    }
+
     // --- Open screenpipe ---
     if !data.app_ui_hidden {
         menu_builder = menu_builder
@@ -2037,6 +2043,11 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
     track_tray_menu_item_clicked(app_handle, event.id().as_ref());
 
     match event.id().as_ref() {
+        "star_session" => {
+            if crate::enterprise_policy::is_simplified_ui() {
+                let _ = crate::commands::starred_sessions::toggle(app_handle);
+            }
+        }
         "show" => {
             let app = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {

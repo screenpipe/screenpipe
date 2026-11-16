@@ -923,7 +923,9 @@ export function normalizeSettingsArrays(settings: Settings): boolean {
 	};
 	let changed = false;
 	const presets = settings.aiPresets;
-	if (!Array.isArray(presets) || presets.length === 0) {
+	const managedAiPolicy = settings.enterpriseAiPresetPolicy;
+	const nativeManagedAi = managedAiPolicy && typeof managedAiPolicy === "object" && !Array.isArray(managedAiPolicy) && managedAiPolicy.version === 2;
+	if (!Array.isArray(presets) || (presets.length === 0 && !nativeManagedAi)) {
 		settings.aiPresets = [defaults.aiPresets[0]] as any;
 		changed = true;
 	}

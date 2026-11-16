@@ -116,6 +116,10 @@ pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
         store.recording.disable_clipboard_capture = true;
         info!("E2E seed: event-trigger capture enabled with keyboard/clipboard DB rows disabled");
     }
+    if e2e_flags.iter().any(|f| f == "windows-privacy-fixture") {
+        store.recording.ignored_windows = vec!["PrivacyBlocked".to_string()];
+        info!("E2E seed: PrivacyBlocked window excluded from Windows capture");
+    }
     if e2e_flags.iter().any(|f| f == "keyboard-db-capture") {
         store.recording.disable_keyboard_capture = false;
         info!("E2E seed: keyboard DB capture enabled");

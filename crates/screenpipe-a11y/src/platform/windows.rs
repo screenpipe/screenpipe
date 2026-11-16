@@ -2073,6 +2073,25 @@ pub struct ForegroundWindowIdentity {
     pub title: String,
 }
 
+/// Resolve the actual foreground window's display without UIA or cursor fallback.
+/// Use the native handle rather than DPI-virtualized window coordinates. xcap's
+/// monitor IDs use the same HMONITOR-to-u32 representation.
+pub fn get_focused_window_monitor_fresh() -> Option<u32> {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() || is_transient_shell_window(hwnd) {
+            return None;
+        }
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
+        if monitor.is_invalid() || GetForegroundWindow() != hwnd {
+            return None;
+        }
+        Some(monitor.0 as u32)
+    }
+}
+
 pub fn get_foreground_window_identity_fresh() -> Option<ForegroundWindowIdentity> {
     unsafe {
         let hwnd = GetForegroundWindow();

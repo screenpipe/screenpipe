@@ -19,6 +19,9 @@ pub mod device_config;
 pub mod managed_settings;
 
 #[cfg(feature = "enterprise-support")]
+pub(crate) mod runtime_policy;
+
+#[cfg(feature = "enterprise-support")]
 pub(crate) mod recording_events;
 
 #[cfg(feature = "enterprise-support")]
