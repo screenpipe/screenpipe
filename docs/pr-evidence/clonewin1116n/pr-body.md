@@ -24,7 +24,9 @@
 
 Starting head: `bf46ba81a3f300c6a6f1b8178558459773363225`.
 Native-validated production-code head: `05158a7478d3c43845501bfe2d2066f42aa43046`.
-This handoff-only follow-up does not change that tested source.
+The follow-up adds `#[cfg(windows)]` to the three helper bindings so macOS/Linux
+do not compile Windows-only calls. The Windows execution path is unchanged, so
+its passed native checks and normal app build remain applicable.
 
 The regression was confirmed on real Windows handles before changing the
 behavior. A process handle was awaited to `WAIT_OBJECT_0`; the existing
@@ -88,6 +90,8 @@ cloud, customer, or full onboarding evidence.
 - Exact built-app ACP guard commands for target exits 0 and 23 — passed; stdout,
   stderr, and exit codes propagated exactly.
 - `cargo fmt --all -- --check` and `git diff --check` — passed.
+- After the platform-guard correction, macOS `cargo check -p screenpipe-core --features acp` — passed (50.85s).
+- macOS `cargo clippy -p screenpipe-core --features acp --no-deps` — passed (6.60s; existing warnings).
 
 The built-app guard checks used these PowerShell commands:
 
@@ -119,17 +123,19 @@ recorded in the package PR. The runtime SHA is unchanged.
 
 ## Core CI
 
-CI is being re-run for the final handoff revision; the results below describe
-the previous completed run. Native validation above passed independently on
-`05158a74`; subsequent commits change this handoff only.
+CI on `54886916` caught an introduced cross-platform compile failure: only the
+assignment binding was gated to Windows, leaving three helper calls enabled on
+macOS/Linux. All three helper bindings now have their own `#[cfg(windows)]`.
+The local macOS core check and focused Clippy run passed after the correction;
+CI is being re-run for the final source.
 
-At exact `bf46ba81`, Vitest/Bun/typecheck and Windows/macOS build, core,
-integration, and Clippy checks passed. Windows CLI/workspace still fail
-`ort-sys` `dynamic_link.rs:42` with OS error 3, matching the evidenced exact-base
-failure. Current Ubuntu job 133618922497 (run 43958392360) fails
-`screenpipe-redact` integration `table_work_slices_adapt_independently` (19
-passed, 1 failed); its baseline was not rerun, so this is not claimed as a
-baseline-reproduced failure. Advisory desktop E2E remains red.
+Earlier exact `bf46ba81` CI passed Vitest/Bun/typecheck and Windows/macOS build,
+core, integration, and Clippy checks. Its Windows CLI/workspace failures were
+`ort-sys` `dynamic_link.rs:42`, OS error 3, matching the evidenced exact-base
+failure. Its Ubuntu job 133618922497 (run 43958392360) failed `screenpipe-redact`
+`table_work_slices_adapt_independently` (19 passed, 1 failed); that failure's
+baseline was not rerun. Advisory desktop E2E also remained red. These older
+results are not presented as a green final CI run.
 
 ## Production status
 

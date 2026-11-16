@@ -1982,6 +1982,7 @@ impl PiExecutor {
 
         #[cfg(windows)]
         let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
         let _process_tree_guard = retain_child_job_or_recover_completion(
             &mut child,
             assignment,
@@ -2157,6 +2158,7 @@ impl PiExecutor {
 
         #[cfg(windows)]
         let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
         let _process_tree_guard = retain_child_job_or_recover_completion(
             &mut child,
             assignment,
@@ -2730,6 +2732,7 @@ impl AgentExecutor for PiExecutor {
         })?;
         #[cfg(windows)]
         let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
         let _process_tree_guard =
             retain_child_job_or_recover_completion(&mut child, assignment, "pi installer")
                 .await
