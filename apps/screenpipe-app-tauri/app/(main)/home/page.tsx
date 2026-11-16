@@ -139,6 +139,7 @@ import { SidebarFooter } from "@/components/sidebar-footer";
 import { WorkflowsHelpDialog } from "@/components/workflows/workflows-help-dialog";
 import { navigationProductMode } from "@/lib/workflows/navigation";
 import { IntegratedWorkflows } from "@/components/workflows/integrated-workflows";
+import { EnterpriseProductCard } from "@/components/workflows/enterprise-product-card";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { readProductMode, saveProductMode } from "@/lib/workflows/entry-preference";
 import { useGT } from "gt-react";
@@ -1763,9 +1764,12 @@ function HomeContent() {
           </div>
 
           {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} fullscreen={isFullscreen} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
-            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter isTranslucent={isTranslucent} teamToken={settings.user?.token} teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()}
-              onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
-              hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
+            navigationFooter={({ openKeyboardShortcuts }) => <>
+              {!isManagedDeployment && <EnterpriseProductCard isTranslucent={isTranslucent} />}
+              <SidebarFooter isTranslucent={isTranslucent} teamToken={settings.user?.token} teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()}
+                onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
+                hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />
+            </>} /></div>}
           <WorkflowsHelpDialog open={workflowsActive && (activeSection === "help" || activeSection === "feedback") && !isSectionHidden("help")}
             onOpenChange={open => { if (!open) void setActiveSection("home"); }} />
           {!workflowsActive && showFirstRunGuide && (
