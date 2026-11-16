@@ -14,6 +14,8 @@ use std::sync::{Arc, RwLock};
 mod linux;
 #[cfg(target_os = "linux")]
 mod linux_portal;
+#[cfg(target_os = "linux")]
+mod linux_portal_token;
 #[cfg(any(target_os = "linux", test))]
 mod linux_wayland;
 #[cfg(target_os = "macos")]

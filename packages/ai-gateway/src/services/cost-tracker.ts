@@ -34,6 +34,11 @@ const GEMINI25_CACHE = { cacheRead: 0.25 };
 const MODEL_PRICING: Record<string, ModelPricing> = {
   [GEMINI_ARGON_MODEL]: { input: 4, output: 20, cacheRead: 0.05 },
   // OpenAI API
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol (Standard, Low).
+  'gpt-6.1-sol': {
+    input: 2, output: 10, cacheRead: 0.05, cacheWrite: 1.25,
+    longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
+  },
   // https://developers.openai.com/api/docs/models/gpt-6-astra (Standard, Low).
   'gpt-6-astra': {
     input: 10.00, output: 50.00, ...GPT56_CACHE,

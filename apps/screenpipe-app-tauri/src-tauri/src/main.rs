@@ -449,6 +449,14 @@ macro_rules! define_specta_builder {
 
         Builder::new()
             .commands(tauri_helper::specta_collect_commands!())
+            .constant(
+                "DEFAULT_SCREENSHOT_FRAME_RATE",
+                screenpipe_config::DEFAULT_SCREENSHOT_FRAME_RATE,
+            )
+            .constant(
+                "MAX_SCREENSHOT_FRAME_RATE",
+                screenpipe_config::MAX_SCREENSHOT_FRAME_RATE,
+            )
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
             .typ::<sync::SyncStatusResponse>()
@@ -775,14 +783,21 @@ async fn main() {
     // the process env itself.
 
     let app_version = env!("CARGO_PKG_VERSION");
-    let sentry_guard = if !telemetry_disabled {
+    crate::analytics::set_consent(!telemetry_disabled);
+    // Keep the client available for a later policy opt-in; delivery always
+    // checks current consent, including while the UI is absent.
+    let sentry_guard = if !screenpipe_engine::analytics::telemetry_disabled_by_env() {
         Some(sentry::init((
             "https://da4edafe2c8e5e8682505945695ecad7@o4505591122886656.ingest.us.sentry.io/4510761355116544",
             sentry::ClientOptions {
                 release: Some(format!("screenpipe-app@{}", app_version).into()),
                 send_default_pii: false,
                 server_name: Some("screenpipe-app".into()),
+                transport: Some(std::sync::Arc::new(crate::analytics::sentry_transport)),
                 before_send: Some(std::sync::Arc::new(|mut event| {
+                    if !crate::analytics::consent_enabled() {
+                        return None;
+                    }
                     // Self-expiring Sentry reports. Each build stamps the
                     // unix epoch seconds of its build time (see build.rs) and
                     // we refuse to emit events once it's > 90 days old. This
@@ -1237,7 +1252,7 @@ async fn main() {
         .plugin(tauri_plugin_webdriver::init())
         .plugin(e2e::plugin());
 
-    // Only add Sentry plugin if telemetry is enabled
+    // The transport checks live consent for native and webview reports.
     let app = if let Some(ref _guard) = sentry_guard {
         let client = sentry::Hub::current().client().unwrap();
         app.plugin(tauri_plugin_sentry::init(&client))
@@ -1890,9 +1905,8 @@ async fn main() {
             // saved snoozes/preferences and the bounded re-show of the smaller
             // cross-platform design. Skip when the timeline itself is unavailable.
             if onboarding_store.is_completed
-                && !app_ui_hidden
-                && !headless_startup
-                && !store.recording.disable_timeline
+                && (crate::enterprise_policy::is_simplified_ui()
+                    || (!app_ui_hidden && !headless_startup && !store.recording.disable_timeline))
             {
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -2323,8 +2337,6 @@ async fn main() {
                 });
             }
 
-            let is_analytics_enabled = store.recording.analytics_enabled;
-
             let is_autostart_enabled = store
                 .auto_start_enabled;
 
@@ -2376,7 +2388,7 @@ async fn main() {
             let email = store.user.email.unwrap_or_default();
             let local_api = crate::recording::local_api_context_from_app(&app_handle);
 
-            if is_analytics_enabled {
+            {
                 match start_analytics(
                     unique_id,
                     email,
@@ -2385,7 +2397,7 @@ async fn main() {
                     local_api.url(""),
                     local_api.api_key.clone(),
                     data_dir.clone(),
-                    is_analytics_enabled,
+                    crate::analytics::consent_enabled(),
                 ) {
                     Ok(analytics_manager) => {
                         app.manage(analytics_manager);
@@ -2461,8 +2473,8 @@ async fn main() {
                 // no way to stop capture at all — and then the start/stop hotkeys
                 // are registered and routed natively, because the usual
                 // `shortcut-*-recording` emits have no webview listener here.
-                if crate::enterprise_policy::is_tray_hidden() {
-                    info!("enterprise: hidden UI and tray suppressed, registering recording control shortcuts only");
+                if crate::enterprise_policy::is_tray_hidden() || crate::enterprise_policy::is_simplified_ui() {
+                    info!("enterprise: registering native recording and simplified controls");
                     let app_handle_clone = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         crate::shortcuts::reconcile_with_enterprise_policy(

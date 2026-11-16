@@ -113,6 +113,9 @@ commits: `28e5c247`
 - [ ] **resolution change (e.g., clamshell mode)** — closing MacBook lid with external monitor. recording continues on external.
 - [ ] **queue stats after unplug** — check logs. no queue stats for disconnected monitor after disconnect.
 - [ ] **Monitor defaults and CLI overrides** — Fresh installs enable all monitors on every device tier. Verify that saved monitor choices are preserved, `--use-all-monitors` enables all monitors, and `--monitor-id` records only the selected monitors. (`bd5b94328`)
+- [ ] **Linux Wayland: portal approval survives restart** - On KDE Plasma or GNOME (Wayland) with 2+ monitors, start screenpipe with no `~/.screenpipe/wayland-screencast-restore-token`, pick each monitor individually in the share dialog. Log shows `Wayland portal capture started for N monitor(s)` and the token file exists with mode `0600`. Quit and relaunch (and log out and in): no dialog appears and capture starts again.
+- [ ] **Linux Wayland: unusable selection re-prompts** - Delete the token file, start screenpipe, and pick "Share full Workspace" on KDE. Log shows `pick individual screens (not the full workspace)`, the token file is removed, and the next retry (about 60s) shows the dialog again instead of failing silently every minute.
+- [ ] **Linux Wayland: identical monitors map by connector** - With 2+ monitors of the same resolution on KDE, each screen's frames land on the matching monitor in the timeline (portal `mapping_id`, for example `HDMI-A-1`, is matched to the monitor name).
 
 ### 4. audio device handling
 

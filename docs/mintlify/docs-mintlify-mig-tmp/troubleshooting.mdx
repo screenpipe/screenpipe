@@ -27,6 +27,7 @@ icon: "wrench"
 | `/api/search` returns 404 | Use `/search` on `localhost:3030` | [API recipes](/api-recipes) |
 | Privacy question | local/cloud path and enabled toggles | [Privacy data flow](/privacy-data-flow) |
 | Connected app fails | OAuth callback, token, proxy path | [Connection reference](/connection-reference) |
+| Linux Wayland: no screen frames, or a screen-share prompt every login | Pick individual screens in the share dialog | [Linux Wayland screen sharing](#linux-wayland-screen-sharing) |
 
 <img src="https://docs.screenpi.pe/public/app-screenshots/settings-storage.png" alt="Screenpipe storage settings" width="1200" />
 
@@ -61,6 +62,15 @@ After installing the desktop app:
 **Linux:**
 - Install dependencies: `sudo apt install tesseract-ocr libxcb1`
 - Grant screen capture permissions for your display server (X11 or Wayland)
+
+### Linux Wayland screen sharing
+
+On Wayland, Screenpipe records the screen through the desktop's screen-share portal (xdg-desktop-portal). The first time it starts, your desktop asks which screens to share.
+
+- **Pick each monitor individually.** On KDE Plasma with more than one display, the dialog also offers "Share full Workspace". That option produces a single stream that cannot be matched to your monitors, so no screen frames are recorded. If it is picked, Screenpipe forgets that choice and shows the dialog again on the next attempt, and the log says `pick individual screens (not the full workspace)`.
+- **You are only asked once.** Screenpipe asks the portal to remember the approval until you revoke it and keeps the portal's restore token in `~/.screenpipe/wayland-screencast-restore-token` (readable only by you). Later starts and logins reuse it without a prompt.
+- **To choose different screens,** quit Screenpipe, delete `~/.screenpipe/wayland-screencast-restore-token`, and start Screenpipe again. You can also revoke the approval from your desktop's privacy settings.
+- **To check capture,** run `curl http://localhost:3030/health` and confirm `frame_status` is `ok`, or look for `Wayland portal capture started for N monitor(s)` in `~/.screenpipe/screenpipe-app.*.log`.
 
 ### Login loop, failed to load user, or wrong account
 

@@ -223,3 +223,8 @@ function chatUsage(usage: any): any {
 		cache_creation_input_tokens: usage.cache_write_tokens ?? usage.input_tokens_details?.cache_write_tokens ?? 0,
 	};
 }
+
+/** Sol shares the Responses/tool wire contract and existing Low/Standard policy. */
+export class SolProvider extends AstraProvider {
+	protected override responseModel = 'gpt-6.1-sol';
+}

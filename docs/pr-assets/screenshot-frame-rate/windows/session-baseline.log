@@ -1,0 +1,19 @@
+wgc_session_ab: monitor=65537 samples=30 interval=500ms timeout=1500ms
+persistent startup + warm-up: 115.8ms
+
+--- persistent session ---
+successful requests: 30 (failures: 0)
+end-to-end request: mean=505.7ms p50=505.1ms p95=526.4ms
+process CPU: 0.203s over 15.230s wall (1.33% of one core)
+WGC callbacks: 30, GPU copies: 30, image requests: 30
+
+cooling down with no benchmark WGC session...
+
+--- session per request ---
+successful requests: 30 (failures: 0)
+end-to-end request: mean=60.6ms p50=57.7ms p95=90.2ms
+session init: mean=14.6ms p50=10.8ms p95=30.5ms
+first frame: mean=39.1ms p50=40.4ms p95=48.1ms
+session close: mean=6.8ms p50=1.4ms p95=14.9ms
+process CPU: 0.250s over 15.030s wall (1.66% of one core)
+WGC callbacks: 30, GPU copies: 30, image requests: 30

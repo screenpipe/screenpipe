@@ -690,6 +690,20 @@ pub fn cloud_routing_env(
     )
 }
 
+/// Claude's CLI sign-in replaces credentials in its store even without a
+/// logout request. Keep both the adapter and its login subprocess in the same
+/// Screenpipe-owned profile, including the macOS Keychain namespace. Never
+/// seed this profile with the user's credentials: copied refresh tokens would
+/// still couple the two logins when either client rotates them.
+fn isolate_claude_auth(command: &mut tokio::process::Command, agent_id: &str, data_dir: &Path) {
+    if agent_id == "claude-acp" {
+        let profile = data_dir.join("acp").join("claude");
+        command
+            .env("CLAUDE_CONFIG_DIR", &profile)
+            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &profile);
+    }
+}
+
 /// Run a `terminal`-type ACP auth method's login: the agent's own launch
 /// command plus the method's `args` (e.g. `bun x <adapter> --cli auth login
 /// --claudeai`). The command opens the browser, completes OAuth, writes the
@@ -737,6 +751,11 @@ async fn run_terminal_login(
     for key in RUNTIME_ONLY_ENV {
         command.env_remove(key);
     }
+    isolate_claude_auth(
+        &mut command,
+        agent_id,
+        &crate::paths::default_screenpipe_data_dir(),
+    );
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to start login: {e}"))?;
@@ -5185,6 +5204,13 @@ pub(super) async fn run_from_env_with_observer(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Apply after preset env so a shared CLAUDE_CONFIG_DIR cannot reconnect
+    // Screenpipe sign-in to an external Claude Code session's credentials.
+    isolate_claude_auth(
+        &mut command,
+        &config.agent_id,
+        &crate::paths::default_screenpipe_data_dir(),
+    );
     #[cfg(unix)]
     let mut process_tree = ProcessTree::prepare_tokio(&mut command)?;
     #[cfg(windows)]
@@ -5364,6 +5390,103 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{AgentCapabilities, ContentChunk, SessionUpdate};
     use agent_client_protocol::Channel;
+
+    #[test]
+    fn claude_auth_overrides_shared_profile_and_secure_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("Screenpipe profile");
+        let mut command = tokio::process::Command::new("unused");
+        command
+            .env("CLAUDE_CONFIG_DIR", root.path().join("external-config"))
+            .env(
+                "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                root.path().join("external-keychain"),
+            )
+            .env("ANTHROPIC_AUTH_TOKEN", "cloud-token");
+
+        isolate_claude_auth(&mut command, "claude-acp", &data_dir);
+
+        let env: HashMap<_, _> = command.as_std().get_envs().collect();
+        let profile = data_dir.join("acp/claude");
+        for key in ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
+            assert_eq!(env[std::ffi::OsStr::new(key)], Some(profile.as_os_str()));
+        }
+        assert_eq!(
+            env[std::ffi::OsStr::new("ANTHROPIC_AUTH_TOKEN")],
+            Some(std::ffi::OsStr::new("cloud-token"))
+        );
+    }
+
+    #[test]
+    fn claude_auth_isolation_leaves_other_agents_unchanged() {
+        for agent_id in [
+            "codex-acp",
+            "pi-acp",
+            "cursor",
+            "github-copilot-cli",
+            "custom",
+        ] {
+            let mut command = tokio::process::Command::new("unused");
+            command.env("CLAUDE_CONFIG_DIR", "user-profile");
+            isolate_claude_auth(&mut command, agent_id, Path::new("unused"));
+            let env: Vec<_> = command.as_std().get_envs().collect();
+            assert_eq!(
+                env,
+                vec![(
+                    std::ffi::OsStr::new("CLAUDE_CONFIG_DIR"),
+                    Some(std::ffi::OsStr::new("user-profile"))
+                )],
+                "{agent_id}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_auth_login_and_restart_preserve_external_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let external = root.path().join("external");
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join(".credentials.json"), "external-login").unwrap();
+        let data_dir = root.path().join("Screenpipe profile");
+        let profile = data_dir.join("acp/claude");
+
+        // Model the CLI's config/credential writes in fresh child processes.
+        // Both inherited overrides point at the external store before isolation.
+        for credential in ["screenpipe-login", "screenpipe-reauth"] {
+            let mut login = tokio::process::Command::new("/bin/sh");
+            login
+                .env("CLAUDE_CONFIG_DIR", &external)
+                .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &external)
+                .env("TEST_CREDENTIAL", credential)
+                .args(["-ec", r#"
+                    test "$CLAUDE_CONFIG_DIR" = "$CLAUDE_SECURESTORAGE_CONFIG_DIR"
+                    mkdir -p "$CLAUDE_CONFIG_DIR"
+                    printf '%s' "$TEST_CREDENTIAL" > "$CLAUDE_SECURESTORAGE_CONFIG_DIR/.credentials.json"
+                "#]);
+            isolate_claude_auth(&mut login, "claude-acp", &data_dir);
+            assert!(login.status().await.unwrap().success());
+
+            let mut restarted_adapter = tokio::process::Command::new("/bin/sh");
+            restarted_adapter.args([
+                "-ec",
+                r#"cat "$CLAUDE_SECURESTORAGE_CONFIG_DIR/.credentials.json""#,
+            ]);
+            isolate_claude_auth(&mut restarted_adapter, "claude-acp", &data_dir);
+            let output = restarted_adapter.output().await.unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, credential.as_bytes());
+            assert_eq!(
+                std::fs::read_to_string(profile.join(".credentials.json")).unwrap(),
+                credential
+            );
+            assert_eq!(
+                std::fs::read_to_string(external.join(".credentials.json")).unwrap(),
+                "external-login"
+            );
+        }
+    }
+
     #[test]
     fn terminal_auth_meta_drives_a_cli_login() {
         // A standard advertised method (not the Terminal variant) that carries
