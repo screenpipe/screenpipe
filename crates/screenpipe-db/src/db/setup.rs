@@ -34,7 +34,7 @@ fn bootstrap_disk_reserve_error(
             "offline construction reached disk reserve: available_bytes={available_bytes}, required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=free space until available_bytes >= required_bytes, then retry"
         ),
         BootstrapDiskReserveFailure::Probe(error) => format!(
-            "offline construction disk-space probe failed: error_kind={:?}, raw_os_error={:?}, cause={error}; required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=restore the disk-space probe, then retry",
+            "offline construction disk-space probe failed: error_kind={:?}, raw_os_error={:?}, cause={error}; required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=restore access to the storage drive or data folder, then retry startup",
             error.kind(),
             error.raw_os_error(),
         ),
@@ -1280,7 +1280,9 @@ mod shutdown_tests {
         assert!(probe.contains("raw_os_error=Some(5)"));
         assert!(probe.contains("cause="));
         assert!(!probe.contains("available_bytes=0"));
-        assert!(probe.contains("recovery=restore the disk-space probe"));
+        assert!(probe.contains(
+            "recovery=restore access to the storage drive or data folder, then retry startup"
+        ));
     }
 
     #[tokio::test]

@@ -931,7 +931,9 @@ async fn reserve_probe_failure_resumes_same_generation_and_persists_recording() 
         "{error}"
     );
     assert!(
-        error.contains("recovery=restore the disk-space probe, then retry"),
+        error.contains(
+            "recovery=restore access to the storage drive or data folder, then retry startup"
+        ),
         "{error}"
     );
     assert!(!error.contains("available_bytes=0"), "{error}");
