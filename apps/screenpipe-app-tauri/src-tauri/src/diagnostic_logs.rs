@@ -1781,12 +1781,11 @@ mod tests {
         let logs = tempdir().unwrap();
         let current = logs.path().join("screenpipe-app.2026-11-16.log");
         let cause = "Access is denied. (os error 5)";
-        let failure =
-            format!("failed to retain pi host cleanup job; guarded process terminated: {cause}");
+        let failure = format!("failed to contain pi process 731 before execution: {cause}");
         std::fs::write(
             &current,
             format!(
-                "ERROR refusing uncontained pi process 731 after cleanup job assignment failed: {cause}\nERROR pipe 'digital-clone' error: {failure}\ncontact=private-person@example.com\n"
+                "ERROR pipe 'digital-clone' error: {failure}\ncontact=private-person@example.com\n"
             ),
         )
         .unwrap();
@@ -1805,7 +1804,6 @@ mod tests {
             .await
             .unwrap();
         for evidence in [
-            "refusing uncontained pi process",
             "pipe 'digital-clone' error:",
             failure.as_str(),
             "screenpipe restarted; digital-clone remains disabled",
