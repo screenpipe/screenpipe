@@ -35,7 +35,7 @@ def cause(text):
 
 account = os.environ["CLOUDFLARE_ACCOUNT_ID"]
 token = os.environ["CLOUDFLARE_API_TOKEN"]
-hours = int(os.environ.get("TRANSCRIPTION_GATE_HOURS", "6"))
+hours = int(os.environ.get("TRANSCRIPTION_GATE_HOURS", "168"))
 now = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
 since = now - hours * 3600 * 1000
 status, telemetry = post(
@@ -51,6 +51,8 @@ status, telemetry = post(
 )
 print("transcription_gate_telemetry_status", status, json.dumps({"hours": hours}), flush=True)
 counts = {}
+by_day = {}
+shape_printed = False
 events = telemetry.get("result", {}).get("events", {}).get("events", [])
 for event in events:
     version = event.get("$workers", {}).get("scriptVersion", {}).get("id")
@@ -64,6 +66,14 @@ for event in events:
         labeled = re.search(r'"reason":\s*"(\w+)"', message)
         key = (version, labeled.group(1) if labeled else cause(payload), None)
     counts[key] = counts.get(key, 0) + 1
+    day = datetime.datetime.fromtimestamp(event.get("timestamp", 0) / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+    by_day[(day, key[1])] = by_day.get((day, key[1]), 0) + 1
+    if key[1] == "unclassified" and not shape_printed:
+        shape_printed = True
+        # Field names only, so the next revision can read the thrown error.
+        print("transcription_gate_event_shape", json.dumps({k: sorted(v) if isinstance(v, dict) else type(v).__name__ for k, v in event.items()}), flush=True)
 print("transcription_gate_events", len(events), flush=True)
+for (day, reason), count in sorted(by_day.items()):
+    print("transcription_gate_day", json.dumps({"day": day, "reason": reason, "count": count}), flush=True)
 for (version, reason, tier), count in sorted(counts.items(), key=lambda item: -item[1]):
     print("transcription_gate", json.dumps({"version": version, "reason": reason, "tier": tier, "count": count}), flush=True)
