@@ -1,0 +1,20 @@
+{
+  "source_hashes": {
+    "crates/screenpipe-screen/src/screenshot_privacy.rs": "c2930934ee1cf7c29d8fffaad4eb1dbb8d05b4b04fa94cd01690a86c508e3e63",
+    "crates/screenpipe-screen/src/screenshot_privacy/macos.rs": "65b6f38dde0e8ec9c3b5701502780bda91be6c845ce462e83a22a3f136bd7ed5",
+    "crates/screenpipe-screen/src/screenshot_privacy/stream.rs": "3f174f620d80075754ea629fcca2977a5bc8f2afa8220513c7ce929ac4240917",
+    "crates/screenpipe-screen/src/core.rs": "6de17c67dfdae10146ab5f7ee85cb268f4d3dc86d6fbec8132bed11f6d65fd91",
+    "crates/screenpipe-screen/src/capture_screenshot_by_window.rs": "9198c52a8232631d7c750eab8fb62888e56159f39e0f42b0385c01582eeb92e2",
+    "crates/screenpipe-screen/examples/screenshot_redaction_probe.rs": "0e82396591fc54e6fb133aab64c569d9178c39925a2504de0a30b2085d310545",
+    "crates/screenpipe-a11y/src/url_filter.rs": "40dbe156b2b96fc96ca20b1ce97ccf20ef80c143467166511ec87e8f69b7c7e0",
+    "crates/screenpipe-engine/src/event_driven_capture.rs": "f61b73612aa84bd8893ded007d1867b5bc8476d7a4b4392184a72b442e17e256",
+    "crates/screenpipe-engine/src/vision_manager/manager.rs": "6efb432a714efb240083fada8eb686c348ab4049d8a6a9ba6215997e78817b33",
+    "apps/screenpipe-app-tauri/src-tauri/src/diagnostic_logs.rs": "6eb14c1ccd698feeabd4a5d690f93ccc9c88a8492f52148353a7f0abad5e51fc"
+  },
+  "optimized_profile": "release-dev",
+  "app_profile": "debug-dev e2e",
+  "app_binary_sha256": "ce8b600798c5dddcf7c99488cc9f79a18c5fc5630e409d625536643539969557",
+  "probe_binary_sha256": "85f134dcdf91ad671ce5ca0756b3aed7023ce3923c6d78e26ac02e576736bbe3",
+  "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83"
+}

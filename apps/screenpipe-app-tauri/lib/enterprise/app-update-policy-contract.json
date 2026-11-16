@@ -1,0 +1,14 @@
+{
+  "modes": [
+    "auto_detect",
+    "screenpipe",
+    "mdm",
+    "manual"
+  ],
+  "default": {
+    "mode": "screenpipe",
+    "default_auto_update": false,
+    "allow_employee_override": true,
+    "channel": "enterprise"
+  }
+}

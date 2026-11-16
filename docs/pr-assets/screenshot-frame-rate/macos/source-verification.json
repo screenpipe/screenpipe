@@ -1,0 +1,23 @@
+{
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83\n",
+  "cpus": 12,
+  "memory_gib": 24,
+  "display": [
+    1024,
+    768
+  ],
+  "files": {
+    "crates/screenpipe-a11y/src/platform/macos.rs": "5abe4e18f845a12b511dd7b9871788959eb301791d753b8c25d9f43b3157643b",
+    "crates/screenpipe-screen/src/screenshot_privacy/macos.rs": "6259ff54ef8c03942da4f1c1aef7dfae9c2fa478d75502e3e62ada57142b0e53",
+    "crates/screenpipe-screen/src/screenshot_privacy/stream.rs": "ec4cfe5b6b99ee0761ed40175250cba38a563a4cba0902ddafae3b268e9f10c2",
+    "crates/screenpipe-screen/src/screenshot_privacy.rs": "138ca3bbb690c923663b1a8d2c6c52eb10ff110b1d31fd49fc2bf6ba1310de13",
+    "crates/screenpipe-screen/src/snapshot_writer.rs": "790b03dd5a0afbd840b81e2343d671a54d4bc59600f4ae29eec905edbad3e993",
+    "crates/screenpipe-engine/src/event_driven_capture.rs": "21d8ff3ca927ccedba15ab8b0963e22409b4e836e46e6983a2cfa19580fe7ef4",
+    "crates/screenpipe-engine/src/visual_probe.rs": "466fbc258b2a47f4568f322bc95d2e34683757e2b838f6b4d00280ffa9abd3fe",
+    "crates/screenpipe-config/src/recording.rs": "15090fe1959e5030b77bc8c74a7e750f0a335130b37cc5261616ff1adcd472d6"
+  },
+  "binaries": {
+    "/Applications/ScreenpipeRateCandidateSharingV2.app/Contents/MacOS/screenpipe-app": "2f17ad12fbebe51b2101348ebfca5b444ce659aaf1aec4ade01be4f3e515bc8e",
+    "/Applications/ScreenpipeRateDemandBench.app/Contents/MacOS/RateDemandBench": "03b1538a6f9ab8c05cb64b8bfb93f4d158ea534133375026c6c9568aeb552c52"
+  }
+}

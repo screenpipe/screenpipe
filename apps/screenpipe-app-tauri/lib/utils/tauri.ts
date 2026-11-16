@@ -2763,6 +2763,17 @@ async setOnboardingStep(step: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Apply only the screenshot acquisition rate. HD remains independently owned.
+ */
+async setScreenshotFrameRate(fps: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_screenshot_frame_rate", { fps }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Pin the webview overlay after a drag. The native macOS panel persists the
  * same two values over the FFI action channel, which the webview cannot use.
  */
@@ -3210,7 +3221,8 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined constants **/
 
-
+export const DEFAULT_SCREENSHOT_FRAME_RATE = 2 as const;
+export const MAX_SCREENSHOT_FRAME_RATE = 2147483647 as const;
 
 /** user-defined types **/
 
@@ -3977,6 +3989,12 @@ videoQuality: string;
  * always capture native.
  */
 captureMaxWidth?: number;
+/**
+ * Background screenshot acquisition fps, independent of snapshot save
+ * cadence and HD video fps. Activity-triggered screenshots may request a
+ * fresh frame. Persisted across recording restarts and applied live.
+ */
+screenshotFrameRate?: number;
 /**
  * Maximum width for stored snapshots. Images wider than this are downscaled
  * (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at

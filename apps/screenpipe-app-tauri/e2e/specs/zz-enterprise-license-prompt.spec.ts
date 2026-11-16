@@ -7,7 +7,7 @@
 // - a full-seat license must show a human-readable error instead of spinning,
 // - retrying after seats are added must activate without a reload.
 
-import { readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authHeaders, getLocalApiConfig } from '../helpers/api-utils.js';
 import { E2E_DATA_DIR } from '../helpers/app-launcher.js';
@@ -369,13 +369,17 @@ describe('Enterprise managed pipe enforcement', () => {
     await waitForAppReady();
     await openHomeReliably();
     await configureManagedHomeMocks();
+    // Native policy tests cover delivery without windows. This consumer-build
+    // UI lane starts with a native-managed task to verify its read-only controls.
+    mkdirSync(MANAGED_PIPE_DIR, { recursive: true });
+    writeFileSync(MANAGED_PIPE_PATH, EXPECTED_MANAGED_PIPE);
   });
 
   after(async () => {
     await clearEnterpriseMocks();
   });
 
-  it('installs the managed pipe, locks its UI, and rejects local API mutations', async () => {
+  it('locks a native-managed pipe in the UI and rejects local API mutations', async () => {
     const installed = await waitForManagedPipe();
     expect(installed.config.enterprise_managed).toBe(true);
     expect(installed.config.preset).toEqual([MANAGED_PRESET_ID]);

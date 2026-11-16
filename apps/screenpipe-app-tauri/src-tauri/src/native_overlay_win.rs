@@ -117,6 +117,7 @@ pub fn show(json: Option<&str>) -> bool {
     };
 
     let ok = mutate(|s| {
+        s.simplified_ui = str_at("simplifiedUI") == "true";
         s.shortcut_overlay = str_at("overlay");
         s.shortcut_chat = str_at("chat");
         s.shortcut_star = str_at("star");

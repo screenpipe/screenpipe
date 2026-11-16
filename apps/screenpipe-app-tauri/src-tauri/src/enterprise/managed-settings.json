@@ -7,6 +7,7 @@
   {"policyKey": "useSystemDefaultAudio", "deviceKey": "useSystemDefaultAudio", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "meetingLiveTranscriptionEnabled", "deviceKey": "meetingLiveTranscriptionEnabled", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "meetingLiveTranscriptionProvider", "deviceKey": "meetingLiveTranscriptionProvider", "apply": "engine", "kind": "enum", "values": ["selected-engine", "screenpipe-cloud", "deepgram-live", "disabled"], "defaultValue": "selected-engine"},
+  {"policyKey": "experimentalMeetingPiggyback", "deviceKey": "experimentalMeetingPiggyback", "apply": "engine", "kind": "boolean"},
   {"policyKey": "filterMusic", "deviceKey": "filterMusic", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "aecMode", "deviceKey": "aecMode", "apply": "engine", "kind": "enum", "values": ["off", "screenpipe", "macos", "windows"], "defaultValue": "off"},
   {"policyKey": "audioChunkDuration", "deviceKey": "audioChunkDuration", "apply": "engine", "kind": "number", "min": 5, "max": 300, "integer": true, "defaultValue": 30},
@@ -54,6 +55,6 @@
   {"policyKey": "localRetentionDays", "deviceKey": "localRetentionDays", "apply": "engine", "kind": "number", "min": 1, "max": 3650, "integer": true, "defaultValue": 14},
   {"policyKey": "localRetentionMode", "deviceKey": "localRetentionMode", "apply": "engine", "kind": "enum", "values": ["media", "lean", "all"], "defaultValue": "media"},
   {"policyKey": "listen_on_lan", "deviceKey": "listenOnLan", "apply": "engine", "kind": "boolean", "defaultValue": false},
-  {"policyKey": "analyticsEnabled", "deviceKey": "analyticsEnabled", "apply": "live", "kind": "boolean", "defaultValue": true},
+  {"policyKey": "analyticsEnabled", "deviceKey": "analyticsEnabled", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "autoStartEnabled", "deviceKey": "autoStartEnabled", "apply": "live", "kind": "boolean", "trueOnly": true}
 ]

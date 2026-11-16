@@ -1100,7 +1100,7 @@ pub fn list_imported_skills() -> Result<Vec<ImportedSkill>, String> {
     Ok(out)
 }
 
-fn sync_managed_team_skills_in(
+pub(crate) fn sync_managed_team_skills_in(
     home: &Path,
     store: &Path,
     skills: &[ManagedTeamSkill],
@@ -1115,7 +1115,8 @@ fn sync_managed_team_skills_in(
             Ok(marker) => marker,
             Err(error) => {
                 prune_safe = false;
-                for destination in &skill.destinations {
+                let destinations = if skill.destinations.is_empty() { vec!["policy".to_string()] } else { skill.destinations.clone() };
+                for destination in &destinations {
                     receipts.push(ManagedTeamSkillReceipt {
                         artifact_id: skill.artifact_id.clone(),
                         version: skill.version,
@@ -1211,9 +1212,14 @@ fn sync_managed_team_skills_in(
     }
 
     if prune_safe {
-        for (_, root) in managed_destination_roots(home, store) {
-            let Ok(entries) = std::fs::read_dir(&root) else {
-                continue;
+        for (destination, root) in managed_destination_roots(home, store) {
+            let entries = match std::fs::read_dir(&root) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    receipts.push(ManagedTeamSkillReceipt { artifact_id: String::new(), version: 0, release_version: 0, digest: String::new(), destination, status: "error".into(), detail: Some(format!("failed to inspect managed skills for removal: {error}")) });
+                    continue;
+                }
             };
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1233,6 +1239,7 @@ fn sync_managed_team_skills_in(
                 }
                 if let Err(error) = std::fs::remove_dir_all(&path) {
                     warn!(path = %path.display(), %error, "failed to prune managed team skill");
+                    receipts.push(ManagedTeamSkillReceipt { artifact_id: entry.file_name().to_string_lossy().into_owned(), version: 0, release_version: 0, digest: String::new(), destination: destination.clone(), status: "error".into(), detail: Some(format!("failed to remove managed skill: {error}")) });
                 }
             }
         }
@@ -1753,7 +1760,7 @@ pub async fn install_registry_skill(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[tokio::test]
@@ -2125,7 +2132,7 @@ mod tests {
         assert!(safe_join(base, "a/../../b").is_err());
     }
 
-    fn managed_skill_fixture(id: &str, version: u64, destinations: &[&str]) -> ManagedTeamSkill {
+    pub(crate) fn managed_skill_fixture(id: &str, version: u64, destinations: &[&str]) -> ManagedTeamSkill {
         let description = "Verify the resident ledger before editing it.";
         let skill_md = format!(
             "---\nname: resident-record-review\ndescription: {description}\n---\n\n# Resident record review\n\nRead references/checklist.md, then run scripts/verify.sh.\n"
