@@ -1303,3 +1303,45 @@ mod wasapi_format_tests {
         )));
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_aec_hardware_tests {
+    use super::*;
+
+    /// Live: the default mic must keep Windows AEC. Some USB webcam mics
+    /// change their mix format in the Communications category and reject
+    /// the 2ch default, so the build fails.
+    ///
+    ///   cargo test -p screenpipe-audio --lib aec_stream_opens_on_default_input \
+    ///     -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires real Windows audio hardware; run manually"]
+    async fn aec_stream_opens_on_default_input() {
+        let device = super::super::device::default_input_device().expect("default input");
+        let (cpal_device, config) = get_cpal_device_and_config(&device).await.expect("config");
+        let (tx, mut rx) = broadcast::channel(1024);
+        let stream = build_input_stream(
+            &cpal_device,
+            &config,
+            config.channels(),
+            tx,
+            |e| eprintln!("stream error: {e}"),
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("AEC build failed for {device}: {e}"));
+        stream.play().expect("play");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        drop(stream);
+        let mut samples = 0;
+        while let Ok(chunk) = rx.try_recv() {
+            samples += chunk.len();
+        }
+        println!(
+            "{device}: {}ch {}Hz, {samples} samples in 1s",
+            config.channels(),
+            config.sample_rate().0
+        );
+        assert!(samples > 0, "no samples arrived from {device}");
+    }
+}
