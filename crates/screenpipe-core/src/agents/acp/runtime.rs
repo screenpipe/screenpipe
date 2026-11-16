@@ -3647,7 +3647,7 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
 /// for a human title like "Read /a/b.ts", which is a native agent step and not
 /// an MCP tool. Cursor's ACP permission title joins the id and the tool with
 /// `": "` (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`); that
-/// joined string is split in `scoped_tool_allowed` before it gets here.
+/// joined string is split in `scoped_tool_name` before it gets here.
 fn normalized_tool_name(title: &str) -> Option<String> {
     let title = title.trim();
     if title.is_empty() {
@@ -3677,22 +3677,26 @@ fn normalized_tool_name(title: &str) -> Option<String> {
 /// name) are refused too: a scoped surface answers from the evidence in its own
 /// turn, so a file read or a skill load is out of contract by construction.
 fn scoped_tool_allowed(allowlist: &[String], title: Option<&str>) -> bool {
-    permission_title_candidates(title.unwrap_or("")).any(|candidate| {
-        normalized_tool_name(candidate).is_some_and(|name| allowlist.contains(&name))
-    })
+    scoped_tool_name(title.unwrap_or("")).is_some_and(|name| allowlist.contains(&name))
 }
 
-/// Pieces of a permission title that might each be a tool id.
+/// The tool a permission title names, or `None` when it names no single tool.
 ///
-/// Cursor's MCP approval title is `${registeredName}: ${toolName}`. The joined
-/// string contains a space, so it is not itself a tool id, but either side is:
-/// `screenpipe-tools-screenpipe_live_view: screenpipe_live_view`.
-fn permission_title_candidates(title: &str) -> impl Iterator<Item = &str> {
+/// Cursor's MCP approval title is `${registeredName}: ${toolName}`
+/// (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`). The joined
+/// string contains a space, so it is not itself a tool id. Both halves must
+/// name the same tool: a title is agent-supplied text, and accepting either
+/// half alone would approve a native step whose description merely ends in
+/// `: <allowlisted tool>`.
+fn scoped_tool_name(title: &str) -> Option<String> {
     let title = title.trim();
-    let (registered, tool) = title.split_once(": ").unwrap_or((title, ""));
-    [title, registered.trim(), tool.trim()]
-        .into_iter()
-        .filter(|candidate| !candidate.is_empty())
+    if let Some(name) = normalized_tool_name(title) {
+        return Some(name);
+    }
+    let (registered, tool) = title.split_once(": ")?;
+    let registered = normalized_tool_name(registered)?;
+    let tool = normalized_tool_name(tool)?;
+    (registered == tool).then_some(tool)
 }
 
 /// A short, readable heading for a permission prompt, from the tool's `kind`.
@@ -5632,6 +5636,20 @@ mod tests {
         assert!(!scoped_tool_allowed(
             &live_view,
             Some("Read `src/main.rs`: notes")
+        ));
+        // Agent-supplied text that only ends in an allowlisted tool name is
+        // not that tool: both halves of a joined title must agree.
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("rm -rf ~: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("Shell: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view: get_meeting")
         ));
 
         // A screenpipe tool outside the list, another MCP server, a native step,
