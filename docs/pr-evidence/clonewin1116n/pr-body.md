@@ -13,9 +13,12 @@
   short-lived child has already exited. ACP builds now preserve that completed
   command's stdout, stderr, and real exit status because the existing ACP guard
   joined its own kill-on-close Job before starting the wrapped command.
+- Refreshes Tokio's usable child PID after completion observation. A reaped
+  child is no longer installed into stop state or passed to `taskkill`; a live
+  child still honors an already-pending stop.
 - Non-ACP builds have no self-contained guard, so they retain unconditional
-  fail-closed behavior. Cleanup errors are reported; the code does not claim a
-  child was terminated when the cleanup request or reap failed.
+  fail-closed behavior. Observation errors no longer bypass cleanup; assignment,
+  observation, cleanup-request, and reap failures are all reported factually.
 
 ## Review result and historical intent
 
@@ -44,12 +47,15 @@ disable claims synchronous descendant teardown.
 
 ## Windows evidence
 
-The deterministic native tests use process handles and OS signals, not sleep,
-PID lookup, polling limits, or deadlines:
+The deterministic native tests use process handles and OS signals, not PID
+reuse, polling limits, or arbitrary deadlines:
 
-- already-signaled children with exit 0 and exit 23 each produced the expected
-  `completed-out` stdout and `completed-err` stderr after real late assignment
-  failures (`os error 5`);
+- the narrow helper test uses an honestly unguarded PowerShell fixture: its
+  already-signaled exit 0 and exit 23 results retained stdout/stderr after real
+  late assignment failures (`os error 5`), and neither replaced a pending-stop
+  sentinel nor triggered PID cleanup;
+- a live real child installed against the same pending-stop sentinel was
+  terminated and reaped;
 - a still-running child received a real Win32 assignment failure, was rejected
   and reaped, while an unrelated blocked process remained unsignaled;
 - the existing Job-close test signaled the owned lingering grandchild while an
@@ -57,20 +63,29 @@ PID lookup, polling limits, or deadlines:
 - existing ACP guard argument transport still preserves `--`, spaces, quotes,
   and shell metacharacters.
 
+The exact normal build output, `C:\spdev\debug-dev\screenpipe-app.exe`, then ran
+the production `--screenpipe-acp-process-guard` entrypoint with completed targets.
+It preserved `guard-out-zero`/`guard-err-zero` with exit 0 and
+`guard-out-nonzero`/`guard-err-nonzero` with exit 23. This proves the built ACP
+guard path; the narrow helper test alone is not presented as that proof.
+
 The execution token was `High Mandatory Level` (`S-1-16-12288`) administrator.
 This is native lifecycle evidence, not standard-user, consumer login, live
 cloud, customer, or full onboarding evidence.
 
 ## Commands and results
 
-- `cargo test -p screenpipe-core --features acp windows_completed_children_preserve_zero_and_nonzero_results -- --nocapture` — passed, 1/1.
+- `cargo test -p screenpipe-core --features acp windows_unguarded_helper_preserves_completed_zero_and_nonzero_results -- --nocapture` — passed, 1/1.
+- `cargo test -p screenpipe-core --features acp windows_live_child_honors_pending_stop_during_pid_install -- --nocapture` — passed, 1/1.
 - `cargo test -p screenpipe-core --features acp windows_live_assignment_failure_fails_closed_without_unrelated_cleanup -- --nocapture` — passed, 1/1.
 - `cargo test -p screenpipe-core --features acp windows_job_close_eventually_signals_owned_grandchildren_only -- --nocapture` — passed, 1/1.
 - `cargo test -p screenpipe-core --features acp windows_guard_transport_preserves_separator_quotes_and_metacharacters -- --nocapture` — passed, 1/1.
 - `cargo check -p screenpipe-core --no-default-features` — passed; confirms the non-ACP path compiles with completed-child recovery absent.
 - `cd apps/screenpipe-app-tauri && bun run test:tauri windows_pipe_containment_failure_survives_rotation_and_support_redaction -- --nocapture` — passed, 1/1 through the supported `debug-dev` queue. This is the actual shared collector with representative Win32 wording, rotation/restart, and email redaction; it is not a live assignment failure or support upload.
 - `cd apps/screenpipe-app-tauri && bun install --frozen-lockfile` — passed with Bun 1.3.10. The source-unreferenced generated `node_modules/@tauri-apps/plugin-updater` 2.10.0 directory was recoverably quarantined; no source pin changed.
-- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` — passed through the supported queue; `debug-dev` application built at `C:\spdev\debug-dev\screenpipe-app.exe`.
+- `cd apps/screenpipe-app-tauri && bun run build:tauri:dev` — passed on final source through the supported queue in 6m20s; `debug-dev` application built at `C:\spdev\debug-dev\screenpipe-app.exe`.
+- Exact built-app ACP guard commands for target exits 0 and 23 — passed; stdout,
+  stderr, and exit codes propagated exactly.
 - `cargo fmt --all -- --check` and `git diff --check` — passed.
 
 A broad exploratory `windows_` test filter ran 10 relevant tests successfully
@@ -85,15 +100,27 @@ head `c5bebf1fc`; no package source is duplicated here. Its final source is
 `c7489091db98fc610bbd0f2d70b4670b472bfa0a2179cdcfe63497dbf3e031cf`;
 the Windows-tested embedded runtime remains
 `2bfac42a54d3874318f2c5a05600e31dea78d8d2a3e22bcd08ca4ab6aaed51c2`.
-All 12 package/Store tests passed. Its disclosure is: cloud presets send screen
-content and local AI chat logs to cloud AI; screenpipe-cloud uses Screenpipe
-cloud. Permissions, completion/privacy instructions, and native runtime are
-unchanged by that review wording fix.
+Its focused 12 tests, build, TypeScript, browser/API, and native automation
+passed. Its broader unit job has exactly the same 26 failures as exact main
+merge parent `fea7da25177dd8329ac873abd24b67c8a48c4743`; that baseline comparison is
+recorded in the package PR. The runtime SHA is unchanged.
+
+## Current core CI
+
+At exact `bf46ba81`, Vitest/Bun/typecheck and Windows/macOS build, core,
+integration, and Clippy checks passed. Windows CLI/workspace still fail
+`ort-sys` `dynamic_link.rs:42` with OS error 3, matching the evidenced exact-base
+failure. Current Ubuntu job 133618922497 (run 43958392360) fails
+`screenpipe-redact` integration `table_work_slices_adapt_independently` (19
+passed, 1 failed); its baseline was not rerun, so this is not claimed as a
+baseline-reproduced failure. Advisory desktop E2E remains red.
 
 ## Production status
 
-Unmerged and unreleased. Pending core and package merge, a versioned Windows
-release build/sign/upload, human Admin Releases publication, and normal Store
-submission/human approval. No migration, new variable, secret, flag, dependent
-service deployment, or backfill is required. No publication pointer, tag,
-release, customer state, billing/auth/account state, or permissions were changed.
+Both PRs are source-only, unmerged, and unreleased. Pending core/package merge,
+a versioned Windows release build/sign/upload, human Admin Releases publication,
+normal Store update submission, and human `/admin/pipes` approval. Live Store
+remains v7, SHA `3ae629da4bab55336fe2586a1a157011445fe85841d6202c95db02da6db4deb9`.
+No migration, new variable, secret, flag, dependent service deployment, or
+backfill is required. No publication, customer/account, billing, or recovery
+claim was made.

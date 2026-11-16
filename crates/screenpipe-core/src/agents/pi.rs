@@ -292,33 +292,41 @@ async fn retain_child_job_or_recover_completion(
             // Therefore a completed guard cannot leave an uncontained wrapped tree.
             // Non-ACP builds have no equivalent guarantee and always fail closed.
             #[cfg(feature = "acp")]
-            if let Some(status) = child.try_wait().map_err(|observation_error| {
-                anyhow!(
-                    "failed to contain {description} ({assignment_error}) and failed to observe its process state: {observation_error}"
-                )
-            })? {
-                warn!(
-                    "{description} exited with {status} before outer cleanup Job assignment ({assignment_error}); preserving its completed result because the ACP process guard already contained the tree"
-                );
-                return Ok(None);
-            }
+            let observation = match child.try_wait() {
+                Ok(Some(status)) => {
+                    warn!(
+                        "{description} exited with {status} before outer cleanup Job assignment ({assignment_error}); preserving its completed result because the ACP process guard already contained the tree"
+                    );
+                    return Ok(None);
+                }
+                Ok(None) => "live child observed".to_string(),
+                Err(error) => format!("failed: {error}"),
+            };
+
+            #[cfg(not(feature = "acp"))]
+            let observation = "not attempted (ACP process guard unavailable)".to_string();
 
             let kill_result = child.start_kill();
             let wait_result = child.wait().await;
-            match (kill_result, wait_result) {
-                (Ok(()), Ok(_)) => Err(anyhow!(
-                    "failed to contain {description} before execution: {assignment_error}"
-                )),
-                (kill_result, wait_result) => Err(anyhow!(
-                    "failed to contain {description} before execution: {assignment_error}; cleanup request: {}; reap: {}",
-                    kill_result
-                        .err()
-                        .map_or_else(|| "accepted".to_string(), |error| error.to_string()),
-                    wait_result
-                        .err()
-                        .map_or_else(|| "completed".to_string(), |error| error.to_string())
-                )),
-            }
+            Err(anyhow!(
+                "failed to contain {description}: {assignment_error}; process-state observation: {}; cleanup request: {}; reap: {}",
+                observation,
+                kill_result
+                    .err()
+                    .map_or_else(|| "accepted".to_string(), |error| error.to_string()),
+                wait_result
+                    .err()
+                    .map_or_else(|| "completed".to_string(), |error| error.to_string())
+            ))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn install_live_child_pid(child: &tokio::process::Child, shared_pid: &super::SharedPid) {
+    if let Some(pid) = child.id() {
+        if install_spawned_pid(shared_pid, pid) {
+            let _ = kill_process_group(pid);
         }
     }
 }
@@ -1980,9 +1988,12 @@ impl PiExecutor {
             &format!("pi process {}", pid.unwrap_or_default()),
         )
         .await?;
+        #[cfg(windows)]
+        let pid = child.id();
 
         // Set PID synchronously. If a stop was requested before spawn
         // completed, honor it immediately against the fresh process group.
+        #[cfg(unix)]
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
                 // If the child is still entering setsid(), this first TERM can
@@ -1990,6 +2001,10 @@ impl PiExecutor {
                 // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
+        }
+        #[cfg(windows)]
+        if let Some(ref sp) = shared_pid {
+            install_live_child_pid(&child, sp);
         }
 
         let output = child.wait_with_output().await?;
@@ -2148,9 +2163,12 @@ impl PiExecutor {
             &format!("streaming pi process {}", pid.unwrap_or_default()),
         )
         .await?;
+        #[cfg(windows)]
+        let pid = child.id();
 
         // Set PID synchronously. If a stop was requested before spawn
         // completed, honor it immediately against the fresh process group.
+        #[cfg(unix)]
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
                 // If the child is still entering setsid(), this first TERM can
@@ -2158,6 +2176,10 @@ impl PiExecutor {
                 // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
+        }
+        #[cfg(windows)]
+        if let Some(ref sp) = shared_pid {
+            install_live_child_pid(&child, sp);
         }
 
         // Take stdout for streaming reads; stderr will be read after exit
@@ -5529,11 +5551,20 @@ mod tests {
         let guard = retain_child_job_or_recover_completion(
             &mut child,
             assignment,
-            "self-contained completed fixture",
+            "unguarded completed helper fixture",
         )
         .await
         .expect("preserve completed result");
         assert!(guard.is_none());
+        let pending_stop = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            super::super::STOP_REQUESTED_PID,
+        ));
+        install_live_child_pid(&child, &pending_stop);
+        assert_eq!(
+            pending_stop.load(std::sync::atomic::Ordering::SeqCst),
+            super::super::STOP_REQUESTED_PID,
+            "a reaped child must not replace the pending-stop sentinel"
+        );
         let output = child
             .wait_with_output()
             .await
@@ -5545,9 +5576,33 @@ mod tests {
 
     #[cfg(all(windows, feature = "acp"))]
     #[tokio::test]
-    async fn windows_completed_children_preserve_zero_and_nonzero_results() {
+    async fn windows_unguarded_helper_preserves_completed_zero_and_nonzero_results() {
         assert_completed_child_result_is_preserved(0).await;
         assert_completed_child_result_is_preserved(23).await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_live_child_honors_pending_stop_during_pid_install() {
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Wait-Event"])
+            .creation_flags(BACKGROUND_SPAWN_FLAGS)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = command.spawn().expect("spawn live fixture");
+        let process = WindowsProcessHandle::open(child.id().expect("live fixture pid"))
+            .expect("open live fixture");
+        let pending_stop = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            super::super::STOP_REQUESTED_PID,
+        ));
+
+        install_live_child_pid(&child, &pending_stop);
+        process
+            .wait_signaled()
+            .await
+            .expect("pending stop terminated live fixture");
+        child.wait().await.expect("reap live fixture");
     }
 
     #[cfg(all(windows, feature = "acp"))]

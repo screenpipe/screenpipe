@@ -1781,7 +1781,9 @@ mod tests {
         let logs = tempdir().unwrap();
         let current = logs.path().join("screenpipe-app.2026-11-16.log");
         let cause = "Access is denied. (os error 5)";
-        let failure = format!("failed to contain pi process 731 before execution: {cause}");
+        let failure = format!(
+            "failed to contain pi process 731: {cause}; process-state observation: live child observed; cleanup request: accepted; reap: completed"
+        );
         std::fs::write(
             &current,
             format!(
