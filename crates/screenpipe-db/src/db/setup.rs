@@ -6,7 +6,54 @@ use super::*;
 use std::io::Read;
 use std::path::Path;
 
+#[derive(Debug)]
+enum BootstrapDiskReserveFailure {
+    BelowReserve { available_bytes: u64 },
+    Probe(std::io::Error),
+}
+
+fn bootstrap_disk_reserve_sample(
+    sample: std::io::Result<u64>,
+    reserve_bytes: u64,
+) -> Result<(), BootstrapDiskReserveFailure> {
+    match sample {
+        Ok(available_bytes) if available_bytes < reserve_bytes => {
+            Err(BootstrapDiskReserveFailure::BelowReserve { available_bytes })
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(BootstrapDiskReserveFailure::Probe(error)),
+    }
+}
+
+fn bootstrap_disk_reserve_error(
+    failure: BootstrapDiskReserveFailure,
+    reserve_bytes: u64,
+) -> SqlxError {
+    let detail = match failure {
+        BootstrapDiskReserveFailure::BelowReserve { available_bytes } => format!(
+            "offline construction reached disk reserve: available_bytes={available_bytes}, required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=free space until available_bytes >= required_bytes, then retry"
+        ),
+        BootstrapDiskReserveFailure::Probe(error) => format!(
+            "offline construction disk-space probe failed: error_kind={:?}, raw_os_error={:?}, cause={error}; required_bytes={reserve_bytes}, reserve_bytes={reserve_bytes} (bytes); source retained; outcome=recording_blocked; recovery=restore access to the storage drive or data folder, then retry startup",
+            error.kind(),
+            error.raw_os_error(),
+        ),
+    };
+    crate::storage::storage_error(detail)
+}
+
 const SQLITE_HEADER_BYTES: usize = 100;
+
+/// How long a connection waits on a lock before SQLite returns `SQLITE_BUSY`.
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the read pool waits for a connection, including opening one.
+///
+/// Opening a connection can itself wait on a lock for `SQLITE_BUSY_TIMEOUT`.
+/// When the two deadlines are equal the pool's fires first and a locked
+/// database is reported as `PoolTimedOut`, which startup treats as final
+/// instead of retrying as it does for a typed busy error (#7801).
+const READ_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+const _: () = assert!(READ_POOL_ACQUIRE_TIMEOUT.as_millis() > SQLITE_BUSY_TIMEOUT.as_millis());
 
 fn startup_not_a_database(detail: impl std::fmt::Display) -> SqlxError {
     SqlxError::Protocol(format!(
@@ -239,13 +286,26 @@ impl DatabaseManager {
         // file come from the single source of truth `WAL_SAFETY_PRAGMAS`.
         // Filesystem paths (including Windows' verbatim prefix) are not URLs.
         // Keep URI parsing only for the existing in-memory connection forms.
+        // SQLite before 3.54 treats any `\\` path as a network share, including
+        // the `\\?\C:\` form `canonicalize` returns on Windows. It then shares
+        // one -shm lock handle across connections and can leak a WAL read lock,
+        // which stops checkpoints until restart (#7850). Open the plain drive
+        // path. dunce keeps the prefix when stripping is unsafe (paths over 260
+        // characters, reserved names, network shares); those still use it.
+        let sqlite_file = dunce::simplified(database_file);
+        if sqlite_file.as_os_str().to_string_lossy().starts_with(r"\\") {
+            warn!(
+                path = %sqlite_file.display(),
+                "SQLite opens this database with network-share locking; WAL checkpoints may stall"
+            );
+        }
         let connect_options = if is_in_memory {
             format!("sqlite:{database_path}").parse::<SqliteConnectOptions>()?
         } else {
-            SqliteConnectOptions::new().filename(database_file)
+            SqliteConnectOptions::new().filename(sqlite_file)
         };
         let mut connect_options = connect_options
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .pragma("cache_size", format!("-{}", config.cache_size_kb))
             .pragma("mmap_size", config.mmap_size.to_string());
         #[cfg(target_os = "macos")]
@@ -360,7 +420,7 @@ impl DatabaseManager {
             } else {
                 config.read_pool_min
             })
-            .acquire_timeout(Duration::from_secs(5));
+            .acquire_timeout(READ_POOL_ACQUIRE_TIMEOUT);
         // An unpublished index has no readers yet. Defer their connections
         // until schema construction is complete, rather than letting their
         // initialization overlap its DDL and checkpoints. The published
@@ -502,8 +562,8 @@ impl DatabaseManager {
                     let root = storage.root.clone();
                     let reserve = storage.descriptor.budget.disk_reserve_bytes;
                     let mut checked = std::time::Instant::now() - Duration::from_secs(1);
-                    let exhausted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let progress_exhausted = Arc::clone(&exhausted);
+                    let reserve_failure = Arc::new(std::sync::Mutex::new(None));
+                    let progress_failure = Arc::clone(&reserve_failure);
                     conn.lock_handle()
                         .await?
                         .set_progress_handler(10_000, move || {
@@ -511,28 +571,44 @@ impl DatabaseManager {
                                 return true;
                             }
                             checked = std::time::Instant::now();
-                            let available = fs2::available_space(&root).unwrap_or(0);
-                            let proceed = available >= reserve;
-                            progress_exhausted
-                                .store(!proceed, std::sync::atomic::Ordering::Relaxed);
-                            proceed
+                            match bootstrap_disk_reserve_sample(
+                                crate::storage::available_space(&root),
+                                reserve,
+                            ) {
+                                Ok(()) => true,
+                                Err(failure) => {
+                                    let mut originating = progress_failure
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    if originating.is_none() {
+                                        *originating = Some(failure);
+                                    }
+                                    false
+                                }
+                            }
                         });
                     // This generation is unpublished. Each construction step
                     // commits before the next checkpoint; the lifecycle journal
                     // rebuilds an interrupted schema from its intact source.
                     let construction =
                         crate::storage::schema::bootstrap(&mut conn, &storage.descriptor).await;
-                    conn.lock_handle().await?.remove_progress_handler();
-                    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    let failure = reserve_failure
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    let remove_handler = conn.lock_handle().await.map(|mut handle| {
+                        handle.remove_progress_handler();
+                    });
+                    let cleanup = sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
                         "PRAGMA temp_store={temp_store}"
                     )))
                     .execute(&mut *conn)
-                    .await?;
-                    if exhausted.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err(crate::storage::storage_error(
-                            "offline construction reached disk reserve; source remains intact",
-                        ));
+                    .await;
+                    if let Some(failure) = failure {
+                        return Err(bootstrap_disk_reserve_error(failure, reserve));
                     }
+                    remove_handler?;
+                    cleanup?;
                     construction?;
                 }
                 crate::storage::schema::verify(&mut conn, &storage.descriptor).await?;
@@ -1187,6 +1263,39 @@ mod shutdown_tests {
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn bootstrap_reserve_distinguishes_boundaries_and_probe_errors() {
+        let reserve = 2 * 1024 * 1024 * 1024;
+
+        let below = bootstrap_disk_reserve_sample(Ok(reserve - 1), reserve)
+            .expect_err("below reserve must stop construction");
+        let below = bootstrap_disk_reserve_error(below, reserve).to_string();
+        assert!(below.contains(&format!("available_bytes={}", reserve - 1)));
+        assert!(below.contains(&format!("required_bytes={reserve}")));
+        assert!(below.contains(&format!("reserve_bytes={reserve} (bytes)")));
+        assert!(below.contains("source retained; outcome=recording_blocked"));
+        assert!(below.contains("recovery=free space"));
+
+        bootstrap_disk_reserve_sample(Ok(reserve), reserve)
+            .expect("exact reserve must permit construction");
+        bootstrap_disk_reserve_sample(Ok(reserve + 1), reserve)
+            .expect("above reserve must permit construction");
+
+        let injected = std::io::Error::from_raw_os_error(5);
+        let expected_kind = format!("error_kind={:?}", injected.kind());
+        let probe = bootstrap_disk_reserve_sample(Err(injected), reserve)
+            .expect_err("an unavailable probe must fail closed");
+        let probe = bootstrap_disk_reserve_error(probe, reserve).to_string();
+        assert!(probe.contains("disk-space probe failed"));
+        assert!(probe.contains(&expected_kind));
+        assert!(probe.contains("raw_os_error=Some(5)"));
+        assert!(probe.contains("cause="));
+        assert!(!probe.contains("available_bytes=0"));
+        assert!(probe.contains(
+            "recovery=restore access to the storage drive or data folder, then retry startup"
+        ));
+    }
+
     #[tokio::test]
     async fn startup_rebuilds_missing_speaker_tables_with_current_schema() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1587,5 +1696,74 @@ mod shutdown_tests {
             .await
             .expect("close should finish after writer returns")
             .expect("close task should not panic");
+    }
+}
+
+#[cfg(test)]
+mod lock_timeout_ordering_tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteJournalMode, SqlitePoolOptions};
+    use sqlx::{ConnectOptions, Connection};
+
+    /// Opens a pool on a database another connection holds exclusively locked
+    /// and returns the error. Opening a connection has to wait on that lock.
+    async fn open_pool_on_locked_database(busy: Duration, acquire: Duration) -> sqlx::Error {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("locked.sqlite"))
+            .create_if_missing(true);
+        let mut locker = options
+            .clone()
+            .journal_mode(SqliteJournalMode::Delete)
+            .connect()
+            .await
+            .expect("locker connect");
+        sqlx::query("CREATE TABLE probe (id INTEGER)")
+            .execute(&mut locker)
+            .await
+            .expect("create table");
+        sqlx::query("BEGIN EXCLUSIVE")
+            .execute(&mut locker)
+            .await
+            .expect("take lock");
+
+        let error = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(acquire)
+            .connect_with(
+                options
+                    .busy_timeout(busy)
+                    .journal_mode(SqliteJournalMode::Wal),
+            )
+            .await
+            .expect_err("opening must fail while the database is locked");
+        locker.close().await.expect("release lock");
+        error
+    }
+
+    /// #7801: with equal deadlines the pool gives up first and the lock is
+    /// hidden behind `PoolTimedOut`.
+    #[tokio::test]
+    async fn equal_deadlines_hide_a_locked_database_behind_pool_timeout() {
+        let busy = Duration::from_millis(400);
+        let error = open_pool_on_locked_database(busy, busy).await;
+        assert!(
+            matches!(error, sqlx::Error::PoolTimedOut),
+            "expected the masked error this guards against, got {error:?}"
+        );
+    }
+
+    /// With the production ratio between the two deadlines, the same lock is
+    /// reported as SQLite's own busy error, which startup retries.
+    #[tokio::test]
+    async fn production_deadline_ratio_reports_a_locked_database_as_busy() {
+        let busy = Duration::from_millis(400);
+        let acquire = busy
+            .mul_f64(READ_POOL_ACQUIRE_TIMEOUT.as_secs_f64() / SQLITE_BUSY_TIMEOUT.as_secs_f64());
+        let error = open_pool_on_locked_database(busy, acquire).await;
+        assert!(
+            crate::sqlite_error::is_sqlite_busy_error(&error),
+            "expected a typed busy error, got {error:?}"
+        );
     }
 }

@@ -39,7 +39,7 @@ struct CompiledDomainRule {
 /// Legacy ignored strings retain their historical matching behavior. New
 /// structured rules are strict hostname rules. A malformed structured policy
 /// fails closed rather than silently widening capture.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UrlPolicy {
     legacy_ignored: Vec<String>,
     ignored_rules: Vec<CompiledDomainRule>,

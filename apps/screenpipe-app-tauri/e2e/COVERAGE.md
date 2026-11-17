@@ -10,9 +10,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 144
-- Declared test blocks: 415
-- Weighted coverage points: 335.0
+- Mapped specs: 145
+- Declared test blocks: 416
+- Weighted coverage points: 335.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,7 +23,7 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 110 | 352 | 294.6 | 15 | 125 | 85% |
+| windows | 111 | 353 | 295.0 | 15 | 125 | 85% |
 | macos | 140 | 377 | 304.8 | 17 | 134 | 88% |
 | linux | 98 | 310 | 264.0 | 14 | 122 | 80% |
 
@@ -40,7 +40,7 @@ pass/fail/skip counts.
 | audio-device | 4 specs / 32 tests / 21.8 pts | 4 specs / 6 tests / 2.9 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
-| capture-ocr | 2 specs / 16 tests / 6.4 pts | 10 specs / 14 tests / 6.2 pts | 1 specs / 3 tests / 1.2 pts |
+| capture-ocr | 3 specs / 17 tests / 6.8 pts | 10 specs / 14 tests / 6.2 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 37 specs / 87 tests / 71.3 pts | 51 specs / 116 tests / 90.8 pts | 35 specs / 86 tests / 70.8 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 30 specs / 122 tests / 102.5 pts | 41 specs / 120 tests / 102.4 pts | 25 specs / 90 tests / 80.7 pts |
@@ -49,8 +49,8 @@ pass/fail/skip counts.
 | os-integration | 8 specs / 37 tests / 31.9 pts | 17 specs / 36 tests / 23.8 pts | 3 specs / 20 tests / 15.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
-| real-ui-e2e | 81 specs / 242 tests / 205.3 pts | 99 specs / 261 tests / 220.8 pts | 75 specs / 218 tests / 191.4 pts |
-| settings | 15 specs / 42 tests / 39.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
+| real-ui-e2e | 82 specs / 243 tests / 205.7 pts | 99 specs / 261 tests / 220.8 pts | 75 specs / 218 tests / 191.4 pts |
+| settings | 16 specs / 43 tests / 39.4 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 11 specs / 47 tests / 38.3 pts | 11 specs / 32 tests / 31.1 pts | 8 specs / 25 tests / 24.1 pts |
 | tauri-command | 26 specs / 73 tests / 59.4 pts | 38 specs / 96 tests / 77.8 pts | 25 specs / 74 tests / 60.3 pts |
 | window-lifecycle | 22 specs / 71 tests / 59.5 pts | 23 specs / 55 tests / 40.9 pts | 16 specs / 44 tests / 34.4 pts |
@@ -223,6 +223,7 @@ pass/fail/skip counts.
 | renderer-recovery.spec.ts | macos | window-lifecycle, tauri-command, real-ui-e2e, local-api | app-launch, window-lifecycle, webview-renderer-recovery, local-api-auth | high | strong | mixed | 4 | Suspends the isolated app's real com.apple.WebKit.GPU process, verifies WebContent's main thread and render queue are blocked in remote WebKit GPU IPC, holds the fault until the production watchdog destroys stale Home, then proves a new page generation repaints in the same app PID with uninterrupted local API health. Also forces three consecutive missed-heartbeat recoveries and reopens discarded Search and Chat webviews. |
 | sck-startup-recovery.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr, health, local-api-search | high | conditional | api | 1 | Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence. |
 | screen-recording-restart.spec.ts | macos | onboarding, os-integration, real-ui-e2e, tauri-command | onboarding, permission-recovery | high | conditional | real-user-flow | 1 | A deterministic post-Later TCC mismatch drives the packaged onboarding UI through the explicit restart button and into the native restart command without destroying the WebDriver session. |
+| screenshot-frame-rate-windows.spec.ts | windows | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording | high | conditional | real-user-flow | 1 | Recording-enabled Windows VM: verifies 2 fps default and persisted setting, live 2/24/4 native changes, pause/resume, and retained privacy-filtered screenshots using owned color fixtures. |
 | search-request-priority.spec.ts | windows, macos, linux | real-ui-e2e, local-api | home-search, local-api-search | medium | partial | synthetic | 1 | Verifies keyword search request fires before secondary search, facet, and speaker requests. |
 | settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, screen-share-privacy, settings-ai, settings-privacy-api-auth, settings-permissions, storage-retention, low-disk-recording-guard, audio-device-health | high | strong | real-user-flow | 14 | Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split, retained Enhanced AI and chat-title controls, and absence of retired cloud-media analysis controls, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard. |
 | speaker-rename-scope.spec.ts | windows, macos, linux | local-api | meeting-notes, speaker-rename-scope | high | strong | real-user-flow | 3 | Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line. Also asserts the orphaned-speaker repair migration is recorded applied after a real app boot and leaves no row pointing at a deleted speaker. |

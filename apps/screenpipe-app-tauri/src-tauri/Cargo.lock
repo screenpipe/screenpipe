@@ -11261,7 +11261,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.7.147"
+version = "2.7.151"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11607,6 +11607,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "criterion",
+ "dunce",
  "fs2",
  "futures",
  "image 0.25.10",
@@ -11847,6 +11848,7 @@ dependencies = [
  "rusty-tesseract",
  "sck-rs",
  "screenpipe-a11y",
+ "screenpipe-config",
  "screenpipe-connect",
  "screenpipe-core",
  "screenpipe-db",
@@ -11857,6 +11859,7 @@ dependencies = [
  "tracing",
  "uiautomation",
  "url",
+ "uuid",
  "windows 0.58.0",
  "xcap",
  "xcb",

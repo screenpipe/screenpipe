@@ -16,7 +16,7 @@ function replace(cwd, file, from, to) {
   expect(text.includes(from)).toBe(true);
   writeFileSync(p, text.replaceAll(from, to));
 }
-function grade(name, ref = item.oracle_ref, mutate = () => {}) {
+function grade(name, ref = item.oracle_ref, mutate = () => {}, command = item.grader.command) {
   const cwd = join(root, name); mkdirSync(cwd);
   if (!archives.has(ref)) {
     // Archive historical frontend source/config, never node_modules, credentials,
@@ -30,15 +30,18 @@ function grade(name, ref = item.oracle_ref, mutate = () => {}) {
   for (const f of item.grader.fixtures) { const dest = join(cwd, f.destination_path); mkdirSync(dirname(dest), {recursive:true}); writeFileSync(dest, readFileSync(join(import.meta.dir, f.local_path))); }
   symlinkSync(join(repo, app, 'node_modules'), join(cwd, app, 'node_modules'), 'dir');
   mutate(cwd);
-  const r = spawnSync('/bin/bash', ['-c', item.grader.command], {cwd, encoding:'utf8', timeout:60000, maxBuffer:4*1024*1024, env:{PATH:process.env.PATH, HOME:cwd, CI:'true', TZ:'UTC', NO_COLOR:'1'}});
-  if (receipts) { mkdirSync(receipts,{recursive:true}); writeFileSync(join(receipts, name+'.stdout'), r.stdout||''); writeFileSync(join(receipts,name+'.stderr'),r.stderr||''); writeFileSync(join(receipts,name+'.json'),JSON.stringify({ref,command:item.grader.command,exit_code:r.status,signal:r.signal,error:r.error?.message},null,2)); }
+  const r = spawnSync('/bin/bash', ['-c', command], {cwd, encoding:'utf8', timeout:60000, maxBuffer:4*1024*1024, env:{PATH:process.env.PATH, HOME:cwd, CI:'true', TZ:'UTC', NO_COLOR:'1'}});
+  if (receipts) { mkdirSync(receipts,{recursive:true}); writeFileSync(join(receipts, name+'.stdout'), r.stdout||''); writeFileSync(join(receipts,name+'.stderr'),r.stderr||''); writeFileSync(join(receipts,name+'.json'),JSON.stringify({ref,command,exit_code:r.status,signal:r.signal,error:r.error?.message},null,2)); }
   expect(r.error).toBeUndefined(); expect(r.signal).toBeNull(); return r;
 }
-function passes(r) { expect(r.status).toBe(0); expect(r.stdout).toContain('14 passed'); expect(r.stdout+r.stderr).not.toMatch(/Unhandled|Uncaught/); }
+function passes(r, expected = '14 passed') { expect(r.status).toBe(0); expect(r.stdout).toContain(expected); expect(r.stdout+r.stderr).not.toMatch(/Unhandled|Uncaught/); }
 function fails(r) { expect(r.status).toBe(1); expect(r.stderr).toContain('AssertionError'); expect(r.stdout+r.stderr).not.toMatch(/Unhandled|Uncaught|Failed to resolve import|Failed to load url|Cannot find module/); }
 test('broken parent exposes stalled authentication and preserves healthy behavior',()=>{const r=grade('parent',item.base_ref);fails(r);expect(r.stdout).toContain('9 failed | 5 passed');},60000);
 test('historical reference passes all outcomes',()=>passes(grade('reference')),60000);
-test('current hook passes all outcomes',()=>passes(grade('current','HEAD')),60000);
+// Historical fixtures grade the original frontend-persistence repair. Current
+// policy application is native; its maintained hook tests assert delegation,
+// authentication deadlines, and pause behavior without requiring React writes.
+test('current hook preserves native delegation and authentication outcomes',()=>passes(grade('current','HEAD',()=>{},'cd apps/screenpipe-app-tauri && bun run test:vitest --silent lib/hooks/__tests__/use-enterprise-policy.test.tsx'),'50 passed'),60000);
 test('equivalent helper names pass',()=>passes(grade('equivalent',item.oracle_ref,cwd=>{
  const file=join(cwd,hook);writeFileSync(file,readFileSync(file,'utf8').replaceAll('readPolicySettings','loadLocalPolicyState').replaceAll('savePolicySettings','persistLocalPolicyState'));
 })),60000);

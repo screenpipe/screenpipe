@@ -71,8 +71,14 @@ mod windows_main {
     pub fn run() {
         let args: Vec<String> = std::env::args().collect();
         let duration_secs: u64 = arg_value(&args, "--duration").unwrap_or(20);
-        let interval_ms: u64 = arg_value(&args, "--interval-ms").unwrap_or(500);
+        let interval_ms: u64 = arg_value(&args, "--interval-ms").unwrap_or(286);
+        let requested_fps: u32 = arg_value(&args, "--fps").unwrap_or(2);
+        let fresh = args.iter().any(|arg| arg == "--fresh");
+        let timeout_ms: u64 = arg_value(&args, "--timeout-ms").unwrap_or(200);
         let monitor_id: Option<u32> = arg_value(&args, "--monitor-id");
+
+        screenpipe_screen::screenshot_rate::set(requested_fps)
+            .expect("invalid --fps for native screenshot acquisition");
 
         let monitor_id = monitor_id.unwrap_or_else(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -85,16 +91,24 @@ mod windows_main {
         });
 
         println!(
-            "wgc_cpu_probe: monitor={} duration={}s sample_interval={}ms",
-            monitor_id, duration_secs, interval_ms
+            "wgc_cpu_probe: monitor={} duration={}s sample_interval={}ms requested_fps={} mode={}",
+            monitor_id,
+            duration_secs,
+            interval_ms,
+            requested_fps,
+            if fresh { "fresh" } else { "streaming" }
         );
 
+        let startup_started = Instant::now();
         let mut capture =
             PersistentCapture::new(monitor_id).expect("failed to start persistent capture");
+        let session_startup_ms = startup_started.elapsed().as_secs_f64() * 1000.0;
         // Warm up so the session is actually delivering frames before we start measuring.
+        let first_frame_started = Instant::now();
         capture
             .get_latest_image(Duration::from_secs(2))
             .expect("failed to get warm-up frame");
+        let first_frame_ms = first_frame_started.elapsed().as_secs_f64() * 1000.0;
         let stats_start = capture.stats();
 
         let sample_interval = Duration::from_millis(interval_ms);
@@ -104,16 +118,26 @@ mod windows_main {
         let wall_start = Instant::now();
         let mut samples = 0u64;
         let mut failures = 0u64;
+        let mut latencies_ms = Vec::new();
 
         while wall_start.elapsed() < run_for {
-            match capture.get_latest_image(Duration::from_millis(200)) {
-                Ok(_) => samples += 1,
+            let request_started = Instant::now();
+            let image = if fresh {
+                capture.get_latest_image(Duration::from_millis(timeout_ms))
+            } else {
+                capture.get_latest_image_streaming(Duration::from_millis(timeout_ms))
+            };
+            match image {
+                Ok(_) => {
+                    samples += 1;
+                    latencies_ms.push(request_started.elapsed().as_secs_f64() * 1000.0);
+                }
                 Err(e) => {
                     failures += 1;
                     eprintln!("get_latest_image failed: {e}");
                 }
             }
-            std::thread::sleep(sample_interval);
+            std::thread::sleep(sample_interval.saturating_sub(request_started.elapsed()));
         }
 
         let cpu_elapsed = cpu_time_now() - cpu_start;
@@ -121,7 +145,50 @@ mod windows_main {
         let cores = cpu_elapsed.as_secs_f64() / wall_elapsed.as_secs_f64();
         let stats_end = capture.stats();
 
+        let teardown_started = Instant::now();
         capture.stop();
+        let teardown_ms = teardown_started.elapsed().as_secs_f64() * 1000.0;
+
+        latencies_ms.sort_by(f64::total_cmp);
+        let percentile = |p: f64| {
+            latencies_ms
+                .get(((latencies_ms.len().saturating_sub(1) as f64) * p).round() as usize)
+                .copied()
+        };
+        let callbacks = stats_end.frame_arrivals - stats_start.frame_arrivals;
+        let copies = stats_end.copy_submissions - stats_start.copy_submissions;
+        let elapsed_seconds = wall_elapsed.as_secs_f64();
+
+        println!(
+            "WGC_RATE_JSON={}",
+            serde_json::json!({
+                "requested_fps": requested_fps,
+                "request_mode": if fresh { "fresh" } else { "streaming_cached_while_refreshing" },
+                "timeout_ms": timeout_ms,
+                "selection_interval_ms": interval_ms,
+                "duration_seconds": elapsed_seconds,
+                "completed_requests": samples,
+                "failed_requests": failures,
+                "delivery_rate_hz": samples as f64 / elapsed_seconds,
+                "callback_count": callbacks,
+                "callback_rate_hz": callbacks as f64 / elapsed_seconds,
+                "copy_count": copies,
+                "copy_rate_hz": copies as f64 / elapsed_seconds,
+                "latency_ms_p50": percentile(0.50),
+                "latency_ms_p95": percentile(0.95),
+                "process_cpu_percent_one_core": cores * 100.0,
+                "session_startup_ms": session_startup_ms,
+                "first_frame_ms": first_frame_ms,
+                "teardown_ms": teardown_ms,
+                "native_interval_status": format!("{:?}", capture.native_interval_status()),
+                "native_interval_ticks": stats_end.native_interval_ticks,
+                "native_interval_attempts": stats_end.native_interval_attempts,
+                "native_interval_successes": stats_end.native_interval_successes,
+                "native_interval_failures": stats_end.native_interval_failures,
+                "frame_age": null,
+                "frame_age_note": "WGC Direct3D11CaptureFrame SystemRelativeTime is not collected; request latency is a software proxy and is not native acquisition time"
+            })
+        );
 
         println!("samples captured: {samples} (failures: {failures})");
         println!(

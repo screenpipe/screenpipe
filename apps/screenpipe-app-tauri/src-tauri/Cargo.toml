@@ -7,7 +7,7 @@ members = ["wer-dump-helper", "windows/persistence-supervisor", "release-router-
 
 [package]
 name = "screenpipe-app"
-version = "2.7.147"
+version = "2.7.151"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -298,6 +298,7 @@ e2e = [
   "screenpipe-screen/e2e",
   "screenpipe-engine/e2e",
 ]
+storage-fault-injection = ["screenpipe-db/storage-fault-injection"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

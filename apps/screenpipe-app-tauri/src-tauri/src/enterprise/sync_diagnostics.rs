@@ -87,7 +87,7 @@ pub(super) async fn report(
     authorized.upload_mode =
         super::EnterpriseUploadMode::Blocked("diagnostic policy unresolved".into());
     authorized
-        .resolve_upload_mode()
+        .resolve_support_mode()
         .await
         .map_err(|e| e.to_string())?;
     if matches!(

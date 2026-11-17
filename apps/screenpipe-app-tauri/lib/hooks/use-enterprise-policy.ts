@@ -14,13 +14,11 @@ import { localFetch } from "@/lib/api";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
 
-import { syncManagedPipes, gatherPipeStatuses, type ManagedPipe } from "./use-enterprise-pipes";
+import { gatherPipeStatuses, type ManagedPipe } from "./use-enterprise-pipes";
 import {
   DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
   EnterpriseAiPresetPolicy,
   EnterpriseManagedAiPreset,
-  filterPresetsForEnterprisePolicy,
-  isEnterpriseManagedPreset,
   normalizeEnterpriseAiPresetPolicy,
 } from "@/lib/enterprise-ai-preset-policy";
 import {
@@ -246,25 +244,6 @@ function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs: number): 
   });
 }
 
-function toLocalAiPreset(
-  preset: EnterpriseManagedAiPreset,
-  defaultPreset: boolean
-): Record<string, unknown> {
-  const provider = preset.provider === "screenpipe-cloud" ? "screenpipe-cloud" : preset.provider;
-  return {
-    id: preset.id,
-    prompt: preset.prompt || "",
-    provider,
-    url: preset.url || "",
-    model: preset.model || "",
-    defaultPreset,
-    apiKey: preset.api_key || undefined,
-    maxContextChars: preset.max_context_chars || 512000,
-    maxTokens: preset.max_tokens || 4096,
-    enterpriseManaged: true,
-  };
-}
-
 function readPolicySettings() {
   return withTimeout(
     "enterprise read policy settings",
@@ -275,75 +254,6 @@ function readPolicySettings() {
     })(),
     LOCAL_POLICY_COMMAND_TIMEOUT_MS,
   );
-}
-
-async function savePolicySettings(
-  store: Awaited<ReturnType<typeof getStore>>,
-  settings: Record<string, unknown>,
-) {
-  await withTimeout(
-    "enterprise write policy settings",
-    store.set("settings", settings),
-    LOCAL_POLICY_COMMAND_TIMEOUT_MS,
-  );
-  await withTimeout(
-    "enterprise save policy settings",
-    store.save(),
-    LOCAL_POLICY_COMMAND_TIMEOUT_MS,
-  );
-}
-
-async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<void> {
-  const { store, settings } = await readPolicySettings();
-  const currentPresets = ((settings.aiPresets as any[]) || []).filter(
-    (preset) => !isEnterpriseManagedPreset(preset)
-  );
-  const suppressedPresets = ((settings.enterpriseSuppressedAiPresets as any[]) || []).filter(
-    (preset) => !isEnterpriseManagedPreset(preset)
-  );
-  const candidatePresets = [...currentPresets, ...suppressedPresets].filter(
-    (preset, index, all) =>
-      all.findIndex((other) => String(other.id).toLowerCase() === String(preset.id).toLowerCase()) === index
-  );
-
-  const managedPresets = policy.managed_presets.map((preset) =>
-    toLocalAiPreset(preset, policy.lock_default_preset && policy.default_preset_id === preset.id)
-  );
-  const managedIds = new Set(managedPresets.map((preset) => String(preset.id).toLowerCase()));
-
-  const allowedPresets = filterPresetsForEnterprisePolicy(candidatePresets as any, policy).filter(
-    (preset: any) => !managedIds.has(String(preset.id).toLowerCase())
-  );
-  const allowedIds = new Set(allowedPresets.map((preset: any) => String(preset.id).toLowerCase()));
-  const nextSuppressedPresets = candidatePresets.filter(
-    (preset) => !allowedIds.has(String(preset.id).toLowerCase())
-  );
-
-  let nextPresets = [...managedPresets, ...allowedPresets] as any[];
-  const hasDefault = nextPresets.some((preset) => preset.defaultPreset);
-  const forcedDefaultId = policy.lock_default_preset ? policy.default_preset_id : null;
-  const fallbackDefaultId =
-    policy.default_preset_id && nextPresets.some((preset) => preset.id === policy.default_preset_id)
-      ? policy.default_preset_id
-      : nextPresets[0]?.id;
-
-  if (forcedDefaultId && nextPresets.some((preset) => preset.id === forcedDefaultId)) {
-    nextPresets = nextPresets.map((preset) => ({
-      ...preset,
-      defaultPreset: preset.id === forcedDefaultId,
-    }));
-  } else if (!hasDefault && fallbackDefaultId) {
-    nextPresets = nextPresets.map((preset, index) => ({
-      ...preset,
-      defaultPreset: preset.id === fallbackDefaultId || (!fallbackDefaultId && index === 0),
-    }));
-  }
-
-  await savePolicySettings(store, {
-    ...settings,
-    aiPresets: nextPresets,
-    enterpriseSuppressedAiPresets: nextSuppressedPresets,
-  });
 }
 
 async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata> {
@@ -362,20 +272,6 @@ async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata
       detected_by: [],
     };
   }
-}
-
-async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<EnterpriseInstallMetadata> {
-  const { store, settings } = await readPolicySettings();
-  const metadata = await getEnterpriseInstallMetadata();
-  await savePolicySettings(store, {
-    ...settings,
-    enterpriseAppUpdatePolicy: policy,
-    enterpriseInstallMetadata: metadata,
-    autoUpdate: policy.allow_employee_override
-      ? settings.autoUpdate ?? policy.default_auto_update
-      : policy.default_auto_update,
-  });
-  return metadata;
 }
 
 function supportsEnterpriseAutoStartEnforcement(): boolean {
@@ -839,180 +735,12 @@ export function useEnterprisePolicyRuntime() {
         return { ok: true, policy: result };
       }
 
-      // Apply enterprise AI preset policy to settings store.
-      if (result.aiPresetPolicy) {
-        try {
-          await applyAiPresetPolicy(result.aiPresetPolicy);
-          console.log(
-            `[enterprise] applied AI preset policy: cloud=${result.aiPresetPolicy.allow_screenpipe_cloud}, employee=${result.aiPresetPolicy.allow_employee_custom_presets}, managed=${result.aiPresetPolicy.managed_presets.length}`
-          );
-        } catch (e) {
-          console.warn("[enterprise] failed to apply AI preset policy; continuing credential verification:", e);
-        }
-      }
-
-      try {
-        const metadata = await applyAppUpdatePolicy(result.appUpdatePolicy);
-        console.log(
-          `[enterprise] applied app update policy: mode=${result.appUpdatePolicy.mode}, manager=${metadata.update_manager}, managed=${metadata.managed}`
-        );
-      } catch (e) {
-        console.warn("[enterprise] failed to apply app update policy; continuing credential verification:", e);
-      }
-
-      // Recording settings are applied by the native policy watcher and
-      // native credential verification, independently of webview lifetime.
-
-      // Fire-and-forget heartbeat
+      // The native authenticated policy fetch owns all device side effects,
+      // including AI presets, tasks, skills, visibility, streams, and team
+      // configuration. This webview only renders policy and reports its status.
       sendHeartbeat(credential, { deploymentLicenseKey }).then((heartbeat) => {
-        if (!heartbeat.ok) {
-          console.warn("[enterprise] heartbeat failed:", heartbeat.reason, heartbeat.error);
-        }
+        if (!heartbeat.ok) console.warn("[enterprise] heartbeat failed:", heartbeat.reason, heartbeat.error);
       });
-
-      // Sync managed pipes to local filesystem. Always runs (even with an
-      // empty list) so pipes removed from the policy get disabled on devices.
-      // Pruning is only allowed when the server actually returned the
-      // managedPipes field — an older backend that omits it must not
-      // mass-disable the fleet.
-      syncManagedPipes(result.managedPipes, {
-        pruneUnlisted: Array.isArray(data.managedPipes),
-      }).catch((e) =>
-        console.warn("[enterprise] failed to sync managed pipes:", e)
-      );
-
-      // Organization skills are a separate, explicit desired state. Omission
-      // means the control plane is older or could not read the registry, so we
-      // preserve the last valid local install. A returned empty array is the
-      // only signal that authorizes pruning screenpipe-owned managed folders.
-      if (Array.isArray(data.managedSkills)) {
-        commands
-          .syncManagedTeamSkills(result.managedSkills, true)
-          .then((response) => {
-            if (response.status === "error") {
-              console.warn(
-                "[enterprise] failed to sync managed skills:",
-                response.error,
-              );
-            }
-          })
-          .catch((e) =>
-            console.warn("[enterprise] failed to sync managed skills:", e),
-          );
-      }
-
-      // Push hidden sections to Rust so tray menu can use them
-      try {
-        await withTimeout(
-          "enterprise setEnterprisePolicy",
-          commands.setEnterprisePolicy(
-            result.hiddenSections,
-            isAutoStartEnforced(result.lockedSettings),
-          ),
-          LOCAL_POLICY_COMMAND_TIMEOUT_MS
-        );
-        // Reconcile the live app with the policy we just pushed: if it turns on
-        // hidden-UI mode, retract any windows already on screen and drop the
-        // dock icon now (set_enterprise_policy only updates state — it doesn't
-        // hide what's already visible). Also persists the decision so the next
-        // launch starts hidden before any window renders. No-op when not hidden.
-        await withTimeout(
-          "enterprise applyEnterpriseUiVisibility",
-          commands.applyEnterpriseUiVisibility(),
-          LOCAL_POLICY_COMMAND_TIMEOUT_MS
-        );
-      } catch (e) {
-        console.warn("[enterprise] failed to push policy to Rust:", e);
-      }
-
-      // Push per-stream sync toggles to Rust so the enterprise sync task
-      // gates each upload kind. Text/event streams and parsed app data default
-      // on, including when an older server omits the flag. Preserve opt-outs.
-      try {
-        const streams = (data.syncStreams ?? {}) as Record<string, unknown>;
-        const pickBool = (key: string): boolean =>
-          typeof streams[key] === "boolean" ? (streams[key] as boolean) : true;
-        // frame_images is a NEW data class (screen pixels leave the device on
-        // request) — a 3-way MODE ("off" | "cited" | "all"), the org's explicit
-        // dashboard choice. Legacy boolean policies map true → "cited".
-        // Anything unrecognized is "off" — fail-closed.
-        const rawMode = streams.frame_images as unknown;
-        const frameImages =
-          rawMode === "off" || rawMode === "cited" || rawMode === "all"
-            ? rawMode
-            : rawMode === true
-            ? "cited"
-            : "off";
-        const rawFeedback = streams.feedback;
-        const feedback =
-          rawFeedback === "ratings" || rawFeedback === "full"
-            ? rawFeedback
-            : "off";
-        await withTimeout(
-          "enterprise setSyncStreams",
-          commands.setSyncStreams(
-            pickBool("frames"),
-            pickBool("parsed"),
-            pickBool("audio"),
-            pickBool("ui_events"),
-            pickBool("memories"),
-            pickBool("snapshots"),
-            feedback,
-            frameImages,
-          ),
-          LOCAL_POLICY_COMMAND_TIMEOUT_MS
-        );
-        await withTimeout(
-          "enterprise setActivitySyncEnabled",
-          commands.setActivitySyncEnabled(streams.activities === true),
-          LOCAL_POLICY_COMMAND_TIMEOUT_MS
-        );
-      } catch (e) {
-        console.warn("[enterprise] failed to push sync streams to Rust:", e);
-      }
-
-      // Persist admin status into ~/.screenpipe/enterprise.json so the
-      // Enterprise app can decide whether to inject the screenpipe-team
-      // skill on its next native Pi boot. Only meaningful when we sent a
-      // cloud token in
-      // the request — without one, the server has no way to identify the
-      // user, so `data.isAdmin` is always false (don't accidentally wipe
-      // an existing admin marker just because the user was signed-out at
-      // policy-fetch time).
-      if (cloudToken) {
-        try {
-          const adminFlag = Boolean(data.isAdmin);
-          // A gateway org's data-API base. Re-asserted on every poll, so a
-          // changed gateway URL lands within one interval. `null` when the
-          // server omits it (hosted org, or a backend that predates the
-          // field) — leave whatever is already on disk alone.
-          //
-          // Admins only: every consumer of this key also needs the admin
-          // `sk_ent_` token, so a non-admin has no use for the URL and no
-          // reason to have the org's internal hostname on disk. The server
-          // is the authoritative gate — this is the second lock.
-          const gatewayUrl =
-            adminFlag &&
-            typeof data.gatewayUrl === "string" &&
-            data.gatewayUrl.trim()
-              ? data.gatewayUrl.trim()
-              : null;
-          console.log(
-            `[enterprise] persisting team config: is_admin=${adminFlag} (raw response.isAdmin=${data.isAdmin}), gateway_url=${gatewayUrl ?? "(unchanged)"}`
-          );
-          await withTimeout(
-            "enterprise saveEnterpriseTeamConfig",
-            commands.saveEnterpriseTeamConfig(adminFlag, true, null, gatewayUrl),
-            LOCAL_POLICY_COMMAND_TIMEOUT_MS
-          );
-        } catch (e) {
-          console.warn("[enterprise] failed to persist team config:", e);
-        }
-      } else {
-        console.warn(
-          "[enterprise] no cloud token available — skipping team-config persist (sign in to screenpipe cloud to enable team queries)"
-        );
-      }
       return { ok: true, policy: result };
     } catch (e) {
       console.error("[enterprise] policy fetch error:", e);

@@ -280,10 +280,71 @@ impl KillOnDropJob {
 }
 
 #[cfg(windows)]
+async fn retain_child_job_or_recover_completion(
+    child: &mut tokio::process::Child,
+    assignment: std::io::Result<KillOnDropJob>,
+    description: &str,
+) -> Result<Option<KillOnDropJob>> {
+    match assignment {
+        Ok(job) => Ok(Some(job)),
+        Err(assignment_error) => {
+            // ACP commands first enter the process guard's own kill-on-close Job.
+            // Therefore a completed guard cannot leave an uncontained wrapped tree.
+            // Non-ACP builds have no equivalent guarantee and always fail closed.
+            #[cfg(feature = "acp")]
+            let observation = match child.try_wait() {
+                Ok(Some(status)) => {
+                    warn!(
+                        "{description} exited with {status} before outer cleanup Job assignment ({assignment_error}); preserving its completed result because the ACP process guard already contained the tree"
+                    );
+                    return Ok(None);
+                }
+                Ok(None) => "live child observed".to_string(),
+                Err(error) => format!("failed: {error}"),
+            };
+
+            #[cfg(not(feature = "acp"))]
+            let observation = "not attempted (ACP process guard unavailable)".to_string();
+
+            let kill_result = child.start_kill();
+            let wait_result = child.wait().await;
+            Err(anyhow!(
+                "failed to contain {description}: {assignment_error}; process-state observation: {}; cleanup request: {}; reap: {}",
+                observation,
+                kill_result
+                    .err()
+                    .map_or_else(|| "accepted".to_string(), |error| error.to_string()),
+                wait_result
+                    .err()
+                    .map_or_else(|| "completed".to_string(), |error| error.to_string())
+            ))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn install_live_child_pid(child: &tokio::process::Child, shared_pid: &super::SharedPid) {
+    if let Some(pid) = child.id() {
+        if install_spawned_pid(shared_pid, pid) {
+            let _ = kill_process_group(pid);
+        }
+    }
+}
+
+#[cfg(windows)]
 impl Drop for KillOnDropJob {
     fn drop(&mut self) {
         unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
+            // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes CloseHandle the native
+            // termination request for every process still assigned to the job.
+            // Stop remains asynchronous; callers must not treat guard drop as
+            // proof that Windows has finished process teardown.
+            if windows_sys::Win32::Foundation::CloseHandle(self.0) == 0 {
+                error!(
+                    "failed to close Windows process cleanup job: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
         }
     }
 }
@@ -1836,7 +1897,7 @@ impl PiExecutor {
             user_prompt,
             system_prompt,
         } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
-        let mut cmd = build_async_command(pi_path);
+        let mut cmd = build_async_command(pi_path)?;
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
@@ -1916,24 +1977,24 @@ impl PiExecutor {
         #[cfg(windows)]
         cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
 
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
         let pid = child.id();
 
         #[cfg(windows)]
-        let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
-            Err(error) => {
-                warn!(
-                    "failed to assign pi process {} to cleanup job: {}",
-                    pid.unwrap_or_default(),
-                    error
-                );
-                None
-            }
-        };
+        let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
+        let _process_tree_guard = retain_child_job_or_recover_completion(
+            &mut child,
+            assignment,
+            &format!("pi process {}", pid.unwrap_or_default()),
+        )
+        .await?;
+        #[cfg(windows)]
+        let pid = child.id();
 
         // Set PID synchronously. If a stop was requested before spawn
         // completed, honor it immediately against the fresh process group.
+        #[cfg(unix)]
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
                 // If the child is still entering setsid(), this first TERM can
@@ -1941,6 +2002,10 @@ impl PiExecutor {
                 // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
+        }
+        #[cfg(windows)]
+        if let Some(ref sp) = shared_pid {
+            install_live_child_pid(&child, sp);
         }
 
         let output = child.wait_with_output().await?;
@@ -1983,7 +2048,7 @@ impl PiExecutor {
             user_prompt,
             system_prompt,
         } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
-        let mut cmd = build_async_command(pi_path);
+        let mut cmd = build_async_command(pi_path)?;
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
@@ -2092,20 +2157,20 @@ impl PiExecutor {
         let pid = child.id();
 
         #[cfg(windows)]
-        let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
-            Err(error) => {
-                warn!(
-                    "failed to assign pi process {} to cleanup job: {}",
-                    pid.unwrap_or_default(),
-                    error
-                );
-                None
-            }
-        };
+        let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
+        let _process_tree_guard = retain_child_job_or_recover_completion(
+            &mut child,
+            assignment,
+            &format!("streaming pi process {}", pid.unwrap_or_default()),
+        )
+        .await?;
+        #[cfg(windows)]
+        let pid = child.id();
 
         // Set PID synchronously. If a stop was requested before spawn
         // completed, honor it immediately against the fresh process group.
+        #[cfg(unix)]
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
                 // If the child is still entering setsid(), this first TERM can
@@ -2113,6 +2178,10 @@ impl PiExecutor {
                 // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
+        }
+        #[cfg(windows)]
+        if let Some(ref sp) = shared_pid {
+            install_live_child_pid(&child, sp);
         }
 
         // Take stdout for streaming reads; stderr will be read after exit
@@ -2640,6 +2709,9 @@ impl AgentExecutor for PiExecutor {
         // trusts that tree, so `--force` is required to repair it generically.
         seed_pi_package_json(&install_dir)?;
 
+        #[cfg(all(windows, feature = "acp"))]
+        let mut cmd = guarded_async_command(&bun)?;
+        #[cfg(not(all(windows, feature = "acp")))]
         let mut cmd = tokio_bun_command(&bun);
         // CREATE_NO_WINDOW only covers this Bun process. Lifecycle scripts can
         // launch new consoles, so disable them for this pinned managed install.
@@ -2651,7 +2723,7 @@ impl AgentExecutor for PiExecutor {
             cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
         }
 
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             anyhow!(
                 "pi installation failed: could not run bun at {}: {}",
                 bun,
@@ -2659,13 +2731,12 @@ impl AgentExecutor for PiExecutor {
             )
         })?;
         #[cfg(windows)]
-        let _process_tree_guard = match KillOnDropJob::assign(&child) {
-            Ok(job) => Some(job),
-            Err(error) => {
-                warn!("failed to assign pi installer to cleanup job: {}", error);
-                None
-            }
-        };
+        let assignment = KillOnDropJob::assign(&child);
+        #[cfg(windows)]
+        let _process_tree_guard =
+            retain_child_job_or_recover_completion(&mut child, assignment, "pi installer")
+                .await
+                .map_err(|error| anyhow!("pi installation failed: {error}"))?;
         let output = child.wait_with_output().await.map_err(|e| {
             anyhow!(
                 "pi installation failed while waiting for bun at {}: {}",
@@ -3898,7 +3969,7 @@ pub fn find_pi_executable() -> Option<String> {
 /// shell metacharacters (`|`, `&`, `>`, `<`, `^`), which breaks multi-line
 /// prompts passed via `-p`. To avoid this we resolve the JS entry point
 /// from the `.cmd` shim and run it directly — no cmd.exe involved.
-fn build_async_command(path: &str) -> tokio::process::Command {
+fn build_async_command(path: &str) -> Result<tokio::process::Command> {
     #[cfg(windows)]
     {
         // Try to resolve the JS entry point from .cmd shim to avoid cmd.exe.
@@ -3911,12 +3982,12 @@ fn build_async_command(path: &str) -> tokio::process::Command {
         let mut cmd = if let Some(ref js_path) = js_entry {
             // Run JS entry point directly with bun (preferred) or node.
             if let Some(bun) = find_bun_executable() {
-                let mut c = tokio_bun_command(&bun);
+                let mut c = guarded_async_command(&bun)?;
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via bun: {} {}", bun, js_path);
                 c
             } else {
-                let mut c = crate::no_window::no_window_command_async("node");
+                let mut c = guarded_async_command("node")?;
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via node: {}", js_path);
                 c
@@ -3927,23 +3998,23 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 "could not resolve JS entry from {}, falling back to cmd.exe /C",
                 path
             );
-            let mut c = crate::no_window::no_window_command_async("cmd.exe");
+            let mut c = guarded_async_command("cmd.exe")?;
             c.args(["/C", path]);
             c
         } else if path.ends_with(".js") {
             // Local install returns a .js entrypoint — run with bun
             if let Some(bun) = find_bun_executable() {
-                let mut c = tokio_bun_command(&bun);
+                let mut c = guarded_async_command(&bun)?;
                 c.arg(path);
                 debug!("running pi JS entrypoint via bun: {} {}", bun, path);
                 c
             } else {
-                let mut c = crate::no_window::no_window_command_async("node");
+                let mut c = guarded_async_command("node")?;
                 c.arg(path);
                 c
             }
         } else {
-            crate::no_window::no_window_command_async(path)
+            guarded_async_command(path)?
         };
 
         // Inject bundled bun directory into PATH so node_modules resolve correctly.
@@ -3979,7 +4050,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
         // Prevent console window flash on Windows
         cmd.creation_flags(0x08000000);
 
-        cmd
+        Ok(cmd)
     }
     #[cfg(not(windows))]
     {
@@ -3992,7 +4063,20 @@ fn build_async_command(path: &str) -> tokio::process::Command {
             tokio::process::Command::new(path)
         };
         apply_pi_child_path(&mut cmd);
-        cmd
+        Ok(cmd)
+    }
+}
+
+#[cfg(windows)]
+fn guarded_async_command(program: &str) -> Result<tokio::process::Command> {
+    #[cfg(feature = "acp")]
+    {
+        let command = super::acp::guarded_command(program).map_err(anyhow::Error::msg)?;
+        return Ok(tokio::process::Command::from(command));
+    }
+    #[cfg(not(feature = "acp"))]
+    {
+        Ok(crate::no_window::no_window_command_async(program))
     }
 }
 
@@ -4866,35 +4950,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn pi_launch_error_display_preserves_windows_io_cause() {
-        let missing = std::env::temp_dir().join(format!(
-            "screenpipe-missing-pi-{}-{}.exe",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut command = build_async_command(missing.to_str().unwrap());
-        let io_error = match command.spawn() {
-            Ok(mut child) => {
-                let _ = child.kill().await;
-                panic!("unexpectedly launched missing pi executable")
-            }
-            Err(error) => error,
-        };
-        assert_eq!(io_error.raw_os_error(), Some(2));
-
-        // Scheduler logging and execution history both use ordinary Display.
-        // Raw propagation must therefore retain the Windows OS text there.
-        let expected = io_error.to_string();
-        let persisted_error = anyhow::Error::from(io_error).to_string();
-        assert_eq!(persisted_error, expected);
-        assert!(persisted_error.contains("os error 2"));
-    }
-
     #[test]
     fn windows_bash_launcher_detection_rejects_wsl_shims() {
         assert!(is_windows_bash_launcher(r#"C:\Windows\System32\bash.exe"#));
@@ -5392,38 +5447,223 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn windows_process_is_running(pid: u32) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
+    struct WindowsProcessHandle(windows_sys::Win32::Foundation::HANDLE);
 
-        unsafe {
-            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if process.is_null() {
-                return false;
+    #[cfg(windows)]
+    unsafe impl Send for WindowsProcessHandle {}
+
+    #[cfg(windows)]
+    impl WindowsProcessHandle {
+        fn open(pid: u32) -> std::io::Result<Self> {
+            const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+            let handle = unsafe {
+                windows_sys::Win32::System::Threading::OpenProcess(
+                    windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION
+                        | windows_sys::Win32::System::Threading::PROCESS_TERMINATE
+                        | SYNCHRONIZE_ACCESS,
+                    0,
+                    pid,
+                )
+            };
+            if handle.is_null() {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(Self(handle))
             }
-            let mut exit_code = 0;
-            let ok = GetExitCodeProcess(process, &mut exit_code) != 0;
-            CloseHandle(process);
-            ok && exit_code == STILL_ACTIVE as u32
+        }
+
+        fn is_signaled(&self) -> std::io::Result<bool> {
+            match unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.0, 0) } {
+                windows_sys::Win32::Foundation::WAIT_OBJECT_0 => Ok(true),
+                windows_sys::Win32::Foundation::WAIT_TIMEOUT => Ok(false),
+                _ => Err(std::io::Error::last_os_error()),
+            }
+        }
+
+        async fn wait_signaled(&self) -> std::io::Result<()> {
+            let handle = self.0 as usize;
+            tokio::task::spawn_blocking(move || {
+                let result = unsafe {
+                    windows_sys::Win32::System::Threading::WaitForSingleObject(
+                        handle as _,
+                        windows_sys::Win32::System::Threading::INFINITE,
+                    )
+                };
+                if result == windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            })
+            .await
+            .expect("process wait worker panicked")
+        }
+
+        fn terminate(&self) -> std::io::Result<()> {
+            if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.0, 1) } == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         }
     }
 
     #[cfg(windows)]
-    fn terminate_windows_process(pid: u32) {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-        };
-
-        unsafe {
-            let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !process.is_null() {
-                TerminateProcess(process, 1);
-                CloseHandle(process);
+    impl Drop for WindowsProcessHandle {
+        fn drop(&mut self) {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.0);
             }
         }
+    }
+
+    #[cfg(all(windows, feature = "acp"))]
+    async fn assert_completed_child_result_is_preserved(exit_code: i32) {
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command
+            .args(&[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "[Console]::Out.Write('completed-out'); [Console]::Error.Write('completed-err'); exit {exit_code}"
+                ),
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("spawn completed fixture");
+        let raw = child.raw_handle().expect("guarded fixture process handle") as usize;
+        tokio::task::spawn_blocking(move || {
+            let result = unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    raw as _,
+                    windows_sys::Win32::System::Threading::INFINITE,
+                )
+            };
+            assert_eq!(result, windows_sys::Win32::Foundation::WAIT_OBJECT_0);
+        })
+        .await
+        .expect("process wait worker");
+
+        let assignment = KillOnDropJob::assign(&child);
+        let error = match assignment.as_ref() {
+            Ok(_) => panic!("late assignment unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        eprintln!("signaled process rejected late Job assignment: {error}");
+        let guard = retain_child_job_or_recover_completion(
+            &mut child,
+            assignment,
+            "unguarded completed helper fixture",
+        )
+        .await
+        .expect("preserve completed result");
+        assert!(guard.is_none());
+        let pending_stop = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            super::super::STOP_REQUESTED_PID,
+        ));
+        install_live_child_pid(&child, &pending_stop);
+        assert_eq!(
+            pending_stop.load(std::sync::atomic::Ordering::SeqCst),
+            super::super::STOP_REQUESTED_PID,
+            "a reaped child must not replace the pending-stop sentinel"
+        );
+        let output = child
+            .wait_with_output()
+            .await
+            .expect("collect completed output");
+        assert_eq!(output.status.code(), Some(exit_code));
+        assert_eq!(output.stdout, b"completed-out");
+        assert_eq!(output.stderr, b"completed-err");
+    }
+
+    #[cfg(all(windows, feature = "acp"))]
+    #[tokio::test]
+    async fn windows_unguarded_helper_preserves_completed_zero_and_nonzero_results() {
+        assert_completed_child_result_is_preserved(0).await;
+        assert_completed_child_result_is_preserved(23).await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_live_child_honors_pending_stop_during_pid_install() {
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Wait-Event"])
+            .creation_flags(BACKGROUND_SPAWN_FLAGS)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = command.spawn().expect("spawn live fixture");
+        let process = WindowsProcessHandle::open(child.id().expect("live fixture pid"))
+            .expect("open live fixture");
+        let pending_stop = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            super::super::STOP_REQUESTED_PID,
+        ));
+
+        install_live_child_pid(&child, &pending_stop);
+        process
+            .wait_signaled()
+            .await
+            .expect("pending stop terminated live fixture");
+        child.wait().await.expect("reap live fixture");
+    }
+
+    #[cfg(all(windows, feature = "acp"))]
+    #[tokio::test]
+    async fn windows_live_assignment_failure_fails_closed_without_unrelated_cleanup() {
+        fn blocked_child() -> tokio::process::Child {
+            let mut command = tokio::process::Command::new("powershell.exe");
+            command
+                .args(["-NoProfile", "-NonInteractive", "-Command", "Wait-Event"])
+                .creation_flags(BACKGROUND_SPAWN_FLAGS)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            command.spawn().expect("spawn blocked fixture")
+        }
+
+        let mut child = blocked_child();
+        let child_handle = WindowsProcessHandle::open(child.id().expect("child pid"))
+            .expect("open blocked fixture");
+        let unrelated = blocked_child();
+        let unrelated_handle = WindowsProcessHandle::open(unrelated.id().expect("unrelated pid"))
+            .expect("open unrelated fixture");
+        assert!(!child_handle.is_signaled().unwrap());
+        assert!(!unrelated_handle.is_signaled().unwrap());
+
+        let assigned = unsafe {
+            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
+                std::ptr::null_mut(),
+                child.raw_handle().expect("child process handle") as _,
+            )
+        };
+        assert_eq!(assigned, 0, "invalid Job handle unexpectedly assigned");
+        let assignment_error = std::io::Error::last_os_error();
+        let error = match retain_child_job_or_recover_completion(
+            &mut child,
+            Err(assignment_error),
+            "live fixture",
+        )
+        .await
+        {
+            Ok(_) => panic!("live uncontained child unexpectedly continued"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("failed to contain live fixture"));
+        child_handle
+            .wait_signaled()
+            .await
+            .expect("child was reaped");
+        assert!(
+            !unrelated_handle.is_signaled().unwrap(),
+            "cleanup terminated an unrelated real process"
+        );
+        unrelated_handle
+            .terminate()
+            .expect("terminate unrelated fixture");
+        unrelated_handle
+            .wait_signaled()
+            .await
+            .expect("wait unrelated fixture");
     }
 
     #[cfg(windows)]
@@ -5468,56 +5708,50 @@ mod tests {
             ready_path.exists(),
             "grandchild did not commit its simulated 32 MB payload"
         );
+        let grandchild = WindowsProcessHandle::open(grandchild_pid).expect("open grandchild");
         assert!(
-            windows_process_is_running(grandchild_pid),
-            "grandchild exited before cleanup could be tested"
+            !grandchild.is_signaled().unwrap(),
+            "grandchild exited early"
         );
 
         (grandchild_pid, job)
     }
 
     #[cfg(windows)]
-    async fn wait_for_windows_process_exit(pid: u32) -> bool {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-        while windows_process_is_running(pid) && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-        !windows_process_is_running(pid)
-    }
-
-    #[cfg(windows)]
     #[tokio::test]
-    async fn windows_job_prevents_orphaned_grandchildren() {
+    async fn windows_job_close_eventually_signals_owned_grandchildren_only() {
         // BEFORE: Windows leaves the descendant running after its immediate
         // parent exits. This is the leak mechanism the production guard fixes.
         let (unmanaged_pid, unmanaged_job) = spawn_parent_with_lingering_grandchild(false).await;
         assert!(unmanaged_job.is_none());
+        let unmanaged = WindowsProcessHandle::open(unmanaged_pid).expect("open unmanaged child");
         assert!(
-            windows_process_is_running(unmanaged_pid),
-            "unmanaged reproduction did not leave the expected orphan"
+            !unmanaged.is_signaled().unwrap(),
+            "unmanaged reproduction exited"
         );
         eprintln!(
             "before: unmanaged grandchild {unmanaged_pid} remained alive with 32 MB committed after parent exit"
         );
-        terminate_windows_process(unmanaged_pid);
-        assert!(
-            wait_for_windows_process_exit(unmanaged_pid).await,
-            "failed to clean up unmanaged reproduction process {unmanaged_pid}"
-        );
-
         // AFTER: the same tree joins a kill-on-close Job Object. The parent
         // still exits normally, but dropping the guard reaps the descendant.
         let (managed_pid, managed_job) = spawn_parent_with_lingering_grandchild(true).await;
-        drop(managed_job.expect("managed run should return a job guard"));
-        let managed_exited = wait_for_windows_process_exit(managed_pid).await;
-        eprintln!(
-            "after: managed grandchild {managed_pid} alive={}",
-            !managed_exited
-        );
+        let managed = WindowsProcessHandle::open(managed_pid).expect("open managed child");
         assert!(
-            managed_exited,
-            "grandchild {managed_pid} survived closing its job object"
+            !managed.is_signaled().unwrap(),
+            "managed fixture exited early"
         );
+        drop(managed_job.expect("managed run should return a job guard"));
+        managed.wait_signaled().await.expect("wait managed fixture");
+        eprintln!("after: managed grandchild {managed_pid} process handle signaled");
+        assert!(
+            !unmanaged.is_signaled().unwrap(),
+            "closing one Job terminated an unrelated real process"
+        );
+        unmanaged.terminate().expect("terminate unmanaged fixture");
+        unmanaged
+            .wait_signaled()
+            .await
+            .expect("wait unmanaged fixture");
     }
 
     #[test]

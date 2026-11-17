@@ -1,0 +1,384 @@
+[
+  {
+    "scene": "static",
+    "duration_seconds": 60.4863113,
+    "dwm_cpu_percent_one_core": 12.735319503604778,
+    "system_cpu_percent_whole_vm_mean": 2.9329272864967986,
+    "dwm_working_set_bytes_mean": 102625143.46666667,
+    "fixture_working_set_bytes_mean": 12601617.066666666,
+    "fixture_private_bytes_mean": 1620923.7333333334,
+    "samples": [
+      {
+        "system_cpu_percent_whole_vm": 5.032446627335096,
+        "dwm_working_set_bytes": 102301696,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.00959959435948,
+        "dwm_working_set_bytes": 104235008,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 5.444280421315629,
+        "dwm_working_set_bytes": 102653952,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.0700705208149826,
+        "dwm_working_set_bytes": 102625280,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.0762173535835,
+        "dwm_working_set_bytes": 102526976,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.8836867845070002,
+        "dwm_working_set_bytes": 102375424,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.5618845996119974,
+        "dwm_working_set_bytes": 102637568,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.0250955393686043,
+        "dwm_working_set_bytes": 102408192,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.766828416083277,
+        "dwm_working_set_bytes": 101974016,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 0.3903178717779454,
+        "dwm_working_set_bytes": 102408192,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.694025702663384,
+        "dwm_working_set_bytes": 101490688,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.839278141558955,
+        "dwm_working_set_bytes": 101724160,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 0.33109015162531286,
+        "dwm_working_set_bytes": 101842944,
+        "fixture_working_set_bytes": 12599296,
+        "fixture_private_bytes": 1630208
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.700093434668573,
+        "dwm_working_set_bytes": 103170048,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.145026845747967,
+        "dwm_working_set_bytes": 103276544,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.953486355978486,
+        "dwm_working_set_bytes": 102703104,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.4429903370068664,
+        "dwm_working_set_bytes": 102686720,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.4677491682884467,
+        "dwm_working_set_bytes": 102850560,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.467687587321589,
+        "dwm_working_set_bytes": 102612992,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.2802796423524017,
+        "dwm_working_set_bytes": 102490112,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.101069048079085,
+        "dwm_working_set_bytes": 102453248,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.315693244544171,
+        "dwm_working_set_bytes": 102658048,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 0.8385734824813307,
+        "dwm_working_set_bytes": 102866944,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.5919397098674533,
+        "dwm_working_set_bytes": 103231488,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.1136049560350756,
+        "dwm_working_set_bytes": 102596608,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.820103953843022,
+        "dwm_working_set_bytes": 102612992,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.187718756926471,
+        "dwm_working_set_bytes": 102670336,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.547213626148016,
+        "dwm_working_set_bytes": 103092224,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.0107686695490132,
+        "dwm_working_set_bytes": 102817792,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.8789980514608238,
+        "dwm_working_set_bytes": 102760448,
+        "fixture_working_set_bytes": 12603392,
+        "fixture_private_bytes": 1613824
+      }
+    ]
+  },
+  {
+    "scene": "moving",
+    "duration_seconds": 60.6521381,
+    "dwm_cpu_percent_one_core": 24.370534103232213,
+    "system_cpu_percent_whole_vm_mean": 3.7842858272916327,
+    "dwm_working_set_bytes_mean": 105965021.86666666,
+    "fixture_working_set_bytes_mean": 12646263.466666667,
+    "fixture_private_bytes_mean": 1677858.1333333333,
+    "samples": [
+      {
+        "system_cpu_percent_whole_vm": 2.378348579246037,
+        "dwm_working_set_bytes": 104689664,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.4326469070008119,
+        "dwm_working_set_bytes": 105234432,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 5.585612549146246,
+        "dwm_working_set_bytes": 108072960,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.3478137165134583,
+        "dwm_working_set_bytes": 105144320,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.769027272397484,
+        "dwm_working_set_bytes": 109047808,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.875296873288602,
+        "dwm_working_set_bytes": 105304064,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.088903165592206,
+        "dwm_working_set_bytes": 105402368,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.893072650192732,
+        "dwm_working_set_bytes": 105734144,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.718189442686349,
+        "dwm_working_set_bytes": 105463808,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.624308774808783,
+        "dwm_working_set_bytes": 105533440,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.383537868357834,
+        "dwm_working_set_bytes": 105918464,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.955675370554468,
+        "dwm_working_set_bytes": 105693184,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.8335480759218434,
+        "dwm_working_set_bytes": 105492480,
+        "fixture_working_set_bytes": 12644352,
+        "fixture_private_bytes": 1687552
+      },
+      {
+        "system_cpu_percent_whole_vm": 5.471089950912644,
+        "dwm_working_set_bytes": 105521152,
+        "fixture_working_set_bytes": 12636160,
+        "fixture_private_bytes": 1658880
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.6949660332701733,
+        "dwm_working_set_bytes": 106106880,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.637177807784187,
+        "dwm_working_set_bytes": 106008576,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.6412466831076897,
+        "dwm_working_set_bytes": 105697280,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.505788375735298,
+        "dwm_working_set_bytes": 109232128,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 3.0820093330732767,
+        "dwm_working_set_bytes": 105861120,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.2030320990409358,
+        "dwm_working_set_bytes": 105660416,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.761460916350178,
+        "dwm_working_set_bytes": 105664512,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.2553405203268095,
+        "dwm_working_set_bytes": 105455616,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 7.054452867680016,
+        "dwm_working_set_bytes": 105922560,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.1800778482101157,
+        "dwm_working_set_bytes": 105676800,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.916839217859102,
+        "dwm_working_set_bytes": 105717760,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.8757468262973225,
+        "dwm_working_set_bytes": 105910272,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 1.906596282017814,
+        "dwm_working_set_bytes": 105902080,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 2.82147169090069,
+        "dwm_working_set_bytes": 106295296,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 4.774547940600138,
+        "dwm_working_set_bytes": 105975808,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      },
+      {
+        "system_cpu_percent_whole_vm": 10.860749179875718,
+        "dwm_working_set_bytes": 105611264,
+        "fixture_working_set_bytes": 12648448,
+        "fixture_private_bytes": 1671168
+      }
+    ]
+  }
+]

@@ -38,7 +38,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(unix)]
+use std::process::ChildStdin;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -101,8 +103,6 @@ fn scrub_runtime_env(command: &mut std::process::Command) {
 
 #[cfg(windows)]
 const WRAPPED_COMMAND_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND";
-#[cfg(windows)]
-const WRAPPED_ARGS_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_ARGS_JSON";
 
 pub fn is_process_guard_mode() -> bool {
     std::env::args_os().any(|arg| arg == PROCESS_GUARD_ARG)
@@ -158,7 +158,7 @@ pub fn run_process_guard() -> Result<i32, String> {
     );
     let program = env_nonempty(WRAPPED_COMMAND_ENV)
         .ok_or("Windows ACP process guard has no wrapped command")?;
-    let args = parse_json_env::<Vec<String>>(WRAPPED_ARGS_ENV)?.unwrap_or_default();
+    let args = wrapped_process_args(std::env::args())?;
     let mut child = windows_target_command(&program, &args)?
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -169,6 +169,18 @@ pub fn run_process_guard() -> Result<i32, String> {
         .wait()
         .map_err(|error| format!("failed waiting for wrapped ACP command '{program}': {error}"))?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(windows)]
+fn wrapped_process_args(args: impl IntoIterator<Item = String>) -> Result<Vec<String>, String> {
+    let mut wrapped = args
+        .into_iter()
+        .skip_while(|arg| arg != PROCESS_GUARD_ARG)
+        .skip(1);
+    match wrapped.next().as_deref() {
+        Some("--") => Ok(wrapped.collect()),
+        _ => Err("Windows ACP process guard argument separator is missing".into()),
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -399,7 +411,7 @@ Never access Screenpipe's live db.sqlite, db.sqlite-wal, or db.sqlite-shm direct
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
 - for a connection returned with mcp=true (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive), use `sp_mcp_list_tools` then `sp_mcp_call` (with its `mcp_server_id`) to actually use it — not the connection proxy.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
-- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard.
+- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard. A turn that asks you to design a dashboard for review uses `screenpipe_live_view` and `screenpipe_live_view_propose` instead, and those tools are already registered.
 - screenpipe seeds on-demand task guides in `.pi/skills/*/SKILL.md` under your working directory. When tool descriptions are not enough for specialized work, read only the closest matching skill. Do not enumerate or preload unrelated skills. If the task already supplies a complete tool workflow, use that narrower contract instead of loading a general skill.
 Do not curl localhost for these; call the tools.";
 
@@ -518,7 +530,6 @@ fn is_process_guard_env(name: &str) -> bool {
     #[cfg(windows)]
     {
         name.eq_ignore_ascii_case(WRAPPED_COMMAND_ENV)
-            || name.eq_ignore_ascii_case(WRAPPED_ARGS_ENV)
     }
     #[cfg(not(windows))]
     {
@@ -690,6 +701,20 @@ pub fn cloud_routing_env(
     )
 }
 
+/// Claude's CLI sign-in replaces credentials in its store even without a
+/// logout request. Keep both the adapter and its login subprocess in the same
+/// Screenpipe-owned profile, including the macOS Keychain namespace. Never
+/// seed this profile with the user's credentials: copied refresh tokens would
+/// still couple the two logins when either client rotates them.
+fn isolate_claude_auth(command: &mut tokio::process::Command, agent_id: &str, data_dir: &Path) {
+    if agent_id == "claude-acp" {
+        let profile = data_dir.join("acp").join("claude");
+        command
+            .env("CLAUDE_CONFIG_DIR", &profile)
+            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &profile);
+    }
+}
+
 /// Run a `terminal`-type ACP auth method's login: the agent's own launch
 /// command plus the method's `args` (e.g. `bun x <adapter> --cli auth login
 /// --claudeai`). The command opens the browser, completes OAuth, writes the
@@ -737,6 +762,11 @@ async fn run_terminal_login(
     for key in RUNTIME_ONLY_ENV {
         command.env_remove(key);
     }
+    isolate_claude_auth(
+        &mut command,
+        agent_id,
+        &crate::paths::default_screenpipe_data_dir(),
+    );
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to start login: {e}"))?;
@@ -1161,19 +1191,22 @@ fn supervised_command(program: &str, args: &[String]) -> Result<Command, String>
 
     #[cfg(windows)]
     {
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate ACP process guard executable: {error}"))?;
-        let mut command = Command::new(executable);
-        command
-            .arg(PROCESS_GUARD_ARG)
-            .env(WRAPPED_COMMAND_ENV, program)
-            .env(
-                WRAPPED_ARGS_ENV,
-                serde_json::to_string(args)
-                    .map_err(|error| format!("failed to encode wrapped ACP arguments: {error}"))?,
-            );
+        let mut command = guarded_command(program)?;
+        command.args(args);
         Ok(command)
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn guarded_command(program: &str) -> Result<Command, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate process guard executable: {error}"))?;
+    let mut command = Command::new(executable);
+    command
+        .arg(PROCESS_GUARD_ARG)
+        .arg("--")
+        .env(WRAPPED_COMMAND_ENV, program);
+    Ok(command)
 }
 
 #[cfg(windows)]
@@ -3620,12 +3653,15 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
 
 /// The bare screenpipe tool name behind whatever an adapter puts on the wire.
 ///
-/// Tool identity reaches the desktop in three shapes and they must all compare
+/// Tool identity reaches the desktop in four shapes and they must all compare
 /// equal: raw Pi sends the bare name (`search-content`), stdio ACP agents send
-/// `mcp__screenpipe__search-content`, and http-only agents (Cursor, Copilot)
-/// send the bundled server's underscored form,
-/// `mcp__screenpipe-tools__frame_context`. Returns `None` for a human title
-/// like "Read /a/b.ts", which is a native agent step and not an MCP tool.
+/// `mcp__screenpipe__search-content`, http-only agents (Cursor, Copilot) send
+/// `mcp__screenpipe-tools__frame_context`, and Cursor's permission id is
+/// `<server>-<tool>` (`screenpipe-tools-screenpipe_live_view`). Returns `None`
+/// for a human title like "Read /a/b.ts", which is a native agent step and not
+/// an MCP tool. Cursor's ACP permission title joins the id and the tool with
+/// `": "` (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`); that
+/// joined string is split in `scoped_tool_name` before it gets here.
 fn normalized_tool_name(title: &str) -> Option<String> {
     let title = title.trim();
     if title.is_empty() {
@@ -3635,7 +3671,12 @@ fn normalized_tool_name(title: &str) -> Option<String> {
         // `mcp__<server>__<tool>`; the server name itself may contain no `__`.
         Some(("mcp", rest)) => rest.split_once("__").map(|(_, tool)| tool)?,
         Some(_) => return None,
-        None => title,
+        // Cursor joins the MCP server and tool with one hyphen. The server
+        // name contains hyphens too, so only peel the known server prefix.
+        None => title
+            .strip_prefix("screenpipe-tools-")
+            .filter(|tool| !tool.is_empty())
+            .unwrap_or(title),
     };
     let bare = bare.trim();
     // A tool name is a single identifier. Anything with whitespace is a human
@@ -3650,7 +3691,26 @@ fn normalized_tool_name(title: &str) -> Option<String> {
 /// name) are refused too: a scoped surface answers from the evidence in its own
 /// turn, so a file read or a skill load is out of contract by construction.
 fn scoped_tool_allowed(allowlist: &[String], title: Option<&str>) -> bool {
-    normalized_tool_name(title.unwrap_or("")).is_some_and(|name| allowlist.contains(&name))
+    scoped_tool_name(title.unwrap_or("")).is_some_and(|name| allowlist.contains(&name))
+}
+
+/// The tool a permission title names, or `None` when it names no single tool.
+///
+/// Cursor's MCP approval title is `${registeredName}: ${toolName}`
+/// (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`). The joined
+/// string contains a space, so it is not itself a tool id. Both halves must
+/// name the same tool: a title is agent-supplied text, and accepting either
+/// half alone would approve a native step whose description merely ends in
+/// `: <allowlisted tool>`.
+fn scoped_tool_name(title: &str) -> Option<String> {
+    let title = title.trim();
+    if let Some(name) = normalized_tool_name(title) {
+        return Some(name);
+    }
+    let (registered, tool) = title.split_once(": ")?;
+    let registered = normalized_tool_name(registered)?;
+    let tool = normalized_tool_name(tool)?;
+    (registered == tool).then_some(tool)
 }
 
 /// A short, readable heading for a permission prompt, from the tool's `kind`.
@@ -5185,6 +5245,13 @@ pub(super) async fn run_from_env_with_observer(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Apply after preset env so a shared CLAUDE_CONFIG_DIR cannot reconnect
+    // Screenpipe sign-in to an external Claude Code session's credentials.
+    isolate_claude_auth(
+        &mut command,
+        &config.agent_id,
+        &crate::paths::default_screenpipe_data_dir(),
+    );
     #[cfg(unix)]
     let mut process_tree = ProcessTree::prepare_tokio(&mut command)?;
     #[cfg(windows)]
@@ -5364,6 +5431,134 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{AgentCapabilities, ContentChunk, SessionUpdate};
     use agent_client_protocol::Channel;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_guard_transport_preserves_separator_quotes_and_metacharacters() {
+        let expected = vec![
+            "--".to_string(),
+            "two words".to_string(),
+            "quoted=\"value\"".to_string(),
+            "&|<>^%PATH%".to_string(),
+        ];
+        let mut argv = vec![
+            "screenpipe.exe".to_string(),
+            PROCESS_GUARD_ARG.to_string(),
+            "--".to_string(),
+        ];
+        argv.extend(expected.clone());
+        assert_eq!(wrapped_process_args(argv).unwrap(), expected);
+
+        let command = guarded_command("fixture program.exe").unwrap();
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new(PROCESS_GUARD_ARG),
+                std::ffi::OsStr::new("--")
+            ]
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == WRAPPED_COMMAND_ENV
+                && value == Some(std::ffi::OsStr::new("fixture program.exe"))
+        }));
+    }
+
+    #[test]
+    fn claude_auth_overrides_shared_profile_and_secure_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("Screenpipe profile");
+        let mut command = tokio::process::Command::new("unused");
+        command
+            .env("CLAUDE_CONFIG_DIR", root.path().join("external-config"))
+            .env(
+                "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                root.path().join("external-keychain"),
+            )
+            .env("ANTHROPIC_AUTH_TOKEN", "cloud-token");
+
+        isolate_claude_auth(&mut command, "claude-acp", &data_dir);
+
+        let env: HashMap<_, _> = command.as_std().get_envs().collect();
+        let profile = data_dir.join("acp/claude");
+        for key in ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
+            assert_eq!(env[std::ffi::OsStr::new(key)], Some(profile.as_os_str()));
+        }
+        assert_eq!(
+            env[std::ffi::OsStr::new("ANTHROPIC_AUTH_TOKEN")],
+            Some(std::ffi::OsStr::new("cloud-token"))
+        );
+    }
+
+    #[test]
+    fn claude_auth_isolation_leaves_other_agents_unchanged() {
+        for agent_id in [
+            "codex-acp",
+            "pi-acp",
+            "cursor",
+            "github-copilot-cli",
+            "custom",
+        ] {
+            let mut command = tokio::process::Command::new("unused");
+            command.env("CLAUDE_CONFIG_DIR", "user-profile");
+            isolate_claude_auth(&mut command, agent_id, Path::new("unused"));
+            let env: Vec<_> = command.as_std().get_envs().collect();
+            assert_eq!(
+                env,
+                vec![(
+                    std::ffi::OsStr::new("CLAUDE_CONFIG_DIR"),
+                    Some(std::ffi::OsStr::new("user-profile"))
+                )],
+                "{agent_id}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_auth_login_and_restart_preserve_external_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let external = root.path().join("external");
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join(".credentials.json"), "external-login").unwrap();
+        let data_dir = root.path().join("Screenpipe profile");
+        let profile = data_dir.join("acp/claude");
+
+        // Model the CLI's config/credential writes in fresh child processes.
+        // Both inherited overrides point at the external store before isolation.
+        for credential in ["screenpipe-login", "screenpipe-reauth"] {
+            let mut login = tokio::process::Command::new("/bin/sh");
+            login
+                .env("CLAUDE_CONFIG_DIR", &external)
+                .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &external)
+                .env("TEST_CREDENTIAL", credential)
+                .args(["-ec", r#"
+                    test "$CLAUDE_CONFIG_DIR" = "$CLAUDE_SECURESTORAGE_CONFIG_DIR"
+                    mkdir -p "$CLAUDE_CONFIG_DIR"
+                    printf '%s' "$TEST_CREDENTIAL" > "$CLAUDE_SECURESTORAGE_CONFIG_DIR/.credentials.json"
+                "#]);
+            isolate_claude_auth(&mut login, "claude-acp", &data_dir);
+            assert!(login.status().await.unwrap().success());
+
+            let mut restarted_adapter = tokio::process::Command::new("/bin/sh");
+            restarted_adapter.args([
+                "-ec",
+                r#"cat "$CLAUDE_SECURESTORAGE_CONFIG_DIR/.credentials.json""#,
+            ]);
+            isolate_claude_auth(&mut restarted_adapter, "claude-acp", &data_dir);
+            let output = restarted_adapter.output().await.unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, credential.as_bytes());
+            assert_eq!(
+                std::fs::read_to_string(profile.join(".credentials.json")).unwrap(),
+                credential
+            );
+            assert_eq!(
+                std::fs::read_to_string(external.join(".credentials.json")).unwrap(),
+                "external-login"
+            );
+        }
+    }
+
     #[test]
     fn terminal_auth_meta_drives_a_cli_login() {
         // A standard advertised method (not the Terminal variant) that carries
@@ -5436,6 +5631,16 @@ mod tests {
             normalized_tool_name("mcp__screenpipe-tools__frame_context").as_deref(),
             Some("frame-context")
         );
+        // Cursor's permission title is `<server>-<tool>`, not the mcp__ form.
+        // Missing this cancelled every Live View read as "User rejected".
+        assert_eq!(
+            normalized_tool_name("screenpipe-tools-screenpipe_live_view").as_deref(),
+            Some("screenpipe-live-view")
+        );
+        assert_eq!(
+            normalized_tool_name("screenpipe-tools-screenpipe_live_view_propose").as_deref(),
+            Some("screenpipe-live-view-propose")
+        );
 
         // Human titles are native agent steps, not MCP tools.
         assert_eq!(normalized_tool_name("Read /a/b.ts"), None);
@@ -5455,6 +5660,41 @@ mod tests {
         assert!(scoped_tool_allowed(
             &allowlist,
             Some("mcp__screenpipe-tools__get_meeting")
+        ));
+        let live_view = vec!["screenpipe-live-view".to_owned()];
+        assert!(scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view")
+        ));
+        // Cursor's ACP permission title is `${registeredName}: ${toolName}`.
+        // The space used to make the whole string look like a human title, so
+        // every Live View call came back "User rejected MCP ... Cancelled".
+        assert!(scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view: screenpipe_live_view")
+        ));
+        let propose = vec!["screenpipe-live-view-propose".to_owned()];
+        assert!(scoped_tool_allowed(
+            &propose,
+            Some("screenpipe-tools-screenpipe_live_view_propose: screenpipe_live_view_propose")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("Read `src/main.rs`: notes")
+        ));
+        // Agent-supplied text that only ends in an allowlisted tool name is
+        // not that tool: both halves of a joined title must agree.
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("rm -rf ~: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("Shell: screenpipe_live_view")
+        ));
+        assert!(!scoped_tool_allowed(
+            &live_view,
+            Some("screenpipe-tools-screenpipe_live_view: get_meeting")
         ));
 
         // A screenpipe tool outside the list, another MCP server, a native step,

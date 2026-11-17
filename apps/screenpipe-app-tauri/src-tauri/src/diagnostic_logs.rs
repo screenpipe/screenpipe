@@ -305,6 +305,129 @@ async fn build_bundle(files: &[LogFile]) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "storage-fault-injection")]
+    #[tokio::test]
+    async fn probe_failure_child_writes_recovery_log() {
+        let Some(root) = std::env::var_os("SCREENPIPE_TEST_PROBE_FAILURE_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let error = match screenpipe_db::DatabaseManager::new_hybrid(
+            &root,
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("injected probe failure must interrupt fresh bootstrap")
+            }
+            Err(error) => error,
+        };
+        crate::recording::recovery_log::append(
+            &root,
+            "database_startup_failed",
+            &format!("Failed to initialize database: {error}"),
+        );
+    }
+
+    #[cfg(feature = "storage-fault-injection")]
+    #[tokio::test]
+    async fn fresh_bootstrap_probe_failure_survives_normal_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("diagnostic_logs::tests::probe_failure_child_writes_recovery_log")
+            .arg("--nocapture")
+            .env("SCREENPIPE_TEST_PROBE_FAILURE_ROOT", root.path())
+            .env("SCREENPIPE_STORAGE_AVAILABLE_SPACE", "error")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "probe failure child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        let injected = std::io::Error::from_raw_os_error(5);
+        for evidence in [
+            "database_startup_failed".to_owned(),
+            "offline construction disk-space probe failed".to_owned(),
+            format!("error_kind={:?}", injected.kind()),
+            "raw_os_error=Some(5)".to_owned(),
+            format!("cause={injected}"),
+            "required_bytes=2147483648".to_owned(),
+            "reserve_bytes=2147483648 (bytes)".to_owned(),
+            "source retained".to_owned(),
+            "outcome=recording_blocked".to_owned(),
+            "recovery=restore access to the storage drive or data folder".to_owned(),
+            "then retry startup".to_owned(),
+        ] {
+            assert!(
+                report.contains(&evidence),
+                "missing support evidence: {evidence}\n{report}"
+            );
+        }
+        assert!(!report.contains("available_bytes=0"));
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert!(root.path().join("storage-init.json").exists());
+    }
+
+    #[tokio::test]
+    async fn fresh_bootstrap_reserve_failure_survives_normal_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = screenpipe_db::storage::MigrationOptions::default();
+        options.budget.disk_reserve_bytes = u64::MAX;
+        let error = match screenpipe_db::DatabaseManager::new_hybrid(
+            root.path(),
+            Default::default(),
+            options,
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("test reserve must interrupt fresh bootstrap")
+            }
+            Err(error) => error,
+        };
+        let detail = format!("Failed to initialize database: {error}");
+        crate::recording::recovery_log::append(root.path(), "database_startup_failed", &detail);
+
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "database_startup_failed".to_owned(),
+            "offline construction reached disk reserve".to_owned(),
+            "available_bytes=".to_owned(),
+            format!("required_bytes={}", u64::MAX),
+            format!("reserve_bytes={} (bytes)", u64::MAX),
+            "source retained".to_owned(),
+            "outcome=recording_blocked".to_owned(),
+            "recovery=free space".to_owned(),
+            "then retry".to_owned(),
+        ] {
+            assert!(
+                report.contains(&evidence),
+                "missing support evidence: {evidence}\n{report}"
+            );
+        }
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert!(root.path().join("storage-init.json").exists());
+    }
+
     #[tokio::test]
     async fn storage_support_report_works_without_a_recording_engine() {
         let root = tempfile::tempdir().unwrap();
@@ -496,6 +619,56 @@ mod tests {
         assert!(report.contains("accessibility_outcome=\"independent\""));
         assert!(report.contains("recorder restarted"));
         assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
+    async fn cached_screenshot_source_failure_and_recovery_survive_support_collection() {
+        let root = tempfile::tempdir().unwrap();
+        // Actual INFO/WARN output from the disposable macOS source recovery run.
+        let emitted = include_str!(
+            "../../../../crates/screenpipe-screen/tests/fixtures/cached-screenshot-source-diagnostic.txt"
+        );
+        tokio::fs::write(root.path().join("screenpipe-app.2026-11-13.1.log"), emitted)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.path().join("screenpipe-app.2026-11-13.log"),
+            "contact=cache-fixture@screenpipe.test\n",
+        )
+        .await
+        .unwrap();
+        let report = collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        for evidence in [
+            "desktop scene changed during privacy capture",
+            "window-filtered capture recovered after scene change",
+            "monitor_id=1",
+            "screenshot_outcome=\"retrying\"",
+            "screenshot_outcome=\"captured\"",
+            "next stream frame unavailable",
+            "screenshot_outcome=\"waiting_for_stream\"",
+            "cached_frame_available=false",
+        ] {
+            assert!(
+                report.contains(evidence),
+                "missing collected support evidence: {evidence}"
+            );
+        }
+        assert_eq!(
+            report
+                .matches("persistent whole-display screenshot stream started")
+                .count(),
+            1,
+            "redaction failure and recovery must retain the single native source"
+        );
+        assert!(report.contains("capture_scope=\"display\""));
+        assert!(report.contains("continuous screenshot source recovered"));
+        assert!(!report.contains("cache-fixture@screenpipe.test"));
+        println!("CACHE_SOURCE_COLLECTED_SUPPORT={report}");
     }
 
     #[tokio::test]
@@ -734,6 +907,36 @@ mod tests {
         assert!(report.contains("continuing credential verification"));
         assert!(report.contains("recorder restarted"));
         assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
+    async fn induced_wgc_interval_failure_and_recovery_reach_normal_redacted_collector() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-11-13.log");
+        // Induced collector fixture only. The screenpipe-screen unit invokes the
+        // production WGC outcome recorder and checks these fields at their source.
+        std::fs::write(
+            &current,
+            concat!(
+                "WARN WGC native minimum update interval failed transiently requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=failed error=HRESULT(0x80004005): Unspecified error; retaining safe demand-driven capture; a later retry can recover native rate control\n",
+                "INFO WGC native minimum update interval recovered requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome=recovered\n",
+                "INFO contact=private-person@example.com\n",
+            ),
+        )
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("requested_fps=2"));
+        assert!(report.contains("interval_ticks=5000000"));
+        assert!(report.contains("cause=FreshRequestRestore"));
+        assert!(report.contains("outcome=failed"));
+        assert!(report.contains("HRESULT(0x80004005)"));
+        assert!(report.contains("retaining safe demand-driven capture"));
+        assert!(report.contains("outcome=recovered"));
+        assert!(report.contains("native minimum update interval recovered"));
+        assert!(!report.contains("private-person@example.com"));
+        println!("redacted WGC interval support report:\n{report}");
     }
 
     #[tokio::test]
@@ -1570,6 +1773,47 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn windows_pipe_containment_failure_survives_rotation_and_support_redaction() {
+        // The process lifecycle is exercised on Windows. This representative
+        // assignment failure exercises the actual support collection boundary.
+        let logs = tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-11-16.log");
+        let cause = "Access is denied. (os error 5)";
+        let failure = format!(
+            "failed to contain pi process 731: {cause}; process-state observation: live child observed; cleanup request: accepted; reap: completed"
+        );
+        std::fs::write(
+            &current,
+            format!(
+                "ERROR pipe 'digital-clone' error: {failure}\ncontact=private-person@example.com\n"
+            ),
+        )
+        .unwrap();
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-11-16.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "screenpipe restarted; digital-clone remains disabled\n",
+        )
+        .unwrap();
+
+        let report = collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+            .await
+            .unwrap();
+        for evidence in [
+            "pipe 'digital-clone' error:",
+            failure.as_str(),
+            "screenpipe restarted; digital-clone remains disabled",
+        ] {
+            assert!(report.contains(evidence), "support report lost {evidence}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+    }
 
     #[tokio::test]
     async fn pi_compaction_failure_survives_rotation_and_support_redaction() {

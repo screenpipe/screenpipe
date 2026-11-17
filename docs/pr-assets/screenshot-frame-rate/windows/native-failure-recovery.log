@@ -1,0 +1,2 @@
+ WARN screenpipe_screen::wgc_capture: WGC native minimum update interval failed transiently; retaining safe demand-driven capture; a later retry can recover native rate control requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome="failed" error=Error { code: HRESULT(0x80004005), message: "Unspecified error" }
+ INFO screenpipe_screen::wgc_capture: WGC native minimum update interval recovered requested_fps=2 interval_ticks=5000000 cause=FreshRequestRestore outcome="recovered"

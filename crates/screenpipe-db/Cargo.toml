@@ -24,6 +24,7 @@ sqlx = { workspace = true, features = [
   "migrate",
 ] }
 sqlite-vec = "0.1.3"
+dunce = "1.0.5"
 libsqlite3-sys = { workspace = true }
 rusqlite = { workspace = true, features = ["vtab"] }
 serde = { workspace = true }

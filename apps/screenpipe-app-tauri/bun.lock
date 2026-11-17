@@ -132,6 +132,7 @@
         "unplugin": "2.3.11",
         "vitest": "^1.6.1",
         "wdio-video-reporter": "^6.0.0",
+        "ws": "8.19.0",
       },
     },
   },

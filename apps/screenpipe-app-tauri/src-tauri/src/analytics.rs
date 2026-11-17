@@ -8,12 +8,57 @@ use screenpipe_engine::telemetry_context::TelemetryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{System, SystemExt};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::interval;
 use tracing::instrument::WithSubscriber;
+
+static TELEMETRY_CONSENT: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_consent(enabled: bool) {
+    TELEMETRY_CONSENT.store(
+        enabled && !screenpipe_engine::analytics::telemetry_disabled_by_env(),
+        Ordering::SeqCst,
+    );
+}
+
+pub(crate) fn consent_enabled() -> bool {
+    TELEMETRY_CONSENT.load(Ordering::SeqCst)
+}
+
+// The webview plugin forwards non-event envelopes directly, bypassing
+// before_send. Gate the transport too so all reports follow live consent.
+struct SentryConsentTransport {
+    inner: Arc<dyn sentry::Transport>,
+    allowed: fn() -> bool,
+}
+
+impl sentry::Transport for SentryConsentTransport {
+    fn send_envelope(&self, envelope: sentry::Envelope) {
+        if (self.allowed)() {
+            self.inner.send_envelope(envelope);
+        }
+    }
+
+    fn flush(&self, timeout: Duration) -> bool {
+        self.inner.flush(timeout)
+    }
+
+    fn shutdown(&self, timeout: Duration) -> bool {
+        self.inner.shutdown(timeout)
+    }
+}
+
+pub(crate) fn sentry_transport(options: &sentry::ClientOptions) -> Arc<dyn sentry::Transport> {
+    use sentry::TransportFactory;
+    Arc::new(SentryConsentTransport {
+        inner: sentry::transports::DefaultTransportFactory.create_transport(options),
+        allowed: consent_enabled,
+    })
+}
 
 const EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -71,7 +116,7 @@ pub struct AnalyticsManager {
     distinct_id: String,
     email: String,
     interval: Duration,
-    enabled: Arc<Mutex<bool>>,
+    enabled: Arc<AtomicBool>,
     api_host: String,
     local_api_base_url: String,
     local_api_key: Option<String>,
@@ -150,7 +195,7 @@ impl AnalyticsManager {
             distinct_id,
             email,
             interval: Duration::from_secs(interval_hours * 3600),
-            enabled: Arc::new(Mutex::new(analytics_enabled)),
+            enabled: Arc::new(AtomicBool::new(analytics_enabled)),
             api_host: "https://us.i.posthog.com".to_string(),
             local_api_base_url,
             local_api_key,
@@ -160,9 +205,21 @@ impl AnalyticsManager {
         }
     }
 
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        let debug =
+            cfg!(debug_assertions) || std::env::var("TAURI_ENV_DEBUG").is_ok_and(|v| v == "true");
+        self.enabled.store(
+            enabled && !debug && !screenpipe_engine::analytics::telemetry_disabled_by_env(),
+            Ordering::SeqCst,
+        );
+    }
+
     /// Fetch UTM attribution from the website by IP matching.
     /// Called once on first launch; result is cached for all subsequent events.
     pub async fn fetch_attribution(&self) {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
         // Only fetch if we haven't already
         if self.attribution.lock().await.is_some() {
             return;
@@ -223,7 +280,7 @@ impl AnalyticsManager {
     /// Send a $create_alias event so PostHog merges the email-based identity
     /// (used by the website download endpoint) with this app's analytics UUID.
     pub async fn send_alias(&self, alias: &str) {
-        if !*self.enabled.lock().await || alias.is_empty() {
+        if !self.enabled.load(Ordering::SeqCst) || alias.is_empty() {
             return;
         }
         let url = format!("{}/capture/", self.api_host);
@@ -261,7 +318,7 @@ impl AnalyticsManager {
         event: &str,
         properties: Option<serde_json::Value>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if !*self.enabled.lock().await {
+        if !self.enabled.load(Ordering::SeqCst) {
             return Ok(());
         }
 
@@ -272,6 +329,10 @@ impl AnalyticsManager {
             .host_info
             .get_or_try_init(|| tokio::task::spawn_blocking(HostInfo::collect))
             .await?;
+
+        if !self.enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
 
         let app_version = env!("CARGO_PKG_VERSION");
 
@@ -409,7 +470,7 @@ impl AnalyticsManager {
 
         loop {
             interval.tick().await;
-            if *self.enabled.lock().await {
+            if self.enabled.load(Ordering::SeqCst) {
                 // Get health status
                 let health_status = match self.check_recording_health().await {
                     Ok(status) => status,
@@ -716,6 +777,53 @@ pub fn start_analytics(
 mod tests {
     use super::*;
 
+    #[test]
+    fn sentry_raw_envelopes_follow_live_consent_on_an_existing_client() {
+        static ALLOWED: AtomicBool = AtomicBool::new(false);
+        fn allowed() -> bool {
+            ALLOWED.load(Ordering::SeqCst)
+        }
+        #[derive(Default)]
+        struct Received(std::sync::Mutex<Vec<sentry::Envelope>>);
+        impl sentry::Transport for Received {
+            fn send_envelope(&self, envelope: sentry::Envelope) {
+                self.0.lock().unwrap().push(envelope);
+            }
+        }
+        let received = Arc::new(Received::default());
+        let transport = Arc::new(SentryConsentTransport {
+            inner: received.clone(),
+            allowed,
+        });
+        let client = sentry::Client::from(sentry::ClientOptions {
+            dsn: Some("https://fixture@example.invalid/1".parse().unwrap()),
+            transport: Some(Arc::new(
+                move |_options: &sentry::ClientOptions| -> Arc<dyn sentry::Transport> {
+                    transport.clone()
+                },
+            )),
+            ..Default::default()
+        });
+        // This is the raw plugin path: no event exists for before_send to filter.
+        let raw = || {
+            let envelope = sentry::Envelope::from_slice(
+                b"{}\n{\"type\":\"session\"}\n{\"attrs\":{\"release\":\"native-policy-qa\"}}\n",
+            )
+            .unwrap();
+            assert!(envelope.event().is_none());
+            assert_eq!(envelope.items().count(), 1);
+            envelope
+        };
+        client.send_envelope(raw());
+        assert!(received.0.lock().unwrap().is_empty());
+        ALLOWED.store(true, Ordering::SeqCst);
+        client.send_envelope(raw());
+        assert_eq!(received.0.lock().unwrap().len(), 1);
+        ALLOWED.store(false, Ordering::SeqCst);
+        client.send_envelope(raw());
+        assert_eq!(received.0.lock().unwrap().len(), 1);
+    }
+
     async fn analytics_server(
         status: axum::http::StatusCode,
         response_gate: Option<Arc<tokio::sync::Notify>>,
@@ -775,6 +883,19 @@ mod tests {
             .unwrap();
 
         assert!(manager.host_info.get().is_none());
+    }
+
+    #[tokio::test]
+    async fn native_policy_opt_out_stops_an_already_running_analytics_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, mut received, server) = analytics_server(axum::http::StatusCode::OK, None).await;
+        let manager = test_manager(dir.path(), url, true);
+        manager.send_event("before_policy", None).await.unwrap();
+        assert_eq!(received.recv().await.unwrap()["event"], "before_policy");
+        manager.set_enabled(false);
+        manager.send_event("after_policy", None).await.unwrap();
+        assert!(received.try_recv().is_err());
+        server.abort();
     }
 
     #[tokio::test]

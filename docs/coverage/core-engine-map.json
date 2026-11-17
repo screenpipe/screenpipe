@@ -1164,6 +1164,8 @@
         "src/screenshot_privacy.rs",
         "src/screenshot_privacy/scene.rs",
         "src/screenshot_privacy/macos.rs",
+        "src/screenshot_privacy/stream.rs",
+        "src/screenshot_rate.rs",
         "src/screenshot_privacy/windows.rs",
         "src/utils.rs",
         "tests/capture_error_test.rs",

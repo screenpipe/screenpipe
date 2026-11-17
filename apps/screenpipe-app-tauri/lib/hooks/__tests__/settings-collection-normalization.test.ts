@@ -63,6 +63,12 @@ describe("normalizeSettingsArrays", () => {
     },
   );
 
+  it("preserves an explicit native organization policy with no allowed presets", () => {
+    const settings = { ...createDefaultSettingsObject(), aiPresets: [], enterpriseAiPresetPolicy: { version: 2, allow_screenpipe_cloud: false, allow_employee_custom_presets: false } } as Settings;
+    expect(normalizeSettingsArrays(settings)).toBe(false);
+    expect(settings.aiPresets).toEqual([]);
+  });
+
   it("preserves a local-only preset list across account refreshes", () => {
     const localPreset = {
       id: "local",

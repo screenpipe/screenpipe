@@ -111,7 +111,19 @@ pub(crate) async fn bounded_visual_probe(
     }
 
     let result = probe_with_timeout(
-        capture_monitor_image(monitor, excluded_ids),
+        async {
+            #[cfg(target_os = "macos")]
+            {
+                let start = std::time::Instant::now();
+                if let Some(image) =
+                    screenpipe_screen::screenshot_privacy::cached_monitor_preview(monitor_id)
+                        .await?
+                {
+                    return Ok((image, start.elapsed()));
+                }
+            }
+            capture_monitor_image(monitor, excluded_ids).await
+        },
         VISUAL_PROBE_TIMEOUT,
     )
     .await;

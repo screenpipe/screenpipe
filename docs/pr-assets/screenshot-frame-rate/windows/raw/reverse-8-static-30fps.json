@@ -1,0 +1,141 @@
+{
+  "scene": "static",
+  "order": "reverse",
+  "ordinal": 8,
+  "exit_code": 0,
+  "probe": {
+    "callback_count": 459,
+    "callback_rate_hz": 15.266775273197696,
+    "completed_requests": 105,
+    "copy_count": 105,
+    "copy_rate_hz": 3.4923995723001267,
+    "delivery_rate_hz": 3.4923995723001267,
+    "duration_seconds": 30.0652883,
+    "failed_requests": 0,
+    "first_frame_ms": 44.3949,
+    "frame_age": null,
+    "frame_age_note": "WGC Direct3D11CaptureFrame SystemRelativeTime is not collected; request latency is a software proxy and is not native acquisition time",
+    "latency_ms_p50": 3.4682,
+    "latency_ms_p95": 3.9114,
+    "native_interval_attempts": 1,
+    "native_interval_failures": 0,
+    "native_interval_status": "Applied",
+    "native_interval_successes": 1,
+    "native_interval_ticks": 333334,
+    "process_cpu_percent_one_core": 1.6110771836503561,
+    "requested_fps": 30,
+    "selection_interval_ms": 286,
+    "session_startup_ms": 66.3619,
+    "teardown_ms": 2.5483
+  },
+  "external": {
+    "sample_count": 14,
+    "process_private_bytes_mean": 9498916.57142857,
+    "process_private_bytes_peak": 12431360.0,
+    "process_working_set_bytes_mean": 29027766.85714286,
+    "process_working_set_bytes_peak": 29032448.0,
+    "dwm_cpu_percent_one_core": 20.629939212843865,
+    "dwm_working_set_bytes_mean": 105768082.28571428,
+    "system_cpu_percent_whole_vm_mean": 9.494648980641717
+  },
+  "resource_samples": [
+    {
+      "utc": "2026-11-12T23:06:21.3509338Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29024256,
+      "dwm_working_set_bytes": 107814912,
+      "system_cpu_percent_whole_vm": 9.408975196790891
+    },
+    {
+      "utc": "2026-11-12T23:06:23.3789074Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29024256,
+      "dwm_working_set_bytes": 104574976,
+      "system_cpu_percent_whole_vm": 8.260160198050992
+    },
+    {
+      "utc": "2026-11-12T23:06:25.4063361Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29024256,
+      "dwm_working_set_bytes": 104738816,
+      "system_cpu_percent_whole_vm": 11.05473047480945
+    },
+    {
+      "utc": "2026-11-12T23:06:27.4311560Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104501248,
+      "system_cpu_percent_whole_vm": 10.174106268222827
+    },
+    {
+      "utc": "2026-11-12T23:06:29.4564587Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104960000,
+      "system_cpu_percent_whole_vm": 9.45676454142319
+    },
+    {
+      "utc": "2026-11-12T23:06:31.4805651Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 107913216,
+      "system_cpu_percent_whole_vm": 8.046112498711832
+    },
+    {
+      "utc": "2026-11-12T23:06:33.5070799Z",
+      "private_bytes": 12431360,
+      "working_set_bytes": 29032448,
+      "dwm_working_set_bytes": 105082880,
+      "system_cpu_percent_whole_vm": 9.933543521235588
+    },
+    {
+      "utc": "2026-11-12T23:06:35.5322675Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104828928,
+      "system_cpu_percent_whole_vm": 9.812931292907056
+    },
+    {
+      "utc": "2026-11-12T23:06:37.5576882Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104480768,
+      "system_cpu_percent_whole_vm": 8.099123673917907
+    },
+    {
+      "utc": "2026-11-12T23:06:39.5843841Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104714240,
+      "system_cpu_percent_whole_vm": 9.740051347881895
+    },
+    {
+      "utc": "2026-11-12T23:06:41.5970909Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 104824832,
+      "system_cpu_percent_whole_vm": 11.720021231694266
+    },
+    {
+      "utc": "2026-11-12T23:06:43.6237498Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 107409408,
+      "system_cpu_percent_whole_vm": 9.178248081326334
+    },
+    {
+      "utc": "2026-11-12T23:06:45.6496519Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 105902080,
+      "system_cpu_percent_whole_vm": 8.515186706705503
+    },
+    {
+      "utc": "2026-11-12T23:06:47.6797945Z",
+      "private_bytes": 9273344,
+      "working_set_bytes": 29028352,
+      "dwm_working_set_bytes": 109006848,
+      "system_cpu_percent_whole_vm": 9.525130695306327
+    }
+  ]
+}
