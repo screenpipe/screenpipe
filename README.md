@@ -15,7 +15,7 @@
 
 
 <p align="center">Screenpipe finds the work worth automating</p>
-<p align="center">Record computer work locally, discover recurring workflows, review the evidence, and hand the result to any agent or automation tool you already use.</p>
+<p align="center">Continuously record computer work locally, discover recurring workflows, and hand the result to any agent you already use.</p>
 
 
 
@@ -64,14 +64,14 @@ screenpipe records computer work locally and turns it into workflows you can rev
 ```
 
 - **discover workflows** - find repeated work, its steps, decisions and exceptions, with links back to the source captures (instead of interviewing people or hiring consultants)
-- **review before you automate** - correct the workflow, agree the exceptions and acceptance checks, then decide what runs
+- **validate** - correct the workflow, agree the exceptions and acceptance checks, then decide what runs
 - **run it anywhere** - hand a reviewed workflow to your existing agents and automation tools through MCP, the REST API, the SDK or a pipe
 
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
 
 - **remember everything** - never forget what you did, saw, heard
 - **search with ai** - find anything using natural language
-- **Local-first** - capture history stays on your device by default. Cloud AI, sync, integrations, and managed team storage have separate data paths; see [Privacy and security](#privacy-and-security).
+- **local-first** - capture history stays on your device by default. Cloud AI, sync, integrations, and managed team storage have separate data paths; see [Privacy and security](#privacy-and-security).
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
 
 <p align="center">
