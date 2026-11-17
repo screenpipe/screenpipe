@@ -14,8 +14,8 @@
 
 
 
-<p align="center">Screenpipe finds work worth automating in your company</p>
-<p align="center">Continuously record your company's computer work, map workflows, help find work worth automating, and power agents' context</p>
+<p align="center">Screenpipe finds the work worth automating</p>
+<p align="center">Record computer work locally, discover recurring workflows, review the evidence, and hand the result to any agent or automation tool you already use.</p>
 
 
 
@@ -55,20 +55,21 @@ https://github.com/user-attachments/assets/70fe94eb-6d2a-47ca-b7c3-c8ead13a5b7f
 
 ## what is this?
 
-screenpipe capture all your computer work locally and power your company's agents
+screenpipe records computer work locally and turns it into workflows you can review and hand off.
 
 ```
-┌─────────────────────────────────────────┐
-│  screen + audio → local storage → ai   │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  capture → discover → review → run anywhere  │
+└──────────────────────────────────────────────┘
 ```
 
-- **remember everything** - never forget what you did, saw, heard
-- **map workflows** - generate a list of workflows to automate (instead of interviewing people or hiring consultants)
-- **run agents that work based on what you do** generate agents, skills, and automations based on what you do
+- **discover workflows** - find repeated work, its steps, decisions and exceptions, with links back to the source captures (instead of interviewing people or hiring consultants)
+- **review before you automate** - correct the workflow, agree the exceptions and acceptance checks, then decide what runs
+- **run it anywhere** - hand a reviewed workflow to your existing agents and automation tools through MCP, the REST API, the SDK or a pipe
 
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
 
+- **remember everything** - never forget what you did, saw, heard
 - **search with ai** - find anything using natural language
 - **Local-first** - capture history stays on your device by default. Cloud AI, sync, integrations, and managed team storage have separate data paths; see [Privacy and security](#privacy-and-security).
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
@@ -80,6 +81,22 @@ screenpipe capture all your computer work locally and power your company's agent
 </p>
 
 
+
+## workflow discovery
+
+Find the work worth automating by observing a few real runs of it. A discovery report names the trigger, the systems and handoffs, repeated steps and decisions, frequency and active time, friction and exceptions, one candidate improvement with a human owner, and the evidence gaps that need another observation.
+
+Use **Automate My Work** on Home, or create a manual discovery task under Scheduled tasks → My tasks → NEW. See [workflow discovery](https://docs.screenpi.pe/workflow-discovery), [workflow handoff](https://docs.screenpi.pe/workflow-handoff) and [automation prioritization](https://docs.screenpi.pe/automation-prioritization).
+
+## off-platform automation
+
+Screenpipe maps and documents the workflow. You choose where the automation runs.
+
+- **Any harness**: Screenpipe Cloud, Zapier, n8n, Claude Code, Codex, or an agent you run yourself
+- **Any model**: cloud or open source, including a local model through Ollama
+- **Any interface**: the MCP server, the REST API on localhost:3030, the JavaScript SDK, or pipes (scheduled AI agents as markdown files)
+
+You do not have to run the automation inside Screenpipe. Keep human review over consequential actions and keep source captures behind every derived instruction. See the [enterprise page](https://screenpi.pe/enterprise) for how teams choose where a workflow runs.
 
 ## install
 
@@ -99,7 +116,9 @@ npx screenpipe setup
 claude mcp add screenpipe -- npx -y screenpipe-mcp@latest
 ```
 
-then ask claude `what did i see in the last 5 mins?` or `summarize today conversations` or `create a pipe that updates linear every time i work on task X`
+then ask claude `what did i see in the last 5 mins?`, `summarize today conversations`, or `create a pipe that updates linear every time i work on task X`
+
+For workflow discovery, ask for a bounded report instead: `list the workflows i repeated this week, with steps, repetitions, exceptions and evidence`. See [workflow discovery](https://docs.screenpi.pe/workflow-discovery) and [workflow handoff](https://docs.screenpi.pe/workflow-handoff).
 
 <details>
 <summary>🤖 CLI-only setup for coding agents</summary>
@@ -201,7 +220,7 @@ Want to translate screenpipe into another language? See [`docs/translations/`](d
 
 ## About screenpipe
 
-screenpipe is a source-available application that continuously captures your screen and audio, creating a searchable, AI-powered memory of everything you do on your computer. Capture history is stored locally by default; optional cloud and team features can send data off-device. It is the leading source-available alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai. If you're looking for a rewind alternative, recall alternative, or a private local screen recorder with AI, screenpipe is the most popular option you can fully audit.
+screenpipe is a source-available application that records screen and audio locally and turns that history into searchable context, reviewed workflows and instructions for AI agents. Teams use it to find recurring work worth automating, check the source evidence, decide what runs, and hand the workflow to any agent or automation tool. Capture history is stored locally by default; optional cloud and team features can send data off-device. It is also a source-available alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai for anyone looking for a rewind alternative, recall alternative, or a private local screen recorder with AI that they can audit.
 
 - **Website**: https://screenpi.pe
 - **Documentation**: https://docs.screenpi.pe
@@ -210,6 +229,7 @@ screenpipe is a source-available application that continuously captures your scr
 
 ## Who screenpipe is for
 
+- **Operators and consultants** who need to find repeated work and document the current process before automating it
 - **Knowledge workers** who want to recall anything they've seen or heard on their computer
 - **Developers** who want to give AI coding assistants (Cursor, Claude Code, Cline, Continue) context about what they're working on
 - **Researchers** who need to search through large volumes of screen-based information
