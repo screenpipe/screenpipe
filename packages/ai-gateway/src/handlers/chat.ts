@@ -31,14 +31,19 @@ import {
   shouldUseBackgroundFallback,
 } from '../services/background-limit-fallback';
 import { getHostedAiCapacityUpgrade } from '../services/hosted-ai-policy';
+import { isVertexGemini4Model } from '../providers/gemini-argon';
 
-// Auto model waterfall (INTERACTIVE) — use only current OpenAI/Anthropic models.
-// Keep a cross-provider option second so an Anthropic outage does not break chat.
-// Exported so tests can pin that every chain entry has a MODEL_PRICING match
-// (otherwise served-model cost rows fall into the unknown-model estimate).
+// Auto model waterfall (INTERACTIVE). All three provider credit pools are
+// represented: Anthropic (Haiku/Sonnet), OpenAI (Luna/mini) and Google
+// (Gemini 4 Hydrogen). The cheap Haiku/Luna heads stay first; the Google entry
+// sits behind them so normal cost discipline is preserved while Google credits
+// still drain on the cascade. Exported so tests can pin that every chain entry
+// has a MODEL_PRICING match (otherwise served-model cost rows fall into the
+// unknown-model estimate).
 export const AUTO_WATERFALL = [
   'claude-haiku-5-5',
   'gpt-6-luna',
+  'gemini-4-hydrogen',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -47,15 +52,17 @@ export const AUTO_WATERFALL = [
 export const AUTO_WATERFALL_VISION = [
   'claude-haiku-5-5',
   'gpt-6-luna',
+  'gemini-4-hydrogen',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
 
 // Background waterfall — for pipes, summaries, and suggestions. All entries
-// support tools; the second entry crosses providers for outage resilience.
+// support tools; the Google entry crosses providers for outage resilience.
 export const AUTO_WATERFALL_BACKGROUND = [
   'claude-haiku-5-5',
   'gpt-6-luna',
+  'gemini-4-hydrogen',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -70,6 +77,9 @@ export const FREE_PREVIEW_WATERFALL = [
 ];
 export const FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS = 2;
 
+// Gemini 4 (Hydrogen/Carbon/Argon) is deliberately excluded: it is priced
+// several times above the Haiku/Luna/mini heads, so efficient-only chains stay
+// on the cheapest models and never spill high-volume pipe traffic onto Google.
 const NON_FRONTIER_FALLBACK_MODELS = new Set([
   'claude-haiku-5-5',
   'gpt-6-luna',
@@ -96,6 +106,8 @@ function isGeminiModel(model: string): boolean {
 // Per-model fallback chains — when a current user-selected model fails with a
 // transient/upstream error, try a comparable model from another provider.
 export const MODEL_FALLBACKS: Record<string, string[]> = {
+  'gpt-6.2-astra': ['gpt-6.2-sol', 'claude-opus-5', 'gpt-5.4-mini'],
+  'gpt-6.2-sol': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-fable-5': ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
@@ -296,9 +308,11 @@ async function tryModel(
     }
 
     // Flex tier applies only to the Vertex Gemini lane. Set per-attempt (not on
-    // the shared body) so a cascade to glm-5 runs standard tier.
-    // Argon launches on standard service; do not inherit the retired Gemini flex policy.
-    const useFlex = flexEligible && isGeminiModel(model) && model !== 'gemini-4-argon';
+    // the shared body) so a cascade to glm-5 runs standard tier. Gemini 4 models
+    // launch on standard service; do not inherit the retired Gemini flex policy
+    // (there is no verified flex price for them, so a :flex served-model key
+    // would fall back to the undiscounted base rate).
+    const useFlex = flexEligible && isGeminiModel(model) && !isVertexGemini4Model(model);
 
     const callOnce = async (withFlex: boolean): Promise<Response> => {
       const rb = { ...reqBody } as RequestBody;

@@ -148,11 +148,11 @@ describe('config sanity', () => {
   it('TIER_HEAD covers all tiers', () => {
     expect(Object.keys(TIER_HEAD).sort()).toEqual(['hard', 'normal', 'trivial']);
   });
-  it('keeps Auto on Haiku 5.5 and reserves Sol for hard prompts', () => {
+  it('keeps Auto on Haiku 5.5 and reserves the newest Sol for hard prompts', () => {
     expect(TIER_HEAD).toEqual({
       trivial: 'claude-haiku-5-5',
       normal: 'claude-haiku-5-5',
-      hard: 'gpt-5.6-sol',
+      hard: 'gpt-6.2-sol',
     });
   });
   it('lastUserText handles string + multimodal content', () => {

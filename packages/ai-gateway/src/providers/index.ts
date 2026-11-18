@@ -5,13 +5,13 @@
 import { OpenAIProvider } from './openai';
 import { ExperientialArgonProvider } from './experiential-argon';
 import { ExperientialFableProvider } from './experiential-fable';
-import { AstraProvider, SolProvider } from './astra';
+import { AstraProvider, SolProvider, Sol62Provider, Astra62Provider } from './astra';
 import { OpenAIProProvider, OPENAI_PRO_NATIVE_FEATURES } from './openai-pro';
 import { AnthropicProvider } from './anthropic';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
 import { ScreenpipeGlmProvider, isScreenpipeGlmModel } from './screenpipe-glm';
 import { GeminiProvider } from './gemini';
-import { GEMINI_ARGON_MODEL, argonVertexConfig } from './gemini-argon';
+import { GEMINI_ARGON_MODEL, argonVertexConfig, isVertexGemini4Model } from './gemini-argon';
 import { AIProvider } from './base';
 import { Env } from '../types';
 
@@ -71,7 +71,9 @@ const RETIRED_HOSTED_MODEL_IDS = new Set([
 export function resolveModelAlias(model: string): string {
 	const lower = model.toLowerCase();
 	if (lower === 'claude-haiku-5-5') return lower;
-	if (lower === GEMINI_ARGON_MODEL) return GEMINI_ARGON_MODEL;
+	// New Gemini 4 ids must be returned before the retired 'gemini-' prefix
+	// check below, otherwise resolveModelAlias rewrites them to gpt-5.6-luna.
+	if (isVertexGemini4Model(lower)) return lower;
 	if (isScreenpipeGlmModel(lower)) return model;
 	if (isRetiredHostedModel(lower)) {
 		console.log(`[router] retired hosted model ${model} → ${RETIRED_HOSTED_MODEL_FALLBACK}`);
@@ -153,14 +155,16 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 	// here too so a removed hosted id can never reach its former provider.
 	model = resolveModelAlias(model);
 
-	if (model === GEMINI_ARGON_MODEL) {
-		if (connection?.openAICompatible) {
+	if (isVertexGemini4Model(model)) {
+		// Only Argon has a dedicated Experiential Chat adapter; the other
+		// Gemini 4 models use the native Vertex generation contract.
+		if (model === GEMINI_ARGON_MODEL && connection?.openAICompatible) {
 			return new ExperientialArgonProvider(requireSecret(connection.apiKey, 'Experiential API key not configured for Argon'), connection.baseURL,
 				connection.defaultHeaders, connection.maxRetries, undefined, connection.fetch, false);
 		}
 		const vertex = argonVertexConfig(env);
 		if (!vertex || !connection?.baseURL) {
-			throw new ProviderConfigurationError('Argon requires Vertex credentials and Cloudflare AI Gateway');
+			throw new ProviderConfigurationError('Gemini 4 requires Vertex credentials and Cloudflare AI Gateway');
 		}
 		return new GeminiProvider(vertex, connection);
 	}
@@ -217,7 +221,9 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 	const proFeatures = Object.prototype.hasOwnProperty.call(OPENAI_PRO_NATIVE_FEATURES, model)
 		? OPENAI_PRO_NATIVE_FEATURES[model as keyof typeof OPENAI_PRO_NATIVE_FEATURES] : undefined;
 	const Provider = model.toLowerCase() === 'gpt-6.1-sol' ? SolProvider
+		: model.toLowerCase() === 'gpt-6.2-sol' ? Sol62Provider
 		: model.toLowerCase() === 'gpt-6-astra' ? AstraProvider
+		: model.toLowerCase() === 'gpt-6.2-astra' ? Astra62Provider
 		: proFeatures ? OpenAIProProvider : OpenAIProvider;
 	const provider = new Provider(
 		connection?.apiKey ?? requireSecret(env.OPENAI_API_KEY, 'OpenAI API key not configured'),

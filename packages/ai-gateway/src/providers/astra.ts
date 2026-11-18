@@ -228,3 +228,13 @@ function chatUsage(usage: any): any {
 export class SolProvider extends AstraProvider {
 	protected override responseModel = 'gpt-6.1-sol';
 }
+
+/** GPT-6.2 Sol is the current Sol flagship; same Responses/tool contract. */
+export class Sol62Provider extends AstraProvider {
+	protected override responseModel = 'gpt-6.2-sol';
+}
+
+/** GPT-6.2 Astra is the current Astra flagship; same Low/Standard policy. */
+export class Astra62Provider extends AstraProvider {
+	protected override responseModel = 'gpt-6.2-astra';
+}
