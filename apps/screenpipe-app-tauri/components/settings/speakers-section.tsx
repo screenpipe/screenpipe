@@ -123,7 +123,6 @@ function AudioClip({
   const [progress, setProgress] = useState(0);
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toast } = useToast();
 
   const stop = useCallback(() => {
@@ -134,10 +133,6 @@ function AudioClip({
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
-    }
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
     }
   }, []);
 
@@ -189,6 +184,8 @@ function AudioClip({
         return;
       }
       el.currentTime = 0;
+      // The endpoint already trims the clip. Let onEnded handle completion
+      // even when loading or buffering takes longer than the clip itself.
       el.play()
         .then(() => {
           setPlaying(true);
@@ -210,9 +207,6 @@ function AudioClip({
             variant: "destructive",
           });
         });
-      timeoutRef.current = setTimeout(() => {
-        stop();
-      }, duration * 1000);
     }
   };
 
