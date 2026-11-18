@@ -98,6 +98,25 @@ function api(dispatchFails = false) {
   return { github, calls };
 }
 
+test("hosted Windows and Linux are the default while Azure remains available for recovery", () => {
+  for (const workflow of [app, enterprise]) {
+    expect(workflow.on.workflow_dispatch.inputs.use_azure_runners.default).toBe(false);
+    expect(workflow.on.workflow_dispatch.inputs.force_github_runners.default).toBe(false);
+  }
+
+  const outputs = app.jobs.check_commit.outputs;
+  const azure = "inputs.use_azure_runners && !inputs.force_github_runners";
+  expect(outputs.windows_runner).toBe(`\${{ ${azure} && 'screenpipe-release-windows' || 'windows-2022' }}`);
+  expect(outputs.windows_arm_runner).toBe(`\${{ ${azure} && 'screenpipe-release-windows-arm64' || 'windows-11-arm' }}`);
+  expect(outputs.linux_runner).toBe(`\${{ ${azure} && 'screenpipe-release-linux' || 'ubuntu-24.04' }}`);
+  expect(enterprise.jobs["release-enterprise-windows"]["runs-on"]).toBe(outputs.windows_runner);
+  expect(enterprise.jobs["release-enterprise-linux"]["runs-on"]).toBe(outputs.linux_runner);
+
+  expect(outputs.macos_arm_runner).toBe("${{ inputs.force_github_runners && 'macos-latest' || 'screenpipe-release-macos-arm64' }}");
+  expect(outputs.macos_x64_runner).toBe("${{ inputs.force_github_runners && 'macos-26' || 'screenpipe-release-macos-x64' }}");
+  expect(enterprise.jobs["release-enterprise-macos"]["runs-on"]).toBe("${{ inputs.force_github_runners && matrix.platform || matrix.runner }}");
+});
+
 test("enterprise dispatch is mandatory after all consumer platforms, without waiting for enterprise", () => {
   const job = app.jobs["dispatch-enterprise"];
   expect(job.needs).toEqual(expect.arrayContaining(["check_commit", "publish-tauri"]));
@@ -109,19 +128,22 @@ test("enterprise dispatch is mandatory after all consumer platforms, without wai
   expect(step.env.RELEASE_VERSION).toBe("${{ needs.check_commit.outputs.release_version }}");
   expect(step.env.DRY_RUN).toBe("${{ inputs.dry_run }}");
   expect(step.env.FORCE_GITHUB_RUNNERS).toBe("${{ inputs.force_github_runners }}");
+  expect(step.env.USE_AZURE_RUNNERS).toBe("${{ inputs.use_azure_runners }}");
+  expect(step.with.script).toContain("useAzureRunners: process.env.USE_AZURE_RUNNERS === 'true'");
   expect(step.with.script).toContain("await dispatchEnterprise(");
   expect(Object.values(app.jobs).some((job: any) => job.uses?.includes("release-enterprise.yml"))).toBe(false);
 });
 
 for (const dryRun of [false, true]) {
   test(`record pending before dispatch and preserve exact revision/flags (dry run=${dryRun})`, async () => {
+    const useAzureRunners = dryRun;
     const { github, calls } = api();
-    await dispatchEnterprise({ github, context, sha, version: "2.7.43", forceGithubRunners: true, dryRun });
+    await dispatchEnterprise({ github, context, sha, version: "2.7.43", forceGithubRunners: !useAzureRunners, useAzureRunners, dryRun });
     expect(calls.map((call) => call.method)).toEqual(["status", "dispatch"]);
     expect(calls[0].args).toMatchObject({ sha, state: "pending", context: dryRun ? "Enterprise artifacts (dry run)" : "Enterprise artifacts" });
     expect(calls[1].args).toEqual({
       ...context.repo, workflow_id: "release-enterprise.yml", ref: "main",
-      inputs: { commit_hash: sha, version: "2.7.43", force_github_runners: "true", dry_run: String(dryRun) },
+      inputs: { commit_hash: sha, version: "2.7.43", force_github_runners: String(!useAzureRunners), use_azure_runners: String(useAzureRunners), dry_run: String(dryRun) },
     });
   });
 }

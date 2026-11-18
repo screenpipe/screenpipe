@@ -7,8 +7,6 @@ name: Close new contributor PRs
 on:
   pull_request_target:
     types: [opened, reopened]
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -83,7 +81,7 @@ jobs:
               }
 
               // Reopening someone else's PR requires repository triage access.
-              // Respect that decision in event runs and scheduled sweeps, using
+              // Respect that decision in event runs and manual sweeps, using
               // the latest reopen so a later author reopen still closes again.
               const latestReopen = pullRequest.timelineItems.nodes[0];
               if (

@@ -4,7 +4,7 @@
 
 # Persistent Azure Windows release runner
 
-This stack provisions two always-on native Azure release runners: Windows Server
+This stack provisions two native Azure release recovery runners: Windows Server
 2022 x64 for the x64 jobs in `Release App` and `Release Enterprise`, and Windows
 11 ARM64 Preview for the ARM64 job in `Release App`. Each default size has 16
 vCPUs and 64 GiB RAM. Each runner has a retained 2 TiB Premium SSD for Cargo,
@@ -59,5 +59,6 @@ EXTRA_ALLOWED_WORKFLOW_REF='screenpipe/screenpipe/.github/workflows/release-app.
 ```
 
 Immediately re-run `configure-runner.sh` without that variable after the test so
-the machine returns to the two `main` workflow refs. Use
-`force_github_runners=true` when the persistent machine is unavailable.
+the machine returns to the `main` workflow refs. See the [release runner rollout
+and recovery steps](../release-linux-runner/README.md#move-normal-releases-to-github-hosted-runners)
+for when to start or deallocate the Azure recovery runners.

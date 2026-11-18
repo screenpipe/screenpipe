@@ -24,8 +24,12 @@ on:
         description: "Consumer run containing the finalized translation snapshot (omit for manual recovery)"
         required: false
         type: string
+      use_azure_runners:
+        description: "Use the persistent Azure Windows and Linux runners for recovery"
+        type: boolean
+        default: false
       force_github_runners:
-        description: "Force GitHub-hosted release runners"
+        description: "Use GitHub-hosted runners for all platforms, including macOS"
         type: boolean
         default: false
       dry_run:
@@ -124,7 +128,7 @@ jobs:
     env:
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
-    runs-on: ${{ inputs.force_github_runners && 'windows-2022' || 'screenpipe-release-windows' }}
+    runs-on: ${{ inputs.use_azure_runners && !inputs.force_github_runners && 'screenpipe-release-windows' || 'windows-2022' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -573,7 +577,7 @@ jobs:
     env:
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
-    runs-on: ${{ inputs.force_github_runners && 'ubuntu-24.04' || 'screenpipe-release-linux' }}
+    runs-on: ${{ inputs.use_azure_runners && !inputs.force_github_runners && 'screenpipe-release-linux' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4

@@ -20,8 +20,12 @@ on:
         description: "Whether this release needs community testing"
         type: boolean
         default: false
+      use_azure_runners:
+        description: "Use the persistent Azure Windows and Linux runners for recovery"
+        type: boolean
+        default: false
       force_github_runners:
-        description: "Force GitHub-hosted runners (skip self-hosted even if online)"
+        description: "Use GitHub-hosted runners for all platforms, including macOS"
         type: boolean
         default: false
       dry_run:
@@ -44,11 +48,11 @@ jobs:
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       should_test: ${{ steps.check.outputs.should_test }}
-      macos_arm_runner: ${{ steps.check-runner.outputs.macos_arm_runner }}
-      macos_x64_runner: ${{ steps.check-runner.outputs.macos_x64_runner }}
-      windows_runner: ${{ steps.check-runner.outputs.windows_runner }}
-      windows_arm_runner: ${{ steps.check-runner.outputs.windows_arm_runner }}
-      linux_runner: ${{ steps.check-runner.outputs.linux_runner }}
+      macos_arm_runner: ${{ inputs.force_github_runners && 'macos-latest' || 'screenpipe-release-macos-arm64' }}
+      macos_x64_runner: ${{ inputs.force_github_runners && 'macos-26' || 'screenpipe-release-macos-x64' }}
+      windows_runner: ${{ inputs.use_azure_runners && !inputs.force_github_runners && 'screenpipe-release-windows' || 'windows-2022' }}
+      windows_arm_runner: ${{ inputs.use_azure_runners && !inputs.force_github_runners && 'screenpipe-release-windows-arm64' || 'windows-11-arm' }}
+      linux_runner: ${{ inputs.use_azure_runners && !inputs.force_github_runners && 'screenpipe-release-linux' || 'ubuntu-24.04' }}
       release_sha: ${{ steps.resolve-release.outputs.sha }}
       release_version: ${{ steps.resolve-release.outputs.version }}
     steps:
@@ -122,27 +126,6 @@ jobs:
             echo "should_test=${{ github.event.inputs.needs_testing }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Select release runners
-        id: check-runner
-        run: |
-          if [ "${{ github.event.inputs.force_github_runners }}" = "true" ]; then
-            {
-              echo "macos_arm_runner=macos-latest"
-              echo "macos_x64_runner=macos-26"
-              echo "windows_runner=windows-2022"
-              echo "windows_arm_runner=windows-11-arm"
-              echo "linux_runner=ubuntu-24.04"
-            } >> "$GITHUB_OUTPUT"
-          else
-            {
-              echo "macos_arm_runner=screenpipe-release-macos-arm64"
-              echo "macos_x64_runner=screenpipe-release-macos-x64"
-              echo "windows_runner=screenpipe-release-windows"
-              echo "windows_arm_runner=screenpipe-release-windows-arm64"
-              echo "linux_runner=screenpipe-release-linux"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
   draft:
     needs: [check_commit]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
@@ -194,8 +177,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Persistent release runners by default; the manual input retains
-          # the GitHub-hosted escape hatch.
+          # Use hosted Windows and Linux runners and the existing EC2 Macs by default.
           - platform: ${{ needs.check_commit.outputs.macos_arm_runner || 'macos-latest' }}
             args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml"
             target: aarch64-apple-darwin
@@ -1846,6 +1828,7 @@ jobs:
           RELEASE_SHA: ${{ needs.check_commit.outputs.release_sha }}
           RELEASE_VERSION: ${{ needs.check_commit.outputs.release_version }}
           FORCE_GITHUB_RUNNERS: ${{ inputs.force_github_runners }}
+          USE_AZURE_RUNNERS: ${{ inputs.use_azure_runners }}
           DRY_RUN: ${{ inputs.dry_run }}
           LOCALIZATION_RUN_ID: ${{ needs.localization.outputs.enabled == 'true' && github.run_id || '' }}
         with:
@@ -1856,6 +1839,7 @@ jobs:
               sha: process.env.RELEASE_SHA,
               version: process.env.RELEASE_VERSION,
               forceGithubRunners: process.env.FORCE_GITHUB_RUNNERS === 'true',
+              useAzureRunners: process.env.USE_AZURE_RUNNERS === 'true',
               dryRun: process.env.DRY_RUN === 'true',
               localizationRunId: process.env.LOCALIZATION_RUN_ID,
             });
