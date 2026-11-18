@@ -541,6 +541,85 @@ describe("Ollama preflight", () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.message).toContain("Cannot connect to Ollama");
   });
+
+  // Ollama serves a small default context and drops what does not fit, so the
+  // model never sees its tools and claims it cannot read recordings.
+  const ollamaFetcher = (psResponses: unknown[], generateOk = true) => {
+    const ps = [...psResponses];
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return new Response(JSON.stringify({ models: [{ name: "llama3.2:latest" }] }));
+      }
+      if (url.endsWith("/api/ps")) {
+        return new Response(JSON.stringify(ps.length > 1 ? ps.shift() : ps[0]));
+      }
+      if (url.endsWith("/api/generate")) {
+        return new Response(JSON.stringify({ done: true }), { status: generateOk ? 200 : 500 });
+      }
+      return new Response("{}", { status: 404 });
+    });
+  };
+  const ollamaPreset = { provider: "native-ollama", model: "llama3.2:latest" };
+  const loadedWith = (context_length?: number) => ({
+    models: [{ name: "llama3.2:latest", model: "llama3.2:latest", context_length }],
+  });
+
+  it("fails before Pi when the loaded model's context cannot hold the agent request", async () => {
+    const fetcher = ollamaFetcher([loadedWith(4096)]);
+
+    const result = await preflightChatProvider(ollamaPreset, fetcher);
+
+    expect(result.ok).toBe(false);
+    const message = result.ok ? "" : result.message;
+    expect(message).toContain('"llama3.2:latest" with a 4,096 token context window');
+    expect(message).toContain("OLLAMA_CONTEXT_LENGTH=32768");
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/api/generate"))).toBe(false);
+  });
+
+  it("loads a cold model to learn the context Ollama will serve", async () => {
+    const fetcher = ollamaFetcher([{ models: [] }, loadedWith(4096)]);
+
+    const result = await preflightChatProvider(ollamaPreset, fetcher);
+
+    expect(result.ok).toBe(false);
+    const generate = fetcher.mock.calls.find(([url]) => String(url).endsWith("/api/generate"));
+    expect(generate).toBeDefined();
+    expect(JSON.parse(String((generate as unknown as [unknown, RequestInit])[1].body))).toEqual({
+      model: "llama3.2:latest",
+      stream: false,
+    });
+  });
+
+  it("passes when the served context fits the agent request", async () => {
+    await expect(
+      preflightChatProvider(ollamaPreset, ollamaFetcher([loadedWith(32768)]))
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      preflightChatProvider(
+        { provider: "native-ollama", model: "llama3.2:latest" },
+        ollamaFetcher([{ models: [] }, loadedWith(131072)])
+      )
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("does not block chat when the served context is unknown", async () => {
+    // Older Ollama: no context_length in /api/ps.
+    await expect(
+      preflightChatProvider(ollamaPreset, ollamaFetcher([loadedWith(undefined)]))
+    ).resolves.toEqual({ ok: true });
+    // Cold model that fails to load here: let the real request report it.
+    await expect(
+      preflightChatProvider(ollamaPreset, ollamaFetcher([{ models: [] }], false))
+    ).resolves.toEqual({ ok: true });
+    // /api/ps unavailable.
+    const fetcher = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith("/api/tags")
+        ? new Response(JSON.stringify({ models: [{ name: "llama3.2:latest" }] }))
+        : new Response("nope", { status: 500 })
+    );
+    await expect(preflightChatProvider(ollamaPreset, fetcher)).resolves.toEqual({ ok: true });
+  });
 });
 
 it("blocks retired hosted selections before any provider request, preserving BYOK", async () => {

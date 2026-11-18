@@ -93,6 +93,107 @@ export function buildOllamaModelMissingMessage(model: string): string {
   return `Ollama model "${model}" is not installed. Run \`ollama pull ${model}\`, or switch your AI preset to a model from \`ollama list\`.`;
 }
 
+/**
+ * Below this, Ollama cannot hold the agent's baseline request (system prompt,
+ * tool schemas, skill index: roughly 13k tokens before the user says anything).
+ * Ollama does not reject the overflow, it drops it, so the model never sees its
+ * tools and answers that it has no access to recordings.
+ */
+export const MIN_OLLAMA_SERVED_CONTEXT_TOKENS = 16_384;
+/** Ollama blocks on a cold model load; the first turn would pay this anyway. */
+const OLLAMA_MODEL_LOAD_TIMEOUT_MS = 60_000;
+
+export function buildOllamaContextTooSmallMessage(model: string, contextTokens: number): string {
+  return `Ollama is running "${model}" with a ${tokenFormatter.format(contextTokens)} token context window, which is too small for Screenpipe's agent: its tools and instructions get cut off, so the model answers as if it cannot see your recordings. Raise the context length to at least ${tokenFormatter.format(MIN_AGENT_CONTEXT_TOKENS)} in the Ollama app settings, or set the OLLAMA_CONTEXT_LENGTH=${MIN_AGENT_CONTEXT_TOKENS} environment variable, then restart Ollama and retry.`;
+}
+
+async function fetchOllamaJson(
+  fetcher: FetchLike,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<unknown | null> {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeout =
+    controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetcher(url, { ...init, signal: controller?.signal });
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function ollamaModelKey(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  const lastSegment = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return lastSegment.includes(":") ? normalized : `${normalized}:latest`;
+}
+
+type OllamaLoadState = { loaded: boolean; contextTokens: number | null };
+
+async function readOllamaLoadState(
+  baseUrl: string,
+  model: string,
+  fetcher: FetchLike,
+  timeoutMs: number,
+): Promise<OllamaLoadState | null> {
+  const data = await fetchOllamaJson(fetcher, `${baseUrl}/api/ps`, {}, timeoutMs);
+  if (!data || typeof data !== "object") return null;
+  const models = (data as { models?: unknown }).models;
+  if (!Array.isArray(models)) return null;
+  const key = ollamaModelKey(model);
+  const entry = models.find((candidate) => {
+    const name = (candidate as { name?: unknown; model?: unknown })?.name
+      ?? (candidate as { model?: unknown })?.model;
+    return typeof name === "string" && ollamaModelKey(name) === key;
+  }) as { context_length?: unknown } | undefined;
+  if (!entry) return { loaded: false, contextTokens: null };
+  const contextTokens = entry.context_length;
+  return {
+    loaded: true,
+    contextTokens:
+      typeof contextTokens === "number" && Number.isInteger(contextTokens) && contextTokens > 0
+        ? contextTokens
+        : null,
+  };
+}
+
+/**
+ * The context window Ollama actually allocated for this model, or null when it
+ * cannot be determined (older Ollama, unreachable, load timed out).
+ *
+ * `/api/show` reports the model's architectural maximum (128k for llama3.2),
+ * not what is served: that comes from the Ollama context-length setting and is
+ * only observable on a loaded model. A cold model is loaded with an empty
+ * prompt, which uses the same defaults the chat request is about to use.
+ */
+async function resolveOllamaServedContext(
+  baseUrl: string,
+  model: string,
+  fetcher: FetchLike,
+  timeoutMs: number,
+): Promise<number | null> {
+  const state = await readOllamaLoadState(baseUrl, model, fetcher, timeoutMs);
+  if (!state) return null;
+  if (state.loaded) return state.contextTokens;
+
+  const loaded = await fetchOllamaJson(
+    fetcher,
+    `${baseUrl}/api/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, stream: false }),
+    },
+    OLLAMA_MODEL_LOAD_TIMEOUT_MS,
+  );
+  if (!loaded) return null;
+  return (await readOllamaLoadState(baseUrl, model, fetcher, timeoutMs))?.contextTokens ?? null;
+}
+
 function isConnectionLikeError(errorStr: string): boolean {
   const normalized = errorStr.toLowerCase();
   return (
@@ -489,12 +590,20 @@ export async function preflightChatProvider(
       .filter((name): name is string => Boolean(name))
       .some((name) => name.toLowerCase() === model.toLowerCase());
 
-    return installed
-      ? { ok: true }
-      : { ok: false, message: buildOllamaModelMissingMessage(model) };
+    if (!installed) {
+      return { ok: false, message: buildOllamaModelMissingMessage(model) };
+    }
   } catch {
     return { ok: false, message: buildOllamaConnectionMessage(preset?.model) };
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+
+  const model = preset?.model?.trim();
+  if (!model) return { ok: true };
+  const contextTokens = await resolveOllamaServedContext(baseUrl, model, fetcher, timeoutMs);
+  if (contextTokens !== null && contextTokens < MIN_OLLAMA_SERVED_CONTEXT_TOKENS) {
+    return { ok: false, message: buildOllamaContextTooSmallMessage(model, contextTokens) };
+  }
+  return { ok: true };
 }
