@@ -32,11 +32,29 @@ const GPT56_CACHE = { cacheRead: 0.1, cacheWrite: 1.25 };
 const GEMINI25_CACHE = { cacheRead: 0.25 };
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Gemini 4 on the native Vertex lane. Hydrogen/Carbon are flat priced (no
+  // long-context cliff); Argon keeps its launch pricing via argonPricing() in
+  // findPricing. All three bill cached input at 5% of the input rate.
   [GEMINI_ARGON_MODEL]: { input: 4, output: 20, cacheRead: 0.05 },
+  // https://ai.google.dev/gemini-api/docs/models (Gemini 4 Hydrogen, Carbon).
+  'gemini-4-hydrogen': { input: 1.50, output: 7.50, cacheRead: 0.05 },
+  'gemini-4-carbon': { input: 2, output: 10, cacheRead: 0.05 },
   // OpenAI API
   // https://developers.openai.com/api/docs/models/gpt-6.1-sol (Standard, Low).
   'gpt-6.1-sol': {
     input: 2, output: 10, cacheRead: 0.05, cacheWrite: 1.25,
+    longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
+  },
+  // GPT-6.2: Sol (Standard, Low) and Astra (Standard, Low). Both keep the
+  // 272K long-context tier and the 5% cached-input rate of the 6.x family.
+  // https://developers.openai.com/api/docs/models/gpt-6.2-sol
+  'gpt-6.2-sol': {
+    input: 2, output: 10, cacheRead: 0.05, cacheWrite: 1.25,
+    longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
+  },
+  // https://developers.openai.com/api/docs/models/gpt-6.2-astra
+  'gpt-6.2-astra': {
+    input: 8, output: 40, cacheRead: 0.05, cacheWrite: 1.25,
     longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
   },
   // https://developers.openai.com/api/docs/models/gpt-6-astra (Standard, Low).

@@ -116,6 +116,11 @@ export async function resolveHostedChatConnection(
 ) {
   const metadataHeaders = { 'X-Explabs-Tags': JSON.stringify(experientialDispatchTags(context)) };
   const hybrid = env.HOSTED_CHAT_GATEWAY === 'experiential';
+  // Only Argon has a dedicated Experiential OpenAI-compatible Chat adapter
+  // (ExperientialArgonProvider). The other Gemini 4 models (Hydrogen, Carbon)
+  // are served natively through Vertex via Cloudflare's google-vertex-ai lane;
+  // sending them through the Experiential Chat wire would hand an OpenAI baseURL
+  // to GeminiProvider, which builds Vertex generateContent URLs from baseURL.
   const nativeProvider = provider === 'openai' || provider === 'anthropic' ||
     (provider === 'google-vertex-ai' && model === GEMINI_ARGON_MODEL);
   const retainedReason = forceOriginalReason ?? (hybrid && nativeProvider ? originalGatewayReason(model, body) : null);
@@ -125,7 +130,7 @@ export async function resolveHostedChatConnection(
     if (!apiKey || !/^xpl_[0-9a-f]{40}$/.test(apiKey) || !slug || !/^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       throw Object.assign(new Error('Experiential hybrid gateway credentials or custom provider are not configured'), { status: 503, transient: false });
     }
-    const connection = await getHostedChatGatewayConnection(env, provider, context);
+    const connection = await getHostedChatGatewayConnection(env, provider, context, model);
     const url = new URL(connection.baseURL);
     if (!url.pathname.endsWith(`/${provider}`)) throw new Error('Unexpected native Cloudflare provider URL');
     url.pathname = url.pathname.slice(0, -provider.length) + slug + (provider === 'anthropic' ? '' : '/v1');
@@ -150,7 +155,7 @@ export async function resolveHostedChatConnection(
   }
   if (hybrid || env.HOSTED_CHAT_GATEWAY === 'cloudflare' || forceOriginalReason || env.EXPERIENTIAL_CANARY_MODE !== 'internal' || context.plan !== 'internal' ||
       (provider !== 'openai' && provider !== 'anthropic' && !(provider === 'google-vertex-ai' && model === GEMINI_ARGON_MODEL))) {
-    const connection = await getHostedChatGatewayConnection(env, provider, context);
+    const connection = await getHostedChatGatewayConnection(env, provider, context, model);
     // getUrl() supplies an address only. Authenticate native SDK requests with
     // the binding for customers too, even if a stored token has expired.
     const bindingFetch = provider === 'openai' || provider === 'anthropic' || provider === 'google-vertex-ai'

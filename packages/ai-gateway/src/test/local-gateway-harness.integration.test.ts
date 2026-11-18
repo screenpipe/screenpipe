@@ -133,9 +133,9 @@ describe('local AI gateway harness', () => {
 		};
 		const initial = { fingerprint: 'synthetic-turn', chain: AUTO_WATERFALL, classify: true, text: 'debug this stack trace and explain the root cause', hasTools: true, continuation: false };
 		const first = await Promise.all([call(initial), call(initial)]);
-		expect(first.map((route) => route.chain[route.index])).toEqual(['gpt-5.6-sol', 'gpt-5.6-sol']);
+		expect(first.map((route) => route.chain[route.index])).toEqual(['gpt-6.2-sol', 'gpt-6.2-sol']);
 		await call({ model: 'gpt-6-luna', turn: first[0].turn });
-		const stale = await call({ model: 'gpt-5.6-sol', turn: first[0].turn });
+		const stale = await call({ model: 'gpt-6.2-sol', turn: first[0].turn });
 		expect(stale.chain[stale.index]).toBe('gpt-6-luna');
 		const continuation = await call({ ...initial, continuation: true });
 		expect(continuation.chain[continuation.index]).toBe('gpt-6-luna');

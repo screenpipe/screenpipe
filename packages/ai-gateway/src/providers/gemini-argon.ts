@@ -8,6 +8,27 @@ import type { VertexGeminiConfig } from './gemini';
 
 export const GEMINI_ARGON_MODEL = 'gemini-4-argon';
 
+/** Gemini 4 models served through Vertex AI's global endpoint. Registering a
+ * new id here also requires a curated catalog entry, a hosted plan allowlist
+ * entry, a MODEL_PRICING row and a MODEL_WEIGHTS row. */
+export const VERTEX_GEMINI_4_MODELS = [
+	'gemini-4-argon',
+	'gemini-4-hydrogen',
+	'gemini-4-carbon',
+] as const;
+
+export function isVertexGemini4Model(model: string | null | undefined): boolean {
+	return typeof model === 'string' &&
+		(VERTEX_GEMINI_4_MODELS as readonly string[]).includes(model.toLowerCase());
+}
+
+/** Output caps for the shared Gemini 4 generation contract. Carbon's published
+ * limit is 32K; Argon and Hydrogen allow 65K when streaming. */
+export function vertexGemini4MaxOutput(model: string, streaming: boolean): number {
+	if (model.toLowerCase() === 'gemini-4-carbon') return 32768;
+	return streaming ? 65536 : 32768;
+}
+
 function configured(value: unknown): value is string {
   return typeof value === 'string' && !!value.trim() &&
     !['placeholder', 'changeme', 'change-me', 'todo', 'none', 'null', 'undefined'].includes(value.trim().toLowerCase());

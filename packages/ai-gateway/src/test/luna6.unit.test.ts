@@ -12,7 +12,8 @@ import { gatewayProviderForModel } from '../services/cloudflare-ai-gateway';
 describe('GPT-6 Luna fallback and explicit selection', () => {
   it('keeps Luna 6 behind Haiku in every Auto lane while preserving cross-provider fallback and plan restrictions', () => {
     for (const chain of [AUTO_WATERFALL, AUTO_WATERFALL_BACKGROUND, AUTO_WATERFALL_VISION]) {
-      expect(chain).toEqual(['claude-haiku-5-5', 'gpt-6-luna', 'claude-sonnet-5', 'gpt-5.4-mini']);
+      expect(chain).toEqual(['claude-haiku-5-5', 'gpt-6-luna', 'gemini-4-hydrogen', 'claude-sonnet-5', 'gpt-5.4-mini']);
+      // Gemini 4 stays out of the efficient-only chain (see NON_FRONTIER_FALLBACK_MODELS).
       expect(efficientModelChain(chain)).toEqual(['claude-haiku-5-5', 'gpt-6-luna', 'gpt-5.4-mini']);
     }
     expect(FREE_PREVIEW_WATERFALL).toEqual(['claude-haiku-5-5', 'gpt-6-luna']);

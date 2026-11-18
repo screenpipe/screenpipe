@@ -5,6 +5,7 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { AnthropicProvider } from '../providers/anthropic';
 import { OpenAIProvider } from '../providers/openai';
+import { AstraProvider } from '../providers/astra';
 import { AUTO_WATERFALL, handleChatCompletions, runChain } from '../handlers/chat';
 import { TIER_EXAMPLES } from '../handlers/difficulty-router';
 import { AUTO_ROUTE_TTL_MS, autoRouteKey, autoRouteScope, pinAutoRoute } from '../services/auto-route';
@@ -69,11 +70,11 @@ describe('Auto routing across tool calls and isolates', () => {
     const h = harness();
     const body = { ...hard, messages: [{ role: 'user' as const, content: 'old question' }, ...hard.messages] };
     const initial = await pinAutoRoute(h.env, scope, body, AUTO_WATERFALL, true);
-    expect(initial.chain[0]).toBe('gpt-5.6-sol');
+    expect(initial.chain[0]).toBe('gpt-6.2-sol');
     const compacted = toolLoop(hard);
-    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
     compacted.messages = compacted.messages.filter((m) => m.role !== 'user');
-    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
   });
 
   it('reclassifies a repeated new user turn and rejects stale fallback writes', async () => {
@@ -86,15 +87,15 @@ describe('Auto routing across tool calls and isolates', () => {
     expect((await pinAutoRoute(h.env, scope, toolLoop(next), AUTO_WATERFALL, true)).chain[0]).toBe('claude-haiku-5-5');
     // A later turn can repeat the first fingerprint after history compaction.
     h.env.ROUTER_MODE = 'heuristic';
-    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
     await expect(initial.beforeAttempt('claude-sonnet-5')).rejects.toThrow('Auto routing state unavailable');
   });
   it('retains the first decision across a tool loop and eviction, reclassifying a new user turn', async () => {
     const h = harness();
-    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
     h.env.ROUTER_MODE = 'off'; // If the classifier ran again it would choose Haiku.
     h.evict();
-    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
     const next = { ...hard, messages: [...toolLoop(hard).messages, { role: 'user' as const, content: 'Dziękuję!' }] };
     expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('claude-haiku-5-5');
     expect(JSON.stringify([...h.stores.values()].map((s) => [...s]))).not.toContain(hard.messages[0].content as string);
@@ -109,11 +110,11 @@ describe('Auto routing across tool calls and isolates', () => {
       return { data: input.text.map((text) => TIER_EXAMPLES.trivial.includes(text) ? [1, 0, 0] : TIER_EXAMPLES.normal.includes(text) ? [0, 1, 0] : [0, 0, 1]) };
     } } as unknown as Env['AI'];
     const results = await Promise.all(Array.from({ length: 5 }, () => pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)));
-    expect(results.map((r) => r.chain[0])).toEqual(Array(5).fill('gpt-5.6-sol'));
+    expect(results.map((r) => r.chain[0])).toEqual(Array(5).fill('gpt-6.2-sol'));
     expect(calls).toBe(4); // three centroid batches + one classification, once per turn
     h.env.AI = { run: () => { throw new Error('unavailable'); } } as unknown as Env['AI'];
     h.evict();
-    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6.2-sol');
   });
 
   it('pins timeout fallback to Haiku even after Workers AI recovers', async () => {
@@ -136,15 +137,15 @@ describe('Auto routing across tool calls and isolates', () => {
     const models: string[] = [];
     const attempt = mock(async (model: string) => {
       models.push(model);
-      if (model === 'gpt-5.6-sol') throw new Error('provider unavailable');
+      if (model === 'gpt-6.2-sol') throw new Error('provider unavailable');
       return new Response('ok');
     });
     const result = await runChain(pin.chain, hard, h.env, 'auto', false, pin.chain.length, undefined, attempt, pin.beforeAttempt);
     expect(result).toMatchObject({ model: 'claude-haiku-5-5' });
-    expect(models).toEqual(['gpt-5.6-sol', 'claude-haiku-5-5']);
+    expect(models).toEqual(['gpt-6.2-sol', 'claude-haiku-5-5']);
     h.evict();
     expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('claude-haiku-5-5');
-    expect(await pin.beforeAttempt('gpt-5.6-sol')).toBe(false);
+    expect(await pin.beforeAttempt('gpt-6.2-sol')).toBe(false);
     expect(await pin.beforeAttempt('claude-sonnet-5')).toBe(true);
     expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('claude-sonnet-5');
   });
@@ -179,11 +180,14 @@ describe('Auto handler policy and provider wiring', () => {
       return Response.json({ model: sent.at(-1).model, choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 1 } });
     });
     const anthropic = spyOn(AnthropicProvider.prototype, 'createCompletion').mockImplementation(provider);
+    // The hard tier head is GPT-6.2 Sol, which overrides createCompletion on the
+    // Responses-based Astra provider instead of inheriting OpenAIProvider's.
+    const astra = spyOn(AstraProvider.prototype, 'createCompletion').mockImplementation(provider);
     try {
       const invoke = (body: RequestBody, options: Parameters<typeof handleChatCompletions>[5] = { autoRouteScope: scope }) =>
         handleChatCompletions(body, h.env, 'interactive', 'device-1', false, options);
-      expect((await invoke(hard)).headers.get('x-screenpipe-model')).toBe('gpt-5.6-sol');
-      expect((await invoke(toolLoop(hard))).headers.get('x-screenpipe-model')).toBe('gpt-5.6-sol');
+      expect((await invoke(hard)).headers.get('x-screenpipe-model')).toBe('gpt-6.2-sol');
+      expect((await invoke(toolLoop(hard))).headers.get('x-screenpipe-model')).toBe('gpt-6.2-sol');
       expect(sent[1].messages.some((m: any) => m.role === 'tool')).toBe(true); // full context still reaches provider
       expect((await invoke(hard, {})).headers.get('x-screenpipe-model')).toBe('claude-haiku-5-5');
       expect((await invoke(toolLoop(hard), { autoRouteScope: scope, efficientOnly: true })).headers.get('x-screenpipe-model')).toBe('claude-haiku-5-5');
@@ -191,6 +195,6 @@ describe('Auto handler policy and provider wiring', () => {
       await invoke(hard, { autoRouteScope: secondScope });
       h.env.ROUTER_MODE = 'off';
       expect((await invoke(toolLoop(hard), { autoRouteScope: secondScope })).headers.get('x-screenpipe-model')).toBe('claude-haiku-5-5');
-    } finally { provider.mockRestore(); anthropic.mockRestore(); }
+    } finally { provider.mockRestore(); anthropic.mockRestore(); astra.mockRestore(); }
   });
 });

@@ -133,7 +133,14 @@ const MODEL_WEIGHTS: Record<string, number> = {
   // OpenAI API
   // Same Standard token prices as Fable 5; cash caps also track actual usage.
   'gpt-6-astra': 10,
+  'gpt-6.2-astra': 8,
   'gpt-6.1-sol': 2,
+  'gpt-6.2-sol': 2,
+  // Gemini 4 (native Vertex lane) — explicit keys so new ids don't silently
+  // default to weight 1 as the model family grows.
+  'gemini-4-argon': 1,
+  'gemini-4-hydrogen': 1,
+  'gemini-4-carbon': 1,
   'gpt-5.6': 6,
   'gpt-5.6-sol': 6,
   'gpt-5.6-terra': 3,
