@@ -355,7 +355,13 @@ export function WorkflowEditor({ workflow, save, actions, secondaryActions = [],
         <div>
           {viewsEnabled && (stepsOnly ? reviewLabel && <span className={styles.reviewLabel}>{reviewLabel === "Approved" ? <CircleCheck size={16} /> : <Circle size={16} />}{reviewLabel}</span> : <WorkflowMoreActions label="Review workflow" text={draft.reviewStatus === "reviewed" ? "Reviewed" : draft.reviewStatus === "needs-edits" ? "Needs edits" : "Unreviewed"} icon={draft.reviewStatus === "reviewed" ? CircleCheck : Circle} actions={([
             ["needs-review", "Unreviewed"], ["needs-edits", "Needs edits"], ["reviewed", "Reviewed"],
-          ] as const).map(([status, label]) => ({ label, icon: status === "reviewed" ? CircleCheck : Circle, onSelect: () => change({ ...draft, reviewStatus: status }) }))} />)}
+          ] as const).map(([status, label]) => {
+            const checked = status === (draft.reviewStatus ?? "needs-review");
+            return {
+              label, icon: status === "reviewed" ? CircleCheck : Circle, checked,
+              onSelect: () => { if (!checked) change({ ...draft, reviewStatus: status }); },
+            };
+          })} />)}
           {viewsEnabled && <WorkflowMoreActions label="Export workflow" icon={Download} actions={exports.actions} />}
           {actions}
           <WorkflowMoreActions actions={[
