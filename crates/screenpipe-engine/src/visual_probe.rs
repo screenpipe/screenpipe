@@ -20,7 +20,13 @@
 //! behavior end to end.
 
 use screenpipe_screen::monitor::SafeMonitor;
+#[cfg(not(target_os = "windows"))]
 use screenpipe_screen::utils::capture_monitor_image;
+#[cfg(target_os = "windows")]
+use screenpipe_screen::{
+    capture_screenshot_by_window::{ExclusionSources, WindowFilters},
+    screenshot_privacy::capture_monitor_image_filtered,
+};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -88,6 +94,8 @@ pub(crate) async fn bounded_visual_probe(
     monitor: &SafeMonitor,
     excluded_ids: &[u32],
     monitor_id: u32,
+    #[cfg(target_os = "windows")] window_filters: &WindowFilters,
+    #[cfg(target_os = "windows")] exclusion_sources: ExclusionSources,
 ) -> Result<Option<(image::DynamicImage, Duration)>, anyhow::Error> {
     #[cfg(debug_assertions)]
     if e2e_take_visual_check_hang() {
@@ -102,8 +110,8 @@ pub(crate) async fn bounded_visual_probe(
         }
         return probe_with_timeout(
             async {
-                tokio::time::sleep(Duration::from_secs(120)).await;
-                capture_monitor_image(monitor, excluded_ids).await
+                std::future::pending::<Result<(image::DynamicImage, Duration), anyhow::Error>>()
+                    .await
             },
             VISUAL_PROBE_TIMEOUT,
         )
@@ -122,7 +130,21 @@ pub(crate) async fn bounded_visual_probe(
                     return Ok((image, start.elapsed()));
                 }
             }
-            capture_monitor_image(monitor, excluded_ids).await
+            #[cfg(target_os = "windows")]
+            {
+                return capture_monitor_image_filtered(
+                    monitor,
+                    window_filters,
+                    exclusion_sources,
+                    excluded_ids,
+                    false,
+                )
+                .await;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                capture_monitor_image(monitor, excluded_ids).await
+            }
         },
         VISUAL_PROBE_TIMEOUT,
     )
@@ -193,5 +215,185 @@ mod tests {
             "prefix-visual-check-hang-once-suffix"
         ));
         assert!(!seed_list_has_visual_hang(""));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    #[ignore = "requires the disposable Windows console and built privacy fixture"]
+    async fn windows_probe_paired_capture_ocr_and_storage_are_sanitized() {
+        use screenpipe_capture::paired_capture::{paired_capture, CaptureContext};
+        use screenpipe_db::DatabaseManager;
+        use screenpipe_screen::{
+            capture_screenshot_by_window::{ExclusionSources, WindowFilters},
+            monitor::get_default_monitor,
+            screenshot_privacy::capture_monitor_frame_filtered,
+            snapshot_writer::SnapshotWriter,
+        };
+        use std::{process::Command, sync::Arc};
+        use tempfile::TempDir;
+
+        let fixture = std::env::var("SCREENPIPE_WINDOWS_FIXTURE")
+            .expect("set SCREENPIPE_WINDOWS_FIXTURE to windows_privacy_fixture.exe");
+        let mut allowed = Command::new(&fixture)
+            .args(["allowed", "120", "140"])
+            .spawn()
+            .expect("start allowed fixture");
+        let mut blocked = Command::new(&fixture)
+            .args(["blocked", "300", "260"])
+            .spawn()
+            .expect("start blocked fixture");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let monitor = get_default_monitor().await.expect("default monitor");
+        let raw = monitor
+            .capture_image_streaming()
+            .await
+            .expect("unfiltered positive control");
+        let raw_ocr = screenpipe_screen::perform_ocr_windows(&raw, &[])
+            .await
+            .expect("WinRT OCR positive control")
+            .0
+            .to_uppercase();
+        assert!(
+            raw_ocr.contains("ALLOWED") && raw_ocr.contains("ORBIT"),
+            "{raw_ocr}"
+        );
+        assert!(
+            raw_ocr.contains("EXCLUDED") && raw_ocr.contains("VIOLET"),
+            "{raw_ocr}"
+        );
+
+        let filters = WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]);
+        let (preview, _) = bounded_visual_probe(
+            &monitor,
+            &[],
+            monitor.id(),
+            &filters,
+            ExclusionSources::default(),
+        )
+        .await
+        .expect("bounded visual probe")
+        .expect("probe was withheld");
+        let rgb = preview.to_rgb8();
+        let blocked_pixels = rgb
+            .pixels()
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] > 200)
+            .count();
+        let allowed_pixels = rgb
+            .pixels()
+            .filter(|p| p[0] < 30 && p[1] > 220 && p[2] > 220)
+            .count();
+        assert_eq!(blocked_pixels, 0);
+        assert!(allowed_pixels > 0);
+        assert!(preview.to_rgba8().pixels().all(|pixel| pixel[3] == 255));
+
+        let temp = TempDir::new().unwrap();
+        let writer = SnapshotWriter::new(temp.path().join("snapshots"), 90, 0);
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let image = Arc::new(preview);
+        let ctx = CaptureContext {
+            db: &db,
+            snapshot_writer: &writer,
+            image: image.clone(),
+            captured_at: chrono::Utc::now(),
+            monitor_id: monitor.id(),
+            device_name: "windows_privacy_fixture",
+            app_name: Some("windows_privacy_fixture"),
+            window_name: Some("PrivacyAllowed"),
+            browser_url: None,
+            document_path: None,
+            focused: true,
+            capture_trigger: "windows_privacy_native",
+            use_pii_removal: false,
+            languages: vec![],
+            elements_ref_frame_id: None,
+            screenshot_disabled: false,
+            in_meeting: false,
+            monitor_hosts_focus: true,
+            ax_screenshot_coherent: true,
+            focused_window_bounds: None,
+        };
+        let stored = paired_capture(&ctx, None, None)
+            .await
+            .expect("paired capture");
+        let text = stored.accessibility_text.unwrap_or_default().to_uppercase();
+        assert!(text.contains("ALLOWED") && text.contains("ORBIT"), "{text}");
+        assert!(
+            !text.contains("EXCLUDED") && !text.contains("VIOLET"),
+            "{text}"
+        );
+        let reopened = image::open(&stored.snapshot_path)
+            .expect("reopen stored JPEG")
+            .to_rgb8();
+        let reopened_blocked = reopened
+            .pixels()
+            .filter(|p| p[0] > 180 && p[1] < 80 && p[2] > 180)
+            .count();
+        let reopened_allowed = reopened
+            .pixels()
+            .filter(|p| p[0] < 60 && p[1] > 180 && p[2] > 180)
+            .count();
+        assert_eq!(reopened_blocked, 0);
+        assert!(reopened_allowed > 0);
+        assert_eq!(
+            db.get_frame(stored.frame_id).await.unwrap().unwrap().0,
+            stored.snapshot_path
+        );
+
+        let before_stop = capture_monitor_frame_filtered(
+            &monitor,
+            &filters,
+            ExclusionSources::default(),
+            &[],
+            false,
+        )
+        .await
+        .expect("frame before pause/stop");
+        let repeated = capture_monitor_frame_filtered(
+            &monitor,
+            &filters,
+            ExclusionSources::default(),
+            &[],
+            false,
+        )
+        .await
+        .expect("repeated frame");
+        assert_eq!(before_stop.session_id, repeated.session_id);
+        monitor.release_capture_stream();
+        let restarted = capture_monitor_frame_filtered(
+            &monitor,
+            &filters,
+            ExclusionSources::default(),
+            &[],
+            false,
+        )
+        .await
+        .expect("frame after restart");
+        assert_ne!(before_stop.session_id, restarted.session_id);
+        println!(
+            "{}",
+            serde_json::json!({
+                "native_sink_evidence": true,
+                "raw_ocr_allowed": raw_ocr.contains("ALLOWED") && raw_ocr.contains("ORBIT"),
+                "raw_ocr_excluded": raw_ocr.contains("EXCLUDED") && raw_ocr.contains("VIOLET"),
+                "preview_allowed_pixels": allowed_pixels,
+                "preview_excluded_pixels": blocked_pixels,
+                "paired_ocr_allowed": text.contains("ALLOWED") && text.contains("ORBIT"),
+                "paired_ocr_excluded": text.contains("EXCLUDED") || text.contains("VIOLET"),
+                "stored_allowed_pixels": reopened_allowed,
+                "stored_excluded_pixels": reopened_blocked,
+                "frame_id": stored.frame_id,
+                "repeated_session_id": repeated.session_id,
+                "restarted_session_id": restarted.session_id,
+            })
+        );
+
+        monitor.release_capture_stream();
+        let _ = blocked.kill();
+        let _ = allowed.kill();
+        let _ = blocked.wait();
+        let _ = allowed.wait();
     }
 }

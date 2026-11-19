@@ -8,10 +8,8 @@ use crate::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use image::{DynamicImage, Rgba, RgbaImage};
-use once_cell::sync::Lazy;
 use screenpipe_a11y::incognito::create_detector;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use std::{collections::HashMap, time::Duration};
 use windows::Win32::{
     Foundation::{GetLastError, SetLastError, BOOL, COLORREF, ERROR_SUCCESS, HWND, LPARAM, RECT},
     Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
@@ -46,6 +44,7 @@ enum SurfaceOpacity {
 }
 
 impl SurfaceOpacity {
+    #[cfg(test)]
     fn alpha(self) -> u8 {
         match self {
             Self::Constant { alpha, .. } => alpha,
@@ -53,6 +52,7 @@ impl SurfaceOpacity {
         }
     }
 
+    #[cfg(test)]
     fn color_key(self) -> Option<[u8; 3]> {
         match self {
             Self::Constant { color_key, .. } => color_key,
@@ -106,6 +106,19 @@ struct NativeWindow {
     height: u32,
     policy: SurfacePolicy,
     opacity: SurfaceOpacity,
+}
+
+impl NativeWindow {
+    fn same_surface(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.pid == other.pid
+            && self.class_name == other.class_name
+            && self.title == other.title
+            && self.width == other.width
+            && self.height == other.height
+            && self.policy == other.policy
+            && self.opacity == other.opacity
+    }
 }
 
 fn wide_text(mut read: impl FnMut(&mut [u16]) -> i32, capacity: usize) -> Result<String> {
@@ -173,6 +186,7 @@ fn snapshot(
     monitor: &MonitorData,
     filters: &WindowFilters,
     sources: ExclusionSources,
+    excluded_ids: &[u32],
 ) -> Result<Vec<NativeWindow>> {
     let metadata = policy_metadata()?;
     let detector = sources
@@ -211,6 +225,14 @@ fn snapshot(
         }
         .is_err()
         {
+            // EnumWindows and the property reads are not atomic. A window which
+            // disappears between them owns no pixels in the candidate anymore;
+            // do not turn that ordinary close animation into a monitor-wide gap.
+            if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(hwnd) }.as_bool()
+                || !unsafe { IsWindowVisible(hwnd) }.as_bool()
+            {
+                continue;
+            }
             // An uncertain visible surface must never be reconstructed from guessed
             // geometry. Withhold the complete frame instead.
             bail!(
@@ -274,7 +296,7 @@ fn snapshot(
         ) || class_name.contains("Thumbnail");
         let desktop_surface =
             pid != 0 && pid == shell_pid && matches!(class_name.as_str(), "Progman" | "WorkerW");
-        let (policy, geometry) = if unverified_preview {
+        let (policy, geometry) = if excluded_ids.contains(&id) || unverified_preview {
             (SurfacePolicy::Blocked, (rect.left, rect.top, width, height))
         } else if desktop_surface {
             let allowed = super::window_allowed(
@@ -306,7 +328,8 @@ fn snapshot(
                 &meta.app_name,
                 &meta.title,
                 meta.pid as i32,
-            ) {
+            ) && filters.should_capture_window_url(Some(&meta.app_name), None)
+            {
                 (SurfacePolicy::Allowed, (rect.left, rect.top, width, height))
             } else {
                 // Redact the conservative native region for blocked surfaces.
@@ -334,29 +357,9 @@ fn snapshot(
     Ok(result)
 }
 
-fn paint_black(output: &mut RgbaImage, window: &NativeWindow, monitor: &MonitorData) {
-    let left = (i64::from(window.x) - i64::from(monitor.x)).max(0) as u32;
-    let top = (i64::from(window.y) - i64::from(monitor.y)).max(0) as u32;
-    let right = (i64::from(window.x) + i64::from(window.width) - i64::from(monitor.x))
-        .clamp(0, i64::from(monitor.width)) as u32;
-    let bottom = (i64::from(window.y) + i64::from(window.height) - i64::from(monitor.y))
-        .clamp(0, i64::from(monitor.height)) as u32;
-    for row in output
-        .rows_mut()
-        .skip(top as usize)
-        .take(bottom.saturating_sub(top) as usize)
-    {
-        for pixel in row
-            .skip(left as usize)
-            .take(right.saturating_sub(left) as usize)
-        {
-            *pixel = Rgba([0, 0, 0, 255]);
-        }
-    }
-}
-
 /// WGC B8G8R8A8 surfaces are premultiplied. `imageops::overlay` expects straight
 /// alpha and would multiply RGB a second time, darkening translucent windows.
+#[cfg(test)]
 fn overlay_wgc_premultiplied(
     output: &mut RgbaImage,
     foreground: &RgbaImage,
@@ -389,68 +392,248 @@ fn overlay_wgc_premultiplied(
     }
 }
 
-fn capture_filtered_sync(
+struct Witness {
+    capture: PersistentCapture,
+    scene: NativeWindow,
+    pixels: Option<(u64, RgbaImage)>,
+}
+
+#[derive(Default)]
+pub(super) struct PrivacySession {
+    witnesses: HashMap<(u32, u32), Witness>,
+    owners: Vec<usize>,
+    visited: Vec<bool>,
+}
+
+fn clipped_bounds(window: &NativeWindow, monitor: &MonitorData) -> (usize, usize, usize, usize) {
+    let x = i64::from(window.x) - i64::from(monitor.x);
+    let y = i64::from(window.y) - i64::from(monitor.y);
+    let width = i64::from(monitor.width);
+    let height = i64::from(monitor.height);
+    (
+        x.clamp(0, width) as usize,
+        y.clamp(0, height) as usize,
+        (x + i64::from(window.width)).clamp(0, width) as usize,
+        (y + i64::from(window.height)).clamp(0, height) as usize,
+    )
+}
+
+fn read_witness<'a>(
+    session: &'a mut PrivacySession,
+    window: &NativeWindow,
+) -> Result<&'a RgbaImage> {
+    let identity = (window.id, window.pid);
+    if session
+        .witnesses
+        .get(&identity)
+        .is_some_and(|witness| !witness.scene.same_surface(window) || witness.capture.is_closed())
+    {
+        session.witnesses.remove(&identity);
+    }
+    if let std::collections::hash_map::Entry::Vacant(entry) = session.witnesses.entry(identity) {
+        entry.insert(Witness {
+            capture: PersistentCapture::new_privacy_window(window.id, window.pid)?,
+            scene: window.clone(),
+            pixels: None,
+        });
+    }
+    let witness = session
+        .witnesses
+        .get_mut(&identity)
+        .expect("witness inserted");
+    let previous_sequence = witness.pixels.as_ref().map(|(sequence, _)| *sequence);
+    if let Some(frame) = witness
+        .capture
+        .get_changed_native_frame_streaming(Duration::from_secs(2), previous_sequence)?
+    {
+        let image = frame.image.into_rgba8();
+        if image.dimensions() != (window.width, window.height) {
+            witness.pixels = None;
+            bail!(
+                "window witness size {:?} differs from native size {:?}",
+                image.dimensions(),
+                (window.width, window.height)
+            );
+        }
+        witness.pixels = Some((frame.sequence, image));
+    }
+    witness
+        .pixels
+        .as_ref()
+        .map(|(_, image)| image)
+        .context("window witness has no matching pixels")
+}
+
+fn mask_changed_regions(
+    output: &mut RgbaImage,
     monitor: &MonitorData,
-    filters: &WindowFilters,
-    sources: ExclusionSources,
-) -> Result<DynamicImage> {
-    let before = snapshot(monitor, filters, sources)?;
-    let mut output = RgbaImage::from_pixel(monitor.width, monitor.height, Rgba([0, 0, 0, 255]));
-    for window in before.iter().rev() {
-        match window.policy {
-            SurfacePolicy::Blocked | SurfacePolicy::Unknown => {
-                paint_black(&mut output, window, monitor)
-            }
-            SurfacePolicy::Allowed => {
-                let capture = PersistentCapture::new_privacy_window(window.id, window.pid)?;
-                let image = capture
-                    .get_latest_image_streaming(Duration::from_secs(2))?
-                    .into_rgba8();
-                drop(capture);
-                if (image.width(), image.height()) != (window.width, window.height) {
-                    bail!(
-                        "window {} ({}) capture geometry {}x{} != native {}x{}",
-                        window.id,
-                        window.class_name,
-                        image.width(),
-                        image.height(),
-                        window.width,
-                        window.height
-                    );
+    before: &[NativeWindow],
+    after: &[NativeWindow],
+    owners: &[usize],
+    visited: &mut [bool],
+) {
+    visited.fill(false);
+    let stride = monitor.width as usize;
+    for window in after {
+        let owner = before.iter().position(|prior| prior.same_surface(window));
+        let (left, top, right, bottom) = clipped_bounds(window, monitor);
+        for y in top..bottom {
+            for x in left..right {
+                let index = y * stride + x;
+                if !visited[index] {
+                    visited[index] = true;
+                    if owner != Some(owners[index]) {
+                        output.put_pixel(x as u32, y as u32, Rgba([0, 0, 0, 255]));
+                    }
                 }
-                // Blend alpha only onto pixels already proven safe; unused RGB cannot leak.
-                overlay_wgc_premultiplied(
-                    &mut output,
-                    &image,
-                    i64::from(window.x) - i64::from(monitor.x),
-                    i64::from(window.y) - i64::from(monitor.y),
-                    window.opacity,
-                );
             }
         }
     }
-    if snapshot(monitor, filters, sources)? != before {
-        bail!("window scene changed during privacy capture");
+    for (index, pixel) in output.pixels_mut().enumerate() {
+        if !visited[index] {
+            *pixel = Rgba([0, 0, 0, 255]);
+        }
     }
-    Ok(DynamicImage::ImageRgba8(output))
 }
 
-static CAPTURE_SLOT: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(1)));
+fn authorize_candidate(
+    monitor: &MonitorData,
+    filters: &WindowFilters,
+    sources: ExclusionSources,
+    excluded_ids: &[u32],
+    scene: &[NativeWindow],
+    candidate: &RgbaImage,
+    session: &mut PrivacySession,
+) -> Result<DynamicImage> {
+    if (candidate.width(), candidate.height()) != (monitor.width, monitor.height) {
+        bail!("buffered display size does not match monitor");
+    }
+    session.witnesses.retain(|identity, _| {
+        scene.iter().any(|window| {
+            window.policy == SurfacePolicy::Allowed && (window.id, window.pid) == *identity
+        })
+    });
+    let mut output = RgbaImage::from_pixel(monitor.width, monitor.height, Rgba([0, 0, 0, 255]));
+    let stride = monitor.width as usize;
+    let pixel_count = stride * monitor.height as usize;
+    let mut owners = std::mem::take(&mut session.owners);
+    owners.resize(pixel_count, usize::MAX);
+    owners.fill(usize::MAX);
+    for (owner, window) in scene.iter().enumerate() {
+        let (left, top, right, bottom) = clipped_bounds(window, monitor);
+        if window.policy == SurfacePolicy::Allowed
+            && window.opacity == SurfaceOpacity::Ordinary
+            && (top..bottom)
+                .any(|y| owners[y * stride + left..y * stride + right].contains(&usize::MAX))
+        {
+            if let Ok(image) = read_witness(session, window).inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    screenshot_outcome = "region_masked",
+                    "Windows isolated window witness unavailable"
+                );
+            }) {
+                let witness_x = (left as i64 + i64::from(monitor.x) - i64::from(window.x)) as usize;
+                let witness_y = (top as i64 + i64::from(monitor.y) - i64::from(window.y)) as usize;
+                let witness_stride = image.width() as usize;
+                for y in top..bottom {
+                    let start = y * stride + left;
+                    let end = y * stride + right;
+                    let witness_start = (witness_y + y - top) * witness_stride + witness_x;
+                    let witness_end = witness_start + right - left;
+                    let trusted =
+                        image.as_raw()[witness_start * 4..witness_end * 4].chunks_exact(4);
+                    let raw = candidate.as_raw()[start * 4..end * 4].chunks_exact(4);
+                    let target = output.as_mut()[start * 4..end * 4].chunks_exact_mut(4);
+                    for (((pixel_owner, trusted), raw), target) in owners[start..end]
+                        .iter_mut()
+                        .zip(trusted)
+                        .zip(raw)
+                        .zip(target)
+                    {
+                        if *pixel_owner == usize::MAX {
+                            *pixel_owner = owner;
+                            if trusted[3] == 255 && trusted[..3] == raw[..3] {
+                                target[..3].copy_from_slice(&raw[..3]);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        for y in top..bottom {
+            for pixel_owner in &mut owners[y * stride + left..y * stride + right] {
+                if *pixel_owner == usize::MAX {
+                    *pixel_owner = owner;
+                }
+            }
+        }
+    }
+    let final_scene = snapshot(monitor, filters, sources, excluded_ids)?;
+    if final_scene != scene {
+        let mut visited = std::mem::take(&mut session.visited);
+        visited.resize(pixel_count, false);
+        mask_changed_regions(
+            &mut output,
+            monitor,
+            scene,
+            &final_scene,
+            &owners,
+            &mut visited,
+        );
+        session.visited = visited;
+    }
+    session.owners = owners;
+    Ok(DynamicImage::ImageRgba8(output))
+}
 
 pub(crate) async fn capture_filtered(
     monitor: &SafeMonitor,
     filters: &WindowFilters,
     sources: ExclusionSources,
+    excluded_ids: &[u32],
     _fresh: bool,
-) -> Result<DynamicImage> {
-    let permit = tokio::time::timeout(Duration::from_secs(1), CAPTURE_SLOT.clone().acquire_owned())
+) -> Result<(DynamicImage, u64, i64, u64, chrono::DateTime<chrono::Utc>)> {
+    let privacy = monitor.privacy_session();
+    let permit = tokio::time::timeout(Duration::from_secs(1), privacy.gate.clone().acquire_owned())
         .await
         .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
-    let monitor = monitor.get_info();
+    let candidate = monitor.capture_native_frame_streaming().await?;
+    let monitor_info = monitor.get_info();
     let filters = filters.clone();
+    let excluded_ids = excluded_ids.to_vec();
+    let before_info = monitor_info.clone();
+    let before_filters = filters.clone();
+    let before_ids = excluded_ids.clone();
+    let scene = tokio::task::spawn_blocking(move || {
+        snapshot(&before_info, &before_filters, sources, &before_ids)
+    })
+    .await
+    .context("Windows privacy scene worker failed")??;
+    let session_id = candidate.session_id;
+    let qpc = candidate.system_relative_time;
+    let sequence = candidate.sequence;
+    let captured_at = candidate.captured_at;
     let work = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        capture_filtered_sync(&monitor, &filters, sources)
+        let mut session = privacy
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("privacy session mutex poisoned"))?;
+        authorize_candidate(
+            &monitor_info,
+            &filters,
+            sources,
+            &excluded_ids,
+            &scene,
+            candidate
+                .image
+                .as_rgba8()
+                .context("WGC display frame is not RGBA8")?,
+            &mut session,
+        )
+        .map(|image| (image, session_id, qpc, sequence, captured_at))
     });
     tokio::time::timeout(Duration::from_secs(5), work)
         .await
@@ -461,6 +644,43 @@ pub(crate) async fn capture_filtered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn allowed_window() -> NativeWindow {
+        NativeWindow {
+            id: 1,
+            pid: 2,
+            class_name: "fixture".into(),
+            title: "allowed".into(),
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 1,
+            policy: SurfacePolicy::Allowed,
+            opacity: SurfaceOpacity::Ordinary,
+        }
+    }
+
+    #[test]
+    fn surface_identity_ignores_only_position() {
+        let original = allowed_window();
+        let mut changed = original.clone();
+        changed.x = 37;
+        changed.y = -9;
+        assert!(original.same_surface(&changed));
+
+        let mut resize = changed.clone();
+        resize.width += 1;
+        assert!(!original.same_surface(&resize));
+
+        let mut policy = changed.clone();
+        policy.policy = SurfacePolicy::Blocked;
+        assert!(!original.same_surface(&policy));
+
+        let mut title = changed;
+        title.title.push_str(" changed");
+        assert!(!original.same_surface(&title));
+    }
+
     #[test]
     fn overlap_math_rejects_adjacent_windows() {
         let window = NativeWindow {
@@ -537,6 +757,97 @@ mod tests {
     }
 
     #[test]
+    fn scene_churn_masks_only_changed_ownership_regions() {
+        let monitor = MonitorData {
+            name: "test".into(),
+            width: 4,
+            height: 1,
+            x: 0,
+            y: 0,
+            is_primary: true,
+        };
+        let stable = NativeWindow {
+            id: 1,
+            pid: 1,
+            class_name: "test".into(),
+            title: "stable".into(),
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+            policy: SurfacePolicy::Allowed,
+            opacity: SurfaceOpacity::Ordinary,
+        };
+        let moved = NativeWindow {
+            id: 2,
+            pid: 2,
+            class_name: "test".into(),
+            title: "moving".into(),
+            x: 3,
+            y: 0,
+            width: 1,
+            height: 1,
+            policy: SurfacePolicy::Blocked,
+            opacity: SurfaceOpacity::Ordinary,
+        };
+        let before = vec![stable.clone()];
+        let after = vec![stable, moved];
+        let mut output = RgbaImage::from_pixel(4, 1, Rgba([0, 255, 255, 255]));
+        let owners = vec![0, 0, usize::MAX, usize::MAX];
+        let mut visited = vec![false; 4];
+        mask_changed_regions(
+            &mut output,
+            &monitor,
+            &before,
+            &after,
+            &owners,
+            &mut visited,
+        );
+        assert_eq!(output.get_pixel(0, 0), &Rgba([0, 255, 255, 255]));
+        assert_eq!(output.get_pixel(1, 0), &Rgba([0, 255, 255, 255]));
+        assert_eq!(output.get_pixel(2, 0), &Rgba([0, 0, 0, 255]));
+        assert_eq!(output.get_pixel(3, 0), &Rgba([0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn moving_surface_retains_only_same_owner_overlap() {
+        let monitor = MonitorData {
+            name: "test".into(),
+            width: 5,
+            height: 1,
+            x: 0,
+            y: 0,
+            is_primary: true,
+        };
+        let before = allowed_window();
+        let mut after = before.clone();
+        after.x = 1;
+        let safe = Rgba([0, 255, 255, 255]);
+        let forbidden = Rgba([255, 0, 255, 255]);
+        let mut output = RgbaImage::from_pixel(5, 1, forbidden);
+        output.put_pixel(1, 0, safe);
+        output.put_pixel(2, 0, safe);
+        // Old ownership covers x=0..3. Only x=1..3 intersects the moved bounds
+        // with the same topmost owner; old x=0 and newly covered x=3 stay black.
+        let owners = vec![0, 0, 0, usize::MAX, usize::MAX];
+        let mut visited = vec![false; 5];
+        mask_changed_regions(
+            &mut output,
+            &monitor,
+            &[before],
+            &[after],
+            &owners,
+            &mut visited,
+        );
+        assert_eq!(output.get_pixel(0, 0), &Rgba([0, 0, 0, 255]));
+        assert_eq!(output.get_pixel(1, 0), &safe);
+        assert_eq!(output.get_pixel(2, 0), &safe);
+        assert_eq!(output.get_pixel(3, 0), &Rgba([0, 0, 0, 255]));
+        assert_eq!(output.get_pixel(4, 0), &Rgba([0, 0, 0, 255]));
+        assert!(!output.pixels().any(|pixel| *pixel == forbidden));
+    }
+
+    #[test]
     #[ignore = "requires a live unlocked Windows console"]
     fn filtered_capture_keeps_full_monitor_dimensions() {
         let monitor = xcap::Monitor::all()
@@ -553,8 +864,23 @@ mod tests {
             is_primary: monitor.is_primary().expect("monitor primary"),
         };
         let filters = WindowFilters::new(&["__screenpipe_no_match__".into()], &[], &[]);
-        let image = capture_filtered_sync(&info, &filters, ExclusionSources::default())
-            .expect("filtered capture");
+        let candidate = PersistentCapture::new(monitor.id().expect("id"))
+            .expect("display session")
+            .get_latest_image_streaming(Duration::from_secs(2))
+            .expect("display frame")
+            .into_rgba8();
+        let scene =
+            snapshot(&info, &filters, ExclusionSources::default(), &[]).expect("scene snapshot");
+        let image = authorize_candidate(
+            &info,
+            &filters,
+            ExclusionSources::default(),
+            &[],
+            &scene,
+            &candidate,
+            &mut PrivacySession::default(),
+        )
+        .expect("filtered capture");
         assert_eq!((image.width(), image.height()), (info.width, info.height));
     }
 }
