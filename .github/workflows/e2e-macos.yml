@@ -1,9 +1,6 @@
 name: macOS E2E Tests
 
 on:
-  schedule:
-    # Run every 4 hours to catch regressions (not on every release — hogs self-hosted runner)
-    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -14,16 +11,12 @@ env:
   GIT_LFS_SKIP_SMUDGE: 1
 
 jobs:
-  # ── Tier 1: GitHub hosted runner ──────────────────────────────────────────
   # Build CLI from source, start server, test API + health
   # No screen recording or mic — tests what we can without permissions
   e2e-hosted:
     name: macOS E2E (hosted)
-    runs-on: macos-14  # M1, Sonoma
+    runs-on: macos-15
     timeout-minutes: 45
-    if: >
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +94,7 @@ jobs:
           bun-version: latest
 
       - name: Run API tests
+        shell: bash
         env:
           ARTIFACTS_DIR: ${{ runner.temp }}/e2e-artifacts
         run: |

@@ -1,8 +1,6 @@
 name: Rust Benchmark
 
 on:
-  schedule:
-    - cron: '0 8 * * *'  # Daily at midnight PST (8 AM UTC)
   workflow_dispatch:
 
 concurrency:
@@ -17,9 +15,7 @@ jobs:
   apple_ocr_benchmark:
     name: Run Apple OCR benchmark
     runs-on: [self-hosted, macos-test]
-    # Self-hosted benchmark runners are not always online. Keep scheduled runs
-    # green by running these platform-specific benchmarks only when triggered
-    # manually by someone who can ensure the runners are available.
+    # A maintainer can verify the self-hosted runner is online before dispatch.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -86,9 +82,7 @@ jobs:
   windows_ocr_benchmark:
     name: Run Windows OCR benchmark
     runs-on: [self-hosted, windows-desktop-test]
-    # Self-hosted benchmark runners are not always online. Keep scheduled runs
-    # green by running these platform-specific benchmarks only when triggered
-    # manually by someone who can ensure the runners are available.
+    # A maintainer can verify the self-hosted runner is online before dispatch.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
