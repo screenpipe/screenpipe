@@ -41,6 +41,7 @@ bun scripts/experiential-smoke.ts --allow-spend gpt-5.4-nano stream
 bun scripts/experiential-smoke.ts --allow-spend gpt-5.4-nano tools
 bun scripts/experiential-smoke.ts --allow-spend gpt-5.4-nano json-schema
 bun scripts/experiential-smoke.ts --allow-spend gpt-6-astra responses
+bun scripts/experiential-smoke.ts --allow-spend gpt-6.2-astra responses
 bun scripts/experiential-smoke.ts --allow-spend claude-sonnet-5 messages
 ```
 

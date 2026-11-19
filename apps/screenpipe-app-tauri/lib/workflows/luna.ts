@@ -4,8 +4,10 @@
 
 import type { AIPreset } from "@/lib/utils/tauri";
 
+// Keep the preset id stable: installLunaPreset retires any previously saved
+// Luna preset by this id before reinstalling the current model.
 export const LUNA_PRESET_ID = "workflows-luna-5.6";
-export const LUNA_MODEL = "gpt-5.6-luna";
+export const LUNA_MODEL = "gpt-6-luna";
 export const LUNA_GATEWAY_LABEL = "Screenpipe Gateway";
 
 export function createLunaPreset(): AIPreset {

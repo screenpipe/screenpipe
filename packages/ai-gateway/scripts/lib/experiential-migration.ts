@@ -13,6 +13,12 @@ export type ProbeProtocol = 'chat' | 'stream' | 'tools' | 'json-schema' | 'respo
 export type ContentRetention = 'retain' | 'zdr';
 const KEY = /^xpl_[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Both Astra generations speak the stateless Responses protocol. Keep the
+// previous slug so existing destination fixtures and mappings keep working.
+const ASTRA_RESPONSES_MODELS = new Set(['gpt-6-astra', 'gpt-6.2-astra']);
+export function isAstraResponsesModel(model: string): boolean {
+  return ASTRA_RESPONSES_MODELS.has(model);
+}
 // Gateway identities are artifact IDs, not UUIDs. Org/model IDs remain UUIDs.
 export function isExperientialIdentityId(value: string): boolean {
   return value.length <= 128 && /^[a-z][a-z0-9]*([._-][a-z0-9]+)*$/.test(value);
@@ -149,13 +155,13 @@ export function syntheticRequest(model: string, protocol: ProbeProtocol, content
   if (!getHostedAiAllowedModels('business').includes(model) || !/^(gpt-|claude-)/.test(model)) {
     throw new MigrationCheckError('unsupported_probe_model');
   }
-  if (model === 'gpt-6-astra' && protocol !== 'responses') throw new MigrationCheckError('astra_requires_responses');
+  if (isAstraResponsesModel(model) && protocol !== 'responses') throw new MigrationCheckError('astra_requires_responses');
   if (protocol === 'messages') {
     if (!model.startsWith('claude-')) throw new MigrationCheckError('messages_requires_claude');
     return { path: '/v1/messages', body: { model, ...retentionFields, max_tokens: 64, messages: [{ role: 'user', content: PROMPT }] } };
   }
   if (protocol === 'responses') {
-    if (model !== 'gpt-6-astra') throw new MigrationCheckError('responses_probe_requires_astra');
+    if (!isAstraResponsesModel(model)) throw new MigrationCheckError('responses_probe_requires_astra');
     return { path: '/v1/responses', body: { model, ...retentionFields, input: [{ role: 'user', content: PROMPT }],
       max_output_tokens: 64, reasoning: { effort: 'low' }, ...STATELESS_RESPONSES_OPTIONS } };
   }
