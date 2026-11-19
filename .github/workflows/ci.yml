@@ -130,9 +130,6 @@ jobs:
     # builds (ORT/OpenBLAS) are slow but finish well under this.
     timeout-minutes: 120
     env:
-      # Single source of truth for the ONNX Runtime version. Referenced by
-      # the download URL, the extract dirname, the DLL staging src path, and
-      # the PATH-append step below. Bump this in one place instead of four.
       ONNXRUNTIME_VERSION: "1.24.2"
     steps:
       - uses: actions/checkout@v4
@@ -225,14 +222,25 @@ jobs:
       - name: Download ONNX Runtime (CPU)
         shell: pwsh
         run: |
-          $version = "${{ env.ONNXRUNTIME_VERSION }}"
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-x64-$version.zip"
-          $zipFile = "onnxruntime-win-x64-$version.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-$version"
+          $version = $env:ONNXRUNTIME_VERSION
+          $package = 'microsoft.ml.onnxruntime'
+          $url = "https://api.nuget.org/v3-flatcontainer/$package/$version/$package.$version.nupkg"
+          $zipFile = Join-Path $env:RUNNER_TEMP "onnxruntime-$version.zip"
+          $libDir = Join-Path $env:RUNNER_TEMP "onnxruntime-win-x64-$version"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
-          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-          7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
-          Write-Host "ONNX Runtime extracted to $extractDir"
+          7z e $zipFile "-o$libDir" -y 'runtimes/win-x64/native/onnxruntime*.dll' 'runtimes/win-x64/native/onnxruntime.lib'
+          if ($LASTEXITCODE -ne 0) { throw "Failed to extract Windows x64 ONNX Runtime from $url (7-Zip exit $LASTEXITCODE)" }
+          foreach ($name in @('onnxruntime.dll', 'onnxruntime.lib')) {
+            $file = Join-Path $libDir $name
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -eq 0) {
+              throw "Missing or empty Windows x64 ONNX Runtime file $file from $url"
+            }
+          }
+          # Link the test binaries against the CPU runtime staged here.
+          "ORT_LIB_LOCATION=$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_PREFER_DYNAMIC_LINK=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # The audio build script otherwise tries to fetch legacy ONNX Runtime 1.22.0.
+          "SCREENPIPE_SKIP_ONNX_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run pre_build.js
         shell: bash
@@ -252,7 +260,7 @@ jobs:
       - name: Stage Windows runtime DLLs next to test binary
         shell: pwsh
         run: |
-          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-${{ env.ONNXRUNTIME_VERSION }}/lib"
+          $src = $env:ORT_LIB_LOCATION
           $dst = "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release-dev/deps"
           if (-not (Test-Path $dst)) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
@@ -319,7 +327,7 @@ jobs:
       - name: Add native DLL dirs to PATH for cargo tests
         shell: pwsh
         run: |
-          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-${{ env.ONNXRUNTIME_VERSION }}/lib"
+          $ortLib = $env:ORT_LIB_LOCATION
           $openblasBin = Join-Path $env:OPENBLAS_PATH "bin"
           $openblasDll = Join-Path $openblasBin "libopenblas.dll"
           if (-not (Test-Path $openblasDll)) {
@@ -359,12 +367,6 @@ jobs:
       - name: Run specific Windows OCR cargo test
         env:
           RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
-          # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
-          # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
-          # static-linking, which needs onnxruntime_common.lib + the static _deps tree
-          # the dynamic MS prebuilt doesn't ship -> "ort-sys could not link" (#4173
-          # fallout, after Windows x86_64 moved off load-dynamic). The MS zip staged
-          # above still provides the runtime DLL.
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         # --profile release-dev, not --release: the release profile is the
@@ -376,12 +378,6 @@ jobs:
       - name: Run PII removal tests
         env:
           RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
-          # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
-          # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
-          # static-linking, which needs onnxruntime_common.lib + the static _deps tree
-          # the dynamic MS prebuilt doesn't ship -> "ort-sys could not link" (#4173
-          # fallout, after Windows x86_64 moved off load-dynamic). The MS zip staged
-          # above still provides the runtime DLL.
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         # release-dev, not release — see the OCR test step above.
@@ -390,12 +386,6 @@ jobs:
       - name: Run PII redaction tests
         env:
           RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
-          # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
-          # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
-          # static-linking, which needs onnxruntime_common.lib + the static _deps tree
-          # the dynamic MS prebuilt doesn't ship -> "ort-sys could not link" (#4173
-          # fallout, after Windows x86_64 moved off load-dynamic). The MS zip staged
-          # above still provides the runtime DLL.
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         # release-dev, not release — see the OCR test step above.
