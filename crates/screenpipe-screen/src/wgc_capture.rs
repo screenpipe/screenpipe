@@ -56,8 +56,7 @@ use windows::{
                 D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
                 ID3D11Resource, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE, D3D11_USAGE_DEFAULT,
-                D3D11_USAGE_STAGING,
+                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE, D3D11_USAGE_STAGING,
             },
             Dxgi::IDXGIDevice,
             Gdi::{EnumDisplayMonitors, HDC, HMONITOR},
@@ -299,6 +298,7 @@ struct D3dContext {
 }
 
 static SHARED_D3D: Mutex<Option<Arc<D3dContext>>> = Mutex::new(None);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn shared_d3d_cache() -> MutexGuard<'static, Option<Arc<D3dContext>>> {
     // Poison recovery: the cache holds an Option we always overwrite consistently;
@@ -454,6 +454,12 @@ fn create_texture_like(
     texture.ok_or_else(|| anyhow!("CreateTexture2D returned no texture"))
 }
 
+fn texture_dimensions(texture: &ID3D11Texture2D) -> (u32, u32) {
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut desc) };
+    (desc.Width, desc.Height)
+}
+
 extern "system" fn monitor_enum_proc(
     h_monitor: HMONITOR,
     _hdc: HDC,
@@ -489,8 +495,12 @@ fn find_hmonitor(monitor_id: u32) -> Result<HMONITOR> {
 
 struct LatestFrame {
     texture: Option<ID3D11Texture2D>,
+    reusable: Vec<ID3D11Texture2D>,
     width: u32,
     height: u32,
+    system_relative_time: i64,
+    sequence: u64,
+    captured_at: chrono::DateTime<chrono::Utc>,
     /// Size the frame pool's buffers were (re)created with. Frames whose surface size
     /// differs are stale pre-`Recreate` deliveries and are dropped; frames whose
     /// `ContentSize` differs signal a display mode change and trigger a `Recreate`.
@@ -563,6 +573,8 @@ fn privacy_window_item(window_id: u32, pid: u32) -> Result<GraphicsCaptureItem> 
 /// Persistent WGC capture session that keeps a single GraphicsCaptureSession alive,
 /// eliminating the orange border flash caused by per-frame session create/destroy.
 pub struct PersistentCapture {
+    session_id: u64,
+    preserve_alpha: bool,
     d3d: Arc<D3dContext>,
     item: GraphicsCaptureItem,
     session: GraphicsCaptureSession,
@@ -582,8 +594,17 @@ pub struct PersistentCapture {
     /// Makes `stop()` idempotent: explicit `stop()` followed by `Drop` must not
     /// double-`Close()` the session/pool (spurious warn logs on every teardown).
     stopped: AtomicBool,
-    /// Cached staging texture for lazy readback, reused across calls unless size changes.
-    staging: Mutex<Option<(ID3D11Texture2D, u32, u32)>>,
+}
+
+/// Pixels and compositor identity selected by one atomic GPU submission.
+/// The texture copied for this observation is never reused, so the callback
+/// cannot advance its contents between selection and CPU staging.
+pub(crate) struct NativeFrame {
+    pub image: DynamicImage,
+    pub session_id: u64,
+    pub system_relative_time: i64,
+    pub sequence: u64,
+    pub captured_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl PersistentCapture {
@@ -642,8 +663,12 @@ impl PersistentCapture {
         let latest: Arc<(Mutex<LatestFrame>, Condvar)> = Arc::new((
             Mutex::new(LatestFrame {
                 texture: None,
+                reusable: Vec::with_capacity(2),
                 width: 0,
                 height: 0,
+                system_relative_time: 0,
+                sequence: 0,
+                captured_at: chrono::Utc::now(),
                 pool_size: (item_size.Width, item_size.Height),
                 demand,
             }),
@@ -693,6 +718,7 @@ impl PersistentCapture {
                     match closed_latest.0.lock() {
                         Ok(mut slot) => {
                             slot.texture = None;
+                            slot.reusable.clear();
                             closed_flag.store(true, Ordering::Release);
                         }
                         Err(_) => closed_flag.store(true, Ordering::Release),
@@ -759,6 +785,8 @@ impl PersistentCapture {
         }
 
         Ok(Self {
+            session_id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
+            preserve_alpha: capture_initial_frame,
             d3d,
             item,
             session,
@@ -772,7 +800,6 @@ impl PersistentCapture {
             native_interval_update: Mutex::new(()),
             closed,
             stopped: AtomicBool::new(false),
-            staging: Mutex::new(None),
         })
     }
 
@@ -854,6 +881,7 @@ impl PersistentCapture {
             }
             slot.pool_size = content_size;
             slot.texture = None;
+            slot.reusable.clear();
             slot.width = 0;
             slot.height = 0;
             // Skip this old-size frame; the next delivery uses the recreated buffers.
@@ -889,15 +917,29 @@ impl PersistentCapture {
             return Ok(false);
         }
 
-        if slot.texture.is_none() || slot.width != desc.Width || slot.height != desc.Height {
-            let texture = create_texture_like(&d3d.device, &desc, D3D11_USAGE_DEFAULT, 0)
-                .map_err(|e| d3d.describe_err("create latest texture", e))?;
-            slot.texture = Some(texture);
-            slot.width = desc.Width;
-            slot.height = desc.Height;
-        }
-
-        let dst = slot.texture.as_ref().expect("ensured above");
+        // A selected texture is immutable. Reusing the previous destination lets
+        // FrameArrived overwrite it after a reader chooses metadata but before it
+        // submits its staging copy (an ABA privacy bug).
+        let dst = slot
+            .texture
+            .take()
+            .filter(|texture| texture_dimensions(texture) == (desc.Width, desc.Height))
+            .or_else(|| {
+                slot.reusable
+                    .iter()
+                    .position(|texture| texture_dimensions(texture) == (desc.Width, desc.Height))
+                    .map(|index| slot.reusable.swap_remove(index))
+            })
+            .map(Ok)
+            .unwrap_or_else(|| {
+                create_texture_like(
+                    &d3d.device,
+                    &desc,
+                    D3D11_USAGE_STAGING,
+                    D3D11_CPU_ACCESS_READ.0 as u32,
+                )
+                .map_err(|e| d3d.describe_err("create selected texture", e))
+            })?;
         let dst_resource: ID3D11Resource = dst
             .cast()
             .map_err(|e| anyhow!("cast latest texture to ID3D11Resource failed: {}", e))?;
@@ -908,6 +950,16 @@ impl PersistentCapture {
             let _context_guard = d3d.lock_context();
             unsafe { d3d.context.CopyResource(&dst_resource, &src_resource) };
         }
+        let system_relative_time = frame
+            .SystemRelativeTime()
+            .map_err(|e| anyhow!("SystemRelativeTime failed: {}", e))?
+            .Duration;
+        slot.texture = Some(dst);
+        slot.width = desc.Width;
+        slot.height = desc.Height;
+        slot.system_relative_time = system_relative_time;
+        slot.sequence = slot.sequence.wrapping_add(1).max(1);
+        slot.captured_at = chrono::Utc::now();
         slot.demand.complete(request_generation);
         stats.copy_submissions.fetch_add(1, Ordering::Relaxed);
         Ok(true)
@@ -985,15 +1037,42 @@ impl PersistentCapture {
     /// pending, allowing the next compositor update to replace that texture without
     /// continuously copying unchanged GPU frames.
     pub fn get_latest_image_streaming(&self, timeout: Duration) -> Result<DynamicImage> {
-        self.get_image(timeout, FrameReadPolicy::CachedWhileRefreshing)
+        Ok(self.get_latest_native_frame_streaming(timeout)?.image)
     }
 
-    fn get_image(&self, timeout: Duration, policy: FrameReadPolicy) -> Result<DynamicImage> {
+    pub(crate) fn get_latest_native_frame_streaming(
+        &self,
+        timeout: Duration,
+    ) -> Result<NativeFrame> {
+        self.get_changed_native_frame_streaming(timeout, None)?
+            .ok_or_else(|| anyhow!("WGC returned no image for an unconditional read"))
+    }
+
+    pub(crate) fn get_changed_native_frame_streaming(
+        &self,
+        timeout: Duration,
+        previous_sequence: Option<u64>,
+    ) -> Result<Option<NativeFrame>> {
         self.refresh_min_update_interval();
-        self.get_image_inner(timeout, policy)
+        self.get_native_frame_inner(
+            timeout,
+            FrameReadPolicy::CachedWhileRefreshing,
+            previous_sequence,
+        )
     }
 
     fn get_image_inner(&self, timeout: Duration, policy: FrameReadPolicy) -> Result<DynamicImage> {
+        self.get_native_frame_inner(timeout, policy, None)?
+            .map(|frame| frame.image)
+            .ok_or_else(|| anyhow!("WGC returned no image for an unconditional read"))
+    }
+
+    fn get_native_frame_inner(
+        &self,
+        timeout: Duration,
+        policy: FrameReadPolicy,
+        previous_sequence: Option<u64>,
+    ) -> Result<Option<NativeFrame>> {
         let deadline = Instant::now() + timeout;
         let (frame_lock, frame_ready) = &*self.latest;
         let mut slot = frame_lock
@@ -1020,6 +1099,9 @@ impl PersistentCapture {
                 slot.texture.is_some(),
                 slot.demand.is_complete(request_generation),
             ) {
+                if previous_sequence == Some(slot.sequence) {
+                    return Ok(None);
+                }
                 break;
             }
             let now = Instant::now();
@@ -1033,18 +1115,43 @@ impl PersistentCapture {
             slot = next_slot;
         }
 
-        let texture = slot.texture.clone().expect("checked Some above");
+        let texture = slot.texture.take().expect("checked Some above");
         let width = slot.width;
         let height = slot.height;
+        let system_relative_time = slot.system_relative_time;
+        let sequence = slot.sequence;
+        let captured_at = slot.captured_at;
+        let pool_size = slot.pool_size;
         // Release the frame lock before the (comparatively slow) readback so
         // FrameArrived isn't blocked from swapping in newer frames meanwhile.
         drop(slot);
 
-        self.readback(&texture, width, height)
+        let image = self.readback(&texture, width, height);
+        if let Ok(mut slot) = frame_lock.lock() {
+            if !self.closed.load(Ordering::Acquire) && slot.pool_size == pool_size {
+                if slot.texture.is_none() && slot.sequence == sequence && image.is_ok() {
+                    slot.texture = Some(texture);
+                    frame_ready.notify_all();
+                } else if slot.reusable.len() < 2 {
+                    slot.reusable.push(texture);
+                }
+            }
+        }
+        Ok(Some(NativeFrame {
+            image: image?,
+            session_id: self.session_id,
+            system_relative_time,
+            sequence,
+            captured_at,
+        }))
     }
 
     pub fn stats(&self) -> CaptureStats {
         self.stats.snapshot()
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire) || self.d3d.invalidate_if_removed()
     }
 
     pub fn native_interval_status(&self) -> NativeIntervalStatus {
@@ -1099,41 +1206,12 @@ impl PersistentCapture {
         let mut rgba = vec![0u8; row_bytes * height as usize];
 
         {
-            let mut staging_slot = self
-                .staging
-                .lock()
-                .map_err(|_| anyhow!("staging texture mutex poisoned"))?;
-
-            let needs_new =
-                !matches!(&*staging_slot, Some((_, w, h)) if *w == width && *h == height);
-            if needs_new {
-                let mut src_desc = D3D11_TEXTURE2D_DESC::default();
-                unsafe { texture.GetDesc(&mut src_desc) };
-                let staging = create_texture_like(
-                    &self.d3d.device,
-                    &src_desc,
-                    D3D11_USAGE_STAGING,
-                    D3D11_CPU_ACCESS_READ.0 as u32,
-                )
-                .map_err(|e| self.d3d.describe_err("create staging texture", e))?;
-                *staging_slot = Some((staging, width, height));
-            }
-
-            let staging_texture = &staging_slot
-                .as_ref()
-                .expect("staging texture ensured above")
-                .0;
-            let dst_resource: ID3D11Resource = staging_texture
+            let dst_resource: ID3D11Resource = texture
                 .cast()
                 .map_err(|e| anyhow!("cast staging texture to ID3D11Resource failed: {}", e))?;
-            let src_resource: ID3D11Resource = texture
-                .cast()
-                .map_err(|e| anyhow!("cast latest texture to ID3D11Resource failed: {}", e))?;
 
             let _context_guard = self.d3d.lock_context();
             unsafe {
-                self.d3d.context.CopyResource(&dst_resource, &src_resource);
-
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 if let Err(e) =
                     self.d3d
@@ -1151,18 +1229,21 @@ impl PersistentCapture {
                     let src_row = std::slice::from_raw_parts(src_ptr.add(src_offset), row_bytes);
                     let dst_row = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
                     dst_row.copy_from_slice(src_row);
-                    // BGRA -> RGBA fused into the row copy while the row is hot in
-                    // cache. A separate whole-buffer pass after releasing the locks
-                    // re-reads the full frame from DRAM and measured ~4ms/readback
-                    // slower, so the swizzle stays inside the mapped loop.
-                    for px in dst_row.chunks_exact_mut(4) {
-                        px.swap(0, 2);
-                    }
                 }
 
                 self.d3d.context.Unmap(&dst_resource, 0);
             }
-        } // staging + context locks released — FrameArrived (all monitors) unblocked
+        } // context released — FrameArrived on every display can submit immediately
+
+        // CPU conversion must not hold either the frame-slot or shared D3D context
+        // lock. A large monitor's swizzle otherwise stalls callback submission for
+        // unrelated displays and can turn capture pressure into dropped evidence.
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            if !self.preserve_alpha {
+                pixel[3] = 255;
+            }
+        }
 
         let img = RgbaImage::from_raw(width, height, rgba)
             .ok_or_else(|| anyhow!("failed to build RgbaImage {}x{}", width, height))?;
@@ -1196,15 +1277,12 @@ impl PersistentCapture {
         match self.latest.0.lock() {
             Ok(mut slot) => {
                 slot.texture = None;
+                slot.reusable.clear();
                 self.closed.store(true, Ordering::Release);
             }
             Err(_) => self.closed.store(true, Ordering::Release),
         }
         self.latest.1.notify_all();
-
-        if let Ok(mut staging) = self.staging.lock() {
-            *staging = None;
-        }
 
         tracing::debug!("persistent WGC capture stopped");
     }
@@ -1528,6 +1606,7 @@ mod tests {
         capture
             .get_latest_image(Duration::from_secs(2))
             .expect("failed to get first frame");
+        let initial_stats = capture.stats();
 
         for fps in [24, 4] {
             crate::screenshot_rate::set(fps).expect("set live fps");
@@ -1544,8 +1623,14 @@ mod tests {
         }
 
         let stats = capture.stats();
-        assert_eq!(stats.native_interval_attempts, 3);
-        assert_eq!(stats.native_interval_successes, 3);
+        assert_eq!(
+            stats.native_interval_attempts,
+            initial_stats.native_interval_attempts + 2
+        );
+        assert_eq!(
+            stats.native_interval_successes,
+            initial_stats.native_interval_successes + 2
+        );
         assert_eq!(stats.native_interval_failures, 0);
         capture.stop();
     }

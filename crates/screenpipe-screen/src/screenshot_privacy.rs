@@ -24,6 +24,31 @@ pub(crate) mod stream;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "windows")]
+pub(crate) struct WindowsPrivacySession {
+    inner: std::sync::Mutex<windows::PrivacySession>,
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(target_os = "windows")]
+impl Default for WindowsPrivacySession {
+    fn default() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(windows::PrivacySession::default()),
+            gate: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsPrivacySession {
+    pub(crate) fn clear(&self) {
+        if let Ok(mut session) = self.inner.lock() {
+            *session = windows::PrivacySession::default();
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub use stream::{own_source as own_cached_source, SourceOwner as CachedSourceOwner};
 
@@ -51,6 +76,11 @@ pub struct CapturedFrame {
     pub duration: Duration,
     /// False for callback/return-time estimates; never advertise them as native PTS.
     pub native_timestamp: bool,
+    /// Windows WGC SystemRelativeTime (QPC domain) and callback sequence for
+    /// diagnostics. They identify the exact immutable texture selected.
+    pub system_relative_time: Option<i64>,
+    pub sequence: Option<u64>,
+    pub session_id: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -58,8 +88,20 @@ struct CapturedPixels {
     image: DynamicImage,
     captured_at: chrono::DateTime<chrono::Utc>,
     native_timestamp: bool,
+    system_relative_time: Option<i64>,
+    sequence: Option<u64>,
+    session_id: Option<u64>,
 }
 
+#[cfg(target_os = "windows")]
+pub fn uses_positive_selection(_filters: &WindowFilters) -> bool {
+    // Windows always has applicable shell/unknown-surface exclusions. Ordinary
+    // recording therefore crosses the same fail-closed sanitizer even when the
+    // user has not configured a window-name rule.
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn uses_positive_selection(filters: &WindowFilters) -> bool {
     #[cfg(target_os = "macos")]
     if cidre::api::macos_available("14.0") {
@@ -94,6 +136,9 @@ pub async fn capture_monitor_frame_filtered(
             captured_at: chrono::Utc::now(),
             duration,
             native_timestamp: false,
+            system_relative_time: None,
+            sequence: None,
+            session_id: None,
         });
     }
     #[cfg(target_os = "macos")]
@@ -101,19 +146,37 @@ pub async fn capture_monitor_frame_filtered(
     #[cfg(target_os = "linux")]
     let image = linux::capture_filtered(monitor, filters, sources, fresh).await;
     #[cfg(target_os = "windows")]
-    let image = windows::capture_filtered(monitor, filters, sources, fresh).await;
-    #[cfg(not(target_os = "macos"))]
+    let image = windows::capture_filtered(monitor, filters, sources, excluded_ids, fresh).await;
+    #[cfg(target_os = "linux")]
     let pixels = image.map(|image| CapturedPixels {
         image,
         captured_at: chrono::Utc::now(),
         native_timestamp: false,
+        system_relative_time: None,
+        sequence: None,
+        session_id: None,
     });
+    #[cfg(target_os = "windows")]
+    let pixels = image.map(
+        |(image, session_id, qpc, sequence, captured_at)| CapturedPixels {
+            image,
+            captured_at,
+            // QPC is retained explicitly; captured_at is the callback-time estimate.
+            native_timestamp: false,
+            system_relative_time: Some(qpc),
+            sequence: Some(sequence),
+            session_id: Some(session_id),
+        },
+    );
     let pixels = report_filtered_capture(monitor.id(), pixels)?;
     Ok(CapturedFrame {
         image: pixels.image,
         captured_at: pixels.captured_at,
         duration: start.elapsed(),
         native_timestamp: pixels.native_timestamp,
+        system_relative_time: pixels.system_relative_time,
+        sequence: pixels.sequence,
+        session_id: pixels.session_id,
     })
 }
 

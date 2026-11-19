@@ -13,7 +13,8 @@ mod windows_harness {
         Win32::{
             Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
             Graphics::Gdi::{
-                BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, HDC, PAINTSTRUCT,
+                BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, SetBkMode,
+                SetTextColor, TextOutW, HDC, PAINTSTRUCT, TRANSPARENT,
             },
             System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::{
@@ -64,6 +65,15 @@ mod windows_harness {
                 };
                 let brush = CreateSolidBrush(color);
                 FillRect(dc, &paint.rcPaint, brush);
+                let label = if state == 1 {
+                    "EXCLUDED VIOLET 8642"
+                } else {
+                    "ALLOWED ORBIT 7319"
+                };
+                let wide: Vec<u16> = label.encode_utf16().collect();
+                let _ = SetBkMode(dc, TRANSPARENT);
+                let _ = SetTextColor(dc, COLORREF(0x00ff_ffff));
+                let _ = TextOutW(dc, 48, 96, &wide);
                 let _ = DeleteObject(brush);
                 let _ = EndPaint(hwnd, &paint);
                 LRESULT(0)
@@ -82,6 +92,16 @@ mod windows_harness {
                 };
                 let brush = CreateSolidBrush(color);
                 FillRect(HDC(wparam.0 as *mut _), &client, brush);
+                let dc = HDC(wparam.0 as *mut _);
+                let label = if state == 1 {
+                    "EXCLUDED VIOLET 8642"
+                } else {
+                    "ALLOWED ORBIT 7319"
+                };
+                let wide: Vec<u16> = label.encode_utf16().collect();
+                let _ = SetBkMode(dc, TRANSPARENT);
+                let _ = SetTextColor(dc, COLORREF(0x00ff_ffff));
+                let _ = TextOutW(dc, 48, 96, &wide);
                 let _ = DeleteObject(brush);
                 LRESULT(0)
             }
@@ -112,9 +132,9 @@ mod windows_harness {
             let title = if kind == "blank" {
                 ""
             } else if blocked {
-                "PrivacyBlocked"
+                "PrivacyBlocked EXCLUDED VIOLET 8642"
             } else {
-                "PrivacyAllowed"
+                "PrivacyAllowed ALLOWED ORBIT 7319"
             };
             let title_wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
             let ex_style = if kind == "transparent" {
@@ -158,12 +178,14 @@ mod windows_harness {
             if kind == "maximized" {
                 let _ = ShowWindow(hwnd, SW_MAXIMIZE);
             }
-            if kind == "churn" {
+            if matches!(kind, "churn" | "allowed-churn") {
                 let raw = hwnd.0 as usize;
+                let fixed_topmost = kind == "allowed-churn";
                 thread::spawn(move || loop {
                     // Keep the synthetic fixture above the test runner while
                     // still exercising both sides of the allowed window's Z order.
                     for (next_x, next_y, order) in [(220, 210, -1), (360, 300, -2)] {
+                        let order = if fixed_topmost { -1 } else { order };
                         let _ = SetWindowPos(
                             raw as isize,
                             order,
@@ -194,13 +216,14 @@ fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let kind = args.next().ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: windows_privacy_fixture <allowed|blocked|blocked-red|blank|borderless|transparent|maximized|churn> <x> <y>"
+            "usage: windows_privacy_fixture <allowed|allowed-churn|blocked|blocked-red|blank|borderless|transparent|maximized|churn> <x> <y>"
         )
     })?;
     anyhow::ensure!(
         matches!(
             kind.as_str(),
             "allowed"
+                | "allowed-churn"
                 | "blocked"
                 | "blocked-red"
                 | "blank"

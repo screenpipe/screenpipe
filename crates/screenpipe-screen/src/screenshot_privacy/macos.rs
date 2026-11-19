@@ -922,6 +922,9 @@ impl PreparedFrame {
             image: DynamicImage::ImageRgba8(canvas),
             captured_at: self.captured_at,
             native_timestamp: self.native_timestamp,
+            system_relative_time: None,
+            sequence: None,
+            session_id: None,
         })
     }
 }

@@ -1512,8 +1512,16 @@ pub(crate) async fn event_driven_capture_loop(
                     // soon-to-be-excluded transient windows.
                     // Bounded: an unbounded await here froze the whole loop
                     // when ScreenCaptureKit wedged (see VISUAL_PROBE_TIMEOUT).
-                    let snap =
-                        bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await;
+                    let snap = bounded_visual_probe(
+                        &monitor,
+                        &cached_excluded_ids,
+                        monitor_id,
+                        #[cfg(target_os = "windows")]
+                        &capture_params.window_filters,
+                        #[cfg(target_os = "windows")]
+                        exclusion_sources(capture_params.tree_walker_config),
+                    )
+                    .await;
                     match snap {
                         Ok(None) => {
                             // Probe timed out — treat like a failed check and
@@ -1955,7 +1963,17 @@ pub(crate) async fn event_driven_capture_loop(
                     &monitor_liveness,
                     screenpipe_screen::CaptureLoopStage::VisualProbe,
                 );
-                match bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await {
+                match bounded_visual_probe(
+                    &monitor,
+                    &cached_excluded_ids,
+                    monitor_id,
+                    #[cfg(target_os = "windows")]
+                    &capture_params.window_filters,
+                    #[cfg(target_os = "windows")]
+                    exclusion_sources(capture_params.tree_walker_config),
+                )
+                .await
+                {
                     Ok(Some((image, _dur))) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
@@ -3263,7 +3281,7 @@ async fn do_capture(
             corrupt: None,
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
     #[cfg(target_os = "windows")]
@@ -3328,7 +3346,7 @@ async fn do_capture(
         tokio::time::sleep(CONTEXT_CAPTURE_SETTLE).await;
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let mut native_captured_at = None;
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
@@ -3356,7 +3374,7 @@ async fn do_capture(
                     "screenshot captured in {:?} for monitor {}",
                     frame.duration, params.monitor_id
                 );
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 {
                     native_captured_at = Some(frame.captured_at);
                 }
@@ -3376,7 +3394,7 @@ async fn do_capture(
     };
     // Preserve the source observation time. Idle samples with an older native
     // PTS require a fresh screenshot rather than relabelling cached pixels.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let captured_at = native_captured_at.unwrap_or_else(Utc::now);
     #[cfg(target_os = "macos")]
     if !monitor_hosts_focus {
