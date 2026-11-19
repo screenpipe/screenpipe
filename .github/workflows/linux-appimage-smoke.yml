@@ -6,8 +6,6 @@ name: Linux AppImage Smoke
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "11 10 * * *"
   pull_request:
     branches: [main]
     paths:

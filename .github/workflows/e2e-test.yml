@@ -13,8 +13,6 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled]
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
 
 permissions:
@@ -32,28 +30,32 @@ jobs:
     name: Route desktop E2E
     runs-on: ubuntu-latest
     outputs:
-      desktop: ${{ steps.filter.outputs.desktop }}
+      run_wayland: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+            steps.filter.outputs.wayland == 'true' ||
+            contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 20
-      - name: Detect desktop runtime changes
+      - name: Detect changes relevant to Wayland attribution
         id: filter
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         uses: dorny/paths-filter@v4
         with:
           base: ${{ github.event_name == 'push' && github.ref || '' }}
           filters: |
-            desktop:
-              - 'apps/screenpipe-app-tauri/**'
-              - 'crates/**'
-              - 'packages/cli/**'
+            # The live test runs in screenpipe-a11y against headless Sway.
+            wayland:
+              - 'crates/screenpipe-a11y/**'
+              - 'crates/screenpipe-config/**'
+              - 'crates/screenpipe-core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.cargo/**'
-              - '.github/actions/**'
-              - '.github/scripts/**'
+              - '.github/actions/setup-sccache/**'
+              - '.github/scripts/apt-install-with-retries.sh'
               - '.github/workflows/e2e-test.yml'
 
   # The full desktop suites are advisory and expensive. Run them explicitly
@@ -675,11 +677,7 @@ jobs:
   linux-wayland-e2e-test:
     name: Linux Wayland E2E Tests (run)
     needs: changes
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      needs.changes.outputs.desktop == 'true' ||
-      contains(github.event.pull_request.labels.*.name, 'full-ci')
+    if: needs.changes.outputs.run_wayland == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -989,8 +987,12 @@ jobs:
       - name: Verify routed check
         env:
           ROUTER_RESULT: ${{ needs.changes.result }}
-          SHOULD_RUN: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || needs.changes.outputs.desktop == 'true' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          SHOULD_RUN: ${{ needs.changes.outputs.run_wayland }}
           CHECK_RESULT: ${{ needs.linux-wayland-e2e-test.result }}
         run: |
           test "$ROUTER_RESULT" = success
-          if [ "$SHOULD_RUN" = true ]; then test "$CHECK_RESULT" = success; fi
+          case "$SHOULD_RUN" in
+            true) test "$CHECK_RESULT" = success ;;
+            false) ;;
+            *) exit 1 ;;
+          esac
