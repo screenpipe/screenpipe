@@ -323,6 +323,18 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
     const timer = setTimeout(() => void flush.current(), 700);
     return () => clearTimeout(timer);
   }, [draft, dirty, valid, saving, error, workflow.revision]);
+  const detailsOpen = panel === "details" || (!!sharing && panel === "variables");
+  const variablePanel = <WorkflowVariablePanel document={draft} change={change} selected={selectedVariable}
+    select={setSelectedVariable} quote={quote} clearQuote={() => setQuote(undefined)} source={id => {
+      if (sharing) setPanel(null);
+      setView("steps");
+      setExecutionOpen(draft.stages.find(stage => stage.id === id)?.key ?? null);
+      requestAnimationFrame(() => {
+        const element = editorRoot.current?.querySelector<HTMLElement>(`[data-step-id="${id}"]`);
+        element?.scrollIntoView?.({ block: "center" });
+        element?.querySelector<HTMLElement>("textarea,[contenteditable=true]")?.focus();
+      });
+    }} />;
   const saveStatus = error ? "Not saved" : saving ? "Saving…" : dirty ? valid ? "Saving…" : "Finish the empty block to save" : savedOnce ? "Saved" : "";
   const archiveAction = { label: draft.archived ? "Unarchive workflow" : "Archive workflow", icon: draft.archived ? ArchiveRestore : Archive, separatorBefore: true, disabled: !valid || dirty || saving || saveDisabled || !!error || draft.expected_revision !== (workflow.revision ?? 0), onSelect: () => change({ ...current.current, archived: !current.current.archived }) };
   const undoAction = { label: "Undo last edit", icon: Undo2, separatorBefore: true, disabled: !history.length, onSelect: () => {
@@ -333,7 +345,7 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
   return (
     <section
       ref={editorRoot}
-      className={`${styles.editor} ${viewsEnabled ? styles.localEditor : ""} ${walkthrough ? styles.walkthrough : ""} ${view === "map" && viewsEnabled ? styles.mapView : ""} ${mapLayout === "focus" ? styles.focusMap : ""} ${!showEvidence || !renderSource ? styles.noEvidence : ""} ${panel && panel !== "details" ? styles.withPanel : ""}`}
+      className={`${styles.editor} ${viewsEnabled ? styles.localEditor : ""} ${walkthrough ? styles.walkthrough : ""} ${view === "map" && viewsEnabled ? styles.mapView : ""} ${mapLayout === "focus" ? styles.focusMap : ""} ${!showEvidence || !renderSource ? styles.noEvidence : ""} ${panel && !detailsOpen ? styles.withPanel : ""}`}
       onMouseUp={event => {
         const selection = window.getSelection(); const value = selection?.toString().trim();
         if (!value || value.length > 1000 || !event.currentTarget.contains(selection?.anchorNode ?? null) || !event.currentTarget.contains(selection?.focusNode ?? null)) return;
@@ -412,7 +424,7 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
           {viewsEnabled && <div className={styles.metadata}>
             <span>{draft.stages.length} steps</span>
             {unchangedStages && (workflow.timing || workflow.durationSource === "measured-meeting") ? <TimingDisclosure showDuration label="Workflow timing" value={workflow.timing} measured={workflow.durationSource === "measured-meeting" ? {minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0} : undefined} /> : <span>Time not measured</span>}
-            <button type="button" onClick={() => setPanel(panel === "details" ? null : "details")} aria-expanded={panel === "details"}><Info size={16} />{sharing ? "Details" : "Workflow details"}</button>
+            <button type="button" onClick={() => setPanel(detailsOpen ? null : "details")} aria-expanded={detailsOpen}><Info size={16} />{sharing ? "Details" : "Workflow details"}</button>
             {!sharing && renderSource && <button type="button" aria-pressed={!showEvidence} onClick={() => setShowEvidence(value => !value)}>{showEvidence ? <Image size={16} /> : <ImageOff size={16} />}{showEvidence ? "Screenshots on" : "Screenshots off"}</button>}
           </div>}
         </div>
@@ -420,7 +432,7 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
           Starts when
           {stepsOnly ? <span className={styles.readOnlyText}>{workflow.trigger}</span> : <Text label="Workflow trigger" value={draft.trigger} onChange={trigger => change({ ...draft, trigger })} />}
         </label>
-        {viewsEnabled ? <WorkflowReadingControls view={view} change={setView} variables={!stepsOnly ? { open: panel === "variables", toggle: () => setPanel(panel === "variables" ? null : "variables") } : undefined} /> : <div className={styles.stepsHeading}><strong>Steps</strong></div>}
+        {viewsEnabled ? <WorkflowReadingControls view={view} change={setView} showMap={!sharing} variables={!stepsOnly && !sharing ? { open: panel === "variables", toggle: () => setPanel(panel === "variables" ? null : "variables") } : undefined} /> : <div className={styles.stepsHeading}><strong>Steps</strong></div>}
         <div className={styles.stepLayout}>
         {viewsEnabled && view === "map" && <WorkflowReadingMap steps={draft.stages.map(stage => ({ name: stage.name, apps: stage.sourceIndex === null ? [] : workflow.stages[stage.sourceIndex]?.apps }))} selected={stepIndex} choose={chooseStep} routes={mapRoutes} layout={mapLayout} changeLayout={setMapLayout} />}
         <div className={styles.steps}>
@@ -720,7 +732,7 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
           {stepsOnly ? <span className={styles.readOnlyText}>{workflow.outcome}</span> : <Text label="Workflow outcome" value={draft.outcome} onChange={outcome => change({ ...draft, outcome })} />}
         </label>
       </fieldset>
-      {panel === "variables" && <WorkflowVariablePanel document={draft} change={change} selected={selectedVariable} select={setSelectedVariable} quote={quote} clearQuote={()=>setQuote(undefined)} source={id=>{setView("steps");setExecutionOpen(draft.stages.find(stage => stage.id === id)?.key ?? null);requestAnimationFrame(()=>{const element = editorRoot.current?.querySelector<HTMLElement>(`[data-step-id="${id}"]`);element?.scrollIntoView?.({block:"center"}); element?.querySelector<HTMLElement>("textarea,[contenteditable=true]")?.focus();});}} />}
+      {panel === "variables" && !sharing && variablePanel}
       {panel === "history" && <WorkflowVersionPanel workflow={workflow} disabled={dirty || saving || saveDisabled} restore={async revision=>{
         if (busy.current) return;
         busy.current = true; setSaving(true); setError("");
@@ -735,7 +747,8 @@ export function WorkflowEditor({ workflow, save, actions, sharing, secondaryActi
         } catch(e) { if(mounted.current) setError(e instanceof Error ? e.message : "Could not restore this version."); }
         finally { busy.current = false; if(mounted.current) setSaving(false); }
       }} />}
-      {panel === "details" && <WorkflowDetailsSheet close={() => setPanel(null)}>
+      {detailsOpen && <WorkflowDetailsSheet close={() => setPanel(null)}>
+        {sharing && !stepsOnly && variablePanel}
         <p>{workflow.description}</p><h3>Starts when</h3><p>{workflow.trigger || "Not specified"}</p><h3>Ends with</h3><p>{workflow.outcome || "Not specified"}</p>
         <h3>Apps</h3><p>{workflow.apps.join(" · ") || "Not specified"}</p>
         {!!workflow.people?.length && <><h3>Recording sources</h3><p>{workflow.people.join(" · ")}</p></>}
@@ -792,9 +805,16 @@ export function WorkflowDocument({ workflow, actions, sharing, secondaryActions 
     requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(`[data-document-step="${index}"]`)?.focus({ preventScroll: true }));
   };
   const exports = useWorkflowDocumentExports(workflowEdit(workflow), downloadDocument);
+  const variablePanel = !!workflow.variables?.length && <WorkflowVariablePanel document={workflowEdit(workflow)}
+    selected={selected} select={select} clearQuote={() => {}} source={id => {
+      const index = workflow.stages.findIndex((stage, i) => (stage.id ?? `step-${i}`) === id);
+      if (index < 0) return;
+      setDetailsOpen(false);
+      chooseStep(index);
+    }} />;
   return <section ref={root} className={`${styles.editor} ${readingModes ? styles.localEditor : ""} ${walkthrough ? styles.walkthrough : ""} ${readingModes && view === "map" ? styles.mapView : ""} ${mapLayout === "focus" ? styles.focusMap : ""} ${!renderSource || !showEvidence ? styles.noEvidence : ""}`} aria-label="Workflow document" onClickCapture={event=>{
     const link=(event.target as Element).closest("a"); const id=variableId(link?.getAttribute("href") ?? "");
-    if(id) {event.preventDefault();select(id);}
+    if(id) {event.preventDefault();select(id);if (sharing) setDetailsOpen(true);}
   }}>
     {!sharing && <header className={styles.toolbar}>
       <div><span>{!readingModes && sourceLabel}</span></div>
@@ -812,7 +832,7 @@ export function WorkflowDocument({ workflow, actions, sharing, secondaryActions 
       {readingModes && <div className={styles.metadata}><span>{workflow.stages.length} steps</span>{workflow.timing || workflow.durationSource === "measured-meeting" ? <TimingDisclosure showDuration label="Workflow timing" value={workflow.timing} measured={workflow.durationSource === "measured-meeting" ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} /> : <span>Time not measured</span>}<button type="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}><Info size={16} />{sharing ? "Details" : "Workflow details"}</button>{!sharing && renderSource && <button type="button" aria-pressed={!showEvidence} onClick={() => setShowEvidence(value => !value)}>{showEvidence ? <Image size={16} /> : <ImageOff size={16} />}{showEvidence ? "Screenshots on" : "Screenshots off"}</button>}</div>}
     </div>
     <div className={styles.endpoint} hidden={walkthrough}>Starts when<span className={styles.readOnlyText}>{workflow.trigger}</span></div>
-    {readingModes ? <WorkflowReadingControls view={view} change={setView} /> : <div className={styles.stepsHeading}><strong>Steps</strong></div>}
+    {readingModes ? <WorkflowReadingControls view={view} change={setView} showMap={!sharing} /> : <div className={styles.stepsHeading}><strong>Steps</strong></div>}
     <div className={styles.stepLayout}>
     {readingModes && view === "map" && <WorkflowReadingMap steps={workflow.stages} selected={stepIndex} choose={chooseStep} routes={mapRoutes} layout={mapLayout} changeLayout={setMapLayout} />}
     <div className={styles.steps}>
@@ -858,7 +878,7 @@ export function WorkflowDocument({ workflow, actions, sharing, secondaryActions 
     </div>
     </div>
     <div className={styles.endpoint} hidden={walkthrough}>Ends with<span className={styles.readOnlyText}>{workflow.outcome}</span></div>
-    {detailsOpen && <WorkflowDetailsSheet close={() => setDetailsOpen(false)}><p>{sourceLabel}</p><p>{workflow.description}</p><h3>Starts when</h3><p>{workflow.trigger || "Not specified"}</p><h3>Ends with</h3><p>{workflow.outcome || "Not specified"}</p><h3>Apps</h3><p>{workflow.apps.join(" · ") || "Not specified"}</p>{sharing && renderSource && <label><input type="checkbox" checked={showEvidence} onChange={event => setShowEvidence(event.target.checked)} /> Show screenshots</label>}{reviewLabel && <p>{reviewLabel}</p>}</WorkflowDetailsSheet>}
-    {!!workflow.variables?.length && <WorkflowVariablePanel document={workflowEdit(workflow)} selected={selected} select={select} clearQuote={()=>{}} source={()=>{}}/>}
+    {detailsOpen && <WorkflowDetailsSheet close={() => setDetailsOpen(false)}>{sharing && variablePanel}<p>{sourceLabel}</p><p>{workflow.description}</p><h3>Starts when</h3><p>{workflow.trigger || "Not specified"}</p><h3>Ends with</h3><p>{workflow.outcome || "Not specified"}</p><h3>Apps</h3><p>{workflow.apps.join(" · ") || "Not specified"}</p>{sharing && renderSource && <label><input type="checkbox" checked={showEvidence} onChange={event => setShowEvidence(event.target.checked)} /> Show screenshots</label>}{reviewLabel && <p>{reviewLabel}</p>}</WorkflowDetailsSheet>}
+    {!sharing && variablePanel}
   </section>;
 }

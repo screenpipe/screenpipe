@@ -105,8 +105,15 @@ it("opens the existing sharing review from the selected workflow in the main app
   for (const name of ["More workflow actions", "Review workflow", "Export workflow", "Open in agent", "Create SOP"]) {
     expect(screen.queryByRole("button", { name, exact: true })).toBeNull();
   }
+  const views = within(screen.getByRole("group", { name: "Workflow view" }));
+  expect(views.getAllByRole("button")).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: "Variables", exact: true })).toBeNull();
+  fireEvent.click(views.getByRole("button", { name: "Steps" }));
+  expect(views.getByRole("button", { name: "Steps" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(views.getByRole("button", { name: "Walkthrough" }));
   fireEvent.click(screen.getByRole("button", { name: "Details", exact: true }));
   const details = screen.getByRole("dialog", { name: "Workflow details" });
+  expect(within(details).getByRole("button", { name: "Add input" })).toBeVisible();
   expect(within(details).getByLabelText("Review status")).toHaveValue("needs-review");
   expect(within(details).getByRole("button", { name: "Undo last edit" })).toBeDisabled();
   fireEvent.click(within(details).getByRole("button", { name: "Close workflow details" }));

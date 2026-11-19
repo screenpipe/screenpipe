@@ -15,15 +15,16 @@ export type WorkflowMapRoute = {
   app?: string;
   links: { label: string; description?: string; target: number | "end" | null }[];
 };
-export function WorkflowReadingControls({ view, change, variables }: {
+export function WorkflowReadingControls({ view, change, variables, showMap = true }: {
   view: WorkflowReadingView; change: (view: WorkflowReadingView) => void;
+  showMap?: boolean;
   variables?: { open: boolean; toggle: () => void };
 }) {
   return <div className={styles.stepsHeading}>
     <span className={styles.workflowTab}>Workflow</span>
     <div className={styles.viewTools}>
       <div role="group" aria-label="Workflow view" className={styles.viewSwitch}>
-        {([{ value: "walkthrough", label: "Walkthrough", icon: PanelsTopLeft }, { value: "map", label: "Map", icon: GitBranch }, { value: "steps", label: "Steps", icon: ListOrdered }] as const).map(({ value, label, icon: Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => change(value)}><Icon size={16} aria-hidden="true" /><span hidden={view !== value}>{label}</span></button>)}
+        {([{ value: "walkthrough", label: "Walkthrough", icon: PanelsTopLeft }, { value: "map", label: "Map", icon: GitBranch }, { value: "steps", label: "Steps", icon: ListOrdered }] as const).filter(mode => showMap || mode.value !== "map").map(({ value, label, icon: Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => change(value)}><Icon size={16} aria-hidden="true" /><span hidden={view !== value}>{label}</span></button>)}
       </div>
       {variables && <button type="button" aria-label="Variables" title="Variables" aria-expanded={variables.open} onClick={variables.toggle}><Braces size={16} /></button>}
     </div>

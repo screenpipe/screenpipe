@@ -280,3 +280,5 @@
 .editor .documentTools button { border: 1px solid var(--line); padding: 6px 8px; }
 .saveStatus { color: var(--muted); font-size: 11px; }
 .saveStatus:empty { display: none; }
+
+.detailsSheet .panel { position: static; max-height: none; overflow: visible; padding: 16px 0; margin-bottom: 16px; border: 0; border-bottom: 1px solid var(--line); }
