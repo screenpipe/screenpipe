@@ -56,13 +56,12 @@ jobs:
               - '.github/scripts/**'
               - '.github/workflows/e2e-test.yml'
 
+  # The full desktop suites are advisory and expensive. Run them explicitly
+  # with full-ci or workflow_dispatch. The Wayland check below is automatic.
   windows-e2e-test:
     name: Windows E2E Tests (advisory)
-    needs: changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      needs.changes.outputs.desktop == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: windows-2022
     continue-on-error: true
@@ -330,11 +329,8 @@ jobs:
 
   linux-e2e-test:
     name: Linux E2E Tests (advisory)
-    needs: changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      needs.changes.outputs.desktop == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'full-ci')
     # Pinned to ubuntu-24.04: the Ubuntu 26 base removed the package this
     # suite needs (`webkit2gtk-driver`, renamed upstream to
@@ -829,11 +825,8 @@ jobs:
 
   macos-e2e-test:
     name: macOS E2E Tests (advisory)
-    needs: changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      needs.changes.outputs.desktop == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'full-ci')
     # Keep this pinned off macos-latest until GitHub's latest image has a
     # complete clang runtime again. macos-14 is too old for permission-flow's
