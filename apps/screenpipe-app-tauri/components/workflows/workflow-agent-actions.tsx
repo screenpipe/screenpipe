@@ -32,9 +32,11 @@ export function workflowAgentTask(workflow: WorkflowMap) {
   };
 }
 
-export function WorkflowAgentActions({ workflow }: { workflow: WorkflowMap }) {
+export function WorkflowAgentActions({ workflow, closeSharing }: { workflow: WorkflowMap; closeSharing?: () => void }) {
   const [pending, setPending] = useState(false);
   const launching = useRef(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   async function launch(runner: Runner) {
     if (launching.current) return;
     launching.current = true;
@@ -64,13 +66,15 @@ export function WorkflowAgentActions({ workflow }: { workflow: WorkflowMap }) {
       toast({ title: "Could not open agent", description: "Your workflow is saved. Try again.", variant: "destructive" });
     } finally { launching.current = false; setPending(false); }
   }
-  return <DropdownMenu>
-    <DropdownMenuTrigger asChild><button type="button" className={styles.trigger} disabled={pending}>
+  return <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={!closeSharing}>
+    <DropdownMenuTrigger asChild><button ref={trigger} type="button" className={styles.trigger} disabled={pending}>
       {pending ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Bot size={16} aria-hidden="true" />}
       Open in agent<ChevronDown size={12} aria-hidden="true" />
     </button></DropdownMenuTrigger>
-    <DropdownMenuContent align="start" sideOffset={6} className={styles.menu}>
-      {runners.map(runner => <DropdownMenuItem key={runner.id} className={styles.item} onSelect={() => void launch(runner.id)}>
+    <DropdownMenuContent container={trigger.current?.closest("dialog")}
+      onCloseAutoFocus={event => { if (closeSharing && !trigger.current?.closest("dialog")?.open) event.preventDefault(); }}
+      align="start" sideOffset={6} className={styles.menu}>
+      {runners.map(runner => <DropdownMenuItem key={runner.id} className={styles.item} onSelect={() => { closeSharing?.(); void launch(runner.id); }}>
         {/* Same provider artwork as Automations. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         {runner.id === "cursor" ? <CursorLogo className="h-4 w-4" /> : <img src={runner.icon} width={16} height={16} alt="" />}{runner.label}

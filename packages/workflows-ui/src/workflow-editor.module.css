@@ -264,3 +264,21 @@
 .stepProperties label, .stepProperties h3 { display:block; margin:0 0 4px; color:var(--muted); font-size:12px; font-weight:400; }
 .behaviorMenu { display:inline-block; margin:4px 0; }
 .editor .behaviorMenu > div > button { min-height:36px; padding:4px; font-size:12px; gap:6px; }
+
+.editor .shareTrigger { flex: none; min-height: 36px; gap: 6px; padding: 6px 10px; font-family: var(--heading-font); font-size: 14px; }
+.shareDialog { width: min(420px, calc(100% - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box; margin: auto; padding: 24px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-family: var(--heading-font); }
+.shareDialog::backdrop { background: #0005; }
+.shareDialog header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.shareDialog h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.shareDialog > p { margin: 4px 0 20px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.shareDialog h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.shareDialog section + section { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 16px; }
+.shareDialog section > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); gap: 8px; }
+.editor .shareDialog section button { border: 1px solid var(--line); border-radius: 6px; gap: 8px; padding: 8px; min-height: 40px; color: var(--ink); font-size: 13px; }
+.shareDialog section button :is(img,svg) { flex: none; width: 16px; height: 16px; }
+.documentTools { display: flex; flex-wrap: wrap; gap: 6px; }
+.editor .documentTools button { border: 1px solid var(--line); padding: 6px 8px; }
+.saveStatus { color: var(--muted); font-size: 11px; }
+.saveStatus:empty { display: none; }
+
+.detailsSheet .panel { position: static; max-height: none; overflow: visible; padding: 16px 0; margin-bottom: 16px; border: 0; border-bottom: 1px solid var(--line); }

@@ -103,6 +103,20 @@ it("shows saved definitions and execution context on the read-only document", ()
   expect(screen.getByRole("button", { name: "Customer" })).toBeVisible();
   expect(screen.queryByRole("button", { name: "Add input" })).toBeNull();
 });
+it("opens a read-only desktop variable in Details and returns to its source step", () => {
+  const workflow = source();
+  workflow.stages[0].description = "Review [Customer](#workflow-io-customer).";
+  workflow.stages[1].id = "source-step";
+  workflow.variables = [{ ...variable, examples: [{ stepId: "source-step", field: "description", value: "Acme" }] }];
+  render(<WorkflowDocument workflow={workflow} readingModes sharing={{ people: [], agents: [] }} />);
+  expect(screen.queryByRole("button", { name: "Map", exact: true })).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "Customer" }));
+  expect(screen.getByRole("dialog", { name: "Workflow details" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Add input" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Source step · Instructions" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText("Step 2 of 3")).toBeVisible();
+});
 it("restores through the revision-checked save path and retains typing made while restore is pending", async () => {
   const workflow = source();
   const old = structuredClone(workflow); old.title = "Earlier title";

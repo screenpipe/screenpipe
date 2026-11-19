@@ -180,7 +180,7 @@ export type WorkflowsAppProps = {
   onShareDocument?: (document: import("./document-actions").LibraryShareDocument) => void;
   onShareWorkflow?: (workflow: WorkflowMap) => void;
   /** Optional host integration with the existing external-agent launchers. */
-  workflowAgentActions?: (workflow: WorkflowMap) => import("react").ReactNode;
+  workflowAgentActions?: (workflow: WorkflowMap, closeSharing?: () => void) => import("react").ReactNode;
   /** Host-owned live recorder status and controls. */
   recordingStatus?: import("react").ReactNode;
   analysisUnavailableReason?: string;
