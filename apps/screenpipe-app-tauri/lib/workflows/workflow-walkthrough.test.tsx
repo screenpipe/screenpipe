@@ -174,11 +174,7 @@ it("keeps review, export and workflow details in the document header", () => {
   const { change } = editor();
   expect(button("Export workflow")).toBeVisible();
   fireEvent.click(button("Review workflow"));
-  expect(screen.getByRole("menuitemradio", { name: "Unreviewed" })).toBeChecked();
-  fireEvent.click(screen.getByRole("menuitemradio", { name: "Unreviewed" }));
-  expect(change).not.toHaveBeenCalled();
-  fireEvent.click(button("Review workflow"));
-  fireEvent.click(screen.getByRole("menuitemradio", { name: "Reviewed", checked: false }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Reviewed", exact: true }));
   expect(change).toHaveBeenLastCalledWith(expect.objectContaining({ reviewStatus: "reviewed" }));
   fireEvent.click(button("Workflow details"));
   expect(screen.getByRole("dialog", { name: "Workflow details" })).toBeVisible();
@@ -189,16 +185,14 @@ it("keeps review, export and workflow details in the document header", () => {
 it("keeps a low field menu within the viewport and restores focus on Escape", () => {
   render(<WorkflowMoreActions label="Step behavior" actions={[{ label: "Expected result", icon: Plus, onSelect: vi.fn(), separatorBefore: true }]} />);
   const trigger = button("Step behavior");
-  vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({ top: 700, bottom: 736, left: 80, right: 116 } as DOMRect);
-  const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(256);
+  vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({ top: 700, bottom: 736 } as DOMRect);
   const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200);
   fireEvent.click(trigger);
   const menu = screen.getByRole("menu");
-  expect(menu).toHaveStyle({ transform: "translateX(148px)", top: "auto", bottom: "calc(100% + 6px)", maxHeight: "520px" });
+  expect(menu).toHaveStyle({ top: "auto", bottom: "calc(100% + 6px)", maxHeight: "520px" });
   expect(within(menu).queryByRole("separator")).toBeNull();
   fireEvent.keyDown(menu, { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
   expect(trigger).toHaveFocus();
   height.mockRestore();
-  width.mockRestore();
 });

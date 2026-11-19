@@ -34,7 +34,7 @@ function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
 }
 const composerAccessory = (props: WorkflowComposerAccessoryProps) => <WorkflowDictation key={props.sessionId} {...props} />;
 
-const workflowAgentActions = (workflow: WorkflowMap) => <WorkflowAgentActions key={workflow.id || workflow.title} workflow={workflow} />;
+const workflowAgentActions = (workflow: WorkflowMap, closeSharing?: () => void) => <WorkflowAgentActions closeSharing={closeSharing} key={workflow.id || workflow.title} workflow={workflow} />;
 
 // Only the existing browser-mock build gets synthetic data. Native builds use
 // the parent PR's adapter, native recorder and app-local persistent storage.

@@ -2,7 +2,7 @@
 // https://screenpipe.com
 "use client";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
-import { Check, MoreHorizontal, type LucideIcon } from "lucide-react";
+import { MoreHorizontal, type LucideIcon } from "lucide-react";
 import styles from "./workflow-more-actions.module.css";
 
 export type WorkflowSecondaryAction = {
@@ -11,7 +11,6 @@ export type WorkflowSecondaryAction = {
   onSelect: () => void;
   disabled?: boolean;
   expanded?: boolean;
-  checked?: boolean;
   separatorBefore?: boolean;
   shortcut?: string;
 };
@@ -19,7 +18,7 @@ export type WorkflowSecondaryAction = {
 /** Occasional document tools follow the Studio's single overflow menu. */
 export function WorkflowMoreActions({ actions, label = "More workflow actions", icon: TriggerIcon = MoreHorizontal, text, align = "end" }: { actions: WorkflowSecondaryAction[]; label?: string; icon?: LucideIcon; text?: string; align?: "start" | "end" }) {
   const [open, setOpen] = useState(false);
-  const [placement, setPlacement] = useState({ above: false, height: 520, offsetX: 0 });
+  const [placement, setPlacement] = useState({ above: false, height: 520 });
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -40,15 +39,12 @@ export function WorkflowMoreActions({ actions, label = "More workflow actions", 
     if (!open) return;
     const position = () => {
       const bounds = trigger.current?.getBoundingClientRect();
-      if (!bounds || !menu.current) return;
-      const width = menu.current.offsetWidth;
-      const preferredLeft = align === "start" ? bounds.left : bounds.right - width;
-      const left = Math.max(8, Math.min(preferredLeft, window.innerWidth - width - 8));
+      if (!bounds) return;
       const below = window.innerHeight - bounds.bottom - 14;
       const above = bounds.top - 14;
       const desired = Math.min(menu.current?.scrollHeight ?? 520, 520);
       const upwards = below < desired && above > below;
-      setPlacement({ offsetX: left - preferredLeft, above: upwards, height: Math.max(40, Math.min(520, upwards ? above : below)) });
+      setPlacement({ above: upwards, height: Math.max(40, Math.min(520, upwards ? above : below)) });
     };
     position();
     window.addEventListener("resize", position);
@@ -60,7 +56,7 @@ export function WorkflowMoreActions({ actions, label = "More workflow actions", 
     };
     document.addEventListener("pointerdown", dismiss);
     return () => { document.removeEventListener("pointerdown", dismiss); window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
-  }, [open, align]);
+  }, [open]);
   if (!actions.length) return null;
   return <div ref={root} className={styles.root} onBlur={event => {
     if (!event.currentTarget.contains(event.relatedTarget as Node)) close();
@@ -74,7 +70,7 @@ export function WorkflowMoreActions({ actions, label = "More workflow actions", 
           event.preventDefault(); initialFocus.current = event.key === "ArrowUp" ? "last" : "first"; setOpen(true);
         }
       }}><TriggerIcon size={18} aria-hidden="true" />{text && <span>{text}</span>}</button>
-    {open && <div ref={menu} id={id} className={`${styles.menu} ${align === "start" ? styles.startMenu : ""}`} style={{ transform: `translateX(${placement.offsetX}px)`, top: placement.above ? "auto" : undefined, bottom: placement.above ? "calc(100% + 6px)" : undefined, maxHeight: placement.height }} role="menu" aria-label={label} onKeyDown={event => {
+    {open && <div ref={menu} id={id} className={`${styles.menu} ${align === "start" ? styles.startMenu : ""}`} style={{ top: placement.above ? "auto" : undefined, bottom: placement.above ? "calc(100% + 6px)" : undefined, maxHeight: placement.height }} role="menu" aria-label="Workflow actions" onKeyDown={event => {
       event.stopPropagation();
       if (event.key === "Escape") { event.preventDefault(); close(true); return; }
       if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
@@ -88,13 +84,8 @@ export function WorkflowMoreActions({ actions, label = "More workflow actions", 
     }}>
       {actions.map((action, index) => <Fragment key={action.label}>
         {index > 0 && action.separatorBefore && <div role="separator" className={styles.separator} />}
-        <button type="button" role={action.checked === undefined ? "menuitem" : "menuitemradio"}
-          aria-checked={action.checked} aria-keyshortcuts={action.shortcut} tabIndex={-1}
-          onPointerMove={event => {
-            if (event.pointerType === "mouse" && document.activeElement !== event.currentTarget)
-              event.currentTarget.focus({ preventScroll: true });
-          }} disabled={action.disabled} aria-expanded={action.expanded} onClick={() => select(action)}>
-          <action.icon size={16} aria-hidden="true" /><span>{action.label}</span>{action.checked && <Check size={16} aria-hidden="true" />}{action.shortcut && <kbd aria-hidden="true">{action.shortcut}</kbd>}
+        <button type="button" role="menuitem" tabIndex={-1} disabled={action.disabled} aria-expanded={action.expanded} onClick={() => select(action)}>
+          <action.icon size={16} aria-hidden="true" /><span>{action.label}</span>{action.shortcut && <kbd aria-hidden="true">{action.shortcut}</kbd>}
         </button>
       </Fragment>)}
     </div>}
