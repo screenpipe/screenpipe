@@ -711,6 +711,8 @@ jobs:
           "ORT_STRATEGY=system"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ORT_LIB_LOCATION=$libDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ORT_PREFER_DYNAMIC_LINK=1"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # The audio build script's legacy 1.22.0 download is unnecessary with the staged runtime.
+          "SCREENPIPE_SKIP_ONNX_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$libDir"                    | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Write-Host "${arch}: ORT_LIB_LOCATION=$libDir (dynamic import link)"
           Get-ChildItem "$extractDir/lib"
