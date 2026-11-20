@@ -262,6 +262,8 @@ fn app_bucket(app: &str) -> &'static str {
         "whatsapp"
     } else if app.contains("telegram") {
         "telegram"
+    } else if app.contains("kontur") || app.contains("ktalk") || app.contains("толк") {
+        "kontur_talk"
     } else if app.contains("arc")
         || app.contains("chrome")
         || app.contains("safari")
@@ -381,6 +383,8 @@ mod tests {
         assert!(props.contains("\"flap_bucket\":\"high\""));
         assert!(props.contains("\"end_reason\":\"auto_timeout\""));
         assert!(props.contains("\"app_bucket\":\"zoom\""));
+        assert_eq!(app_bucket("Kontur Talk"), "kontur_talk");
+        assert_eq!(app_bucket("Толк"), "kontur_talk");
     }
 
     #[test]

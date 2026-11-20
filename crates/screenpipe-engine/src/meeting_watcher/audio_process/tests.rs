@@ -267,6 +267,47 @@ fn comet_helper_plus_meet_url_resolves_to_google_meet() {
 }
 
 #[test]
+fn comet_helper_plus_ktalk_url_resolves_to_kontur_talk() {
+    // Same helper as a Meet tab, but the captured frame is a Kontur Talk room.
+    // The renderer is not named "Comet", and the meeting URL arrives for the
+    // main app.
+    let profiles = load_detection_profiles();
+    let process = AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:911:input:built-in-mic".to_string()),
+        audio_object_id: Some(911),
+        pid: Some(192),
+        bundle_id: Some("ai.perplexity.comet.helper.Renderer".to_string()),
+        process_name: Some("Comet Helper (Renderer)".to_string()),
+        owner_app_name: Some("Comet Helper (Renderer)".to_string()),
+        owner_bundle_id: Some("ai.perplexity.comet".to_string()),
+        first_seen_at_ms: None,
+    };
+    let url = "https://x5group.ktalk.ru/a58e4738f7724805ab50ba18388b6cb4";
+    let evidence = vec![BrowserPageEvidence {
+        browser_app: Some("Comet".to_string()),
+        url: Some(url.to_string()),
+        title: Some("Синк по платофрме — Толк – Comet".to_string()),
+    }];
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &evidence,
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(
+            candidate,
+            ResolvedMeetingCandidate::Browser { ref platform, ref meeting_url, .. }
+                if platform == "Kontur Talk" && meeting_url == url
+        ),
+        "Comet on a ktalk room should be a meeting: {candidate:?}"
+    );
+}
+
+#[test]
 fn browser_helper_plus_meet_url_resolves_to_google_meet() {
     let profiles = load_detection_profiles();
     let process = chrome_process();
@@ -1854,6 +1895,80 @@ fn teams_unaffected_by_call_signal_gate() {
     assert!(result.is_some());
     let (platform, _) = result.unwrap();
     assert_eq!(platform, "Microsoft Teams");
+}
+
+fn kontur_talk_process(bundle_id: &str, process_name: &str) -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:900:input:built-in-mic".to_string()),
+        audio_object_id: Some(900),
+        pid: Some(190),
+        bundle_id: Some(bundle_id.to_string()),
+        process_name: Some(process_name.to_string()),
+        owner_app_name: Some(process_name.to_string()),
+        owner_bundle_id: Some(bundle_id.to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+#[test]
+fn kontur_talk_desktop_and_helper_resolve_as_native() {
+    // Call-first, like Zoom: mic hold starts the meeting and mic release ends
+    // it. The Electron helper is the process that actually holds the mic, so
+    // `kontur.talk.helper.Renderer` / "Толк Helper" must resolve too.
+    let profiles = load_detection_profiles();
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.app_identifiers.macos_app_names.contains(&"толк"))
+        .expect("Kontur Talk profile");
+    assert!(!profile.requires_call_signal);
+
+    for (bundle, name) in [
+        ("kontur.talk", "Толк"),
+        ("kontur.talk.helper.Renderer", "Толк Helper (Renderer)"),
+        ("kontur.talk", "tolk"),
+    ] {
+        let (platform, _) = resolve_native_platform(&kontur_talk_process(bundle, name), &profiles)
+            .unwrap_or_else(|| panic!("{bundle} / {name} should resolve"));
+        assert_eq!(platform, "Kontur Talk", "{bundle} / {name}");
+    }
+
+    let windows = AudioInputProcess {
+        bundle_id: None,
+        process_name: Some("Толк.exe".to_string()),
+        owner_app_name: Some("Толк.exe".to_string()),
+        owner_bundle_id: None,
+        ..kontur_talk_process("unused", "unused")
+    };
+    let (platform, _) = resolve_native_platform(&windows, &profiles).expect("windows exe");
+    assert_eq!(platform, "Kontur Talk");
+}
+
+#[test]
+fn kontur_talk_room_url_resolves_in_a_browser() {
+    let profiles = load_detection_profiles();
+    let url = "https://bestcompany.ktalk.ru/exampleroom?pinCode=12345";
+    let candidate = resolve_active_tab_url_candidate("Google Chrome", url, &profiles)
+        .expect("ktalk room should resolve");
+    assert_eq!(
+        platform_name_for_profile(&profiles[candidate.profile_index], true),
+        "Kontur Talk"
+    );
+    assert_eq!(candidate.meeting_url.as_deref(), Some(url));
+
+    // A meeting link carried as a query parameter is not a call, and a host that
+    // merely ends in the same letters is not ktalk.ru.
+    assert!(resolve_active_tab_url_candidate(
+        "Google Chrome",
+        "https://example.com/redirect?to=https://bestcompany.ktalk.ru/exampleroom",
+        &profiles,
+    )
+    .is_none());
+    assert!(resolve_active_tab_url_candidate(
+        "Google Chrome",
+        "https://notktalk.ru/exampleroom",
+        &profiles,
+    )
+    .is_none());
 }
 
 #[test]
@@ -4707,6 +4822,48 @@ fn meet_navigation_pages_are_not_room_identities() {
         meeting_url_identity(ROOM_A).as_deref(),
         Some(ROOM_A_IDENTITY)
     );
+}
+
+#[test]
+fn kontur_talk_room_identity_ignores_pin_and_shell_pages() {
+    use crate::meeting_watcher::shared::calendar::{
+        calendar_event_matches_platform, meeting_url_identity, CalendarEventSignal,
+    };
+
+    assert_eq!(
+        meeting_url_identity("https://bestcompany.ktalk.ru/exampleroom?pinCode=12345").as_deref(),
+        Some("ktalk:bestcompany.ktalk.ru/exampleroom")
+    );
+    assert_eq!(
+        meeting_url_identity("https://bestcompany.ktalk.ru/exampleroom").as_deref(),
+        Some("ktalk:bestcompany.ktalk.ru/exampleroom")
+    );
+    assert_eq!(
+        meeting_url_identity("https://bestcompany.ktalk.ru/other-room").as_deref(),
+        Some("ktalk:bestcompany.ktalk.ru/other-room")
+    );
+    for url in [
+        "https://ktalk.ru/",
+        "https://www.ktalk.ru/pricing",
+        "https://app.ktalk.ru/system/dist/v2/",
+        "https://bestcompany.ktalk.ru/",
+        "https://bestcompany.ktalk.ru/calendar",
+        "https://thedaily.com/notktalk.ru",
+    ] {
+        assert_eq!(meeting_url_identity(url), None, "{url}");
+    }
+
+    let event = CalendarEventSignal {
+        id: "ktalk-1".to_string(),
+        title: "weekly".to_string(),
+        start: "2026-11-10T07:00:00Z".to_string(),
+        end: "2026-11-10T08:00:00Z".to_string(),
+        attendees: vec![],
+        meeting_url: Some("https://bestcompany.ktalk.ru/exampleroom?pinCode=12345".to_string()),
+        is_all_day: false,
+    };
+    assert!(calendar_event_matches_platform(&event, "Kontur Talk"));
+    assert!(!calendar_event_matches_platform(&event, "Zoom"));
 }
 
 #[test]

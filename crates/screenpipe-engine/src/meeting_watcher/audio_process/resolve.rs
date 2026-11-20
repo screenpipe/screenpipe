@@ -539,6 +539,21 @@ pub(crate) fn known_native_bundle_platform(field_lower: &str) -> Option<&'static
     if field_lower.contains("webex") {
         return Some("Webex");
     }
+    // Kontur Talk (Толк). CoreAudio reports `kontur.talk` on the main process
+    // and `kontur.talk.helper…` on the Electron subprocess that actually holds
+    // the mic. `proc_name` is "Толк" or "Толк Helper (Renderer)".
+    if field_lower == "kontur.talk"
+        || field_lower.starts_with("kontur.talk.")
+        || matches!(
+            field_lower,
+            "толк" | "tolk" | "ktalk" | "толк.exe" | "tolk.exe" | "ktalk.exe"
+        )
+        || field_lower.starts_with("толк ")
+        || field_lower.starts_with("tolk ")
+        || field_lower.starts_with("ktalk ")
+    {
+        return Some("Kontur Talk");
+    }
     if field_lower.contains("discord") {
         return Some("Discord");
     }
@@ -672,6 +687,8 @@ pub(crate) fn platform_name_for_profile(
         "WhatsApp".to_string()
     } else if has_pattern("web.telegram.org") {
         "Telegram".to_string()
+    } else if has_pattern("ktalk.ru") {
+        "Kontur Talk".to_string()
     } else if ids.macos_app_names.contains(&"facetime") {
         "FaceTime".to_string()
     } else if ids.macos_app_names.contains(&"signal") {

@@ -215,6 +215,36 @@ pub fn meeting_url_identity(raw: &str) -> Option<String> {
         }
         return Some(format!("webex:{host}/{path}"));
     }
+    if host == "ktalk.ru" || host.ends_with(".ktalk.ru") {
+        // A room is `<space>.ktalk.ru/<room-key>`. The marketing site, www, and
+        // `app.ktalk.ru` (the desktop update feed) are not conference rooms, and
+        // neither are the signed-in shell routes. Query (`pinCode`) is already
+        // dropped by using path segments only, so a copied invite and the live
+        // tab identify the same room.
+        if host == "ktalk.ru" || host == "www.ktalk.ru" || host == "app.ktalk.ru" {
+            return None;
+        }
+        let room = segments.first()?;
+        const SHELL_PATHS: &[&str] = &[
+            "system",
+            "login",
+            "auth",
+            "signin",
+            "sign-in",
+            "download",
+            "downloads",
+            "account",
+            "settings",
+            "calendar",
+            "static",
+            "assets",
+            "api",
+        ];
+        if SHELL_PATHS.contains(&room.as_str()) {
+            return None;
+        }
+        return Some(format!("ktalk:{host}/{room}"));
+    }
     None
 }
 
@@ -583,6 +613,7 @@ fn platform_identity_provider(platform: &str) -> Option<&'static str> {
         "google meet" => Some("google-meet"),
         "microsoft teams" | "teams" => Some("teams"),
         "webex" => Some("webex"),
+        "kontur talk" => Some("ktalk"),
         _ => None,
     }
 }

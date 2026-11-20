@@ -356,6 +356,40 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ignore_window_titles: &["webex"],
             requires_call_signal: false,
         },
+        // Kontur Talk (Контур.Толк). Desktop bundle `kontur.talk`, process name
+        // "Толк"; the call itself is the same web client as ktalk.ru, loaded
+        // either in that Electron app or in a browser.
+        //
+        // Rooms are `https://<space>.ktalk.ru/<room-key>` (PIN rides in
+        // `?pinCode=`, which URL matching already ignores). The app is
+        // call-first, like Zoom: the mic is the start/end signal. The Electron
+        // shell does not ship in-call control labels (those come from the
+        // remote page), and the signed-in home screen's account menu is also
+        // labeled "Выйти", so a bare leave-word would start a meeting whenever
+        // Толк is merely open. "Завершить для всех" exists only inside a live
+        // conference, for the UI-scan backend.
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["толк", "tolk", "ktalk", "kontur.talk"],
+                windows_process_names: &["толк.exe", "tolk.exe", "ktalk.exe"],
+                browser_url_patterns: &["ktalk.ru"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::NameContains("Завершить для всех"),
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "завершить для всех",
+                },
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "Завершить для всех",
+                },
+            ],
+            min_signals_required: 1,
+            ignore_window_titles: &[],
+            requires_call_signal: false,
+        },
         // Discord in browser — require BOTH "Voice Connected" bar AND "Disconnect"
         // button. Either alone can appear without being in a call (e.g. seeing other
         // users' voice status in channel list). Both together = you are connected.
