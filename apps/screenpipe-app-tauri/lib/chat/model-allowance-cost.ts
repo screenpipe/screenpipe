@@ -31,13 +31,22 @@ const TIER_PREFIXES: ReadonlyArray<readonly [string, ModelAllowanceTier]> = [
   // Frontier reasoning models: an order of magnitude above the efficient tier.
   ["claude-fable", "highest"],
   ["claude-opus", "highest"],
+  ["gpt-6.2-astra", "highest"],
+  ["gpt-6-astra", "highest"],
   // Mid tier: several times the efficient models per request.
   ["gpt-5.6-sol", "higher"],
+  ["gpt-6.2-sol", "higher"],
+  ["gpt-6.1-sol", "higher"],
+  ["gemini-4-argon", "higher"],
+  ["gemini-4-carbon", "higher"],
   ["claude-sonnet", "higher"],
   ["gpt-5.6-terra", "higher"],
   ["gpt-5.5", "higher"],
-  // Efficient default lane.
+  // Efficient default lane (the Auto waterfall heads).
   ["gpt-5.6-luna", "standard"],
+  ["gpt-6-luna", "standard"],
+  ["claude-haiku-5-5", "standard"],
+  ["gemini-4-hydrogen", "standard"],
   ["auto", "standard"],
 ];
 

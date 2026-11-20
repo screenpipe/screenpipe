@@ -29,6 +29,12 @@ export function ollamaContextWindowFromShow(
 }
 
 const OPENAI_MODEL_LIMITS: Array<[RegExp, ModelLimitMetadata]> = [
+  // GPT-6 Astra/Sol/Luna share the 1.05M context and 128k output window on the
+  // hosted gateway (handlers/models.ts).
+  [
+    /^gpt-6(?:\.\d+)?-(?:astra|sol|luna)(?:-|$)/,
+    { contextWindow: 1_050_000, maxOutputTokens: 128_000 },
+  ],
   [
     /^gpt-5\.6(?:$|-(?:sol|terra|luna)(?:-|$))/,
     { contextWindow: 1_050_000, maxOutputTokens: 128_000 },
@@ -84,6 +90,10 @@ const ANTHROPIC_MODEL_LIMITS: Array<[RegExp, ModelLimitMetadata]> = [
   [
     /^claude-opus-4-8(?:$|-)/,
     { contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  ],
+  [
+    /^claude-haiku-5-5(?:$|-)/,
+    { contextWindow: 200_000, maxOutputTokens: 64_000 },
   ],
 ];
 

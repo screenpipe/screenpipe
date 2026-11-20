@@ -30,6 +30,29 @@ describe("model metadata resolution", () => {
     });
   });
 
+  it("resolves the newest GPT-6 and Haiku families", () => {
+    expect(resolveModelLimits("openai", "gpt-6.2-astra")).toEqual({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(resolveModelLimits("openai", "gpt-6.2-sol")).toEqual({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(resolveModelLimits("openai", "gpt-6-astra")).toEqual({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(resolveModelLimits("openai", "gpt-6-luna")).toEqual({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(resolveModelLimits("anthropic", "claude-haiku-5-5")).toEqual({
+      contextWindow: 200_000,
+      maxOutputTokens: 64_000,
+    });
+  });
+
   it("keeps matching ChatGPT and custom names unresolved", () => {
     expect(resolveModelLimits("openai-chatgpt", "gpt-5.6-terra")).toBeNull();
     expect(resolveModelLimits("custom", "gpt-5.6-terra")).toBeNull();

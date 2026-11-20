@@ -583,7 +583,9 @@ const AISection = ({
         break;
       case "openai-chatgpt":
         newUrl = "https://api.openai.com/v1";
-        newModel = "gpt-5.5";
+        // Match DEFAULT_CHATGPT_MODEL / the rewind Chatgpt preset selector so a
+        // new preset starts on the same balanced model everywhere.
+        newModel = "gpt-5.6-terra";
         break;
       case "anthropic":
         newUrl = "https://api.anthropic.com";
@@ -1211,14 +1213,21 @@ const AISection = ({
           } catch {
             // fallback to hardcoded
           }
+          // Keep this fallback aligned with the public gateway catalog
+          // (packages/ai-gateway/src/handlers/models.ts); it is shown only when
+          // the live model fetch fails. Internal auto-waterfall models such as
+          // claude-haiku-5-5 are not listed there and are intentionally absent.
           setModels([
             { id: "auto", name: "Auto (recommended)", provider: "screenpipe" },
-            { id: "gpt-5.6-luna", name: "GPT-5.6 Luna (fast)", provider: "screenpipe" },
+            { id: "gpt-6.2-astra", name: "GPT-6.2 Astra (Business)", provider: "screenpipe" },
+            { id: "gpt-6.2-sol", name: "GPT-6.2 Sol (frontier)", provider: "screenpipe" },
+            { id: "gpt-6-luna", name: "GPT-6 Luna (fast)", provider: "screenpipe" },
+            { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen (fast)", provider: "screenpipe" },
+            { id: "gemini-4-carbon", name: "Gemini 4 Carbon (balanced)", provider: "screenpipe" },
             { id: "gpt-5.6-terra", name: "GPT-5.6 Terra (balanced)", provider: "screenpipe" },
             { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "screenpipe" },
             { id: "claude-sonnet-5", name: "Sonnet 5 (high intelligence)", provider: "screenpipe" },
             { id: "claude-opus-5", name: "Opus 5 (frontier, Business)", provider: "screenpipe" },
-            { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, Business)", provider: "screenpipe" },
             { id: "claude-fable-5", name: "Fable 5 (premium, Business)", provider: "screenpipe" },
           ]);
           break;

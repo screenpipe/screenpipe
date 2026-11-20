@@ -17,6 +17,8 @@ describe("modelAllowanceTier", () => {
     expect(modelAllowanceTier("claude-opus-5")).toBe("highest");
     expect(modelAllowanceTier("claude-opus-4-8")).toBe("highest");
     expect(modelAllowanceTier("claude-fable-5")).toBe("highest");
+    expect(modelAllowanceTier("gpt-6.2-astra")).toBe("highest");
+    expect(modelAllowanceTier("gpt-6-astra")).toBe("highest");
   });
 
   it("classifies mid-tier models as higher", () => {
@@ -24,10 +26,17 @@ describe("modelAllowanceTier", () => {
     expect(modelAllowanceTier("gpt-5.6-sol")).toBe("higher");
     expect(modelAllowanceTier("gpt-5.6-terra")).toBe("higher");
     expect(modelAllowanceTier("gpt-5.5")).toBe("higher");
+    expect(modelAllowanceTier("gpt-6.2-sol")).toBe("higher");
+    expect(modelAllowanceTier("gpt-6.1-sol")).toBe("higher");
+    expect(modelAllowanceTier("gemini-4-carbon")).toBe("higher");
+    expect(modelAllowanceTier("gemini-4-argon")).toBe("higher");
   });
 
   it("classifies the efficient lane as standard", () => {
     expect(modelAllowanceTier("gpt-5.6-luna")).toBe("standard");
+    expect(modelAllowanceTier("gpt-6-luna")).toBe("standard");
+    expect(modelAllowanceTier("claude-haiku-5-5")).toBe("standard");
+    expect(modelAllowanceTier("gemini-4-hydrogen")).toBe("standard");
     expect(modelAllowanceTier("auto")).toBe("standard");
   });
 

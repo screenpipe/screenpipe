@@ -7,7 +7,7 @@
 import type { AccountPlan, AuthResult } from '../../src/types';
 import { hostedChatActorId } from '../../src/services/cloudflare-ai-gateway';
 import { isHostedAiModelAllowed } from '../../src/services/hosted-ai-policy';
-import { EXPERIENTIAL_ORIGIN, MigrationCheckError, inspectExperientialAccount, verifyExperientialCustomerKey, verifyExperientialCanonicalModel, isExperientialIdentityId, verifyExperientialCustomerPlan, type Fetcher } from './experiential-migration';
+import { EXPERIENTIAL_ORIGIN, MigrationCheckError, inspectExperientialAccount, verifyExperientialCustomerKey, verifyExperientialCanonicalModel, isExperientialIdentityId, verifyExperientialCustomerPlan, isAstraResponsesModel, type Fetcher } from './experiential-migration';
 
 export interface ExperientialCustomerBinding {
   actorId: string;
@@ -70,7 +70,7 @@ export async function prepareExperientialProbeConnection(options: ExperientialAd
   if (mapping.destinationModelId !== sourceModelId || !UUID.test(mapping.canonicalModelUuid)) {
     throw new MigrationCheckError('exact_model_mapping_required');
   }
-  const protocol = sourceModelId === 'gpt-6-astra' ? 'responses' : sourceModelId.startsWith('claude-') ? 'messages' : 'chat';
+  const protocol = isAstraResponsesModel(sourceModelId) ? 'responses' : sourceModelId.startsWith('claude-') ? 'messages' : 'chat';
   if (mapping.protocol !== protocol) throw new MigrationCheckError('native_protocol_mapping_mismatch');
   const actorId = await hostedChatActorId(auth);
   const found = await options.lookupBinding(actorId);
