@@ -2254,6 +2254,13 @@ impl SettingsStore {
     /// (e.g. synced settings from a newer version with a provider this version doesn't know).
     fn sanitize_legacy_fields(mut val: Value) -> Value {
         if let Some(obj) = val.as_object_mut() {
+            // `user.credits` must be a `Credits { amount }` object. Older builds and
+            // raw `/api/user` responses persisted it as a bare integer (e.g. `1000`),
+            // which makes the whole settings blob fail to deserialize.
+            if let Some(user) = obj.get_mut("user").and_then(|u| u.as_object_mut()) {
+                Self::sanitize_user_credits(user);
+            }
+
             if obj.contains_key("enableAccessibility") {
                 obj.remove("enableUiEvents");
             } else if let Some(v) = obj.remove("enableUiEvents") {
@@ -2318,6 +2325,35 @@ impl SettingsStore {
             }
         }
         val
+    }
+
+    /// Migrate a legacy integer `credits` value to the `Credits { amount }` shape.
+    /// Any other non-object, non-null value can't be interpreted, so it is reset
+    /// to null (with a warning carrying the offending value) instead of breaking
+    /// deserialization of every setting.
+    fn sanitize_user_credits(user: &mut serde_json::Map<String, Value>) {
+        let Some(credits) = user.get("credits") else {
+            return;
+        };
+        let replacement = match credits {
+            Value::Null | Value::Object(_) => return,
+            Value::Number(n) => {
+                let amount = n
+                    .as_i64()
+                    .or_else(|| n.as_f64().map(|f| f as i64))
+                    .unwrap_or(0)
+                    .clamp(i32::MIN as i64, i32::MAX as i64);
+                serde_json::json!({ "amount": amount })
+            }
+            other => {
+                tracing::warn!(
+                    "unexpected user.credits value {:?} in settings, resetting to null",
+                    other
+                );
+                Value::Null
+            }
+        };
+        user.insert("credits".to_string(), replacement);
     }
 
     /// Give a coding-agent preset its `acp` provider back.
@@ -5542,6 +5578,27 @@ mod tests {
     }
 
     // ---- Existing tests ----
+
+    #[test]
+    fn test_sanitize_legacy_fields_migrates_integer_credits() {
+        let legacy = json!({ "user": { "id": "u1", "credits": 1000 } });
+        let sanitized = SettingsStore::sanitize_legacy_fields(legacy);
+        assert_eq!(sanitized["user"]["credits"], json!({ "amount": 1000 }));
+        let user: User = serde_json::from_value(sanitized["user"].clone())
+            .expect("migrated user must deserialize");
+        assert_eq!(user.credits.map(|c| c.amount), Some(1000));
+
+        // Already-correct and null values are left untouched.
+        let ok = json!({ "user": { "credits": { "amount": 5 } } });
+        assert_eq!(SettingsStore::sanitize_legacy_fields(ok.clone()), ok);
+        let null = json!({ "user": { "credits": null } });
+        assert_eq!(SettingsStore::sanitize_legacy_fields(null.clone()), null);
+
+        // Uninterpretable values are reset instead of breaking deserialization.
+        let bad = json!({ "user": { "credits": "lots" } });
+        let sanitized = SettingsStore::sanitize_legacy_fields(bad);
+        assert_eq!(sanitized["user"]["credits"], Value::Null);
+    }
 
     #[test]
     fn test_sanitize_legacy_fields_does_not_panic() {

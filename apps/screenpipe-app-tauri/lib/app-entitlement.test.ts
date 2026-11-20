@@ -584,6 +584,18 @@ describe("app entitlement", () => {
   });
 });
 
+describe("normalizeAppUser credits", () => {
+  it("converts a bare numeric credits value into the { amount } shape", () => {
+    expect(normalizeAppUser({ id: "u1", credits: 1000 }, "tok").credits).toEqual({ amount: 1000 });
+  });
+
+  it("keeps object credits and drops unusable values", () => {
+    expect(normalizeAppUser({ credits: { amount: 5 } }, "tok").credits).toEqual({ amount: 5 });
+    expect(normalizeAppUser({ credits: "lots" }, "tok").credits).toBeNull();
+    expect(normalizeAppUser({}, "tok").credits).toBeNull();
+  });
+});
+
 describe("isAuthenticatedFreeUser", () => {
   beforeEach(() => {
     vi.useFakeTimers();
