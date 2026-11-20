@@ -292,6 +292,7 @@ fn collect_nodes(value: &Value, fields: &mut Vec<InputField>) {
                             || role_is_secure(role)
                             || looks_credential_label(&hint)
                             || looks_like_secret_value(&value)
+                            || looks_like_masked_secret(&value)
                             || value.contains(SpanLabel::Secret.placeholder());
                         let context_key = if force_secret {
                             "password"
@@ -446,6 +447,59 @@ fn looks_like_secret_value(value: &str) -> bool {
             && (trimmed.contains("PRIVATE KEY") || trimmed.contains("SECRET KEY")))
 }
 
+/// Partially/fully masked credential shapes that RF-DETR rarely sees in
+/// training but are unambiguous secrets on screen: `sk-proj-••••abcd`,
+/// `ghp_••••••••`, or a bare masked password `••••••••`. Kept as a bounded
+/// char scan (no full text-regex engine, matching the image-only path's
+/// zero-allocation constraint). Only ever *adds* a forced region, so it
+/// cannot un-redact something the model would have caught.
+fn looks_like_masked_secret(value: &str) -> bool {
+    let t = value.trim();
+    if t.is_empty() || t.len() > 128 {
+        return false;
+    }
+    let is_mask = |c: char| matches!(c, '•' | '●' | '·' | '＊' | '*');
+    let lower = t.to_ascii_lowercase();
+    let credential_prefix = [
+        "sk-",
+        "sk_",
+        "github_pat_",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "glpat-",
+        "whsec_",
+        "rk_live_",
+        "akia",
+        "asia",
+        "xox",
+        "aiza",
+        "bearer ",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix));
+
+    let mut run = 0usize;
+    for c in t.chars() {
+        if is_mask(c) {
+            run += 1;
+            // Known key prefix plus a visible mask run: definitely a secret.
+            if run >= 4 && credential_prefix {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    // A value made almost entirely of mask glyphs is a masked password field,
+    // even without a prefix. Whitespace between glyphs is tolerated.
+    let mask_count = t.chars().filter(|c| is_mask(*c)).count();
+    let all_mask = t.chars().all(|c| is_mask(c) || c.is_whitespace());
+    all_mask && mask_count >= 4
+}
+
 fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
     value
         .get(..prefix.len())
@@ -572,6 +626,31 @@ mod tests {
         assert_eq!(regions.len(), 1);
         let region = &regions[0];
         assert_eq!(region.bbox, [98, 98, 304, 54]);
+    }
+
+    #[test]
+    fn masked_credential_shapes_are_high_confidence_only() {
+        assert!(looks_like_masked_secret("sk-proj-••••••••abcd"));
+        assert!(looks_like_masked_secret("ghp_••••••••••••"));
+        assert!(looks_like_masked_secret("••••••••"));
+        assert!(looks_like_masked_secret("• • • • • •"));
+        assert!(!looks_like_masked_secret("ordinary prompt"));
+        assert!(!looks_like_masked_secret("score: 5 * 3"));
+        assert!(!looks_like_masked_secret("hello* world"));
+    }
+
+    #[test]
+    fn masked_password_field_is_forced_secret() {
+        // AXTextField is not inherently secure, so force_secret can only come
+        // from the masked-value detector — proving the new shape is wired in.
+        let blob = r#"[{"role":"AXTextField","value":"••••••••","bounds":{"left":0.1,"top":0.2,"width":0.3,"height":0.04}}]"#;
+        let context = A11yContext::parse(blob).unwrap();
+        assert_eq!(context.fields.len(), 1);
+        assert!(
+            context.fields[0].force_secret,
+            "a masked password in a generic text field must be force-masked"
+        );
+        assert_eq!(context.forced_image_regions(1000, 500).len(), 1);
     }
 
     #[test]

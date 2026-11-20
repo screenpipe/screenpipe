@@ -18,6 +18,18 @@
 //! [`RedactError::Unavailable`], same pattern as the text ONNX
 //! adapter.
 //!
+//! ## Current model (v54)
+//!
+//! `rfdetr_v54` is a W16A32-quantized RF-DETR-Nano with a 768x768 input
+//! (52.93 MiB ONNX) trained on real-screen PII. It keeps the shipped
+//! decode: 300 queries, 12 PII classes (+1 no-object channel), sigmoid
+//! scores. The 768px input is why `detect_input_size` includes 768 and
+//! tiling uses `input_size.min(512)` as its base: a 768px model that fell
+//! back to 384 would feed a wrong-sized tensor and drop every detection.
+//! Weights come from a pinned, SHA-256-verified public mirror; the
+//! numbers below are the historical `v38` baseline that validated this
+//! adapter.
+//!
 //! ## Reference benchmark numbers
 //!
 //! `rfdetr_v38` (512×512 input, FP16 ONNX with fp32 I/O wrapper, ~60 MB,
@@ -77,7 +89,7 @@ use crate::RedactError;
 use crate::SpanLabel;
 
 const RFDETR_NAME: &str = "rfdetr";
-pub(crate) const RFDETR_VERSION: u32 = 38; // matches the rfdetr_v38 ONNX (fp16, 512px, real-app trained)
+pub(crate) const RFDETR_VERSION: u32 = 54; // matches the rfdetr_v54 ONNX (W16A32, 768px, real-screen trained)
 
 #[cfg(feature = "onnx-cpu")]
 const NUM_CLASSES: usize = 12;
@@ -103,7 +115,7 @@ const CLASSES: [SpanLabel; NUM_CLASSES] = [
 ];
 
 /// Per-class score floors applied on top of `conf_threshold` (the higher
-/// wins). All zero since v19, and v38 keeps them zero: genuine secret
+/// wins). All zero since v19, and the current model keeps them zero: genuine secret
 /// detections score ~0.5–0.7 while zero secret false fires were
 /// observed at conf 0.50 across every zero-PII suite — a high floor
 /// would suppress real catches for no precision gain. Mechanism kept
@@ -115,12 +127,13 @@ const CLASS_MIN_SCORE: [f32; NUM_CLASSES] =
 /// Configuration for [`RfdetrRedactor`].
 #[derive(Debug, Clone)]
 pub struct RfdetrConfig {
-    /// Path to `rfdetr_vN.onnx`. We default to `~/.screenpipe/models/rfdetr_v38.onnx`
+    /// Path to `rfdetr_vN.onnx`. We default to `~/.screenpipe/models/rfdetr_v54.onnx`
     /// in [`Self::default_model_path`] but callers may override (e.g.
     /// for an INT8-quantized variant in the future).
     pub model_path: PathBuf,
-    /// Square input size baked into the ONNX (320 for v8, 384 for
-    /// v9, 512 for v11). Must match the model — auto-detected if 0.
+    /// Square input size baked into the ONNX (320 for v8, 384 for v9,
+    /// 512 for v11..v38, 640 for v39..v45, 768 for v46+). Must match
+    /// the model — auto-detected if 0.
     pub input_size: u32,
     /// Score floor below which detections are dropped before the
     /// adapter even returns them. The downstream
@@ -183,36 +196,37 @@ impl Default for RfdetrConfig {
 }
 
 impl RfdetrConfig {
-    /// `~/.screenpipe/models/rfdetr_v38.onnx`. Created lazily by
+    /// `~/.screenpipe/models/rfdetr_v54.onnx`. Created lazily by
     /// [`Self::ensure_model_present`] on first run.
     pub fn default_model_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx")
+            .join("rfdetr_v54.onnx")
     }
 
-    /// HuggingFace download URL for the canonical ONNX. Pinned to
-    /// `main` so a model bump goes through a deliberate code change
-    /// (URL + expected SHA-256 + [`RFDETR_VERSION`] all bumped
-    /// together).
-    pub const HF_DOWNLOAD_URL: &'static str =
-        "https://huggingface.co/screenpipe/pii-image-redactor/resolve/main/rfdetr_v38.onnx";
+    /// Public, immutable download URL for the canonical ONNX, served from
+    /// a pinned orphan branch on `screenpipe/privacy-filter` via
+    /// `raw.githubusercontent.com` (no auth, no expiring signed URL). A
+    /// model bump goes through a deliberate code change (URL + expected
+    /// SHA-256 + [`RFDETR_VERSION`] all bumped together).
+    pub const MODEL_DOWNLOAD_URL: &'static str =
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/models-static/rfdetr_v54.onnx";
 
-    /// Expected SHA-256 of the canonical `rfdetr_v38.onnx`. Verified
+    /// Expected SHA-256 of the canonical `rfdetr_v54.onnx`. Verified
     /// after every download. If a future training run produces a new
-    /// best, bump [`RFDETR_VERSION`], re-publish to HF, update this
-    /// constant. Note: the worker is destructive-only and does NOT
-    /// re-redact already-processed frames, so a model-version bump
-    /// only takes effect for newly-captured frames going forward.
+    /// best, bump [`RFDETR_VERSION`], re-publish to the public mirror,
+    /// update this constant. Note: the worker is destructive-only and
+    /// does NOT re-redact already-processed frames, so a model-version
+    /// bump only takes effect for newly-captured frames going forward.
     pub const EXPECTED_SHA256: &'static str =
-        "0e968657aafcfb2c5d61ece264d5959ddeeec53091171fae226b45ecd3a8a880";
+        "c2b645b9f4084aebb503805722e53c8de0c023e67b77b69e46a7ce9de014522a";
 
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
     /// expected SHA-256. Otherwise downloads from
-    /// [`Self::HF_DOWNLOAD_URL`], verifies, atomic-renames into place.
+    /// [`Self::MODEL_DOWNLOAD_URL`], verifies, atomic-renames into place.
     ///
     /// Atomic semantics: the download lands at
     /// `<model_path>.partial`, gets verified, then renames over
@@ -234,12 +248,12 @@ impl RfdetrConfig {
         let _ = tokio::fs::remove_file(&tmp).await;
 
         tracing::info!(
-            url = Self::HF_DOWNLOAD_URL,
+            url = Self::MODEL_DOWNLOAD_URL,
             target = %self.model_path.display(),
-            "downloading rfdetr_v38.onnx (~60 MB) — first-run only"
+            "downloading rfdetr_v54.onnx (~53 MiB) — first-run only"
         );
         let resp = reqwest::Client::new()
-            .get(Self::HF_DOWNLOAD_URL)
+            .get(Self::MODEL_DOWNLOAD_URL)
             .send()
             .await
             .map_err(|e| RedactError::Runtime(format!("rfdetr download GET: {e}")))?;
@@ -273,7 +287,7 @@ impl RfdetrConfig {
         tracing::info!(
             target = %self.model_path.display(),
             bytes = bytes.len(),
-            "rfdetr_v38.onnx ready"
+            "rfdetr_v54.onnx ready"
         );
         Ok(())
     }
@@ -338,17 +352,20 @@ mod imp {
                     // (With CoreML the CPU pool only runs CoreML-rejected
                     // fallback ops, where 2 was already the right number.)
                     .with_intra_threads(2)?;
-                // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
-                // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
-                // faster than the legacy default and keeps the work off the CPU/GPU.
-                // Shadowed again by the directml rebind when both features are
-                // enabled (Windows app build), which leaves this `mut` unused there.
+                // Offload to Apple Metal GPU (`ComputeUnits::CpuAndGpu`) instead of
+                // `ComputeUnits::All` (ANE). The exported FP16 ONNX has internal
+                // FLOAT16 ops that underflow on the ANE compiler (measured on
+                // v38: detections collapsed 164 -> 13 over 400 real frames).
+                // `MLProgram` + `ComputeUnits::CpuAndGpu` restores full CPU
+                // parity (37/37 active-slice regions) at ~201 ms p50 vs ~926 ms
+                // for `ModelFormat::NeuralNetwork` CPU fallback. Every shipped
+                // model (including W16A32 v54) stays on CPU/GPU.
                 #[cfg(feature = "onnx-coreml")]
                 #[allow(unused_mut)]
                 let mut builder = builder.with_execution_providers([
                     ort::ep::CoreML::default()
                         .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                        .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+                        .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndGPU)
                         .with_subgraphs(true)
                         .build(),
                     ort::ep::CPU::default().with_arena_allocator(false).build(),
@@ -431,10 +448,12 @@ mod imp {
                 .to_rgb8();
             let (orig_w, orig_h) = (img.width(), img.height());
 
-            // Tiling only pays when the frame is much larger than the model
-            // input. On a frame already near `input_size` the downscale loses
-            // nothing, so 4× the compute would buy nothing.
-            let big = orig_w >= self.input_size * 2 && orig_h >= self.input_size * 3 / 2;
+            // Tiling pays whenever the frame is desktop-sized (>= 1024×768, the
+            // original 512px 2× / 1.5× threshold), even when `input_size` is
+            // bumped to 640 or 768 so 1440×900 / 1512×982 / 1920×1080 desktops
+            // still receive 2×2 quadrant magnification.
+            let tile_base = self.input_size.min(512);
+            let big = orig_w >= tile_base * 2 && orig_h >= tile_base * 3 / 2;
             if !self.cfg.tiled_inference || !big {
                 let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
                 return Ok(self.extend_wrapped_secrets(&img, regions));
@@ -708,10 +727,10 @@ mod imp {
         let s = format!("{shape:?}");
         // Cheap parse: look for a known square size in the shape.
         // Keep this in sync with every shipped model: v8=320, v9=384,
-        // v11=512. Omitting the current model's size makes detection
-        // fall back to 384 and feed a wrong-sized tensor → ort "invalid
-        // dimensions for input" on every frame (silent redaction outage).
-        [320u32, 384, 512]
+        // v11..v38=512, v39..v45=640, v46+=768. Omitting the current model's
+        // size makes detection fall back to 384 and feed a wrong-sized tensor
+        // → ort "invalid dimensions for input" on every frame (silent redaction outage).
+        [768u32, 640, 512, 384, 320]
             .into_iter()
             .find(|cand| s.contains(&cand.to_string()))
     }
@@ -765,6 +784,26 @@ impl ImageRedactor for RfdetrRedactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model bump must move version, default filename, download URL and
+    /// SHA-256 together. A partial bump is a silent redaction outage
+    /// (wrong-sized tensor) or a checksum failure on every fresh install.
+    #[test]
+    fn shipped_model_constants_are_coherent() {
+        assert_eq!(RFDETR_VERSION, 54, "model bump must move the version");
+        assert!(
+            RfdetrConfig::default_model_path().ends_with(Path::new("rfdetr_v54.onnx")),
+            "default filename must track RFDETR_VERSION"
+        );
+        assert!(
+            RfdetrConfig::MODEL_DOWNLOAD_URL.ends_with("/rfdetr_v54.onnx"),
+            "download URL must track RFDETR_VERSION"
+        );
+        assert_eq!(
+            RfdetrConfig::EXPECTED_SHA256,
+            "c2b645b9f4084aebb503805722e53c8de0c023e67b77b69e46a7ce9de014522a"
+        );
+    }
 
     /// Tiling must ADD to the whole-frame pass, never replace it.
     ///
@@ -866,7 +905,7 @@ mod tests {
         let p = RfdetrConfig::default_model_path();
         let expected_suffix = Path::new(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx");
+            .join("rfdetr_v54.onnx");
         assert!(
             p.ends_with(&expected_suffix),
             "default path {} should end with {}",
@@ -934,7 +973,7 @@ mod tests {
         // (Real download path is exercised by integration tests off
         // the unit-test harness.)
         let d = tempdir().unwrap();
-        let p = d.path().join("models").join("rfdetr_v38.onnx");
+        let p = d.path().join("models").join("rfdetr_v54.onnx");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"not the real model").unwrap();
         let cfg = RfdetrConfig {
