@@ -105,6 +105,7 @@ pub(crate) const BROWSER_NAMES: &[&str] = &[
     "zen browser",
     "orion",
     "floorp",
+    "comet",
 ];
 
 /// Load all built-in detection profiles.

@@ -226,6 +226,47 @@ fn browser_helper_alone_is_unresolved_browser() {
 }
 
 #[test]
+fn comet_helper_plus_meet_url_resolves_to_google_meet() {
+    // Comet (Perplexity) holds the mic in a helper process. CoreAudio reports
+    // `ai.perplexity.comet.helper.Renderer`, not "Comet", and the meeting URL
+    // arrives as a captured frame for the main app.
+    let profiles = load_detection_profiles();
+    let process = AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:910:input:built-in-mic".to_string()),
+        audio_object_id: Some(910),
+        pid: Some(191),
+        bundle_id: Some("ai.perplexity.comet.helper.Renderer".to_string()),
+        process_name: Some("Comet Helper (Renderer)".to_string()),
+        owner_app_name: Some("Comet Helper (Renderer)".to_string()),
+        owner_bundle_id: Some("ai.perplexity.comet".to_string()),
+        first_seen_at_ms: None,
+    };
+    let url = "https://meet.google.com/abc-defg-hij";
+    let evidence = vec![BrowserPageEvidence {
+        browser_app: Some("Comet".to_string()),
+        url: Some(url.to_string()),
+        title: Some("Meet – Comet".to_string()),
+    }];
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &evidence,
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(
+            candidate,
+            ResolvedMeetingCandidate::Browser { ref platform, ref meeting_url, .. }
+                if platform == "Google Meet" && meeting_url == url
+        ),
+        "Comet on a Meet room should be a meeting: {candidate:?}"
+    );
+}
+
+#[test]
 fn browser_helper_plus_meet_url_resolves_to_google_meet() {
     let profiles = load_detection_profiles();
     let process = chrome_process();

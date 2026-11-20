@@ -316,6 +316,8 @@ fn browser_app_detection_is_case_insensitive() {
     assert!(is_browser_app("Microsoft Edge Helper"));
     assert!(is_browser_app("brave.exe"));
     assert!(is_browser_app("Dia"));
+    assert!(is_browser_app("Comet"));
+    assert!(is_browser_app("Comet Helper (Renderer)"));
     assert!(!is_browser_app("Zoom.exe"));
 }
 

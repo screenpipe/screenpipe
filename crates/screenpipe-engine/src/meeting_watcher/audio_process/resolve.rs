@@ -595,6 +595,8 @@ pub(crate) fn browser_name_for_bundle(bundle: &str) -> Option<&'static str> {
         Some("Brave Browser")
     } else if bundle.starts_with("org.chromium.chromium") {
         Some("Chromium")
+    } else if bundle.starts_with("ai.perplexity.comet") {
+        Some("Comet")
     } else if bundle.contains("opera") {
         Some("Opera")
     } else if bundle.contains("vivaldi") {
@@ -620,6 +622,8 @@ pub(crate) fn normalize_browser_display_name(name: &str) -> String {
         "Microsoft Edge".to_string()
     } else if lower.contains("brave") {
         "Brave Browser".to_string()
+    } else if lower.contains("comet") {
+        "Comet".to_string()
     } else {
         name.to_string()
     }
