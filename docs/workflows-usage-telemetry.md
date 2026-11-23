@@ -20,7 +20,7 @@ events through this adapter.
 | `workflow_detail_viewed` | A selected workflow is visible, including returning to that detail after leaving the tab. No workflow identifier is sent. |
 | `workflow_analysis_requested` | A manual analysis request is submitted through the local UI. Repeated requests can reuse an existing job; this counts requests, not distinct executions. |
 | `workflow_analysis_completed` | A requested analysis cycle reaches complete and its result is loaded. Duplicate polls are ignored. |
-| `workflow_analysis_failed` | The request rejects or its tracked cycle reports failed. A transient polling error does not count as failure. |
+| `workflow_analysis_failed` | The request rejects or its tracked cycle reports failed. A transient polling error does not count as failure. Includes enumerated `failure_stage` (`start` or `execution`) and allowlisted `error_code` (`cancelled`, `allowance_paused`, `business_required`, `usage_unavailable`, `sign_in_required`, `rollout_disabled`, `context_compaction`, `missing_output`, `timeout`, `context_length_exceeded`, `tasks_disabled`, `no_work_ready`, `missing_execution_id`, `http_4xx`, `http_5xx`, `network_error`, or `unknown`); raw error messages are never sent. |
 | `workflow_analysis_incomplete` | The tracked cycle reports incomplete. |
 | `workflow_output_saved` | An SOP or skill save resolves successfully. `output` is `sop` or `skill`. Repeated edits/saves count again. |
 | `workflow_agent_handoff_requested` | The user selects an agent. `runner` is `screenpipe`, `claude`, `codex`, or `cursor`. |

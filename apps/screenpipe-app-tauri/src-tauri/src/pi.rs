@@ -731,22 +731,40 @@ fn sync_queue_state_from_event(
             queue_state.clear_steer_in_flight();
         }
         Some("agent_end") => {
-            // Pi emits agent_end before entering provider retry backoff. The
-            // SDK's `willRetry` flag means this logical turn still owns the
-            // process; releasing the queue here sends the next prompt into a
-            // busy agent and causes the misleading "already processing" loop.
+            // Pi emits agent_end before entering provider retry backoff or
+            // post-run compaction (`_handlePostAgentRun()`). Releasing the
+            // queue before `agent_settled` sends the next prompt into a busy
+            // Pi process (`_isAgentRunActive === true`) and fails with
+            // "Agent is already processing. Specify streamingBehavior...".
             if event.get("willRetry").and_then(|value| value.as_bool()) == Some(true) {
                 queue_state.mark_agent_active();
+            } else if queue_state.awaits_agent_settled() {
+                queue_state.mark_agent_settling();
             } else {
                 queue_state.mark_agent_idle();
                 queue_state.signal_done_if_idle();
             }
         }
-        Some("auto_retry_start") => {
+        Some("agent_settled") => {
+            queue_state.mark_agent_settled();
+        }
+        Some("auto_retry_start") | Some("compaction_start") | Some("auto_compaction_start") => {
             queue_state.mark_agent_active();
         }
         Some("auto_retry_end") => {
             if event.get("success").and_then(|value| value.as_bool()) == Some(false) {
+                if queue_state.awaits_agent_settled() {
+                    queue_state.mark_agent_settling();
+                } else {
+                    queue_state.mark_agent_idle();
+                    queue_state.signal_done_if_idle();
+                }
+            }
+        }
+        Some("compaction_end") | Some("auto_compaction_end") => {
+            if queue_state.awaits_agent_settled() {
+                queue_state.mark_agent_settling();
+            } else {
                 queue_state.mark_agent_idle();
                 queue_state.signal_done_if_idle();
             }
@@ -3762,6 +3780,7 @@ pub async fn pi_start_inner(
     if let Some(m) = pool.sessions.get_mut(&sid) {
         // Spawn the command queue for this session
         let queue_state = crate::pi_command_queue::PiQueueState::new();
+        queue_state.set_awaits_agent_settled(!use_acp);
         let stdin_arc = Arc::new(tokio::sync::Mutex::new(stdin));
         let (queue_handle, queue_task) =
             crate::pi_command_queue::spawn_queue(stdin_arc, queue_state.clone(), 0);
@@ -6488,6 +6507,173 @@ mod tests {
             !state.is_agent_active(),
             "terminal agent_end releases the queue"
         );
+    }
+
+    #[test]
+    fn raw_pi_queue_waits_for_agent_settled_across_post_run_compaction() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.set_awaits_agent_settled(true);
+
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_start" }));
+        assert!(state.has_active_turn_work());
+
+        // Pi emits agent_end before _handlePostAgentRun() runs compaction.
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": false }),
+        );
+        assert!(
+            state.is_agent_settling() && state.has_active_turn_work(),
+            "raw Pi must stay busy until agent_settled so follow-up prompts do not race compaction"
+        );
+
+        // Post-run compaction promotes back to full active work so long
+        // compactions do not hit the short settle grace timeout.
+        super::sync_queue_state_from_event(&state, &json!({ "type": "compaction_start" }));
+        assert!(state.is_agent_active() && !state.is_agent_settling());
+
+        super::sync_queue_state_from_event(&state, &json!({ "type": "compaction_end" }));
+        assert!(state.is_agent_settling() && state.has_active_turn_work());
+
+        // Only agent_settled releases the queue for the next prompt.
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_settled" }));
+        assert!(
+            !state.has_active_turn_work(),
+            "agent_settled must release the queue once Pi finishes _emitAgentSettled()"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn followup_prompt_waits_for_agent_settled_and_avoids_already_processing_error() {
+        use std::io::BufRead;
+        use std::process::{Command as StdCommand, Stdio};
+
+        // Fake Pi subprocess that faithfully implements Pi 0.84.1's lifecycle:
+        // emits agent_end, runs a 120ms compaction window where a second prompt
+        // is rejected with Pi's exact "Agent is already processing..." error,
+        // then emits compaction_end + agent_settled and accepts prompt 2 cleanly.
+        let script = r#"
+import sys, json, time, threading
+
+settling = threading.Event()
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def run_turn_1(req_id):
+    settling.set()
+    emit({"type": "response", "id": req_id, "command": "prompt", "success": True})
+    emit({"type": "agent_start"})
+    emit({"type": "agent_end", "messages": []})
+    emit({"type": "compaction_start"})
+    time.sleep(0.12)
+    emit({"type": "compaction_end"})
+    settling.clear()
+    emit({"type": "agent_settled"})
+
+first = True
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    cmd = json.loads(raw)
+    req_id = cmd.get("id", "")
+    if first:
+        first = False
+        threading.Thread(target=run_turn_1, args=(req_id,), daemon=True).start()
+    else:
+        if settling.is_set():
+            emit({
+                "type": "response",
+                "id": req_id,
+                "command": "prompt",
+                "success": False,
+                "error": "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
+            })
+        else:
+            emit({"type": "response", "id": req_id, "command": "prompt", "success": True})
+            emit({"type": "agent_start"})
+            emit({"type": "agent_end", "messages": [{"role": "assistant", "content": [{"type": "text", "text": "{\"entries\":[]}"}]}]})
+            emit({"type": "agent_settled"})
+            break
+"#;
+
+        let mut child = StdCommand::new("python3")
+            .args(["-u", "-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fake pi 0.84.1 subprocess");
+
+        let stdin = std::sync::Arc::new(tokio::sync::Mutex::new(
+            child.stdin.take().expect("fake pi stdin"),
+        ));
+        let stdout = child.stdout.take().expect("fake pi stdout");
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.set_awaits_agent_settled(true);
+        let (handle, queue_join) = crate::pi_command_queue::spawn_queue(stdin, state.clone(), 0);
+
+        let (agent_end_tx, agent_end_rx) = tokio::sync::oneshot::channel::<()>();
+        let state_reader = state.clone();
+        let reader_handle = std::thread::spawn(move || {
+            let mut agent_end_tx = Some(agent_end_tx);
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                    super::sync_queue_state_from_event(&state_reader, &event);
+                    if event.get("type").and_then(|v| v.as_str()) == Some("agent_end") {
+                        if let Some(tx) = agent_end_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+            }
+            state_reader.signal_terminated();
+        });
+
+        let (_, first_reply) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "message": "first activity prompt" }),
+                crate::pi_command_queue::WaitMode::Prompt,
+                "first".into(),
+                false,
+            )
+            .await
+            .expect("enqueue first prompt");
+        assert_eq!(first_reply.await.expect("first reply"), Ok(()));
+
+        // Mirror activity_history.rs reacting immediately to agent_end.
+        tokio::time::timeout(std::time::Duration::from_secs(3), agent_end_rx)
+            .await
+            .expect("receive first agent_end")
+            .expect("agent_end channel open");
+
+        let (_, second_reply) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "message": "empty completion followup" }),
+                crate::pi_command_queue::WaitMode::Prompt,
+                "followup".into(),
+                false,
+            )
+            .await
+            .expect("enqueue followup prompt");
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), second_reply)
+                .await
+                .expect("followup reply within timeout")
+                .expect("followup reply channel open"),
+            Ok(()),
+            "followup prompt must wait for agent_settled instead of failing with 'Agent is already processing'"
+        );
+
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), queue_join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader_handle.join();
     }
 
     #[tokio::test]

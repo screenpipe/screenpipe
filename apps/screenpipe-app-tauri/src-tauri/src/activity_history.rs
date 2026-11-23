@@ -563,15 +563,14 @@ fn settings_restrict_activity_history(settings: &SettingsStore, is_enterprise_bu
     !is_enterprise_build && settings.is_free_or_unattributed_user()
 }
 
-pub(crate) fn provider_config(
-    settings: &SettingsStore,
+fn selected_preset<'a>(
+    settings: &'a SettingsStore,
     selected_preset_key: Option<&str>,
-    task_system_prompt: &str,
-) -> Result<(PiProviderConfig, Option<String>), String> {
+) -> Option<&'a crate::store::AIPreset> {
     let selected_id = selected_preset_key
         .and_then(|key| settings.extra.get(key))
         .and_then(Value::as_str);
-    let preset = settings
+    settings
         .ai_presets
         .iter()
         .find(|preset| selected_id == Some(preset.id.as_str()))
@@ -582,6 +581,40 @@ pub(crate) fn provider_config(
                 .find(|preset| preset.default_preset)
         })
         .or_else(|| settings.ai_presets.first())
+}
+
+fn preset_uses_screenpipe_cloud(
+    settings: &SettingsStore,
+    selected_preset_key: Option<&str>,
+) -> bool {
+    let Some(preset) = selected_preset(settings, selected_preset_key) else {
+        return true;
+    };
+    matches!(preset.provider, AIProviderType::ScreenpipeCloud)
+        || (matches!(preset.provider, AIProviderType::Acp)
+            && preset
+                .acp_agent
+                .as_ref()
+                .and_then(|agent| agent.use_screenpipe_cloud)
+                .unwrap_or(false))
+}
+
+/// Free/unattributed non-enterprise accounts must not run scheduled background
+/// activity generation against hosted Screenpipe Cloud AI: doing so consumes
+/// the user's daily interactive free-chat allowance and fails on the 8-step
+/// per-turn limit (`free_chat_turn_request_limit_exceeded`). Free users who
+/// configure a local or BYOK preset can still run automatic generation.
+fn should_skip_automatic_generation(settings: &SettingsStore, is_enterprise_build: bool) -> bool {
+    settings_restrict_activity_history(settings, is_enterprise_build)
+        && preset_uses_screenpipe_cloud(settings, Some("activitiesAiPresetId"))
+}
+
+pub(crate) fn provider_config(
+    settings: &SettingsStore,
+    selected_preset_key: Option<&str>,
+    task_system_prompt: &str,
+) -> Result<(PiProviderConfig, Option<String>), String> {
+    let preset = selected_preset(settings, selected_preset_key)
         .ok_or_else(|| "No compatible AI preset is configured".to_string())?;
     let is_acp = matches!(&preset.provider, AIProviderType::Acp);
     // A coding agent is defined by its adapter, not by a model id, and several
@@ -748,6 +781,67 @@ fn classify_activity_run_event(event: &Value, empty_completion_retries: u8) -> A
             ActivityRunEvent::Fail("Pi process terminated during activity generation".to_string())
         }
         _ => ActivityRunEvent::Ignore,
+    }
+}
+
+/// Stateful event tracker for a background Pi/ACP run.
+///
+/// Raw Pi (>=0.84) emits `agent_end` before post-run compaction/continuation
+/// finishes and only clears `_isAgentRunActive` at `agent_settled`. Waiting for
+/// `agent_settled` before sending `EMPTY_COMPLETION_PROMPT` prevents both
+/// racing Pi's compaction loop and sending a duplicate follow-up when Pi's own
+/// continuation recovers with valid output.
+struct ActivityRunTracker {
+    awaits_agent_settled: bool,
+    empty_completion_retries: u8,
+    pending_empty_completion: bool,
+}
+
+impl ActivityRunTracker {
+    fn new(awaits_agent_settled: bool) -> Self {
+        Self {
+            awaits_agent_settled,
+            empty_completion_retries: 0,
+            pending_empty_completion: false,
+        }
+    }
+
+    fn on_event(&mut self, event: &Value) -> ActivityRunEvent {
+        let event_type = event.get("type").and_then(Value::as_str);
+        if self.awaits_agent_settled {
+            match event_type {
+                Some("agent_start") => {
+                    self.pending_empty_completion = false;
+                    return ActivityRunEvent::Ignore;
+                }
+                Some("agent_settled") => {
+                    if self.pending_empty_completion {
+                        self.pending_empty_completion = false;
+                        self.empty_completion_retries += 1;
+                        return ActivityRunEvent::RetryEmptyCompletion;
+                    }
+                    return ActivityRunEvent::Ignore;
+                }
+                _ => {}
+            }
+        }
+
+        match classify_activity_run_event(event, self.empty_completion_retries) {
+            ActivityRunEvent::RetryEmptyCompletion if self.awaits_agent_settled => {
+                self.pending_empty_completion = true;
+                ActivityRunEvent::Ignore
+            }
+            ActivityRunEvent::RetryEmptyCompletion => {
+                self.empty_completion_retries += 1;
+                ActivityRunEvent::RetryEmptyCompletion
+            }
+            other => {
+                if !matches!(other, ActivityRunEvent::Ignore) {
+                    self.pending_empty_completion = false;
+                }
+                other
+            }
+        }
     }
 }
 
@@ -1158,7 +1252,7 @@ pub(crate) async fn run_background_pi_with_config(
     }
 
     let wait_for_result = async {
-        let mut empty_completion_retries = 0;
+        let mut tracker = ActivityRunTracker::new(!is_agent);
         loop {
             let envelope = match events.recv().await {
                 Ok(envelope) => envelope,
@@ -1168,10 +1262,9 @@ pub(crate) async fn run_background_pi_with_config(
             if envelope.session_id != session_id {
                 continue;
             }
-            match classify_activity_run_event(&envelope.event, empty_completion_retries) {
+            match tracker.on_event(&envelope.event) {
                 ActivityRunEvent::Complete(text) => return Ok(text),
                 ActivityRunEvent::RetryEmptyCompletion => {
-                    empty_completion_retries += 1;
                     pi::pi_prompt_inner(
                         app,
                         state.inner(),
@@ -1935,6 +2028,12 @@ pub fn start(app: AppHandle) {
             if !setting_bool(&settings, "activitiesEnabled") {
                 continue;
             }
+            if should_skip_automatic_generation(
+                &settings,
+                crate::app_mode::for_settings(&settings),
+            ) {
+                continue;
+            }
             let now = Utc::now();
             let pause = settings
                 .extra
@@ -2517,6 +2616,114 @@ mod tests {
             &SettingsStore::default(),
             false,
         ));
+    }
+
+    #[test]
+    fn automatic_generation_skips_free_users_on_hosted_cloud_but_allows_byok_and_paid() {
+        // Default SettingsStore is an unattributed/free user with screenpipe-cloud preset.
+        let free_cloud = SettingsStore::default();
+        assert!(should_skip_automatic_generation(&free_cloud, false));
+        assert!(!should_skip_automatic_generation(&free_cloud, true));
+
+        // Free user with a local/BYOK preset is still allowed to run automatic generation.
+        let free_local = settings_with_presets(
+            "local-ollama",
+            vec![crate::store::AIPreset {
+                id: "local-ollama".to_string(),
+                provider: AIProviderType::NativeOllama,
+                model: "llama3".to_string(),
+                default_preset: true,
+                ..Default::default()
+            }],
+        );
+        assert!(!should_skip_automatic_generation(&free_local, false));
+
+        // Free user with an ACP preset backed by screenpipe cloud is still skipped.
+        let free_acp_cloud = settings_with_presets(
+            "acp-cloud",
+            vec![crate::store::AIPreset {
+                id: "acp-cloud".to_string(),
+                provider: AIProviderType::Acp,
+                acp_agent: Some(crate::store::AcpAgentPresetConfig {
+                    id: "pi-acp".to_string(),
+                    command: Some("pi".to_string()),
+                    use_screenpipe_cloud: Some(true),
+                    ..Default::default()
+                }),
+                default_preset: true,
+                ..Default::default()
+            }],
+        );
+        assert!(should_skip_automatic_generation(&free_acp_cloud, false));
+
+        // Verified paid user with hosted cloud preset is allowed.
+        let mut paid_cloud = SettingsStore::default();
+        paid_cloud.user.id = Some("user-1".to_string());
+        paid_cloud.user.subscription_plan = Some("pro".to_string());
+        paid_cloud.user.cloud_subscribed = Some(true);
+        paid_cloud.user.app_entitled = Some(true);
+        paid_cloud.user.entitlement = Some(json!({
+            "plan": "pro",
+            "active": true,
+            "source": "subscription",
+            "features": ["app"],
+            "checked_at": Utc::now().to_rfc3339(),
+        }));
+        assert!(!should_skip_automatic_generation(&paid_cloud, false));
+    }
+
+    #[test]
+    fn raw_pi_empty_completion_waits_for_agent_settled_and_cancels_on_continuation() {
+        let empty_end = json!({ "type": "agent_end", "messages": [] });
+        let final_end = json!({
+            "type": "agent_end",
+            "messages": [{
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "{\"entries\":[]}" }]
+            }]
+        });
+
+        // Raw Pi defers empty completion retry across compaction until agent_settled.
+        let mut tracker = ActivityRunTracker::new(true);
+        assert_eq!(tracker.on_event(&empty_end), ActivityRunEvent::Ignore);
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "compaction_start" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "compaction_end" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "agent_settled" })),
+            ActivityRunEvent::RetryEmptyCompletion
+        );
+        // A second empty turn fails instead of looping.
+        assert_eq!(
+            tracker.on_event(&empty_end),
+            ActivityRunEvent::Fail("AI returned an empty activity history".to_string())
+        );
+
+        // If Pi's own post-compaction continuation produces output before agent_settled,
+        // complete immediately without triggering an extra follow-up prompt.
+        let mut continued = ActivityRunTracker::new(true);
+        assert_eq!(continued.on_event(&empty_end), ActivityRunEvent::Ignore);
+        assert_eq!(
+            continued.on_event(&json!({ "type": "agent_start" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            continued.on_event(&final_end),
+            ActivityRunEvent::Complete("{\"entries\":[]}".to_string())
+        );
+        assert_eq!(
+            continued.on_event(&json!({ "type": "agent_settled" })),
+            ActivityRunEvent::Ignore
+        );
+
+        // ACP does not emit agent_settled and still retries on agent_end.
+        let mut acp = ActivityRunTracker::new(false);
+        assert_eq!(acp.on_event(&empty_end), ActivityRunEvent::RetryEmptyCompletion);
     }
 
     #[test]

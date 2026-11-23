@@ -50,6 +50,13 @@ const FIRST_PROMPT_START_TIMEOUT: Duration = PROMPT_START_TIMEOUT;
 pub const PROMPT_START_TIMEOUT_ERROR: &str =
     "AI agent did not start responding within its startup grace period";
 
+/// Maximum silence to wait for raw Pi's `agent_settled` event after `agent_end`.
+/// Pi >= 0.84 emits `agent_settled` once `_handlePostAgentRun()` finishes
+/// (milliseconds normally, or after `compaction_start`/`auto_retry_start`
+/// promotes the turn back to `agent_active`). Bounding pure settling ensures an
+/// older binary that never emits `agent_settled` cannot wedge the queue.
+const AGENT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn is_already_processing_rejection(error: &str) -> bool {
     error.to_ascii_lowercase().contains("already processing")
 }
@@ -173,6 +180,13 @@ pub struct PiQueueState {
     /// so `agent_end` plus the tool/steer state is the durable completion
     /// predicate; lifecycle responses are correlated separately by request id.
     agent_active: AtomicBool,
+    /// True for raw Pi processes that emit `agent_settled` once post-run hooks
+    /// (compaction/retries) complete and `_isAgentRunActive` returns to false.
+    awaits_agent_settled: AtomicBool,
+    /// True after `agent_end` while waiting for raw Pi's `agent_settled`.
+    /// Prevents writing the next prompt during `_handlePostAgentRun()`, which
+    /// otherwise fails with "Agent is already processing. Specify streamingBehavior...".
+    agent_settling: AtomicBool,
     /// Set before a prompt is written and cleared by its first `agent_start`,
     /// rejection, write failure, or termination. This reserves the turn
     /// without pretending the SDK actually accepted the prompt.
@@ -222,6 +236,8 @@ impl PiQueueState {
             cancelled: std::sync::Mutex::new(HashSet::new()),
             queued_payloads: std::sync::Mutex::new(HashMap::new()),
             agent_active: AtomicBool::new(false),
+            awaits_agent_settled: AtomicBool::new(false),
+            agent_settling: AtomicBool::new(false),
             prompt_pending: AtomicBool::new(false),
             agent_started: AtomicBool::new(false),
             steer_in_flight: AtomicBool::new(false),
@@ -255,10 +271,20 @@ impl PiQueueState {
         self.done_notify.notify_waiters();
     }
 
+    /// Configure whether this process emits `agent_settled` after `agent_end`.
+    pub fn set_awaits_agent_settled(&self, awaits: bool) {
+        self.awaits_agent_settled.store(awaits, Ordering::SeqCst);
+    }
+
+    pub fn awaits_agent_settled(&self) -> bool {
+        self.awaits_agent_settled.load(Ordering::SeqCst)
+    }
+
     /// Called by the stdout reader on `agent_start` (a prompt has begun streaming).
     pub fn mark_agent_active(&self) {
         self.stamp_activity();
         self.prompt_pending.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
         self.agent_active.store(true, Ordering::SeqCst);
         // Records that this turn genuinely started, so the acceptance wait can
         // still recognize a turn that finished before it looked (vs an abort
@@ -267,10 +293,38 @@ impl PiQueueState {
         self.done_notify.notify_waiters();
     }
 
+    /// Called by the stdout reader on `agent_end` for raw Pi while awaiting `agent_settled`.
+    pub fn mark_agent_settling(&self) {
+        self.stamp_activity();
+        self.prompt_pending.store(false, Ordering::SeqCst);
+        self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(true, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
+    }
+
+    /// Called by the stdout reader on `agent_settled` (post-run hooks finished).
+    pub fn mark_agent_settled(&self) {
+        self.prompt_pending.store(false, Ordering::SeqCst);
+        self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
+        self.signal_done_if_idle();
+    }
+
+    /// Clear the settle guard if a bounded wait expires.
+    pub fn clear_agent_settling(&self) {
+        self.agent_settling.store(false, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
+    }
+
+    pub fn is_agent_settling(&self) -> bool {
+        self.agent_settling.load(Ordering::SeqCst)
+    }
+
     /// Called by the stdout reader on `agent_end` (a prompt has finished).
     pub fn mark_agent_idle(&self) {
         self.prompt_pending.store(false, Ordering::SeqCst);
         self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
     }
 
     /// Whether a prompt is currently mid-stream.
@@ -292,6 +346,7 @@ impl PiQueueState {
     fn mark_prompt_rejected(&self) {
         self.prompt_pending.store(false, Ordering::SeqCst);
         self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
         if let Ok(mut active_tools) = self.active_tool_calls.lock() {
             active_tools.clear();
         }
@@ -305,6 +360,7 @@ impl PiQueueState {
             // looked idle. Clear only this prompt's reservation and preserve a
             // busy guard until that real turn emits its terminal event.
             self.prompt_pending.store(false, Ordering::SeqCst);
+            self.agent_settling.store(false, Ordering::SeqCst);
             self.agent_active.store(true, Ordering::SeqCst);
             self.done_notify.notify_waiters();
         } else {
@@ -315,6 +371,7 @@ impl PiQueueState {
     fn finish_aborted_turn(&self) {
         self.prompt_pending.store(false, Ordering::SeqCst);
         self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
         self.steer_in_flight.store(false, Ordering::SeqCst);
         if let Ok(mut active_tools) = self.active_tool_calls.lock() {
             active_tools.clear();
@@ -373,6 +430,7 @@ impl PiQueueState {
 
     pub fn has_active_turn_work(&self) -> bool {
         self.is_agent_active()
+            || self.is_agent_settling()
             || self.is_prompt_pending()
             || self.is_steer_in_flight()
             || self.has_active_tools()
@@ -429,6 +487,10 @@ impl PiQueueState {
 
     /// Called by the stdout reader when the process terminates (EOF).
     pub fn signal_terminated(&self) {
+        self.agent_active.store(false, Ordering::SeqCst);
+        self.agent_settling.store(false, Ordering::SeqCst);
+        self.prompt_pending.store(false, Ordering::SeqCst);
+        self.steer_in_flight.store(false, Ordering::SeqCst);
         let _ = self.alive.send(false);
         // Also wake anyone waiting for done, they'll see terminated
         self.done_notify.notify_waiters();
@@ -1019,6 +1081,33 @@ fn spawn_queue_with_prompt_start_timeouts(
                                         state.clear_steer_in_flight();
                                     }
                                 }
+                            } else if state.is_agent_settling()
+                                && !state.is_agent_active()
+                                && !state.is_prompt_pending()
+                                && !state.is_steer_in_flight()
+                                && !state.has_active_tools()
+                            {
+                                match wait_until_idle_or_terminated(
+                                    &state,
+                                    &mut alive_rx,
+                                    &cmd_type,
+                                    AGENT_SETTLE_TIMEOUT,
+                                )
+                                .await
+                                {
+                                    IdleWait::Idle => {}
+                                    IdleWait::Terminated => {
+                                        died_during_wait = true;
+                                        break;
+                                    }
+                                    IdleWait::TimedOut => {
+                                        warn!(
+                                            "pi_command_queue: agent_settled did not arrive within {}s after agent_end, clearing settle guard",
+                                            AGENT_SETTLE_TIMEOUT.as_secs()
+                                        );
+                                        state.clear_agent_settling();
+                                    }
+                                }
                             } else {
                                 match wait_until_idle_or_terminated(
                                     &state,
@@ -1399,6 +1488,17 @@ async fn wait_for_prompt_idle_or_rejected(
             return PromptWait::Idle;
         }
 
+        let only_settling = state.is_agent_settling()
+            && !state.is_agent_active()
+            && !state.is_prompt_pending()
+            && !state.is_steer_in_flight()
+            && !state.has_active_tools();
+        let step_deadline = if only_settling {
+            deadline.min(state.last_activity_instant() + AGENT_SETTLE_TIMEOUT)
+        } else {
+            deadline
+        };
+
         if let Some(receiver) = response_rx.as_mut() {
             tokio::select! {
                 response = receiver => {
@@ -1414,7 +1514,17 @@ async fn wait_for_prompt_idle_or_rejected(
                         return PromptWait::Terminated;
                     }
                 }
-                _ = tokio::time::sleep_until(deadline) => return PromptWait::TimedOut,
+                _ = tokio::time::sleep_until(step_deadline) => {
+                    if only_settling && step_deadline < deadline {
+                        warn!(
+                            "pi_command_queue: agent_settled did not arrive within {}s after agent_end, releasing prompt wait",
+                            AGENT_SETTLE_TIMEOUT.as_secs()
+                        );
+                        state.clear_agent_settling();
+                        continue;
+                    }
+                    return PromptWait::TimedOut;
+                }
             }
         } else {
             tokio::select! {
@@ -1424,7 +1534,17 @@ async fn wait_for_prompt_idle_or_rejected(
                         return PromptWait::Terminated;
                     }
                 }
-                _ = tokio::time::sleep_until(deadline) => return PromptWait::TimedOut,
+                _ = tokio::time::sleep_until(step_deadline) => {
+                    if only_settling && step_deadline < deadline {
+                        warn!(
+                            "pi_command_queue: agent_settled did not arrive within {}s after agent_end, releasing prompt wait",
+                            AGENT_SETTLE_TIMEOUT.as_secs()
+                        );
+                        state.clear_agent_settling();
+                        continue;
+                    }
+                    return PromptWait::TimedOut;
+                }
             }
         }
     }
