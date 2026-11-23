@@ -323,8 +323,11 @@ fn engine_settings(current: &Value) -> Value {
             .map(|definition| {
                 (
                     definition.device_key.clone(),
-                    current
-                        .get(&definition.device_key)
+                    (if definition.policy_key == "streamingMode" {
+                        current[MANAGED_SETTINGS].get(&definition.device_key)
+                    } else {
+                        current.get(&definition.device_key)
+                    })
                         .or(definition.default_value.as_ref())
                         .cloned()
                         .unwrap_or(Value::Null),
@@ -338,7 +341,7 @@ fn engine_settings(current: &Value) -> Value {
 fn reconcile(locked: &HashMap<String, Value>, current: &Value) -> (Value, bool) {
     let mut managed = Map::new();
     for def in DEFINITIONS.iter() {
-        if def.policy_key == "autoStartEnabled"
+        if matches!(def.policy_key.as_str(), "autoStartEnabled" | "streamingMode" | "screenshotFrameRate")
             && !cfg!(any(target_os = "macos", target_os = "windows"))
         {
             continue;
@@ -357,7 +360,9 @@ fn reconcile(locked: &HashMap<String, Value>, current: &Value) -> (Value, bool) 
     }
     let mut next = current.clone();
     for (key, value) in &managed {
-        next[key] = value.clone();
+        if key != "streamingMode" {
+            next[key] = value.clone();
+        }
     }
     next[MANAGED_SETTINGS] = Value::Object(managed);
     let engine_changed = engine_settings(current) != engine_settings(&next);
@@ -883,6 +888,27 @@ mod tests {
             "unchanged policy saved again"
         ))
         .unwrap());
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn streaming_policy_and_sampling_are_independent_and_removal_disables_mode() {
+        let current = json!({"screenshotFrameRate": 2, "idleCaptureIntervalMs": 5000});
+        let (configured, restart) = reconcile(&policy(json!({"screenshotFrameRate": 20})), &current);
+        assert!(restart);
+        assert_eq!(configured["screenshotFrameRate"], 20);
+        assert_eq!(configured["idleCaptureIntervalMs"], 5000);
+        assert_eq!(engine_settings(&configured)["streamingMode"], false);
+
+        let (enabled, restart) = reconcile(&policy(json!({"streamingMode": true})), &configured);
+        assert!(restart);
+        assert_eq!(engine_settings(&enabled)["streamingMode"], true);
+        assert_eq!(enabled["screenshotFrameRate"], 20);
+        assert_eq!(enabled["idleCaptureIntervalMs"], 5000);
+        let (released, restart) = reconcile(&HashMap::new(), &enabled);
+        assert!(restart);
+        assert_eq!(engine_settings(&released)["streamingMode"], false);
+        assert_eq!(released["idleCaptureIntervalMs"], 5000);
     }
 
     #[test]

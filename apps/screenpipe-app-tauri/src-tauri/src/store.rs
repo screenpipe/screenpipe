@@ -2500,6 +2500,10 @@ impl SettingsStore {
             data_dir,
             Some(&resolved_engine),
         );
+        config.streaming_mode = self.extra.get("enterpriseManagedSettings")
+            .and_then(|managed| managed.get("streamingMode"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // Resolve the API auth key from the seeded cache. The cache is populated
         // asynchronously by `recording::spawn_screenpipe` via the shared helper
         // (`screenpipe_engine::auth_key::resolve_api_auth_key`) — which is the

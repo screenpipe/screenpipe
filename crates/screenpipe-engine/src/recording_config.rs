@@ -175,6 +175,8 @@ pub struct RecordingConfig {
     pub capture_max_width: u32,
     /// Native screenshot acquisition rate; does not change HD video pacing.
     pub screenshot_frame_rate: u32,
+    /// Managed opt-in to best-effort window masking on regular screenshots.
+    pub streaming_mode: bool,
 
     // Misc
     pub use_chinese_mirror: bool,
@@ -402,6 +404,7 @@ impl RecordingConfig {
             user_name: settings.user_name.clone(),
             video_quality: settings.video_quality.clone(),
             screenshot_frame_rate: settings.screenshot_frame_rate,
+            streaming_mode: false,
             capture_max_width: match settings.capture_max_width {
                 0 => 0,
                 width => width.max(MIN_CAPTURE_MAX_WIDTH),
@@ -575,6 +578,7 @@ impl RecordingConfig {
             video_quality: self.video_quality.clone(),
             capture_max_width: self.capture_max_width,
             screenshot_frame_rate: self.screenshot_frame_rate,
+            streaming_mode: self.streaming_mode,
             disable_screenshots: self.disable_screenshots,
             focused_window_screenshots: self.focused_window_screenshots,
             enable_semantic_context: self.enable_semantic_context,

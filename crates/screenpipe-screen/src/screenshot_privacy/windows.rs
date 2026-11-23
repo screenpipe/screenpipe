@@ -403,6 +403,57 @@ pub(super) struct PrivacySession {
     witnesses: HashMap<(u32, u32), Witness>,
     owners: Vec<usize>,
     visited: Vec<bool>,
+    streaming: Option<StreamingPlan>,
+}
+
+struct StreamingPlan {
+    filters: WindowFilters,
+    sources: ExclusionSources,
+    excluded_ids: Vec<u32>,
+    masks: super::window_events::Watcher<Vec<super::scene::Rect>>,
+}
+
+fn streaming_masks(
+    session: &mut PrivacySession,
+    monitor: &MonitorData,
+    filters: &WindowFilters,
+    sources: ExclusionSources,
+    excluded_ids: &[u32],
+) -> Option<std::sync::Arc<Vec<super::scene::Rect>>> {
+    if !session.streaming.as_ref().is_some_and(|plan| {
+        plan.filters == *filters && plan.sources == sources && plan.excluded_ids == excluded_ids
+    }) {
+        let info = monitor.clone();
+        let watched = filters.clone();
+        let ids = excluded_ids.to_vec();
+        session.streaming = Some(StreamingPlan {
+            filters: filters.clone(),
+            sources,
+            excluded_ids: ids.clone(),
+            masks: super::window_events::Watcher::start(move || {
+                Ok(snapshot(&info, &watched, sources, &ids)?
+                    .iter()
+                    .filter_map(|window| {
+                        if window.policy == SurfacePolicy::Allowed {
+                            return None;
+                        }
+                        let (left, top, right, bottom) = clipped_bounds(window, &info);
+                        Some(super::scene::Rect {
+                            x: left as i64,
+                            y: top as i64,
+                            width: (right - left) as u32,
+                            height: (bottom - top) as u32,
+                        })
+                    })
+                    .collect())
+            }),
+        });
+        tracing::info!("regular screenshot streaming mode active on Windows");
+    }
+    session
+        .streaming
+        .as_ref()
+        .and_then(|plan| plan.masks.latest())
 }
 
 fn clipped_bounds(window: &NativeWindow, monitor: &MonitorData) -> (usize, usize, usize, usize) {
@@ -601,6 +652,51 @@ pub(crate) async fn capture_filtered(
         .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
     let candidate = monitor.capture_native_frame_streaming().await?;
     let monitor_info = monitor.get_info();
+    if filters.streaming_mode() {
+        let masks = {
+            let mut session = privacy
+                .inner
+                .lock()
+                .map_err(|_| anyhow!("privacy session mutex poisoned"))?;
+            streaming_masks(&mut session, &monitor_info, filters, sources, excluded_ids)
+        };
+        return tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut image = candidate
+                .image
+                .as_rgba8()
+                .context("WGC display frame is not RGBA8")?
+                .clone();
+            if let Some(masks) = masks {
+                for rect in masks.iter() {
+                    super::scene::paint_black(&mut image, *rect);
+                }
+            } else {
+                let rect = super::scene::Rect {
+                    x: 0,
+                    y: 0,
+                    width: image.width(),
+                    height: image.height(),
+                };
+                super::scene::paint_black(&mut image, rect);
+            }
+            Ok((
+                DynamicImage::ImageRgba8(image),
+                candidate.session_id,
+                candidate.system_relative_time,
+                candidate.sequence,
+                candidate.captured_at,
+            ))
+        })
+        .await
+        .context("Windows streaming mask worker failed")?;
+    }
+    privacy
+        .inner
+        .lock()
+        .map_err(|_| anyhow!("privacy session mutex poisoned"))?
+        .streaming
+        .take();
     let filters = filters.clone();
     let excluded_ids = excluded_ids.to_vec();
     let before_info = monitor_info.clone();

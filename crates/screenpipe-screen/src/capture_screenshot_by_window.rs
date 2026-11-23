@@ -227,6 +227,7 @@ pub struct WindowFilters {
     legacy_ignored_urls: Vec<String>,
     title_block_patterns: Vec<String>,
     url_policy: screenpipe_a11y::url_filter::UrlPolicy,
+    streaming_mode: bool,
 }
 
 impl WindowFilters {
@@ -262,11 +263,30 @@ impl WindowFilters {
             legacy_ignored_urls,
             title_block_patterns,
             url_policy: screenpipe_a11y::url_filter::UrlPolicy::new(ignored_urls, included_urls),
+            streaming_mode: false,
         }
     }
 
     /// Apps that are always excluded — system lock screen processes.
     const BUILTIN_IGNORED: &'static [&'static str] = &["loginwindow", "logonui"];
+
+    /// Streaming mode relaxes geometry only for window exclusions. URL and
+    /// window allowlists keep the existing screenshot privacy path.
+    pub fn with_streaming_mode(mut self, enabled: bool) -> Self {
+        #[cfg(not(target_os = "macos"))]
+        let supported = cfg!(target_os = "windows");
+        #[cfg(target_os = "macos")]
+        let supported = cidre::api::macos_available("14.0");
+        self.streaming_mode = enabled
+            && supported
+            && self.include_patterns.is_empty()
+            && !self.url_policy.is_active();
+        self
+    }
+
+    pub fn streaming_mode(&self) -> bool {
+        self.streaming_mode
+    }
 
     /// Explicit include/exclude patterns require isolated window pixels.
     pub fn has_window_patterns(&self) -> bool {

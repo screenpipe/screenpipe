@@ -65,6 +65,7 @@ pub struct VisionManagerConfig {
     pub capture_max_width: u32,
     /// Preview acquisition rate, independent of HD's encoded frame rate.
     pub screenshot_frame_rate: u32,
+    pub streaming_mode: bool,
     /// Skip screenshot pixels/JPEG/OCR while keeping accessibility-tree capture.
     pub disable_screenshots: bool,
     pub focused_window_screenshots: bool,
@@ -700,6 +701,7 @@ impl VisionManager {
             jpeg_quality: baseline_q,
             disable_screenshots: self.config.disable_screenshots,
             focused_window_screenshots: self.config.focused_window_screenshots,
+            streaming_mode: self.config.streaming_mode,
             ..EventDrivenCaptureConfig::default()
         };
         // Mitsukeru fork: apply per-parameter CLI / settings overrides if any.
@@ -1085,6 +1087,7 @@ mod tests {
             video_quality: "balanced".to_string(),
             capture_max_width: 0,
             screenshot_frame_rate: screenpipe_config::DEFAULT_SCREENSHOT_FRAME_RATE,
+            streaming_mode: false,
             disable_screenshots: false,
             focused_window_screenshots: false,
             enable_semantic_context,
