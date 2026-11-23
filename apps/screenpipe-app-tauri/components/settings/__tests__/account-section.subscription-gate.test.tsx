@@ -462,12 +462,34 @@ describe("AccountSection subscription/login gating", () => {
     expect(loginStatus()).toContain("logged in as basic@screenpipe.test");
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     expect(screen.queryByTestId("account-data-sync-setting")).not.toBeInTheDocument();
+    expect(screen.getByTestId("account-data-sync-locked")).toBeInTheDocument();
     // Branch-3 named-plan badge still renders for the paying Basic user.
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByTestId("account-plan-standard")).toHaveAttribute(
       "data-current", "true",
     );
     expect(screen.queryByText(/One-time purchase/)).not.toBeInTheDocument();
+  });
+
+  it("tracks and routes Basic users from the locked personal data sync card to Business upgrade", () => {
+    mocks.state.user = {
+      id: "u1",
+      email: "basic@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: false,
+      subscription_plan: "standard",
+    };
+
+    render(<AccountSection />);
+
+    const lockedCard = screen.getByTestId("account-data-sync-locked");
+    expect(within(lockedCard).getByRole("switch", { name: "Sync work context across devices" })).toBeDisabled();
+    fireEvent.click(screen.getByTestId("locked-data-sync-upgrade-button"));
+
+    expect(mocks.capture).toHaveBeenCalledWith("desktop_upgrade_entry_clicked", {
+      source: "locked-data-sync",
+      target_plan: "business",
+    });
   });
 
   it("sends existing Basic subscribers to billing even with a stale cloud flag", () => {
@@ -562,6 +584,7 @@ describe("AccountSection subscription/login gating", () => {
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     expect(screen.getByText(/sign in to screenpipe/i)).toBeInTheDocument();
     expect(screen.queryByTestId("account-data-sync-setting")).not.toBeInTheDocument();
+    expect(screen.getByTestId("account-data-sync-locked")).toBeInTheDocument();
   });
 
   function signInForDataSync() {
@@ -589,6 +612,7 @@ describe("AccountSection subscription/login gating", () => {
         finishDevice = resolve;
       }));
     render(<AccountSection />);
+    expect(screen.queryByTestId("account-data-sync-locked")).not.toBeInTheDocument();
     const sync = screen.getByRole("switch", { name: "Sync this device" });
     expect(sync).toBeVisible();
     expect(sync.closest("details")).toBeNull();
