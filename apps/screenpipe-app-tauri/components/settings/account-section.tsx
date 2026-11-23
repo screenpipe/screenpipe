@@ -977,6 +977,40 @@ export function AccountSection() {
             />
           </div>
 
+          {/* Locked personal data sync toggle — not logged in */}
+          <Card className="p-4 opacity-75" data-testid="account-data-sync-locked">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Sync work context across devices</p>
+                <p className="text-xs text-muted-foreground">
+                  Upload your screen, audio &amp; meeting history to use across your devices and cloud AI tools
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Switch
+                  disabled
+                  checked={false}
+                  aria-label="Sync work context across devices"
+                />
+                <button
+                  type="button"
+                  data-testid="locked-data-sync-upgrade-button"
+                  onClick={() => {
+                    posthog.capture("desktop_upgrade_entry_clicked", {
+                      source: "locked-data-sync",
+                      target_plan: "business",
+                    });
+                    focusUpgradeCard("locked-data-sync");
+                  }}
+                  className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium flex items-center gap-1 hover:bg-primary/20 transition-colors cursor-pointer"
+                >
+                  <Lock className="h-3 w-3" />
+                  Business
+                </button>
+              </div>
+            </div>
+          </Card>
+
           {/* Locked pipe sync toggle — not logged in */}
           <Card className="p-4 opacity-75">
             <div className="flex items-center justify-between">
@@ -1017,7 +1051,7 @@ export function AccountSection() {
               <p className="text-sm text-muted-foreground mt-2">
                 {isLifetimePlan
                   ? ui("One-time purchase. Local capture, search & timeline are included.")
-                  : ui("Local capture, search & timeline. Add cloud sync, cloud AI & 50+ integrations with Business below.")}
+                  : ui("Local capture, search & timeline. Add cross-device sync, frontier AI models & higher limits with Business below.")}
               </p>
 
               <div className="mt-4">
@@ -1069,6 +1103,40 @@ export function AccountSection() {
               onContinue={handleCheckout}
             />
           </div>
+
+          {/* Locked personal data sync toggle — gated to Business (cloud) */}
+          <Card className="p-4 opacity-75" data-testid="account-data-sync-locked">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Sync work context across devices</p>
+                <p className="text-xs text-muted-foreground">
+                  Upload your screen, audio &amp; meeting history to use across your devices and cloud AI tools
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Switch
+                  disabled
+                  checked={false}
+                  aria-label="Sync work context across devices"
+                />
+                <button
+                  type="button"
+                  data-testid="locked-data-sync-upgrade-button"
+                  onClick={() => {
+                    posthog.capture("desktop_upgrade_entry_clicked", {
+                      source: "locked-data-sync",
+                      target_plan: "business",
+                    });
+                    focusUpgradeCard("locked-data-sync");
+                  }}
+                  className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium flex items-center gap-1 hover:bg-primary/20 transition-colors cursor-pointer"
+                >
+                  <Lock className="h-3 w-3" />
+                  Business
+                </button>
+              </div>
+            </div>
+          </Card>
 
           {/* Locked pipe sync toggle — gated to Business (cloud) */}
           <Card className="p-4 opacity-75">
