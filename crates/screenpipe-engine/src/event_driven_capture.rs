@@ -581,6 +581,7 @@ pub struct EventDrivenCaptureConfig {
     /// fallback are skipped.
     pub disable_screenshots: bool,
     pub focused_window_screenshots: bool,
+    pub streaming_mode: bool,
     /// User-pinned guaranteed-capture floor (ms). When `Some`, this is an
     /// explicit "always capture at least every N ms" choice and it must
     /// survive PowerProfile transitions — a battery-saver switch (whose
@@ -603,6 +604,7 @@ impl Default for EventDrivenCaptureConfig {
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
             disable_screenshots: false,
             focused_window_screenshots: false,
+            streaming_mode: false,
             idle_capture_interval_override_ms: None, // follow PowerProfile unless pinned
         }
     }
@@ -1053,6 +1055,7 @@ pub(crate) async fn event_driven_capture_loop(
 
     let screenshots_disabled_by_config = config.disable_screenshots;
     let focused_window_screenshots = config.focused_window_screenshots;
+    let streaming_requested = config.streaming_mode;
     let mut screenshot_disabled = screenshots_disabled_by_config;
     // Publish the effective state so /health can name an intentional pixel
     // pause instead of blaming Screen Recording permission for it (#5808).
@@ -1185,6 +1188,9 @@ pub(crate) async fn event_driven_capture_loop(
             &tree_walker_config.included_windows,
             &tree_walker_config.ignored_urls,
             &tree_walker_config.included_urls,
+        )
+        .with_streaming_mode(
+            streaming_requested && !focused_window_screenshots && !pause_on_drm_content,
         ),
         ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
@@ -1193,6 +1199,16 @@ pub(crate) async fn event_driven_capture_loop(
         languages: &languages,
         semantic_tx: semantic_tx.as_ref(),
     };
+
+    if streaming_requested && !capture_params.window_filters.streaming_mode() {
+        tracing::info!(
+            monitor_id,
+            focused_window_screenshots,
+            pause_on_drm_content,
+            screenshot_outcome = "standard_privacy_path",
+            "streaming mode constrained by platform support or strict capture policy"
+        );
+    }
 
     // Capture immediately on startup so the timeline has a frame right away.
     // Also seeds the frame comparer so subsequent visual-change checks work.
@@ -3172,6 +3188,9 @@ async fn redacted_focus_check(
         .clone()
         .try_acquire_owned()
     else {
+        if filters.streaming_mode() && pixels_only_permitted {
+            return RedactedFocusDecision::PixelsOnly;
+        }
         return RedactedFocusDecision::Withhold;
     };
     config.ignored_windows.clear();
@@ -3184,6 +3203,17 @@ async fn redacted_focus_check(
         Ok(Ok(Ok(focus))) => Some(focus),
         _ => None,
     };
+    if filters.streaming_mode()
+        && pixels_only_permitted
+        && matches!(
+            focus,
+            None | Some(screenpipe_a11y::tree::FocusedWindowFilterResult::NotFound)
+        )
+    {
+        // An unavailable geometry observation must not discard the already
+        // masked screenshot or authorize text and URL extraction.
+        return RedactedFocusDecision::PixelsOnly;
+    }
     redacted_focus_decision(filters, focus, pixels_only_permitted)
 }
 
@@ -3242,6 +3272,60 @@ async fn monitor_hosts_focused_window(params: &CaptureParams<'_>) -> bool {
         .flatten();
         focused_window_is_on_monitor(bounds, params.tree_walker_config)
     }
+}
+
+async fn persist_masked_screenshot(
+    params: &CaptureParams<'_>,
+    trigger: &CaptureTrigger,
+    image: image::DynamicImage,
+    captured_at: chrono::DateTime<Utc>,
+    in_meeting: bool,
+) -> Result<CaptureOutput> {
+    if crate::sleep_monitor::screen_is_locked() {
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+            corrupt: None,
+        });
+    }
+    let _ = params
+        .tree_walker
+        .suspend_with_timeout(Duration::from_millis(250))
+        .await;
+    let ctx = CaptureContext {
+        db: params.db,
+        snapshot_writer: params.snapshot_writer,
+        image: Arc::new(image),
+        captured_at,
+        monitor_id: params.monitor_id,
+        device_name: params.device_name,
+        app_name: None,
+        window_name: None,
+        browser_url: None,
+        document_path: None,
+        focused: false,
+        capture_trigger: trigger.as_str(),
+        use_pii_removal: params.use_pii_removal,
+        languages: params.languages.to_vec(),
+        elements_ref_frame_id: None,
+        screenshot_disabled: false,
+        in_meeting,
+        monitor_hosts_focus: false,
+        ax_screenshot_coherent: false,
+        focused_window_bounds: None,
+    };
+    let result = paired_capture_deferred(&ctx).await?;
+    if let Some(sender) = params.semantic_tx {
+        sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
+    }
+    let image = Arc::try_unwrap(ctx.image).unwrap_or_else(|arc| (*arc).clone());
+    Ok(CaptureOutput {
+        result: Some(result),
+        image,
+        elements_deduped: false,
+        corrupt: None,
+    })
 }
 
 /// Perform a single event-driven capture.
@@ -3430,7 +3514,10 @@ async fn do_capture(
         if let Some(kind) = frame_corruption_with_privacy_padding(
             &image,
             params.window_filters.has_window_patterns(),
-        ) {
+        )
+        .filter(|kind| {
+            !params.window_filters.streaming_mode() || !matches!(kind, CorruptKind::Black)
+        }) {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
                 // shows up in shared logs. Black is common (DRM / excluded window).
@@ -3486,44 +3573,11 @@ async fn do_capture(
         });
     }
     if focus_decision == RedactedFocusDecision::PixelsOnly {
-        let _ = params
-            .tree_walker
-            .suspend_with_timeout(Duration::from_millis(250))
-            .await;
-        let ctx = CaptureContext {
-            db: params.db,
-            snapshot_writer: params.snapshot_writer,
-            image: Arc::new(image),
-            captured_at,
-            monitor_id: params.monitor_id,
-            device_name: params.device_name,
-            app_name: None,
-            window_name: None,
-            browser_url: None,
-            document_path: None,
-            focused: false,
-            capture_trigger: trigger.as_str(),
-            use_pii_removal: params.use_pii_removal,
-            languages: params.languages.to_vec(),
-            elements_ref_frame_id: None,
-            screenshot_disabled: false,
-            in_meeting,
-            monitor_hosts_focus: false,
-            ax_screenshot_coherent: false,
-            focused_window_bounds: None,
-        };
-        let result = paired_capture_deferred(&ctx).await?;
-        if let Some(sender) = params.semantic_tx {
-            sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
-        }
-        let image = Arc::try_unwrap(ctx.image).unwrap_or_else(|arc| (*arc).clone());
-        return Ok(CaptureOutput {
-            result: Some(result),
-            image,
-            elements_deduped: false,
-            corrupt: None,
-        });
+        return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting).await;
     }
+    let streaming_pixels = params.window_filters.streaming_mode()
+        && !screenshot_disabled
+        && !skip_pixels_for_unknown_exclusions;
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
     // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
@@ -3770,6 +3824,12 @@ async fn do_capture(
 
     let mut tree_snapshot = match tree_walk_result {
         Some(TreeWalkResult::Found(snap)) => Some(snap),
+        Some(TreeWalkResult::Skipped(screenpipe_a11y::tree::SkipReason::UserIgnored))
+            if streaming_pixels =>
+        {
+            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
+                .await;
+        }
         Some(TreeWalkResult::Skipped(reason)) => {
             if !matches!(reason, screenpipe_a11y::tree::SkipReason::UrlPending) {
                 let _ = params
@@ -3828,6 +3888,10 @@ async fn do_capture(
             || (foreground_identity_before.is_some()
                 && foreground_identity_before == foreground_identity_after);
         if monitor_hosts_focus && !ax_screenshot_coherent {
+            if streaming_pixels {
+                return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
+                    .await;
+            }
             debug!(
                 before = ?foreground_identity_before,
                 after = ?foreground_identity_after,
@@ -3865,6 +3929,16 @@ async fn do_capture(
             // scoped `App::Title` patterns defer to the post-resolution gate
             // below where the full pair is known.
             if window_pattern::matches_any(&params.ignored_patterns, &app_lower, "") {
+                if streaming_pixels {
+                    return persist_masked_screenshot(
+                        params,
+                        trigger,
+                        image,
+                        captured_at,
+                        in_meeting,
+                    )
+                    .await;
+                }
                 debug!(
                     "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
                     app, params.monitor_id
@@ -3977,6 +4051,18 @@ async fn do_capture(
         app_name_owned.as_deref(),
         window_name_owned.as_deref(),
     ) {
+        if streaming_pixels
+            && !resolved_window_matches_privacy_filters(
+                params.tree_walker_config.ignore_incognito_windows,
+                monitor_hosts_focus,
+                &[],
+                app_name_owned.as_deref(),
+                window_name_owned.as_deref(),
+            )
+        {
+            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
+                .await;
+        }
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
         let check_win = window_name_owned
             .as_deref()

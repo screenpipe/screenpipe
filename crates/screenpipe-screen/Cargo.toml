@@ -130,6 +130,7 @@ windows = { workspace = true, features = [
   # Detect Remote Desktop / Terminal Services sessions so WGC can be scoped to
   # individual screenshot requests instead of loading the remote compositor.
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Accessibility",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

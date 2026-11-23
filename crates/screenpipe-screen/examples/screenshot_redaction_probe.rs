@@ -68,7 +68,9 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     let _source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor.id());
     let filters = match mode {
-        "exclude" | "policy-cycle" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
+        "exclude" | "policy-cycle" | "streaming" => {
+            WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[])
+        }
         #[cfg(target_os = "windows")]
         "cadence" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         "none" => WindowFilters::new(&[], &[], &[]),
@@ -88,7 +90,12 @@ async fn main() -> anyhow::Result<()> {
         "nomatch" => WindowFilters::new(&["::NeverPresentWindow".into()], &[], &[]),
         "title-churn" => WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]),
         _ => anyhow::bail!("unknown mode: {mode}"),
-    };
+    }
+    .with_streaming_mode(mode == "streaming");
+    anyhow::ensure!(
+        mode != "streaming" || filters.streaming_mode(),
+        "streaming masks unsupported in this session"
+    );
     let writer =
         screenpipe_screen::snapshot_writer::SnapshotWriter::new(out.join("snapshots"), 90, 0);
     #[cfg(target_os = "windows")]
@@ -280,6 +287,12 @@ async fn main() -> anyhow::Result<()> {
         anyhow::ensure!(
             usable == count,
             "only {usable}/{count} scheduled frames contained useful allowed output"
+        );
+    }
+    if mode == "streaming" {
+        anyhow::ensure!(
+            saved == count && usable > 0,
+            "streaming recorded {saved}/{count} frames, {usable} with allowed content"
         );
     }
     anyhow::ensure!(
