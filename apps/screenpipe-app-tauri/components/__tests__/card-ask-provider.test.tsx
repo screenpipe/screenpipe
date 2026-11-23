@@ -4,33 +4,18 @@
 
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CARD_ASK_ARM_STORAGE_KEY,
-  CARD_ASK_SHOWN_STORAGE_KEY,
-} from "@/lib/card-ask/gating";
+import posthog from "posthog-js";
 import { resetCardAskTriggerBus } from "@/lib/card-ask/trigger-bus";
 
-/**
- * Provider-level tests. The controller is covered in
- * lib/hooks/__tests__/use-card-ask.test.tsx; what is pinned here is *when* the
- * provider emits, which is where the arm/settings startup race lived.
- */
-
-let flagVariant: string | undefined = "at_login";
-// The kill switch is read live on every decision, so it has to be mocked or
-// every ask is (correctly) suppressed.
 let flagEnabled: boolean | undefined = true;
 let businessTrialReminderEnabled: boolean | undefined = false;
-let flagPayload: unknown = undefined;
 let settingsState: { settings: any; isSettingsLoaded: boolean };
 
 vi.mock("posthog-js/react", () => ({
-  useFeatureFlagVariantKey: () => flagVariant,
   useFeatureFlagEnabled: (key: string) =>
     key === "business-trial-card-reminder"
       ? businessTrialReminderEnabled
       : flagEnabled,
-  useFeatureFlagPayload: () => flagPayload,
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -66,6 +51,7 @@ const localStorageMock = {
   },
   clear: () => {
     localStorageValues.clear();
+  vi.clearAllMocks();
   },
 };
 
@@ -84,7 +70,7 @@ function reset() {
     value: localStorageMock,
   });
   resetCardAskTriggerBus();
-  flagVariant = "at_login";
+  flagEnabled = true;
   businessTrialReminderEnabled = false;
   posthogDistinctId = "user_123";
   settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
@@ -97,78 +83,11 @@ function modal() {
   return screen.queryByTestId("card-ask-modal");
 }
 
-describe("CardAskProvider login trigger", () => {
-  it("shows the login ask for an eligible user in at_login", () => {
-    render(<CardAskProvider />);
-    expect(modal()).not.toBeNull();
-  });
-
-  it("still shows it when settings finish loading after the arm resolves", () => {
-    // The regression. The arm comes from a synchronous localStorage read and
-    // the account from an async store load, so this is the real startup order
-    // on a cold launch. Emitting on `arm` alone fired into an unloaded
-    // account, was refused, and — the bus having no replay — was lost for the
-    // whole session, silently zeroing out the at_login arm.
-    settingsState = { settings: { user: null }, isSettingsLoaded: false };
-    const { rerender } = render(<CardAskProvider />);
-    expect(modal()).toBeNull();
-
-    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
-    rerender(<CardAskProvider />);
-    expect(modal()).not.toBeNull();
-  });
-
-  it("shows it when the user signs in after Home is already mounted", () => {
-    settingsState = { settings: { user: null }, isSettingsLoaded: true };
-    const { rerender } = render(<CardAskProvider />);
-    expect(modal()).toBeNull();
-
-    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
-    rerender(<CardAskProvider />);
-    expect(modal()).not.toBeNull();
-  });
-
-  it("re-emitting on every settings change still asks only once", () => {
-    const first = render(<CardAskProvider />);
-    expect(modal()).not.toBeNull();
-    expect(
-      JSON.parse(
-        window.localStorage.getItem(CARD_ASK_SHOWN_STORAGE_KEY) ?? "[]",
-      ),
-    ).toEqual(["login"]);
-    first.unmount();
-
-    // A later launch: the arm is sticky and the shown-list must keep this to a
-    // single ask for the install, however many times the effect re-emits.
-    resetCardAskTriggerBus();
-    render(<CardAskProvider />);
-    expect(modal()).toBeNull();
-  });
-
-  it("stays silent for a user with a card on file", () => {
-    settingsState = {
-      settings: { user: { ...cardlessUser, has_payment_method: true } },
-      isSettingsLoaded: true,
-    };
-    render(<CardAskProvider />);
-    expect(modal()).toBeNull();
-  });
-
-  it("stays silent in control even once settings load", () => {
-    flagVariant = "control";
-    settingsState = { settings: { user: null }, isSettingsLoaded: false };
-    const { rerender } = render(<CardAskProvider />);
-    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
-    rerender(<CardAskProvider />);
-    expect(modal()).toBeNull();
-  });
-
-  it("does not fire login for an arm that does not own it", () => {
-    flagVariant = "at_limit";
-    localStorageValues.set(CARD_ASK_ARM_STORAGE_KEY, "at_limit");
-    render(<CardAskProvider />);
-    expect(modal()).toBeNull();
-  });
+it("does not show a Home login modal or re-enroll a legacy install", () => {
+  localStorageValues.set("screenpipe_card_ask_arm", "at_login");
+  render(<CardAskProvider />);
+  expect(modal()).toBeNull();
+  expect(posthog.capture).not.toHaveBeenCalledWith("card_ask_enrolled", expect.anything());
 });
 
 /**
@@ -191,9 +110,7 @@ describe("CardAskProvider grant expiry trigger", () => {
   }
 
   beforeEach(() => {
-    flagVariant = "at_onboarding";
     businessTrialReminderEnabled = true;
-    localStorageValues.set(CARD_ASK_ARM_STORAGE_KEY, "at_onboarding");
   });
 
   afterEach(() => {
@@ -209,15 +126,18 @@ describe("CardAskProvider grant expiry trigger", () => {
     expect(modal()).not.toBeNull();
   });
 
-  it("uses only the dedicated reminder flag when the old arm is unresolved", () => {
-    flagVariant = undefined;
-    localStorageValues.delete(CARD_ASK_ARM_STORAGE_KEY);
+  it("uses only the dedicated reminder flag when the signup switch is off", () => {
+    flagEnabled = false;
     settingsState = {
       settings: { user: grantExpiringIn(3 * DAY) },
       isSettingsLoaded: true,
     };
     render(<CardAskProvider />);
     expect(modal()).not.toBeNull();
+    expect(posthog.capture).toHaveBeenCalledWith("card_ask_shown", expect.objectContaining({
+      arm: "business_trial_reminder",
+      trigger: "grant_expiry",
+    }));
   });
 
   it("fails closed until PostHog is identified as the signed-in account", () => {
