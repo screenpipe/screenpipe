@@ -6,13 +6,13 @@ import { CHAT_SEARCH_TOOL, searchChats } from "./chat-search";
 it("sends only bounded read arguments and preserves source attribution and partial coverage", async () => {
   const data = { results: [{ source: "codex", id: "thread-1", title: "Project", preview: "decision", updated_at: 42 }], warnings: ["older chats were not scanned"], coverage: "bounded_recent_chats", read_only: true };
   const api = vi.fn().mockResolvedValue(Response.json(data));
-  const result = await searchChats({ query: "decision", sources: ["codex"], limit: 5 }, api);
-  expect(api).toHaveBeenCalledWith("/chats/search", expect.objectContaining({ method: "POST", body: JSON.stringify({ query: "decision", sources: ["codex"], limit: 5 }) }));
+  const result = await searchChats({ query: "decision", sources: ["codex", "opencode"], limit: 5 }, api);
+  expect(api).toHaveBeenCalledWith("/chats/search", expect.objectContaining({ method: "POST", body: JSON.stringify({ query: "decision", sources: ["codex", "opencode"], limit: 5 }) }));
   expect(JSON.parse(result.content[0].text)).toEqual(data);
   expect(CHAT_SEARCH_TOOL.annotations?.readOnlyHint).toBe(true);
 });
 
-it.each([{ limit: 0 }, { limit: 51 }, { limit: 1.5 }, { query: 2 }, { query: "x".repeat(1001) }, { sources: ["unknown"] }, { sources: "codex" }, { confirmed: true }, { message: "send this" }])("rejects invalid input before any request: %j", async args => {
+it.each([{ limit: 0 }, { limit: 51 }, { limit: 1.5 }, { query: 2 }, { query: "x".repeat(1001) }, { sources: ["unknown"] }, { sources: Array(7).fill("codex") }, { sources: "codex" }, { confirmed: true }, { message: "send this" }])("rejects invalid input before any request: %j", async args => {
   const api = vi.fn();
   await expect(searchChats(args, api)).rejects.toThrow();
   expect(api).not.toHaveBeenCalled();

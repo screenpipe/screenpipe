@@ -30,8 +30,22 @@ import {
   listConversations,
   prefetchRecentChats,
   searchConversations,
-  type ConversationMeta,
 } from "@/lib/chat-storage";
+import {
+  AGENT_CHAT_SOURCE_META,
+  AGENT_CHAT_SOURCE_ORDER,
+  buildExternalChatPrefillContext,
+  chatRowActionHint,
+  fetchAgentChats,
+  mergeUnifiedChatResults,
+  openUnifiedChatItem,
+  workspaceLabel,
+  type AgentChatSource,
+  type UnifiedChatSearchItem,
+} from "@/lib/search/agent-chat-search";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { platform } from "@tauri-apps/plugin-os";
+import { Command } from "@tauri-apps/plugin-shell";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -49,6 +63,99 @@ import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { useGT } from "gt-react";
 import { useUiLocale } from "@/lib/i18n/provider";
 
+
+async function openCodexThreadDeeplink(url: string): Promise<void> {
+  try {
+    await openUrl(url);
+    return;
+  } catch {
+    // Fall back to the OS app launcher when opener allowlist and protocol handler disagree.
+  }
+  const os = platform();
+  if (os === "macos") {
+    const output = await Command.create("open-codex-url", [
+      "-b",
+      "com.openai.codex",
+      url,
+    ]).execute();
+    if (output.code === 0) return;
+  } else if (os === "windows") {
+    const result = await commands.openWindowsShellTarget(url);
+    if (result.status === "ok") return;
+  }
+  throw new Error("Codex app launch unavailable");
+}
+
+function AgentChatRow({
+  chat,
+  navPos,
+  active,
+  showPreview,
+  uiLocale,
+  onSelect,
+  onHover,
+}: {
+  chat: UnifiedChatSearchItem;
+  navPos: number | undefined;
+  active: boolean;
+  showPreview: boolean;
+  uiLocale: string;
+  onSelect: () => void;
+  onHover: () => void;
+}) {
+  const meta = AGENT_CHAT_SOURCE_META[chat.source];
+  const repoName = workspaceLabel(chat.workspace);
+  const ts = chat.updatedAt > 0 ? new Date(chat.updatedAt).toISOString() : null;
+  const previewText =
+    showPreview && chat.preview && chat.preview.trim() !== chat.title.trim()
+      ? chat.preview.trim()
+      : null;
+
+  return (
+    <button
+      data-nav-index={navPos}
+      data-chat-source={chat.source}
+      onClick={onSelect}
+      onMouseEnter={onHover}
+      className={cn(
+        "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
+        active ? "bg-muted" : "hover:bg-muted/50",
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={meta.icon}
+        alt=""
+        className="h-4 w-4 rounded-sm object-contain shrink-0 opacity-85"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm truncate">{chat.title}</span>
+          {chat.source !== "screenpipe" && (
+            <span className="text-[10px] font-mono text-muted-foreground bg-muted/80 border border-border/50 px-1.5 py-0.5 rounded shrink-0">
+              {meta.shortLabel}
+            </span>
+          )}
+          {repoName && (
+            <span className="text-[11px] font-mono text-muted-foreground/70 truncate shrink-0 max-w-[140px]">
+              {repoName}
+            </span>
+          )}
+        </div>
+        {previewText && (
+          <p className="text-xs text-muted-foreground truncate mt-0.5">
+            {previewText}
+          </p>
+        )}
+      </div>
+      {ts && (
+        <span className="ml-auto text-[11px] text-muted-foreground font-mono shrink-0">
+          {formatRelativeTime(ts, uiLocale)}
+        </span>
+      )}
+    </button>
+  );
+}
 
 interface SpeakerResult {
   id: number;
@@ -737,7 +844,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // Chat search state. Seed from the prewarm cache so a reopened search window
   // paints its recent chats on the first frame instead of after a disk scan.
   const cachedChats = getCachedRecentChats();
-  const [chatResults, setChatResults] = useState<ConversationMeta[]>(cachedChats ?? []);
+  const initialCachedUnifiedChats = useMemo(
+    () => (cachedChats ? mergeUnifiedChatResults(cachedChats, [], "") : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [chatResults, setChatResults] = useState<UnifiedChatSearchItem[]>(initialCachedUnifiedChats);
+  const [chatSourceFilter, setChatSourceFilter] = useState<AgentChatSource | "all">("all");
   const [isLoadingChats, setIsLoadingChats] = useState(!cachedChats);
   // Which query `chatResults` actually belongs to. Without this the list held
   // whatever loaded when the palette opened, so a fresh query briefly painted
@@ -757,9 +870,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // refetching the same query when only the scope changed. Seeded from the
   // prewarm cache, which holds the no-query list the Chats scope would ask for.
   const dispatchedChatQueryRef = useRef<string | null>(cachedChats ? "" : null);
-  // Recent chats shown in the suggestions area (loaded on open, independent of chats tab)
-  const [recentChats, setRecentChats] = useState<ConversationMeta[]>(
-    cachedChats ? cachedChats.slice(0, 5) : [],
+  // Recent chats shown in the suggestions area (loaded on open across all local agents)
+  const [recentChats, setRecentChats] = useState<UnifiedChatSearchItem[]>(
+    initialCachedUnifiedChats.slice(0, 6),
   );
   const visibleRecentChats = contentFilter === "all" ? recentChats : [];
 
@@ -798,17 +911,31 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const requestId = ++chatSearchRequestRef.current;
     setIsLoadingChats(true);
     try {
+      const trimmed = q.trim();
       const options = {
         limit: CHAT_HISTORY_INITIAL_LIMIT,
         includeHidden: false,
         kind: "chat" as const,
       };
-      const chats = q.trim()
-        ? await searchConversations(q, options)
-        : await listConversations(options);
+      const [localResult, externalResult] = await Promise.allSettled([
+        trimmed
+          ? searchConversations(trimmed, options)
+          : listConversations(options),
+        fetchAgentChats(trimmed, { limit: CHAT_HISTORY_INITIAL_LIMIT }),
+      ]);
+      const localChats =
+        localResult.status === "fulfilled" ? localResult.value : [];
+      const externalChats =
+        externalResult.status === "fulfilled" ? externalResult.value.results : [];
+      const merged = mergeUnifiedChatResults(
+        localChats,
+        externalChats,
+        trimmed,
+        CHAT_HISTORY_INITIAL_LIMIT,
+      );
       if (chatSearchRequestRef.current === requestId) {
-        setChatResults(chats);
-        setChatsQuery(q.trim());
+        setChatResults(merged);
+        setChatsQuery(trimmed);
         setNavIndex(0);
       }
     } catch {
@@ -1009,10 +1136,42 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setChatsPassPending(true);
   }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isEntitySearch, loadChats, searchQuery, searchError, isSearching]);
 
-  // Chat results are already bounded / searched in chat-storage.
-  const filteredChats = useMemo(() => {
-    return chatResults;
+  // Count chats per agent source so the Chats scope can offer quick source chips.
+  const chatSourceCounts = useMemo(() => {
+    const counts = new Map<AgentChatSource, number>();
+    for (const chat of chatResults) {
+      counts.set(chat.source, (counts.get(chat.source) ?? 0) + 1);
+    }
+    return AGENT_CHAT_SOURCE_ORDER
+      .filter((source) => (counts.get(source) ?? 0) > 0)
+      .map((source) => ({ source, count: counts.get(source) ?? 0 }));
   }, [chatResults]);
+
+  // Keep source filter valid if a fresh query no longer has chats from that agent.
+  useEffect(() => {
+    if (
+      chatSourceFilter !== "all" &&
+      !chatResults.some((chat) => chat.source === chatSourceFilter)
+    ) {
+      setChatSourceFilter("all");
+    }
+  }, [chatResults, chatSourceFilter]);
+
+  const filteredChats = useMemo(() => {
+    if (contentFilter === "chats" && chatSourceFilter !== "all") {
+      return chatResults.filter((chat) => chat.source === chatSourceFilter);
+    }
+    return chatResults;
+  }, [chatResults, chatSourceFilter, contentFilter]);
+
+  const chatByKey = useMemo(() => {
+    const map = new Map<string, UnifiedChatSearchItem>();
+    for (const chat of recentChats) map.set(chat.key, chat);
+    for (const chat of chatResults) map.set(chat.key, chat);
+    return map;
+  }, [chatResults, recentChats]);
+  const chatByKeyRef = useRef(chatByKey);
+  chatByKeyRef.current = chatByKey;
 
   // Refs for chat keyboard navigation (avoids re-registering the keydown effect)
   const contentFilterRef = useRef<ContentFilter>(contentFilter);
@@ -1041,19 +1200,19 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // treats navItems as "what the list is painting". Counting rows that
       // aren't on screen suppressed the skeleton and left the panel blank.
       if (belowMinimum || isLoadingChats || !chatsFresh) return items;
-      for (const chat of filteredChats) items.push({ kind: "chat", id: chat.id });
+      for (const chat of filteredChats) items.push({ kind: "chat", id: chat.key });
       return items;
     }
 
     // Empty state: the recent chats strip is the only content, so it owns
     // selection — this is what makes Enter work the moment search opens.
     if (contentFilter === "all" && !query.trim()) {
-      for (const chat of recentChats) items.push({ kind: "chat", id: chat.id });
+      for (const chat of recentChats) items.push({ kind: "chat", id: chat.key });
       return items;
     }
 
     if (contentFilter === "all" && q.length >= MIN_QUERY_CHARS && chatsFresh) {
-      for (const chat of filteredChats.slice(0, 5)) items.push({ kind: "chat", id: chat.id });
+      for (const chat of filteredChats.slice(0, 5)) items.push({ kind: "chat", id: chat.key });
     }
     if (uiEventResults.length > 0 && contentFilter !== "screen") {
       const shown = contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults;
@@ -1153,8 +1312,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   const { setHighlight, clear: clearHighlight } = useSearchHighlight();
 
-  // Load all chats on open — powers both the inline chat section in "All" view
-  // and the recent chats strip in the empty state
+  // Load all chats on open (Screenpipe + Codex, Claude Code, OpenCode, Cursor, Gemini) —
+  // powers both the inline chat section in "All" view and the recent chats strip in the empty state.
   useEffect(() => {
     if (!isOpen) return;
     const requestId = ++recentChatRequestRef.current;
@@ -1163,12 +1322,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     if (!queryRef.current.trim() && !getCachedRecentChats()) {
       setIsLoadingChats(true);
     }
-    prefetchRecentChats()
-      .then((all) => {
+    Promise.allSettled([
+      prefetchRecentChats(),
+      fetchAgentChats("", { limit: CHAT_HISTORY_INITIAL_LIMIT }),
+    ])
+      .then(([localResult, externalResult]) => {
         if (recentChatRequestRef.current !== requestId) return;
-        setRecentChats(all.slice(0, 5));
+        const localChats =
+          localResult.status === "fulfilled" ? localResult.value : [];
+        const externalChats =
+          externalResult.status === "fulfilled" ? externalResult.value.results : [];
+        const merged = mergeUnifiedChatResults(
+          localChats,
+          externalChats,
+          "",
+          CHAT_HISTORY_INITIAL_LIMIT,
+        );
+        setRecentChats(merged.slice(0, 6));
         if (!queryRef.current.trim()) {
-          setChatResults(all);
+          setChatResults(merged);
           setChatsQuery("");
           // Same list the Chats scope would fetch for an empty query, so mark
           // it dispatched and let entering that scope reuse it.
@@ -1212,6 +1384,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setDomainFilter(null);
       setTimeFilter(null);
       setContentFilter("all");
+      setChatSourceFilter("all");
       setSpeakerResults([]);
       setTagResults([]);
       setAllTags([]);
@@ -1664,29 +1837,48 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   );
 
   const handleOpenChatResult = useCallback(
-    async (conversationId: string, selectionMethod: SearchSelectionMethod) => {
-      let homeShown = false;
+    async (chatKey: string, selectionMethod: SearchSelectionMethod) => {
+      const chatItem = chatByKeyRef.current.get(chatKey);
+      const item: UnifiedChatSearchItem = chatItem ?? {
+        key: chatKey,
+        source: "screenpipe",
+        id: chatKey,
+        title: "",
+        updatedAt: 0,
+        screenpipeConversationId: chatKey,
+      };
       await runSearchResultNavigation({
         inFlightRef: resultNavigationInFlightRef,
         navigate: async () => {
           trackSearchResultSelected("chat", selectionMethod, "chat");
-          localStorage.setItem("pending-chat-conversation", conversationId);
-          try {
-            await commands.showWindowActivated({ Home: { page: "home" } });
-            homeShown = true;
-            await emit("chat-load-conversation", {
-              conversationId,
-              targetWindow: "home",
-            });
-          } catch (error) {
-            if (
-              !homeShown &&
-              localStorage.getItem("pending-chat-conversation") === conversationId
-            ) {
-              localStorage.removeItem("pending-chat-conversation");
-            }
-            throw error;
-          }
+          await openUnifiedChatItem(item, {
+            openScreenpipeChat: async (conversationId) => {
+              let homeShown = false;
+              localStorage.setItem("pending-chat-conversation", conversationId);
+              try {
+                await commands.showWindowActivated({ Home: { page: "home" } });
+                homeShown = true;
+                await emit("chat-load-conversation", {
+                  conversationId,
+                  targetWindow: "home",
+                });
+              } catch (error) {
+                if (
+                  !homeShown &&
+                  localStorage.getItem("pending-chat-conversation") === conversationId
+                ) {
+                  localStorage.removeItem("pending-chat-conversation");
+                }
+                throw error;
+              }
+            },
+            openCodexDeeplink: openCodexThreadDeeplink,
+            openExternalInScreenpipeAi: async (externalItem) => {
+              await showChatWithPrefill({
+                context: buildExternalChatPrefillContext(externalItem),
+              });
+            },
+          });
         },
         close: onClose,
         onError: (phase, error) => {
@@ -2433,12 +2625,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       );
     }
     if (!activeNavItem) return <span>Type to search</span>;
+    const activeChatItem =
+      activeNavItem.kind === "chat" ? chatByKey.get(activeNavItem.id) : undefined;
     return (
       <>
         <span>{activeNavItem.kind === "frame" ? ui("←→↑↓ navigate") : ui("↑↓ navigate")}</span>
         {/* Every non-chat row resolves to a moment — a frame, or the instant a
             line was typed or copied — and Enter opens the main timeline there. */}
-        <span>{activeNavItem.kind === "chat" ? ui("⏎ open chat") : ui("⏎ go to timeline")}</span>
+        <span>{activeNavItem.kind === "chat" ? ui(chatRowActionHint(activeChatItem)) : ui("⏎ go to timeline")}</span>
         {activeNavItem.kind === "frame" && (
           <span className="flex items-center gap-1" suppressHydrationWarning>
             <MessageSquare className="w-2.5 h-2.5" />
@@ -2939,32 +3133,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
+          {/* Inline chat section in "All" view — unified across Screenpipe and local coding agents */}
           {contentFilter === "all" && debouncedQuery.trim().length >= MIN_QUERY_CHARS && chatsFreshForQuery && filteredChats.length > 0 && !isTagSearch && !isEntitySearch && (
             <div className="mb-4">
               <SectionLabel>Chats</SectionLabel>
               <div className="flex flex-col">
                 {filteredChats.slice(0, 5).map((chat) => {
-                  const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
-                  const navKey = `chat:${chat.id}`;
+                  const navKey = `chat:${chat.key}`;
                   const pos = navPositions.get(navKey);
                   return (
-                    <button
-                      key={chat.id}
-                      data-nav-index={pos}
-                      onClick={() => handleOpenChatResult(chat.id, "click")}
-                      onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
-                      className={cn(
-                        "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
-                        isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50",
-                      )}
-                    >
-                      <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                      <span className="text-sm truncate">{chat.title}</span>
-                      <span className="ml-auto text-[11px] text-muted-foreground font-mono shrink-0">
-                        {formatRelativeTime(ts, uiLocale)}
-                      </span>
-                    </button>
+                    <AgentChatRow
+                      key={chat.key}
+                      chat={chat}
+                      navPos={pos}
+                      active={isNavActive(navKey)}
+                      showPreview={true}
+                      uiLocale={uiLocale}
+                      onSelect={() => handleOpenChatResult(chat.key, "click")}
+                      onHover={() => pos !== undefined && setNavIndex(pos)}
+                    />
                   );
                 })}
               </div>
@@ -2980,6 +3167,47 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Chat results */}
           {contentFilter === "chats" && (
             <>
+              {!isLoadingChats && chatsFreshForQuery && !queryBelowMinimum && chatSourceCounts.length > 1 && (
+                <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                  <button
+                    onClick={() => { setChatSourceFilter("all"); setNavIndex(0); }}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border transition-colors",
+                      chatSourceFilter === "all"
+                        ? "bg-muted text-foreground border-foreground/25"
+                        : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                    )}
+                  >
+                    <span>{ui("All agents")}</span>
+                    <span className="text-[10px] font-mono opacity-70">{chatResults.length}</span>
+                  </button>
+                  {chatSourceCounts.map(({ source, count }) => {
+                    const meta = AGENT_CHAT_SOURCE_META[source];
+                    const active = chatSourceFilter === source;
+                    return (
+                      <button
+                        key={source}
+                        onClick={() => { setChatSourceFilter(source); setNavIndex(0); }}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border transition-colors",
+                          active
+                            ? "bg-muted text-foreground border-foreground/25"
+                            : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                        )}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={meta.icon}
+                          alt=""
+                          className="h-3.5 w-3.5 rounded-sm object-contain shrink-0"
+                        />
+                        <span>{meta.shortLabel}</span>
+                        <span className="text-[10px] font-mono opacity-70">{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {/* Loading rows come from the one shared skeleton above — this
                   scope used to render its own on top of it, which is why the
                   chats scope showed twice as many placeholder rows. */}
@@ -2995,9 +3223,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Below the minimum this scope shows the "keep typing" state
                   like every other one, instead of listing stale chats. */}
               {!isLoadingChats && chatsFreshForQuery && filteredChats.length > 0 && !queryBelowMinimum && (() => {
-                const buckets: Record<string, ConversationMeta[]> = { today: [], yesterday: [], week: [], older: [] };
+                const buckets: Record<string, UnifiedChatSearchItem[]> = { today: [], yesterday: [], week: [], older: [] };
                 for (const c of filteredChats) {
-                  buckets[getChatTimeBucket(c.lastUserMessageAt ?? c.updatedAt)].push(c);
+                  buckets[getChatTimeBucket(c.updatedAt)].push(c);
                 }
                 return CHAT_BUCKET_ORDER.map((bucket) => {
                   const items = buckets[bucket];
@@ -3006,24 +3234,19 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     <div key={bucket} className="mb-1">
                       <SectionLabel>{CHAT_BUCKET_LABELS[bucket]}</SectionLabel>
                       {items.map((chat) => {
-                        const navKey = `chat:${chat.id}`;
+                        const navKey = `chat:${chat.key}`;
                         const pos = navPositions.get(navKey);
                         return (
-                          <button
-                            key={chat.id}
-                            data-nav-index={pos}
-                            onClick={() => {
-                              handleOpenChatResult(chat.id, "click");
-                            }}
-                            onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
-                            className={cn(
-                              "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
-                              isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50"
-                            )}
-                          >
-                            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                            <span className="text-sm truncate">{chat.title}</span>
-                          </button>
+                          <AgentChatRow
+                            key={chat.key}
+                            chat={chat}
+                            navPos={pos}
+                            active={isNavActive(navKey)}
+                            showPreview={Boolean(debouncedQuery.trim())}
+                            uiLocale={uiLocale}
+                            onSelect={() => handleOpenChatResult(chat.key, "click")}
+                            onHover={() => pos !== undefined && setNavIndex(pos)}
+                          />
                         );
                       })}
                     </div>
@@ -3392,37 +3615,35 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Suggestions when no query */}
           {!query.trim() && !isSearching && contentFilter !== "chats" && (
             <div className="pb-2 space-y-2">
-              {/* Recent chats — list with timestamps */}
+              {/* Recent chats across Screenpipe and local agents — list with provider icon & timestamp */}
               {visibleRecentChats.length > 0 && (
                 <div>
-                  {/* No icon here — the chip in the search bar already names
-                      this list as chats, and each row carries its own icon. */}
-                  <SectionLabel>Recent</SectionLabel>
+                  {/* No icon here — each row carries its own provider icon. */}
+                  <SectionLabel>Recent chats</SectionLabel>
                   <div className="flex flex-col">
                     {visibleRecentChats.map((chat) => {
-                      const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
-                      const navKey = `chat:${chat.id}`;
+                      const navKey = `chat:${chat.key}`;
                       const pos = navPositions.get(navKey);
                       return (
-                        <button
-                          key={chat.id}
-                          data-nav-index={pos}
-                          onClick={() => handleOpenChatResult(chat.id, "click")}
-                          onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
-                          className={cn(
-                            "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
-                            isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50",
-                          )}
-                        >
-                          <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                          <span className="text-sm truncate">{chat.title}</span>
-                          <span className="ml-auto text-[11px] text-muted-foreground font-mono shrink-0">
-                            {formatRelativeTime(ts, uiLocale)}
-                          </span>
-                        </button>
+                        <AgentChatRow
+                          key={chat.key}
+                          chat={chat}
+                          navPos={pos}
+                          active={isNavActive(navKey)}
+                          showPreview={false}
+                          uiLocale={uiLocale}
+                          onSelect={() => handleOpenChatResult(chat.key, "click")}
+                          onHover={() => pos !== undefined && setNavIndex(pos)}
+                        />
                       );
                     })}
                   </div>
+                  {chatResults.length > visibleRecentChats.length && (
+                    <SeeAllRow
+                      label={ui("See all {value1} chats", { value1: chatResults.length })}
+                      onClick={() => { setContentFilter("chats"); setNavIndex(0); }}
+                    />
+                  )}
                 </div>
               )}
               {/* Suggestion chips from recent screen activity */}

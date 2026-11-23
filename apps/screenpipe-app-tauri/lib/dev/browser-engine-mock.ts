@@ -413,6 +413,91 @@ export function mockLocalApiResponse(
       })),
     });
   }
+  if (url.pathname === "/chats/search" && method === "POST") {
+    if (scenario === "empty") {
+      return Response.json({
+        results: [],
+        warnings: [],
+        coverage: "bounded_recent_chats",
+        read_only: true,
+      });
+    }
+    const body = parseJsonBody(init);
+    const query = typeof body.query === "string" ? body.query.trim().toLowerCase() : "";
+    const sources = Array.isArray(body.sources)
+      ? body.sources.filter((s): s is string => typeof s === "string")
+      : [];
+    const limit = typeof body.limit === "number" ? Math.min(Math.max(body.limit, 1), 50) : 20;
+    const now = Date.now();
+    const fixtures = [
+      {
+        source: "opencode",
+        id: "ses_agent_search_01",
+        title: "Search all local agent chats in Screenpipe",
+        preview: "Wire /chats/search + OpenCode SQLite into SearchModal with provider badges and filters",
+        workspace: "/Users/dev/screenpipe",
+        updated_at: now - 4 * 60 * 1000,
+      },
+      {
+        source: "codex",
+        id: "01a209d4-release-notes",
+        title: "Prepare release notes and migration guide",
+        preview: "Summarize API changes and verify local CLI upgrade steps",
+        workspace: "/Users/dev/docs",
+        updated_at: now - 22 * 60 * 1000,
+      },
+      {
+        source: "claude",
+        id: "claude-session-mcp-setup",
+        title: "Streamline local MCP server setup flow",
+        preview: "Detect installed editors and verify read-only chat search tool contract",
+        workspace: "/Users/dev/screenpipe",
+        updated_at: now - 2 * 60 * 60 * 1000,
+      },
+      {
+        source: "cursor",
+        id: "cursor-timeline-scroll",
+        title: "Fix native timeline playhead scrub jitter",
+        preview: "Debounce frame preview decode while dragging the timeline scrubber",
+        workspace: "/Users/dev/screenpipe",
+        updated_at: now - 5 * 60 * 60 * 1000,
+      },
+      {
+        source: "gemini",
+        id: "gemini-workflow-eval",
+        title: "Evaluate structured workflow extraction prompts",
+        preview: "Compare JSON schema adherence across multi-window desktop sessions",
+        workspace: "/Users/dev/evals",
+        updated_at: now - 26 * 60 * 60 * 1000,
+      },
+      {
+        source: "screenpipe",
+        id: "sp-daily-recap-01",
+        title: "Daily work recap and open follow-ups",
+        preview: "Reviewed open pull requests, timeline playback fixes, and test coverage",
+        workspace: null,
+        updated_at: now - 48 * 60 * 60 * 1000,
+      },
+    ];
+    const matched = fixtures
+      .filter((item) => {
+        if (sources.length > 0 && !sources.includes(item.source)) return false;
+        if (!query) return true;
+        return (
+          item.source.includes(query)
+          || item.title.toLowerCase().includes(query)
+          || item.preview.toLowerCase().includes(query)
+          || (item.workspace?.toLowerCase().includes(query) ?? false)
+        );
+      })
+      .slice(0, limit);
+    return Response.json({
+      results: matched,
+      warnings: [],
+      coverage: "bounded_recent_chats",
+      read_only: true,
+    });
+  }
   if (url.pathname === "/search") {
     const appName = url.searchParams.get("app_name");
     // The meeting scrubber pages this endpoint for the meeting's transcript;

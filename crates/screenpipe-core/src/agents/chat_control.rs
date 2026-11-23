@@ -47,16 +47,18 @@ pub enum ChatSource {
     Screenpipe,
     Codex,
     Claude,
+    Opencode,
     Cursor,
     Gemini,
 }
 
 impl ChatSource {
-    pub fn all() -> [Self; 5] {
+    pub fn all() -> [Self; 6] {
         [
             Self::Screenpipe,
             Self::Codex,
             Self::Claude,
+            Self::Opencode,
             Self::Cursor,
             Self::Gemini,
         ]
@@ -67,16 +69,17 @@ impl ChatSource {
             Self::Screenpipe => "screenpipe",
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Opencode => "opencode",
             Self::Cursor => "cursor",
             Self::Gemini => "gemini",
         }
     }
 
-    /// Gemini CLI has no non-interactive resume, so its chats are searchable
-    /// but cannot be steered. Everything else has a documented queue/resume
-    /// entry point.
+    /// Gemini CLI and OpenCode are read-only in chat_control search (no
+    /// non-interactive resume transport here). Everything else has a
+    /// documented queue/resume entry point.
     pub fn supports_send(self) -> bool {
-        !matches!(self, Self::Gemini)
+        !matches!(self, Self::Gemini | Self::Opencode)
     }
 }
 
@@ -302,7 +305,8 @@ fn query_matches(result: &ChatSearchResult, query: &str, extra: &str) -> bool {
         return true;
     }
     let query = query.to_lowercase();
-    result.title.to_lowercase().contains(&query)
+    result.source.label().contains(&query)
+        || result.title.to_lowercase().contains(&query)
         || result.id.to_lowercase().contains(&query)
         || result.preview.to_lowercase().contains(&query)
         || result
@@ -1037,7 +1041,20 @@ async fn search_codex(query: &str, limit: usize) -> Result<SourceSearch, String>
         .await
         .map_err(|error| format!("codex transcript search failed: {error}"))?;
     }
-    search_codex_recents(limit).await
+    match search_codex_recents(limit).await {
+        Ok(found) if !found.results.is_empty() => Ok(found),
+        _ => tokio::task::spawn_blocking(move || {
+            search_local_transcripts(
+                codex_session_files(),
+                "",
+                limit,
+                |_| true,
+                parse_codex_chat,
+            )
+        })
+        .await
+        .map_err(|error| format!("codex transcript recents failed: {error}"))?,
+    }
 }
 
 async fn search_codex_recents(limit: usize) -> Result<SourceSearch, String> {
@@ -1214,7 +1231,7 @@ pub async fn search(
                 ChatSource::Claude => search_claude(&query_for_local, limit),
                 ChatSource::Cursor => search_cursor(&query_for_local, limit),
                 ChatSource::Gemini => search_gemini(&query_for_local, limit),
-                ChatSource::Codex => unreachable!(),
+                ChatSource::Codex | ChatSource::Opencode => unreachable!(),
             };
             match found {
                 Ok(mut found) => {
@@ -1371,6 +1388,9 @@ fn external_command_spec(
         ChatSource::Gemini => {
             Err("Gemini CLI chats are search-only; it has no non-interactive resume".to_string())
         }
+        ChatSource::Opencode => {
+            Err("OpenCode chats are search-only in chat_control".to_string())
+        }
         ChatSource::Screenpipe => Err("screenpipe uses the native Pi queue".to_string()),
     }
 }
@@ -1432,7 +1452,7 @@ async fn send_external(
             },
         )),
         ChatSource::Cursor => unreachable!("background Cursor command returned above"),
-        ChatSource::Gemini | ChatSource::Screenpipe => {
+        ChatSource::Gemini | ChatSource::Opencode | ChatSource::Screenpipe => {
             unreachable!("unsendable sources are rejected before delivery")
         }
     }
@@ -1469,7 +1489,7 @@ async fn resolve_external_target(source: ChatSource, id: &str) -> Result<ChatSea
                 .map_err(|error| error.to_string())??
                 .results
         }
-        ChatSource::Gemini | ChatSource::Screenpipe => {
+        ChatSource::Gemini | ChatSource::Opencode | ChatSource::Screenpipe => {
             return Err(format!("{} chats cannot be resumed", source.label()))
         }
     };

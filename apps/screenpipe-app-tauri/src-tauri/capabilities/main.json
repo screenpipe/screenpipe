@@ -86,6 +86,9 @@
           "url": "^codex://threads/new\\?prompt=.*$"
         },
         {
+          "url": "^codex://threads/[A-Za-z0-9._-]+$"
+        },
+        {
           "url": "^codex://automations(?:\\?.*)?$"
         }
       ]
@@ -613,7 +616,7 @@
             "-b",
             "com.openai.codex",
             {
-              "validator": "codex://automations(?:\\?.*)?"
+              "validator": "codex://(?:automations(?:\\?.*)?|threads/[A-Za-z0-9._-]+)"
             }
           ],
           "sidecar": false
