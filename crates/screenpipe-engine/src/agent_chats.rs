@@ -93,7 +93,11 @@ fn opencode_db_path() -> Option<PathBuf> {
     None
 }
 
-fn search_opencode_db(path: &Path, query: &str, limit: usize) -> Result<(Vec<ChatSearchResult>, bool), String> {
+fn search_opencode_db(
+    path: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<(Vec<ChatSearchResult>, bool), String> {
     if !path.exists() {
         return Ok((Vec::new(), false));
     }

@@ -1044,13 +1044,7 @@ async fn search_codex(query: &str, limit: usize) -> Result<SourceSearch, String>
     match search_codex_recents(limit).await {
         Ok(found) if !found.results.is_empty() => Ok(found),
         _ => tokio::task::spawn_blocking(move || {
-            search_local_transcripts(
-                codex_session_files(),
-                "",
-                limit,
-                |_| true,
-                parse_codex_chat,
-            )
+            search_local_transcripts(codex_session_files(), "", limit, |_| true, parse_codex_chat)
         })
         .await
         .map_err(|error| format!("codex transcript recents failed: {error}"))?,
@@ -1388,9 +1382,7 @@ fn external_command_spec(
         ChatSource::Gemini => {
             Err("Gemini CLI chats are search-only; it has no non-interactive resume".to_string())
         }
-        ChatSource::Opencode => {
-            Err("OpenCode chats are search-only in chat_control".to_string())
-        }
+        ChatSource::Opencode => Err("OpenCode chats are search-only in chat_control".to_string()),
         ChatSource::Screenpipe => Err("screenpipe uses the native Pi queue".to_string()),
     }
 }
