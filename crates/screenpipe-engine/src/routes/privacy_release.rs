@@ -484,7 +484,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(history[0]["frame_id"], 1);
-        assert_eq!(history[0]["captured_at"], "2026-10-14T10:00:00Z");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(history[0]["captured_at"].as_str().unwrap())
+                .unwrap(),
+            chrono::DateTime::parse_from_rfc3339("2026-10-14T10:00:00Z").unwrap()
+        );
         assert_eq!(history[0]["text_fields"], redaction["fields"]);
         assert_eq!(history[0]["processed_at"], redaction["processed_at"]);
         assert!(!history.to_string().contains("SYNTHETIC_SECRET"));

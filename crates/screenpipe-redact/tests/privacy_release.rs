@@ -124,7 +124,10 @@ async fn pending_capture_is_durable_but_not_released_and_late_completion_is_not_
         .await
         .unwrap();
     assert_eq!(older[0].frame_id, 2);
-    assert_eq!(older[0].captured_at, "2026-10-14T10:01:00Z");
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(&older[0].captured_at).unwrap(),
+        chrono::DateTime::parse_from_rfc3339("2026-10-14T10:01:00Z").unwrap()
+    );
     db.execute_raw_sql_write("DELETE FROM frames WHERE id=2")
         .await
         .unwrap();
