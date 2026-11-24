@@ -325,9 +325,11 @@ pub async fn paired_capture_with_snapshot(
         );
         String::new()
     } else {
-        let snapshot_path =
-            ctx.snapshot_writer
-                .write(snapshot_image.unwrap_or(&ctx.image), ctx.captured_at, ctx.monitor_id)?;
+        let snapshot_path = ctx.snapshot_writer.write(
+            snapshot_image.unwrap_or(&ctx.image),
+            ctx.captured_at,
+            ctx.monitor_id,
+        )?;
         debug!(
             "paired_capture: snapshot written in {:?} (trigger={})",
             start.elapsed(),
@@ -1306,7 +1308,8 @@ mod tests {
             ax_screenshot_coherent: false,
             focused_window_bounds: None,
         };
-        let presized = DynamicImage::ImageRgb8(RgbImage::from_pixel(50, 50, image::Rgb([200, 0, 0])));
+        let presized =
+            DynamicImage::ImageRgb8(RgbImage::from_pixel(50, 50, image::Rgb([200, 0, 0])));
         let result = paired_capture_with_snapshot(&ctx, None, None, true, Some(&presized))
             .await
             .unwrap();
