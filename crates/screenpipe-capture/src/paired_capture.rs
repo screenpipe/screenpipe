@@ -264,21 +264,22 @@ pub async fn paired_capture(
     tree_snapshot: Option<&TreeSnapshot>,
     ocr_gate: Option<&mut OcrGate>,
 ) -> Result<PairedCaptureResult> {
-    paired_capture_inner(ctx, tree_snapshot, ocr_gate, false).await
+    paired_capture_with_snapshot(ctx, tree_snapshot, ocr_gate, false, None).await
 }
 
 /// Save an authorized screenshot while expensive text extraction is deferred.
 /// Never reuse accessibility or OCR text from an earlier image. The normal
 /// capture path can resume extraction on the next admitted walk.
 pub async fn paired_capture_deferred(ctx: &CaptureContext<'_>) -> Result<PairedCaptureResult> {
-    paired_capture_inner(ctx, None, None, true).await
+    paired_capture_with_snapshot(ctx, None, None, true, None).await
 }
 
-async fn paired_capture_inner(
+pub async fn paired_capture_with_snapshot(
     ctx: &CaptureContext<'_>,
     tree_snapshot: Option<&TreeSnapshot>,
     ocr_gate: Option<&mut OcrGate>,
     defer_text_extraction: bool,
+    snapshot_image: Option<&DynamicImage>,
 ) -> Result<PairedCaptureResult> {
     let start = Instant::now();
 
@@ -326,7 +327,7 @@ async fn paired_capture_inner(
     } else {
         let snapshot_path =
             ctx.snapshot_writer
-                .write(&ctx.image, ctx.captured_at, ctx.monitor_id)?;
+                .write(snapshot_image.unwrap_or(&ctx.image), ctx.captured_at, ctx.monitor_id)?;
         debug!(
             "paired_capture: snapshot written in {:?} (trigger={})",
             start.elapsed(),
@@ -1274,6 +1275,56 @@ mod tests {
         assert_eq!(result.capture_trigger, "click");
         assert!(result.accessibility_text.is_none());
         assert!(result.text_source.is_none());
+    }
+
+    #[tokio::test]
+    async fn presized_snapshot_keeps_original_pixels_and_frame_record() {
+        let tmp = TempDir::new().unwrap();
+        let writer = SnapshotWriter::new(tmp.path(), 80, 50);
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let ctx = CaptureContext {
+            db: &db,
+            snapshot_writer: &writer,
+            image: test_image(),
+            captured_at: Utc::now(),
+            monitor_id: 7,
+            device_name: "test_monitor",
+            app_name: None,
+            window_name: None,
+            browser_url: None,
+            document_path: None,
+            focused: false,
+            capture_trigger: "idle",
+            use_pii_removal: false,
+            languages: vec![],
+            elements_ref_frame_id: None,
+            screenshot_disabled: false,
+            in_meeting: false,
+            monitor_hosts_focus: false,
+            ax_screenshot_coherent: false,
+            focused_window_bounds: None,
+        };
+        let presized = DynamicImage::ImageRgb8(RgbImage::from_pixel(50, 50, image::Rgb([200, 0, 0])));
+        let result = paired_capture_with_snapshot(&ctx, None, None, true, Some(&presized))
+            .await
+            .unwrap();
+
+        let stored = db.get_frame(result.frame_id).await.unwrap().unwrap();
+        assert_eq!(stored.0, result.snapshot_path);
+        assert!(stored.2);
+        assert_eq!(
+            db.get_frame_timestamp(result.frame_id).await.unwrap(),
+            Some(ctx.captured_at)
+        );
+        assert!(result
+            .snapshot_path
+            .ends_with(&format!("{}_m7.jpg", ctx.captured_at.timestamp_millis())));
+        let jpeg = image::open(&result.snapshot_path).unwrap().to_rgb8();
+        assert_eq!(jpeg.dimensions(), (50, 50));
+        assert!(jpeg.get_pixel(25, 25)[0] > 180);
+        assert_eq!(ctx.image.width(), 100);
     }
 
     #[tokio::test]

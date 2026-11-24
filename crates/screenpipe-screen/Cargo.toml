@@ -17,6 +17,7 @@ edition = { workspace = true }
 [features]
 default = []
 e2e = []
+screenshot-benchmark = ["windows/Win32_UI_HiDpi"]
 
 [dependencies]
 screenpipe-fs = { path = "../screenpipe-fs" }
@@ -89,7 +90,7 @@ harness = false
 sck-rs = { git = "https://github.com/screenpipe/sck-rs", rev = "62d79abed212015eb9beaa03138002807f61f59a" }
 xcap = { workspace = true }
 libc = { workspace = true }
-cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["vn", "cv", "cg", "app"] }
+cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["vn", "cv", "cg", "app", "mtl"] }
 accessibility-sys = { workspace = true }
 core-foundation = { workspace = true }
 core-graphics = { workspace = true }
@@ -118,6 +119,7 @@ windows = { workspace = true, features = [
   "Graphics_DirectX_Direct3D11",
   "Win32_Foundation",
   "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Dxgi",
@@ -143,3 +145,11 @@ atspi = { version = "0.25.0", features = ["tokio","proxies-tokio","zbus"] }
 zbus = { workspace = true, default-features = false }
 atspi-common     = { version = "0.9.0", default-features = false }
 atspi-proxies    = { version = "0.9.0", default-features = false }
+
+[[example]]
+name = "gpu_screenshot_benchmark"
+required-features = ["screenshot-benchmark"]
+
+[[example]]
+name = "gpu_preencode_benchmark"
+required-features = ["screenshot-benchmark"]

@@ -80,49 +80,25 @@ struct StreamingPlan {
     masks: super::window_events::Watcher<SceneMetadata>,
 }
 
-fn observe_streaming_masks(
-    display: cidre::cg::Rect,
-    dimensions: (u32, u32),
-    policy: &Policy,
-) -> anyhow::Result<SceneMetadata> {
-    ensure!(
-        cidre::ax::is_process_trusted(),
-        "Accessibility permission unavailable for streaming window events"
-    );
+fn observe_streaming_masks(display: cidre::cg::Rect, dimensions: (u32, u32), policy: &Policy) -> anyhow::Result<SceneMetadata> {
+    ensure!(cidre::ax::is_process_trusted(), "Accessibility permission unavailable for streaming window events");
     let windows = snapshot(display)?;
     let detector = policy.sources.ignore_incognito_windows.then(|| {
         screenpipe_a11y::incognito::create_detector(policy.sources.enhanced_incognito_detection)
     });
     let is_dock = |surface: &Surface| surface.layer == 20 && surface.app == "Dock";
-    let dock = windows
-        .iter()
-        .find(|surface| is_dock(surface))
-        .map(|surface| surface.pid);
+    let dock = windows.iter().find(|surface| is_dock(surface)).map(|surface| surface.pid);
     let dock_masks = dock_masks(dock, display, &policy.filters, detector.as_deref());
-    let mut surfaces: Vec<_> = windows
-        .into_iter()
-        .filter(|surface| {
-            policy.excluded_ids.contains(&surface.id)
-                || (is_dock(surface) && dock_masks.is_none())
-                || !window_allowed(
-                    &policy.filters,
-                    detector.as_deref(),
-                    &surface.app,
-                    &surface.title,
-                    surface.pid,
-                )
-        })
-        .collect();
+    let mut surfaces: Vec<_> = windows.into_iter().filter(|surface| {
+        policy.excluded_ids.contains(&surface.id)
+            || (is_dock(surface) && dock_masks.is_none())
+            || !window_allowed(&policy.filters, detector.as_deref(), &surface.app, &surface.title, surface.pid)
+    }).collect();
     surfaces.extend(dock_masks.into_iter().flatten());
-    let cached_masks = surfaces
-        .iter()
+    let cached_masks = surfaces.iter()
         .map(|surface| output_rect(surface, display, dimensions.0, dimensions.1))
         .collect();
-    Ok(SceneMetadata {
-        allowed: vec![false; surfaces.len()],
-        surfaces,
-        cached_masks,
-    })
+    Ok(SceneMetadata { allowed: vec![false; surfaces.len()], surfaces, cached_masks })
 }
 
 impl Producer {
@@ -134,10 +110,7 @@ impl Producer {
                 // Retire prepared pixels under the old policy while the display
                 // stream continues independently of redaction configuration.
                 self.frames.send_replace(None);
-                self.streaming
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .take();
+                self.streaming.lock().unwrap_or_else(|e| e.into_inner()).take();
                 *current = Arc::new(policy);
             }
             admitted = Some(current.clone());
@@ -146,12 +119,7 @@ impl Producer {
         admitted.expect("policy update synchronously observes the admitted generation")
     }
 
-    fn streaming_scene(
-        &self,
-        display: cidre::cg::Rect,
-        dimensions: (u32, u32),
-        policy: &Arc<Policy>,
-    ) -> Option<Arc<SceneMetadata>> {
+    fn streaming_scene(&self, display: cidre::cg::Rect, dimensions: (u32, u32), policy: &Arc<Policy>) -> Option<Arc<SceneMetadata>> {
         // A superseded preparation must not reinstall an old policy's watcher.
         let current = self.policy.borrow();
         if !Arc::ptr_eq(&current, policy) {
@@ -159,9 +127,7 @@ impl Producer {
         }
         let mut entry = self.streaming.lock().unwrap_or_else(|e| e.into_inner());
         if !entry.as_ref().is_some_and(|plan| {
-            Arc::ptr_eq(&plan.policy, policy)
-                && plan.display == display
-                && plan.dimensions == dimensions
+            Arc::ptr_eq(&plan.policy, policy) && plan.display == display && plan.dimensions == dimensions
         }) {
             let watched = policy.clone();
             *entry = Some(StreamingPlan {
@@ -179,20 +145,30 @@ impl Producer {
 
     fn render(
         &self,
+        _slot: &super::stream::Slot,
         requested: &Arc<Policy>,
         frame: &PreparedFrame,
+        snapshot_max_width: u32,
     ) -> anyhow::Result<CapturedPixels> {
         let current = self.policy.borrow();
         ensure!(
             Arc::ptr_eq(&current, &frame.policy) && Arc::ptr_eq(requested, &frame.policy),
             "screenshot redaction policy changed before rendering"
         );
-        frame.render()
+        #[cfg(feature = "screenshot-benchmark")]
+        if let Some(sequence) = frame.benchmark_sequence {
+            _slot.benchmark.redaction_work.record(sequence as i64);
+        }
+        frame.render(snapshot_max_width)
     }
 
-    fn publish(&self, frame: PreparedFrame) {
+    fn publish(&self, _slot: &super::stream::Slot, frame: PreparedFrame) {
         let current = self.policy.borrow();
         if Arc::ptr_eq(&current, &frame.policy) {
+            #[cfg(feature = "screenshot-benchmark")]
+            if let Some(sequence) = frame.benchmark_sequence {
+                _slot.benchmark.prepared.record(sequence as i64);
+            }
             self.frames.send_replace(Some(Arc::new(frame)));
         }
     }
@@ -204,6 +180,7 @@ pub(super) async fn capture_filtered(
     sources: ExclusionSources,
     excluded_ids: &[u32],
     _fresh: bool,
+    snapshot_max_width: u32,
 ) -> anyhow::Result<CapturedPixels> {
     ensure!(
         api::macos_available("14.0"),
@@ -224,11 +201,7 @@ pub(super) async fn capture_filtered(
             .get_or_insert_with(|| {
                 let (frames, _) = watch::channel(None);
                 let (policy, _) = watch::channel(Arc::new(policy.clone()));
-                let producer = Arc::new(Producer {
-                    policy,
-                    frames,
-                    streaming: Mutex::new(None),
-                });
+                let producer = Arc::new(Producer { policy, frames, streaming: Mutex::new(None) });
                 tokio::spawn(produce(monitor.id(), slot.clone(), producer.clone()));
                 producer
             })
@@ -238,7 +211,7 @@ pub(super) async fn capture_filtered(
     let frame = selected_frame(&slot, producer.frames.subscribe()).await?;
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot capture invalidated");
-        let rendered = producer.render(&requested_policy, &frame)?;
+        let rendered = producer.render(&slot, &requested_policy, &frame, snapshot_max_width)?;
         ensure!(
             slot.is_active(),
             "screenshot capture invalidated during rendering"
@@ -302,7 +275,7 @@ async fn produce(id: u32, slot: Arc<super::stream::Slot>, producer: Arc<Producer
                         "continuous screenshot source recovered"
                     );
                 }
-                producer.publish(frame);
+                producer.publish(&slot, frame);
             }
             Err(error) => {
                 let cause = format!("{error:#}");
@@ -342,7 +315,7 @@ pub(super) async fn cached_preview(id: u32) -> anyhow::Result<Option<DynamicImag
     };
     capture_on_worker(CAPTURE_SLOT.clone(), DEADLINE, move || async move {
         ensure!(slot.is_active(), "screenshot preview invalidated");
-        Ok(Some(producer.render(&frame.policy, &frame)?.image))
+        Ok(Some(producer.render(&slot, &frame.policy, &frame, 0)?.image))
     })
     .await
 }
@@ -926,7 +899,7 @@ async fn sample_window_layer(
     let native_timestamp = captured_at.is_some();
     let captured_at = captured_at.unwrap_or(received_at);
     Ok(LayerImage {
-        pixels: super::stream::NativeFrame(pixels),
+        pixels: super::stream::NativeFrame::new(pixels),
         captured_at,
         native_timestamp,
     })
@@ -950,6 +923,8 @@ struct PreparedFrame {
     base: Option<super::stream::NativeFrame>,
     operations: Vec<Draw>,
     captured_at: chrono::DateTime<chrono::Utc>,
+    #[cfg(feature = "screenshot-benchmark")]
+    benchmark_sequence: Option<u64>,
     native_timestamp: bool,
 }
 
@@ -962,30 +937,32 @@ enum Draw {
 
 impl PreparedFrame {
     fn streaming(
-        policy: Arc<Policy>,
-        scene: Option<Arc<SceneMetadata>>,
-        width: usize,
-        height: usize,
-        pixels: super::stream::NativeFrame,
-        captured_at: chrono::DateTime<chrono::Utc>,
-        native_timestamp: bool,
+        policy: Arc<Policy>, scene: Option<Arc<SceneMetadata>>, width: usize, height: usize,
+        pixels: super::stream::NativeFrame, captured_at: chrono::DateTime<chrono::Utc>, native_timestamp: bool,
     ) -> Self {
+        #[cfg(feature = "screenshot-benchmark")]
+        let benchmark_sequence = Some(pixels.1);
         let base = scene.as_ref().map(|_| pixels);
         Self {
-            policy,
-            scene: scene.unwrap_or_default(),
-            width,
-            height,
-            base,
-            operations: Vec::new(),
-            captured_at,
-            native_timestamp,
+            #[cfg(feature = "screenshot-benchmark")]
+            benchmark_sequence,
+            policy, scene: scene.unwrap_or_default(), width, height, base,
+            operations: Vec::new(), captured_at, native_timestamp,
         }
     }
 
-    fn render(&self) -> anyhow::Result<CapturedPixels> {
+    fn render(&self, _snapshot_max_width: u32) -> anyhow::Result<CapturedPixels> {
         use super::scene::{self, Rect};
         debug_assert_eq!(self.scene.surfaces.len(), self.scene.allowed.len());
+        if self.policy.filters.uses_streaming_gpu() {
+            if let Some(base) = &self.base {
+                match super::gpu::metal::render(&base.0, &self.scene.cached_masks, _snapshot_max_width) {
+                    Ok((image, snapshot_image)) => return Ok(self.captured(image, snapshot_image)),
+                    Err(error) => tracing::warn!(%error, screenshot_outcome = "cpu_fallback",
+                        "Metal streaming screenshot masking failed"),
+                }
+            }
+        }
         // This frame retains the immutable policy and scene used by its plan.
         let _policy = &self.policy;
         let mut canvas = image::RgbaImage::from_pixel(
@@ -1037,33 +1014,29 @@ impl PreparedFrame {
                 }
             }
         }
-        Ok(CapturedPixels {
-            image: DynamicImage::ImageRgba8(canvas),
+        Ok(self.captured(DynamicImage::ImageRgba8(canvas), None))
+    }
+
+    fn captured(&self, image: DynamicImage, snapshot_image: Option<DynamicImage>) -> CapturedPixels {
+        CapturedPixels {
+            image,
+            snapshot_image,
             captured_at: self.captured_at,
             native_timestamp: self.native_timestamp,
             system_relative_time: None,
+            #[cfg(feature = "screenshot-benchmark")]
+            sequence: self.benchmark_sequence,
+            #[cfg(not(feature = "screenshot-benchmark"))]
             sequence: None,
             session_id: None,
-        })
+        }
     }
 }
 
-async fn prepare(
+fn display_configuration(
     id: u32,
-    policy: Arc<Policy>,
-    stream_slot: &Arc<super::stream::Slot>,
-    producer: &Producer,
-) -> anyhow::Result<PreparedFrame> {
-    use super::scene::Rect;
-    let filters = &policy.filters;
-    let sources = policy.sources;
-    ensure!(stream_slot.is_active(), "screenshot capture invalidated");
-    let detector = sources
-        .ignore_incognito_windows
-        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
-    let content = sc::ShareableContent::current()
-        .await
-        .map_err(|e| anyhow!("window enumeration: {e:?}"))?;
+    content: &sc::ShareableContent,
+) -> anyhow::Result<(cidre::arc::R<sc::ContentFilter>, super::stream::DisplayGeometry)> {
     let displays = content.displays();
     let display = displays
         .iter()
@@ -1088,7 +1061,8 @@ async fn prepare(
         nw > 0 && nh > 0 && nw <= 16384 && nh <= 16384,
         "invalid display dimensions"
     );
-    let cap = crate::monitor::sck_capture_max_width() as usize;
+    let capture_max_width = crate::monitor::sck_capture_max_width();
+    let cap = capture_max_width as usize;
     let width = if cap == 0 { nw } else { nw.min(cap) };
     let height = (nh * width / nw).max(1);
     if api::macos_available("14.2") {
@@ -1099,27 +1073,64 @@ async fn prepare(
         height,
         fps: super::stream::frame_rate(),
     };
+    Ok((filter, super::stream::DisplayGeometry {
+        bounds: frame,
+        key,
+        capture_max_width,
+    }))
+}
+
+async fn prepare_streaming(
+    id: u32,
+    policy: Arc<Policy>,
+    slot: &Arc<super::stream::Slot>,
+    producer: &Producer,
+) -> anyhow::Result<PreparedFrame> {
+    let native = match super::stream::active_streaming_source(slot) {
+        Some(native) => native,
+        None => {
+            let content = sc::ShareableContent::current()
+                .await
+                .map_err(|e| anyhow!("streaming display setup: {e:?}"))?;
+            let (filter, geometry) = display_configuration(id, &content)?;
+            super::stream::source(slot, &filter, geometry).await?
+        }
+    };
+    // The tracker works independently and clips against this source's bounds.
+    let geometry = native.geometry;
+    let (width, height) = (geometry.key.width, geometry.key.height);
+    let dimensions = (width as u32, height as u32);
+    producer.streaming_scene(geometry.bounds, dimensions, &policy);
+    let (pixels, captured_at, native_timestamp) = super::stream::frame(slot, &native).await?;
+    let scene = producer.streaming_scene(geometry.bounds, dimensions, &policy);
+    Ok(PreparedFrame::streaming(policy, scene, width, height, pixels, captured_at, native_timestamp))
+}
+
+async fn prepare(
+    id: u32,
+    policy: Arc<Policy>,
+    stream_slot: &Arc<super::stream::Slot>,
+    producer: &Producer,
+) -> anyhow::Result<PreparedFrame> {
+    use super::scene::Rect;
+    let filters = &policy.filters;
+    let sources = policy.sources;
+    ensure!(stream_slot.is_active(), "screenshot capture invalidated");
+    if filters.streaming_mode() {
+        return prepare_streaming(id, policy, stream_slot, producer).await;
+    }
+    let detector = sources
+        .ignore_incognito_windows
+        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
+    let content = sc::ShareableContent::current()
+        .await
+        .map_err(|e| anyhow!("window enumeration: {e:?}"))?;
+    let (filter, geometry) = display_configuration(id, &content)?;
+    let frame = geometry.bounds;
+    let (width, height) = (geometry.key.width, geometry.key.height);
     // Start capture before collecting privacy metadata. A failed scene lookup
     // may delay redaction, but cannot prevent the display source from running.
-    super::stream::start(stream_slot, &filter, key).await?;
-    if filters.streaming_mode() {
-        // Pair the sampled display pixels with one immutable watcher observation.
-        // The same plan follows this frame until its screenshot is rendered.
-        let dimensions = (width as u32, height as u32);
-        producer.streaming_scene(frame, dimensions, &policy);
-        let (pixels, captured_at, native_timestamp) =
-            super::stream::frame(stream_slot, &filter, key).await?;
-        let scene = producer.streaming_scene(frame, dimensions, &policy);
-        return Ok(PreparedFrame::streaming(
-            policy,
-            scene,
-            width,
-            height,
-            pixels,
-            captured_at,
-            native_timestamp,
-        ));
-    }
+    let native_source = super::stream::source(stream_slot, &filter, geometry).await?;
     let before = snapshot(frame)?;
     let available = content.windows();
     let native = |surface: &Surface| {
@@ -1175,7 +1186,7 @@ async fn prepare(
         cached_masks: Vec::new(),
     });
     let (pixels, mut captured_at, mut native_timestamp) =
-        super::stream::frame(stream_slot, &filter, key).await?;
+        super::stream::frame(stream_slot, &native_source).await?;
     // Even a fully excluded scene keeps recording. Only its downstream output
     // is black; no raw pixels from that scene enter preview, OCR or storage.
     let base = allowed.iter().any(|ok| *ok).then_some(pixels);
@@ -1277,6 +1288,8 @@ async fn prepare(
         }
     }
     Ok(PreparedFrame {
+        #[cfg(feature = "screenshot-benchmark")]
+        benchmark_sequence: None,
         policy,
         scene,
         width,
@@ -1379,11 +1392,13 @@ mod tests {
         unsafe { pixels.unlock_lock_base_addr(flags) }
             .result()
             .unwrap();
-        super::super::stream::NativeFrame(pixels)
+        super::super::stream::NativeFrame::new(pixels)
     }
 
     fn prepared_for_test(at: chrono::DateTime<chrono::Utc>) -> PreparedFrame {
         PreparedFrame {
+            #[cfg(feature = "screenshot-benchmark")]
+            benchmark_sequence: None,
             policy: Arc::new(Policy {
                 filters: WindowFilters::new(&["Private".into()], &[], &[]),
                 sources: ExclusionSources::default(),
@@ -1418,16 +1433,13 @@ mod tests {
 
     #[test]
     fn policy_updates_retire_prepared_frames_and_reject_in_flight_old_policy() {
+        let slot = super::stream::slot(u32::MAX);
         let prepared = prepared_for_test(chrono::Utc::now());
         let old_policy = prepared.policy.clone();
         let (policy, _) = watch::channel(old_policy.clone());
         let (frames, _) = watch::channel(None);
-        let producer = Producer {
-            policy,
-            frames,
-            streaming: Mutex::new(None),
-        };
-        producer.publish(prepared.clone());
+        let producer = Producer { policy, frames, streaming: Mutex::new(None) };
+        producer.publish(&slot, prepared.clone());
         producer.update_policy((*old_policy).clone());
         assert!(producer.frames.borrow().is_some());
         assert!(Arc::ptr_eq(&producer.policy.borrow(), &old_policy));
@@ -1435,14 +1447,14 @@ mod tests {
         changed.excluded_ids.push(42);
         producer.update_policy(changed);
         assert!(producer.frames.borrow().is_none());
-        producer.publish(prepared.clone());
+        producer.publish(&slot, prepared.clone());
         assert!(producer.frames.borrow().is_none());
-        assert!(producer.render(&old_policy, &prepared).is_err());
+        assert!(producer.render(&slot, &old_policy, &prepared, 0).is_err());
         let mut next = prepared;
         next.policy = producer.policy.borrow().clone();
-        assert!(producer.render(&old_policy, &next).is_err());
-        assert!(producer.render(&next.policy, &next).is_ok());
-        producer.publish(next);
+        assert!(producer.render(&slot, &old_policy, &next, 0).is_err());
+        assert!(producer.render(&slot, &next.policy, &next, 0).is_ok());
+        producer.publish(&slot, next);
         assert!(producer.frames.borrow().is_some());
     }
 
@@ -1468,7 +1480,7 @@ mod tests {
         assert_eq!(selected.captured_at, at);
         assert_eq!(selected.scene.surfaces[0].x, 0.0);
         assert_eq!(selected.scene.surfaces[0].title, "Public");
-        let rendered = selected.render().unwrap();
+        let rendered = selected.render(0).unwrap();
         assert_eq!(rendered.captured_at, at);
         let pixels = rendered.image.into_rgba8();
         assert_eq!(pixels.get_pixel(1, 1).0, [0, 0, 0, 255]);
@@ -1508,7 +1520,7 @@ mod tests {
                 native_timestamp: true,
             },
         ));
-        let pixels = frame.render().unwrap().image.into_rgba8();
+        let pixels = frame.render(0).unwrap().image.into_rgba8();
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 128, 0, 255]);
         assert_eq!(pixels.get_pixel(3, 0).0, [0, 0, 0, 255]);
         assert_eq!(pixels.get_pixel(6, 0).0, [0, 0, 0, 255]);
@@ -1546,42 +1558,27 @@ mod tests {
         let policy = prepared_for_test(at).policy;
         let make_pixels = || solid_buffer(8, 8, [255, 255, 0, 255]);
         let plan = Arc::new(SceneMetadata {
-            cached_masks: vec![Rect {
-                x: 2,
-                y: 0,
-                width: 3,
-                height: 8,
-            }],
+            cached_masks: vec![Rect { x: 2, y: 0, width: 3, height: 8 }],
             ..Default::default()
         });
-        let masked =
-            PreparedFrame::streaming(policy.clone(), Some(plan), 8, 8, make_pixels(), at, true)
-                .render()
-                .unwrap();
+        let masked = PreparedFrame::streaming(policy.clone(), Some(plan), 8, 8, make_pixels(), at, true)
+            .render(0).unwrap();
         assert_eq!(masked.captured_at, at);
         let image = masked.image.into_rgba8();
         assert_eq!(image.get_pixel(3, 3).0, [0, 0, 0, 255]);
         assert_eq!(image.get_pixel(7, 3).0, [0, 255, 255, 255]);
 
         let warming_up = PreparedFrame::streaming(policy, None, 8, 8, make_pixels(), at, true)
-            .render()
-            .unwrap();
+            .render(0).unwrap();
         assert_eq!(warming_up.captured_at, at);
-        assert!(warming_up
-            .image
-            .into_rgba8()
-            .pixels()
-            .all(|pixel| pixel.0 == [0, 0, 0, 255]));
+        assert!(warming_up.image.into_rgba8().pixels().all(|pixel| pixel.0 == [0, 0, 0, 255]));
     }
 
     #[test]
     #[ignore = "requires the isolated moving-window fixture and macOS capture permissions"]
     fn native_streaming_watcher_observes_fixture_motion() {
         use std::sync::mpsc;
-        let pid: i32 = std::env::var("SCREENPIPE_WINDOW_WATCHER_TEST_PID")
-            .unwrap()
-            .parse()
-            .unwrap();
+        let pid: i32 = std::env::var("SCREENPIPE_WINDOW_WATCHER_TEST_PID").unwrap().parse().unwrap();
         let ready_path = std::env::var("SCREENPIPE_WINDOW_WATCHER_TEST_READY").unwrap();
         let (tx, rx) = mpsc::channel();
         let _watcher = super::super::window_events::Watcher::start(move || {
@@ -1600,9 +1597,7 @@ mod tests {
         std::fs::write(ready_path, initial.to_string()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let observed = rx
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .unwrap();
+            let observed = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap();
             if observed != initial {
                 assert_eq!(observed - initial, 120.0);
                 break;
@@ -1639,7 +1634,7 @@ mod tests {
                 },
             ),
         ];
-        let pixels = frame.render().unwrap().image.into_rgba8();
+        let pixels = frame.render(0).unwrap().image.into_rgba8();
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 0, 0, 255]);
         assert_eq!(pixels.get_pixel(3, 3).0, [0, 255, 255, 255]);
         assert!(pixels.pixels().all(|pixel| pixel.0 != [255, 0, 255, 255]));

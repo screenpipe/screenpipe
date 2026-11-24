@@ -126,6 +126,9 @@ pub struct VisionManager {
     /// recovery from fallback both require replacing that immutable handle.
     #[cfg(target_os = "macos")]
     monitor_configurations: Arc<DashMap<u32, screenpipe_screen::monitor::CaptureConfiguration>>,
+    /// Clones of active Windows Streaming handles for topology updates.
+    #[cfg(target_os = "windows")]
+    streaming_monitors: Arc<DashMap<u32, screenpipe_screen::monitor::SafeMonitor>>,
     /// Per-monitor pipeline heartbeat. Aggregate metrics remain in `config` for
     /// `/health`; these independent clocks are exclusively the recovery source
     /// so partial multi-display stalls are observable.
@@ -247,6 +250,8 @@ impl VisionManager {
             recording_tasks: Arc::new(DashMap::new()),
             #[cfg(target_os = "macos")]
             monitor_configurations: Arc::new(DashMap::new()),
+            #[cfg(target_os = "windows")]
+            streaming_monitors: Arc::new(DashMap::new()),
             monitor_liveness: Arc::new(DashMap::new()),
             hd_recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
@@ -605,6 +610,8 @@ impl VisionManager {
 
         #[cfg(target_os = "macos")]
         let configuration = monitor.capture_configuration();
+        #[cfg(target_os = "windows")]
+        let streaming_monitor = self.config.streaming_mode.then(|| monitor.clone());
         let liveness = Arc::new(PipelineMetrics::new());
         let handle = self
             .start_event_driven_monitor(monitor_id, monitor, liveness.clone())
@@ -614,6 +621,10 @@ impl VisionManager {
         #[cfg(target_os = "macos")]
         self.monitor_configurations
             .insert(monitor_id, configuration);
+        #[cfg(target_os = "windows")]
+        if let Some(monitor) = streaming_monitor {
+            self.streaming_monitors.insert(monitor_id, monitor);
+        }
         self.recording_tasks.insert(monitor_id, handle);
 
         Ok(())
@@ -824,6 +835,8 @@ impl VisionManager {
     /// Stop recording on a specific monitor
     pub async fn stop_monitor(&self, monitor_id: u32) -> Result<()> {
         self.monitor_liveness.remove(&monitor_id);
+        #[cfg(target_os = "windows")]
+        self.streaming_monitors.remove(&monitor_id);
         #[cfg(target_os = "macos")]
         self.monitor_configurations.remove(&monitor_id);
         // Stop the HD recorder first. Aborting drops its ffmpeg stdin, which
@@ -879,6 +892,8 @@ impl VisionManager {
 
         for id in &dead {
             self.monitor_liveness.remove(id);
+            #[cfg(target_os = "windows")]
+            self.streaming_monitors.remove(id);
             #[cfg(target_os = "macos")]
             self.monitor_configurations.remove(id);
             if let Some((_, handle)) = self.recording_tasks.remove(id) {
@@ -923,6 +938,16 @@ impl VisionManager {
                     .should_replace(*active.value())
             })
             .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn refresh_streaming_monitor_geometry(
+        &self,
+        fresh: &screenpipe_screen::monitor::SafeMonitor,
+    ) {
+        if let Some(active) = self.streaming_monitors.get(&fresh.id()) {
+            active.update_streaming_geometry(fresh);
+        }
     }
 
     /// Independent liveness for each active capture loop. Never derive this

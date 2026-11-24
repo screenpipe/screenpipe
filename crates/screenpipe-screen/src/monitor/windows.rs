@@ -15,6 +15,9 @@ static RDP_CAPTURE_LOG_ONCE: Once = Once::new();
 pub(super) struct RecorderCapture {
     capture: PersistentCapture,
     decoded: DecodedFrameCache,
+    geometry: Option<Arc<MonitorData>>,
+    renderer: Option<crate::wgc_capture::gpu_d3d11::Renderer>,
+    gpu_source: bool,
 }
 
 #[derive(Default)]
@@ -35,6 +38,17 @@ impl DecodedFrameCache {
     }
 }
 
+fn same_streaming_geometry(
+    active: Option<&Arc<MonitorData>>,
+    requested: Option<&Arc<MonitorData>>,
+) -> bool {
+    match (active, requested) {
+        (Some(active), Some(requested)) => Arc::ptr_eq(active, requested),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 impl SafeMonitor {
     // Windows: Create from xcap monitor
     // NOTE: We don't cache the XcapMonitor because on Windows it contains
@@ -52,6 +66,7 @@ impl SafeMonitor {
 
         Self {
             monitor_id,
+            streaming_geometry: Arc::new(std::sync::RwLock::new(monitor_data.clone())),
             monitor_data,
             cached_monitor_index: Arc::new(std::sync::Mutex::new(None)),
             persistent_capture: Arc::new(std::sync::Mutex::new(None)),
@@ -60,6 +75,55 @@ impl SafeMonitor {
             persistent_capture_disabled: Arc::new(AtomicBool::new(false)),
             persistent_capture_failures: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    pub(crate) fn streaming_geometry(&self) -> Arc<MonitorData> {
+        self.streaming_geometry.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Reconcile a running recorder with the monitor watcher's fresh topology.
+    pub fn update_streaming_geometry(&self, fresh: &Self) {
+        debug_assert_eq!(self.id(), fresh.id());
+        self.set_streaming_geometry(&fresh.monitor_data);
+    }
+
+    fn set_streaming_geometry(&self, fresh: &Arc<MonitorData>) {
+        let mut geometry = self.streaming_geometry.write().unwrap_or_else(|e| e.into_inner());
+        if geometry.bounds() != fresh.bounds() {
+            tracing::info!(
+                monitor_id = self.id(), previous = ?geometry.bounds(), current = ?fresh.bounds(),
+                "Windows streaming screenshot geometry refreshed"
+            );
+            *geometry = fresh.clone();
+        }
+    }
+
+    #[cfg(feature = "screenshot-benchmark")]
+    pub(crate) fn screenshot_benchmark_counters(
+        &self,
+    ) -> Option<crate::screenshot_privacy::ScreenshotBenchmarkCounters> {
+        let active = self.recorder_capture.lock().ok()?;
+        let stats = active.as_ref()?.capture.stats();
+        let (redaction_distinct, redaction_repeated) = self.privacy_session.redaction_work.counts();
+        Some(crate::screenshot_privacy::ScreenshotBenchmarkCounters {
+            callbacks: stats.frame_arrivals,
+            native_arrivals: stats.native_arrivals,
+            native_buffer_publications: stats.copy_submissions,
+            cache_publications: stats.copy_submissions,
+            redaction_distinct,
+            redaction_repeated,
+        })
+    }
+
+    /// Inspect the adapter used by this monitor's active screenshot session.
+    #[cfg(feature = "screenshot-benchmark")]
+    #[doc(hidden)]
+    pub fn benchmark_active_wgc_adapter(&self) -> Result<(String, bool)> {
+        let active = self.recorder_capture.lock()
+            .map_err(|_| anyhow::anyhow!("WGC recorder lock poisoned"))?;
+        active.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no active WGC screenshot session"))?
+            .capture.benchmark_adapter()
     }
 
     // Windows: Use persistent WGC capture to avoid orange border flash.
@@ -80,16 +144,40 @@ impl SafeMonitor {
     /// Recorder-only acquisition. This path never invokes request-scoped WGC or
     /// xcap and an ordinary timeout never tears down the live display session.
     pub(crate) async fn capture_native_frame_streaming(&self) -> Result<Arc<NativeFrame>> {
+        self.capture_native_frame_at_geometry(None).await
+    }
+
+    pub(crate) async fn capture_native_frame_at_geometry(
+        &self,
+        geometry: Option<Arc<MonitorData>>,
+    ) -> Result<Arc<NativeFrame>> {
         let monitor_id = self.monitor_id;
         let persistent = self.recorder_capture.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = persistent
                 .lock()
                 .map_err(|e| anyhow::anyhow!("persistent capture mutex poisoned: {}", e))?;
+            if guard.as_ref().is_some_and(|recorder| recorder.gpu_source) {
+                guard.take();
+            }
+            // A cached WGC texture belongs to the old layout even when its
+            // pixel dimensions are unchanged. Recreate lazily on the reader.
+            if guard.as_ref().is_some_and(|recorder| {
+                !same_streaming_geometry(recorder.geometry.as_ref(), geometry.as_ref())
+            }) {
+                guard.take();
+            }
             if guard.is_none() {
                 *guard = Some(RecorderCapture {
-                    capture: PersistentCapture::new(monitor_id)?,
+                    capture: if geometry.is_some() {
+                        PersistentCapture::new_streaming(monitor_id, false)?
+                    } else {
+                        PersistentCapture::new(monitor_id)?
+                    },
                     decoded: DecodedFrameCache::default(),
+                    geometry,
+                    renderer: None,
+                    gpu_source: false,
                 });
             }
             let recorder = guard.as_mut().expect("capture initialized");
@@ -115,6 +203,40 @@ impl SafeMonitor {
         })
         .await
         .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))?
+    }
+
+    pub(crate) async fn capture_gpu_frame_streaming(
+        &self,
+        geometry: Arc<MonitorData>,
+        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>
+            + Send + 'static,
+        max_width: u32,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<NativeFrame> {
+        let monitor_id = self.monitor_id;
+        let persistent = self.recorder_capture.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut guard = persistent.lock().map_err(|_| anyhow::anyhow!("WGC recorder lock poisoned"))?;
+            if !guard.as_ref().is_some_and(|recorder| recorder.gpu_source && !recorder.capture.is_closed()
+                && same_streaming_geometry(recorder.geometry.as_ref(), Some(&geometry))) {
+                guard.take();
+                *guard = Some(RecorderCapture {
+                    capture: PersistentCapture::new_streaming(monitor_id, true)?,
+                    decoded: DecodedFrameCache::default(),
+                    geometry: Some(geometry),
+                    renderer: None,
+                    gpu_source: true,
+                });
+            }
+            let recorder = guard.as_mut().unwrap();
+            let result = recorder.capture.get_gpu_frame_streaming(std::time::Duration::from_millis(500),
+                &mut recorder.renderer, latest_masks, max_width);
+            if result.is_err() {
+                guard.take();
+            }
+            result
+        }).await?
     }
 
     async fn capture_image_inner(&self, streaming: bool) -> Result<DynamicImage> {
@@ -337,7 +459,9 @@ impl SafeMonitor {
         .await
         .map_err(|e| anyhow::anyhow!("refresh task panicked: {}", e))??;
 
-        self.monitor_data = Arc::new(refreshed);
+        let refreshed = Arc::new(refreshed);
+        self.set_streaming_geometry(&refreshed);
+        self.monitor_data = refreshed;
         // Invalidate cached index — monitor list may have changed
         *self.cached_monitor_index.lock().unwrap() = None;
         tracing::debug!("Refreshed monitor {} metadata", self.monitor_id);
@@ -419,6 +543,7 @@ mod recorder_cache_tests {
                 1,
                 image::Rgba([value, value, value, 255]),
             )),
+            snapshot_image: None,
             session_id: 17,
             system_relative_time: sequence as i64,
             sequence,

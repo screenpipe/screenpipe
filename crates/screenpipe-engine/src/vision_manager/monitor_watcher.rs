@@ -1136,6 +1136,11 @@ pub async fn start_monitor_watcher(
                 }
             }
 
+            #[cfg(target_os = "windows")]
+            for monitor in &current_monitors {
+                vision_manager.refresh_streaming_monitor_geometry(monitor);
+            }
+
             // Get currently recording monitors
             let active_ids: HashSet<u32> =
                 vision_manager.active_monitors().await.into_iter().collect();

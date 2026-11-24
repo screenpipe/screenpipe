@@ -21,7 +21,7 @@ use screenpipe_a11y::tree::TreeWalkerConfig;
 use screenpipe_a11y::ActivityFeed;
 use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{
-    detach_tree_from_pixels, paired_capture, paired_capture_deferred, CaptureContext,
+    detach_tree_from_pixels, paired_capture_with_snapshot, CaptureContext,
     PairedCaptureResult,
 };
 use screenpipe_capture::{TreeWalkerWorker, TreeWalkerWorkerOutcome};
@@ -30,7 +30,7 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
-use screenpipe_screen::screenshot_privacy::capture_monitor_frame_filtered;
+use screenpipe_screen::screenshot_privacy::capture_monitor_frame_for_snapshot;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use std::collections::HashMap;
 #[cfg(debug_assertions)]
@@ -1188,10 +1188,7 @@ pub(crate) async fn event_driven_capture_loop(
             &tree_walker_config.included_windows,
             &tree_walker_config.ignored_urls,
             &tree_walker_config.included_urls,
-        )
-        .with_streaming_mode(
-            streaming_requested && !focused_window_screenshots && !pause_on_drm_content,
-        ),
+        ).with_streaming_mode(streaming_requested && !focused_window_screenshots && !pause_on_drm_content),
         ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
         pause_on_drm_content,
@@ -1201,13 +1198,9 @@ pub(crate) async fn event_driven_capture_loop(
     };
 
     if streaming_requested && !capture_params.window_filters.streaming_mode() {
-        tracing::info!(
-            monitor_id,
-            focused_window_screenshots,
-            pause_on_drm_content,
+        tracing::info!(monitor_id, focused_window_screenshots, pause_on_drm_content,
             screenshot_outcome = "standard_privacy_path",
-            "streaming mode constrained by platform support or strict capture policy"
-        );
+            "streaming mode constrained by platform support or strict capture policy");
     }
 
     // Capture immediately on startup so the timeline has a frame right away.
@@ -3205,10 +3198,7 @@ async fn redacted_focus_check(
     };
     if filters.streaming_mode()
         && pixels_only_permitted
-        && matches!(
-            focus,
-            None | Some(screenpipe_a11y::tree::FocusedWindowFilterResult::NotFound)
-        )
+        && matches!(focus, None | Some(screenpipe_a11y::tree::FocusedWindowFilterResult::NotFound))
     {
         // An unavailable geometry observation must not discard the already
         // masked screenshot or authorize text and URL extraction.
@@ -3280,6 +3270,7 @@ async fn persist_masked_screenshot(
     image: image::DynamicImage,
     captured_at: chrono::DateTime<Utc>,
     in_meeting: bool,
+    snapshot_image: Option<&image::DynamicImage>,
 ) -> Result<CaptureOutput> {
     if crate::sleep_monitor::screen_is_locked() {
         return Ok(CaptureOutput {
@@ -3315,7 +3306,7 @@ async fn persist_masked_screenshot(
         ax_screenshot_coherent: false,
         focused_window_bounds: None,
     };
-    let result = paired_capture_deferred(&ctx).await?;
+    let result = paired_capture_with_snapshot(&ctx, None, None, true, snapshot_image).await?;
     if let Some(sender) = params.semantic_tx {
         sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
     }
@@ -3432,6 +3423,7 @@ async fn do_capture(
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let mut native_captured_at = None;
+    let mut snapshot_image = None;
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3444,12 +3436,13 @@ async fn do_capture(
 
         // macOS selects a prepared stream frame with its own policy and scene.
         // Other platforms retain their existing positive-selection boundary.
-        match capture_monitor_frame_filtered(
+        match capture_monitor_frame_for_snapshot(
             params.monitor,
             &params.window_filters,
             exclusion_sources(params.tree_walker_config),
             &excluded_ids,
             capture_needs_fresh_pixels(trigger, context_changed),
+            params.snapshot_writer.max_width(),
         )
         .await
         {
@@ -3462,6 +3455,7 @@ async fn do_capture(
                 {
                     native_captured_at = Some(frame.captured_at);
                 }
+                snapshot_image = frame.snapshot_image;
                 frame.image
             }
             Err(error)
@@ -3514,10 +3508,7 @@ async fn do_capture(
         if let Some(kind) = frame_corruption_with_privacy_padding(
             &image,
             params.window_filters.has_window_patterns(),
-        )
-        .filter(|kind| {
-            !params.window_filters.streaming_mode() || !matches!(kind, CorruptKind::Black)
-        }) {
+        ).filter(|kind| !params.window_filters.streaming_mode() || !matches!(kind, CorruptKind::Black)) {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
                 // shows up in shared logs. Black is common (DRM / excluded window).
@@ -3573,11 +3564,10 @@ async fn do_capture(
         });
     }
     if focus_decision == RedactedFocusDecision::PixelsOnly {
-        return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting).await;
+        return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting, snapshot_image.as_ref()).await;
     }
     let streaming_pixels = params.window_filters.streaming_mode()
-        && !screenshot_disabled
-        && !skip_pixels_for_unknown_exclusions;
+        && !screenshot_disabled && !skip_pixels_for_unknown_exclusions;
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
     // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
@@ -3824,11 +3814,8 @@ async fn do_capture(
 
     let mut tree_snapshot = match tree_walk_result {
         Some(TreeWalkResult::Found(snap)) => Some(snap),
-        Some(TreeWalkResult::Skipped(screenpipe_a11y::tree::SkipReason::UserIgnored))
-            if streaming_pixels =>
-        {
-            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
-                .await;
+        Some(TreeWalkResult::Skipped(screenpipe_a11y::tree::SkipReason::UserIgnored)) if streaming_pixels => {
+            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting, snapshot_image.as_ref()).await;
         }
         Some(TreeWalkResult::Skipped(reason)) => {
             if !matches!(reason, screenpipe_a11y::tree::SkipReason::UrlPending) {
@@ -3889,8 +3876,7 @@ async fn do_capture(
                 && foreground_identity_before == foreground_identity_after);
         if monitor_hosts_focus && !ax_screenshot_coherent {
             if streaming_pixels {
-                return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
-                    .await;
+                return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting, snapshot_image.as_ref()).await;
             }
             debug!(
                 before = ?foreground_identity_before,
@@ -3930,14 +3916,7 @@ async fn do_capture(
             // below where the full pair is known.
             if window_pattern::matches_any(&params.ignored_patterns, &app_lower, "") {
                 if streaming_pixels {
-                    return persist_masked_screenshot(
-                        params,
-                        trigger,
-                        image,
-                        captured_at,
-                        in_meeting,
-                    )
-                    .await;
+                    return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting, snapshot_image.as_ref()).await;
                 }
                 debug!(
                     "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
@@ -4051,17 +4030,11 @@ async fn do_capture(
         app_name_owned.as_deref(),
         window_name_owned.as_deref(),
     ) {
-        if streaming_pixels
-            && !resolved_window_matches_privacy_filters(
-                params.tree_walker_config.ignore_incognito_windows,
-                monitor_hosts_focus,
-                &[],
-                app_name_owned.as_deref(),
-                window_name_owned.as_deref(),
-            )
-        {
-            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting)
-                .await;
+        if streaming_pixels && !resolved_window_matches_privacy_filters(
+            params.tree_walker_config.ignore_incognito_windows, monitor_hosts_focus, &[],
+            app_name_owned.as_deref(), window_name_owned.as_deref(),
+        ) {
+            return persist_masked_screenshot(params, trigger, image, captured_at, in_meeting, snapshot_image.as_ref()).await;
         }
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
         let check_win = window_name_owned
@@ -4165,10 +4138,12 @@ async fn do_capture(
     // so accessibility bounds, OCR boxes, and replay retain their coordinates.
     // If the platform cannot provide trustworthy bounds, keep the allowed snapshot but
     // suppress pixels and OCR for this frame rather than widening capture.
+    let scope_to_focused_window = params.focused_window_screenshots || params.window_filters.has_url_allowlist();
+    let snapshot_image = snapshot_image.as_ref().filter(|_| !scope_to_focused_window);
     let (image, scoped_pixels_unverified) = apply_screenshot_scope(
         image,
         focused_window_bounds,
-        params.focused_window_screenshots || params.window_filters.has_url_allowlist(),
+        scope_to_focused_window,
         screenshot_disabled || skip_pixels_for_unknown_exclusions,
     );
 
@@ -4211,9 +4186,13 @@ async fn do_capture(
     };
 
     let result = if defer_text_extraction {
-        paired_capture_deferred(&ctx).await?
+        paired_capture_with_snapshot(
+            &ctx, None, None, true, snapshot_image,
+        ).await?
     } else {
-        paired_capture(&ctx, tree_snapshot.as_ref(), Some(ocr_gate)).await?
+        paired_capture_with_snapshot(
+            &ctx, tree_snapshot.as_ref(), Some(ocr_gate), false, snapshot_image,
+        ).await?
     };
     if let Some(sender) = params.semantic_tx {
         match tree_snapshot {
