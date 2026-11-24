@@ -228,6 +228,8 @@ pub struct WindowFilters {
     title_block_patterns: Vec<String>,
     url_policy: screenpipe_a11y::url_filter::UrlPolicy,
     streaming_mode: bool,
+    #[cfg(feature = "screenshot-benchmark")]
+    benchmark_cpu_masks: bool,
 }
 
 impl WindowFilters {
@@ -264,6 +266,8 @@ impl WindowFilters {
             title_block_patterns,
             url_policy: screenpipe_a11y::url_filter::UrlPolicy::new(ignored_urls, included_urls),
             streaming_mode: false,
+            #[cfg(feature = "screenshot-benchmark")]
+            benchmark_cpu_masks: false,
         }
     }
 
@@ -286,6 +290,22 @@ impl WindowFilters {
 
     pub fn streaming_mode(&self) -> bool {
         self.streaming_mode
+    }
+
+    #[cfg(feature = "screenshot-benchmark")]
+    #[doc(hidden)]
+    pub fn with_benchmark_cpu_masks(mut self) -> Self {
+        self.benchmark_cpu_masks = true;
+        self
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    pub(crate) fn uses_streaming_gpu(&self) -> bool {
+        #[cfg(feature = "screenshot-benchmark")]
+        if self.benchmark_cpu_masks {
+            return false;
+        }
+        self.streaming_mode()
     }
 
     /// Explicit include/exclude patterns require isolated window pixels.
@@ -1309,6 +1329,24 @@ pub async fn capture_all_visible_windows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn streaming_mode_selects_gpu_masks() {
+        let filters = WindowFilters::new(&[], &[], &[]);
+        assert!(!filters.uses_streaming_gpu());
+
+        #[cfg(target_os = "macos")]
+        if !cidre::api::macos_available("14.0") {
+            return;
+        }
+
+        let streaming = filters.with_streaming_mode(true);
+        assert!(streaming.uses_streaming_gpu());
+
+        #[cfg(feature = "screenshot-benchmark")]
+        assert!(!streaming.with_benchmark_cpu_masks().uses_streaming_gpu());
+    }
 
     fn domain_rule(
         domain: &str,

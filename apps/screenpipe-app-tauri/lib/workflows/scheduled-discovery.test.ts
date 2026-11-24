@@ -142,15 +142,16 @@ describe("workflow agent workspace adapter",()=>{
     expect(await getWorkflowJob("saved:41")).toMatchObject({ status: "incomplete" });
   });
   it.each([
-    ["context_compaction", "Auto-compaction failed: 502", "could not prepare its next step"],
-    ["timeout", "execution timed out after 900s", "ran out of time"],
-    ["agent_error", "Request timed out.", "ran out of time"],
-    ["agent_error", "413 Your conversation is too long for the model's context window", "AI context limit"],
-  ])("explains %s without exposing the raw provider error", async (error_type, error_message, message) => {
+    ["context_compaction", "Auto-compaction failed: 502", "could not prepare its next step", "context_compaction"],
+    ["timeout", "execution timed out after 900s", "ran out of time", "timeout"],
+    ["agent_error", "Request timed out.", "ran out of time", "timeout"],
+    ["agent_error", "413 Your conversation is too long for the model's context window", "AI context limit", "context_length_exceeded"],
+    ["workflow_allowance_paused", "quota hit", "paused to preserve AI allowance", "allowance_paused"],
+    ["workflow_business_required", "free plan", "requires Business", "business_required"],
+  ])("explains %s without exposing the raw provider error and attaches enumerated errorCode", async (error_type, error_message, message, expectedCode) => {
     executions["workflow-discover"] = { id: 42, status: "failed", started_at: end, error_type, error_message };
     const result = await getWorkflowJob("failed:42");
-    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining(message) });
-    expect(result.message).toContain("Try again to continue");
+    expect(result).toMatchObject({ status: "failed", errorCode: expectedCode, message: expect.stringContaining(message) });
     expect(result.message).not.toContain(error_message);
   });
   it("saves only human corrections, never a stale full catalog",async()=>{

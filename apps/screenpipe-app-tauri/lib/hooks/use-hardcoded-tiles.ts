@@ -61,6 +61,7 @@ export async function getInstalledMcpVersion(): Promise<string | null> {
 const KNOWN_DEFAULT_MCP_ARGS: readonly string[][] = [
   ["-y", "screenpipe-mcp@latest"], // npx (current)
   ["-y", "screenpipe-mcp"],        // npx (older README snippet)
+  ["x", "--bun", "screenpipe-mcp@latest"], // bundled bun on Windows (current)
   ["x", "screenpipe-mcp@latest"],  // bundled bun / bunx (current)
   ["x", "screenpipe-mcp"],         // bundled bun / bunx (older)
 ];

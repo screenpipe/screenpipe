@@ -7,7 +7,7 @@
 // with timestamped backups, connect rolls back skills when the MCP write
 // fails, and disconnect stays idempotent.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseJsonc } from "jsonc-parser";
 import { parse as parseYaml } from "yaml";
 
@@ -18,6 +18,14 @@ const fsMock = vi.hoisted(() => ({
 }));
 
 const pathMock = vi.hoisted(() => ({ home: "/Users/test" }));
+
+// Like the real plugin outside Tauri, platform() throws unless a test sets it.
+const osMock = vi.hoisted(() => ({
+  platform: vi.fn((): string => {
+    throw new Error("not running inside Tauri");
+  }),
+}));
+vi.mock("@tauri-apps/plugin-os", () => osMock);
 
 const skillsMock = vi.hoisted(() => ({
   installExternalAgentSkills: vi.fn(async () => ["a", "b"]),
@@ -116,6 +124,7 @@ import {
   isVscodeMcpInstalled,
   isToolConfigHealthy,
   installCodexMcp,
+  buildMcpConfig,
   installCloudMcp,
   uninstallCodexMcp,
   installCursorMcp,
@@ -904,5 +913,39 @@ describe("additional local AI apps", () => {
     expect(command).toContain("'/app/bun' 'x' 'screenpipe-mcp@latest'");
     expect(tauriMock.setAiToolAutoConnectOptOut).not.toHaveBeenCalled();
     expect(fsMock.files.size).toBe(0);
+  });
+});
+
+// #7560: on Windows, plain `bun x` starts screenpipe-mcp in a second process
+// that opens its own terminal window when the client started bun without a
+// console. `--bun` keeps it inside bun. Other platforms keep the old args.
+describe("bundled bun launch args", () => {
+  afterEach(() => {
+    osMock.platform.mockImplementation(() => {
+      throw new Error("not running inside Tauri");
+    });
+  });
+
+  it("runs screenpipe-mcp inside bun on Windows", async () => {
+    osMock.platform.mockReturnValue("windows");
+    expect(await buildMcpConfig({ client: "codex" })).toMatchObject({
+      command: "/app/bun",
+      args: ["x", "--bun", "screenpipe-mcp@latest"],
+    });
+
+    fsMock.files.set("/Users/test/.codex", "");
+    await installCodexMcp();
+    expect(fsMock.files.get("/Users/test/.codex/config.toml")).toContain(
+      'args = ["x", "--bun", "screenpipe-mcp@latest"]',
+    );
+  });
+
+  it.each(["macos", "linux"])("keeps plain bun x on %s", async (os) => {
+    osMock.platform.mockReturnValue(os);
+    expect((await buildMcpConfig({ client: "codex" })).args).toEqual(["x", "screenpipe-mcp@latest"]);
+  });
+
+  it("keeps plain bun x when the platform is unknown", async () => {
+    expect((await buildMcpConfig({ client: "codex" })).args).toEqual(["x", "screenpipe-mcp@latest"]);
   });
 });

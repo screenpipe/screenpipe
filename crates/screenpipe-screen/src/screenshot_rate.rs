@@ -98,9 +98,30 @@ pub fn set(fps: u32) -> anyhow::Result<()> {
     FRAME_RATE.set(fps)
 }
 
+/// Give the 20 FPS Windows Streaming consumer headroom with a 25 ms WGC
+/// interval, short enough to catch each update on the tested 32 Hz display.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn wgc_source_fps(requested_fps: u32, streaming_headroom: bool) -> u32 {
+    if streaming_headroom && requested_fps == 20 {
+        40
+    } else {
+        requested_fps
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wgc_headroom_is_scoped_to_the_tested_streaming_rate() {
+        assert_eq!(wgc_source_fps(20, true), 40);
+        assert_eq!(wgc_source_fps(20, false), 20);
+        for fps in [1, 2, 19, 21, 22, 24, 30] {
+            assert_eq!(wgc_source_fps(fps, true), fps);
+            assert_eq!(wgc_source_fps(fps, false), fps);
+        }
+    }
 
     #[test]
     fn sampling_covers_idle_rates_below_at_and_above_the_preference() {

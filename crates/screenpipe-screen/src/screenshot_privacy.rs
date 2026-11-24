@@ -13,7 +13,14 @@ use image::DynamicImage;
 use std::time::{Duration, Instant};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
-mod scene;
+pub(crate) mod scene;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) mod gpu;
+#[cfg(all(feature = "screenshot-benchmark", any(target_os = "macos", target_os = "windows")))]
+pub use gpu::benchmark::{
+    process_cpu_time as benchmark_process_cpu_time, run as benchmark_gpu_screenshots,
+    run_preencode_matched as benchmark_gpu_preencode_matched,
+};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod window_events;
 
@@ -26,10 +33,58 @@ pub(crate) mod stream;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(all(feature = "screenshot-benchmark", any(target_os = "macos", target_os = "windows")))]
+#[derive(Default, serde::Serialize)]
+pub struct ScreenshotBenchmarkCounters {
+    pub callbacks: u64,
+    pub native_arrivals: u64,
+    pub native_buffer_publications: u64,
+    pub cache_publications: u64,
+    pub redaction_distinct: u64,
+    pub redaction_repeated: u64,
+}
+
+#[cfg(all(feature = "screenshot-benchmark", any(target_os = "macos", target_os = "windows")))]
+#[derive(Default)]
+pub(super) struct BenchmarkFrameKeys {
+    last: std::sync::atomic::AtomicI64,
+    distinct: std::sync::atomic::AtomicU64,
+    repeated: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(all(feature = "screenshot-benchmark", any(target_os = "macos", target_os = "windows")))]
+impl BenchmarkFrameKeys {
+    pub(super) fn record(&self, key: i64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if key > self.last.fetch_max(key, Relaxed) {
+            self.distinct.fetch_add(1, Relaxed);
+        } else {
+            self.repeated.fetch_add(1, Relaxed);
+        }
+    }
+
+    pub(super) fn counts(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.distinct.load(Relaxed), self.repeated.load(Relaxed))
+    }
+}
+
+/// Counters for the local pre-encoder benchmark. Each returns the lifetime
+/// totals of the session currently backing this monitor.
+#[cfg(all(feature = "screenshot-benchmark", any(target_os = "macos", target_os = "windows")))]
+pub fn screenshot_benchmark_counters(monitor: &SafeMonitor) -> Option<ScreenshotBenchmarkCounters> {
+    #[cfg(target_os = "macos")]
+    return stream::benchmark_counters(monitor.id());
+    #[cfg(target_os = "windows")]
+    monitor.screenshot_benchmark_counters()
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) struct WindowsPrivacySession {
     inner: std::sync::Mutex<windows::PrivacySession>,
     gate: std::sync::Arc<tokio::sync::Semaphore>,
+    #[cfg(feature = "screenshot-benchmark")]
+    pub(crate) redaction_work: BenchmarkFrameKeys,
 }
 
 #[cfg(target_os = "windows")]
@@ -38,6 +93,8 @@ impl Default for WindowsPrivacySession {
         Self {
             inner: std::sync::Mutex::new(windows::PrivacySession::default()),
             gate: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+            #[cfg(feature = "screenshot-benchmark")]
+            redaction_work: BenchmarkFrameKeys::default(),
         }
     }
 }
@@ -74,6 +131,7 @@ pub async fn capture_monitor_image_filtered(
 #[derive(Clone)]
 pub struct CapturedFrame {
     pub image: DynamicImage,
+    pub snapshot_image: Option<DynamicImage>,
     pub captured_at: chrono::DateTime<chrono::Utc>,
     pub duration: Duration,
     /// False for callback/return-time estimates; never advertise them as native PTS.
@@ -88,6 +146,7 @@ pub struct CapturedFrame {
 #[derive(Clone)]
 struct CapturedPixels {
     image: DynamicImage,
+    snapshot_image: Option<DynamicImage>,
     captured_at: chrono::DateTime<chrono::Utc>,
     native_timestamp: bool,
     system_relative_time: Option<i64>,
@@ -126,6 +185,19 @@ pub async fn capture_monitor_frame_filtered(
     excluded_ids: &[u32],
     fresh: bool,
 ) -> anyhow::Result<CapturedFrame> {
+    capture_monitor_frame_for_snapshot(monitor, filters, sources, excluded_ids, fresh, 0).await
+}
+
+/// Supply the writer's width to the Streaming GPU path. The full-size image still
+/// serves OCR, focus validation, and visual-change detection.
+pub async fn capture_monitor_frame_for_snapshot(
+    monitor: &SafeMonitor,
+    filters: &WindowFilters,
+    sources: ExclusionSources,
+    excluded_ids: &[u32],
+    fresh: bool,
+    _snapshot_max_width: u32,
+) -> anyhow::Result<CapturedFrame> {
     let start = Instant::now();
     // macOS 14+ uses the same redacted display stream with or without window
     // patterns. Keep the older OS and other platforms' existing native paths.
@@ -135,6 +207,7 @@ pub async fn capture_monitor_frame_filtered(
                 .await?;
         return Ok(CapturedFrame {
             image,
+            snapshot_image: None,
             captured_at: chrono::Utc::now(),
             duration,
             native_timestamp: false,
@@ -144,14 +217,15 @@ pub async fn capture_monitor_frame_filtered(
         });
     }
     #[cfg(target_os = "macos")]
-    let pixels = macos::capture_filtered(monitor, filters, sources, excluded_ids, fresh).await;
+    let pixels = macos::capture_filtered(monitor, filters, sources, excluded_ids, fresh, _snapshot_max_width).await;
     #[cfg(target_os = "linux")]
     let image = linux::capture_filtered(monitor, filters, sources, fresh).await;
     #[cfg(target_os = "windows")]
-    let image = windows::capture_filtered(monitor, filters, sources, excluded_ids, fresh).await;
+    let image = windows::capture_filtered(monitor, filters, sources, excluded_ids, fresh, _snapshot_max_width).await;
     #[cfg(target_os = "linux")]
     let pixels = image.map(|image| CapturedPixels {
         image,
+        snapshot_image: None,
         captured_at: chrono::Utc::now(),
         native_timestamp: false,
         system_relative_time: None,
@@ -159,20 +233,11 @@ pub async fn capture_monitor_frame_filtered(
         session_id: None,
     });
     #[cfg(target_os = "windows")]
-    let pixels = image.map(
-        |(image, session_id, qpc, sequence, captured_at)| CapturedPixels {
-            image,
-            captured_at,
-            // QPC is retained explicitly; captured_at is the callback-time estimate.
-            native_timestamp: false,
-            system_relative_time: Some(qpc),
-            sequence: Some(sequence),
-            session_id: Some(session_id),
-        },
-    );
+    let pixels = image;
     let pixels = report_filtered_capture(monitor.id(), pixels)?;
     Ok(CapturedFrame {
         image: pixels.image,
+        snapshot_image: pixels.snapshot_image,
         captured_at: pixels.captured_at,
         duration: start.elapsed(),
         native_timestamp: pixels.native_timestamp,

@@ -31,6 +31,9 @@
 //!   cached frame is dropped and `get_latest_image` fails fast so monitor/windows.rs
 //!   reinits — a closed session never serves stale frames.
 
+#[path = "screenshot_privacy/gpu/d3d11.rs"]
+pub(crate) mod gpu_d3d11;
+
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, RgbaImage};
 use std::collections::VecDeque;
@@ -76,6 +79,8 @@ const FRAME_POOL_BUFFERS: i32 = 2;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CaptureStats {
     pub frame_arrivals: u64,
+    #[cfg(feature = "screenshot-benchmark")]
+    pub native_arrivals: u64,
     pub copy_submissions: u64,
     pub image_requests: u64,
     pub native_interval_requested_fps: u32,
@@ -88,6 +93,8 @@ pub struct CaptureStats {
 #[derive(Default)]
 struct CaptureCounters {
     frame_arrivals: AtomicU64,
+    #[cfg(feature = "screenshot-benchmark")]
+    native_arrivals: AtomicU64,
     copy_submissions: AtomicU64,
     image_requests: AtomicU64,
     native_interval_requested_fps: AtomicU32,
@@ -101,6 +108,8 @@ impl CaptureCounters {
     fn snapshot(&self) -> CaptureStats {
         CaptureStats {
             frame_arrivals: self.frame_arrivals.load(Ordering::Relaxed),
+            #[cfg(feature = "screenshot-benchmark")]
+            native_arrivals: self.native_arrivals.load(Ordering::Relaxed),
             copy_submissions: self.copy_submissions.load(Ordering::Relaxed),
             image_requests: self.image_requests.load(Ordering::Relaxed),
             native_interval_requested_fps: self
@@ -223,6 +232,22 @@ fn min_update_interval_ticks(fps: u32) -> i64 {
     // TimeSpan has 100ns resolution, so rates above 10 MHz saturate at one tick;
     // this is a native representation limit, not a product FPS ceiling.
     WINDOWS_TICKS_PER_SECOND.div_ceil(fps as u64).max(1) as i64
+}
+
+fn configured_interval_ticks(requested_fps: u32, streaming_headroom: bool) -> i64 {
+    min_update_interval_ticks(crate::screenshot_rate::wgc_source_fps(requested_fps, streaming_headroom))
+}
+
+#[cfg(feature = "screenshot-benchmark")]
+static EXACT_BENCHMARK_INTERVAL: AtomicBool = AtomicBool::new(false);
+
+/// Configure an exact WGC hint for a benchmark process before it starts capture.
+/// With no explicit hint, the benchmark exercises the normal Streaming policy.
+#[cfg(feature = "screenshot-benchmark")]
+#[doc(hidden)]
+pub fn configure_benchmark_native_rate(requested_fps: u32, exact: bool) -> u32 {
+    EXACT_BENCHMARK_INTERVAL.store(exact, Ordering::Relaxed);
+    crate::screenshot_rate::wgc_source_fps(requested_fps, !exact)
 }
 
 /// Generations make outstanding demand explicit and allow one frame to satisfy all
@@ -505,6 +530,7 @@ struct LatestFrame {
     /// differs are stale pre-`Recreate` deliveries and are dropped; frames whose
     /// `ContentSize` differs signal a display mode change and trigger a `Recreate`.
     pool_size: (i32, i32),
+    shader_source: bool,
     demand: CopyDemand,
 }
 
@@ -586,6 +612,7 @@ pub struct PersistentCapture {
     native_interval_status: AtomicU8,
     native_interval_capability: AtomicU8,
     native_interval_update: Mutex<()>,
+    streaming_headroom: bool,
     /// Set when the capture item reports `Closed` (monitor disconnect, session
     /// invalidated) or `stop()` runs. Checked *before* the cached frame in
     /// `get_latest_image` — a closed session errors out (triggering reinit in
@@ -601,6 +628,7 @@ pub struct PersistentCapture {
 /// cannot advance its contents between selection and CPU staging.
 pub(crate) struct NativeFrame {
     pub image: DynamicImage,
+    pub snapshot_image: Option<DynamicImage>,
     pub session_id: u64,
     pub system_relative_time: i64,
     pub sequence: u64,
@@ -610,6 +638,18 @@ pub(crate) struct NativeFrame {
 impl PersistentCapture {
     /// Create and start a persistent WGC capture for the given monitor ID.
     pub fn new(monitor_id: u32) -> Result<Self> {
+        Self::new_monitor(monitor_id, false, false)
+    }
+
+    pub(crate) fn new_streaming(monitor_id: u32, shader_source: bool) -> Result<Self> {
+        #[cfg(feature = "screenshot-benchmark")]
+        let streaming_headroom = !EXACT_BENCHMARK_INTERVAL.load(Ordering::Relaxed);
+        #[cfg(not(feature = "screenshot-benchmark"))]
+        let streaming_headroom = true;
+        Self::new_monitor(monitor_id, shader_source, streaming_headroom)
+    }
+
+    fn new_monitor(monitor_id: u32, shader_source: bool, streaming_headroom: bool) -> Result<Self> {
         let h_monitor = find_hmonitor(monitor_id)?;
 
         let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
@@ -619,14 +659,14 @@ impl PersistentCapture {
                 .CreateForMonitor(h_monitor)
                 .map_err(|e| anyhow!("CreateForMonitor failed: {}", e))?
         };
-        Self::from_item(item, false)
+        Self::from_item(item, false, shader_source, streaming_headroom)
     }
 
     /// Capture only this window's compositor surface. Reuse only the keyed native
     /// target; every call creates a new session and never retains pixels.
     pub(crate) fn new_privacy_window(window_id: u32, pid: u32) -> Result<Self> {
         let item = privacy_window_item(window_id, pid)?;
-        let result = Self::from_item(item, true);
+        let result = Self::from_item(item, true, false, false);
         if result.is_err() {
             privacy_window_items()
                 .lock()
@@ -636,7 +676,12 @@ impl PersistentCapture {
         result
     }
 
-    fn from_item(item: GraphicsCaptureItem, capture_initial_frame: bool) -> Result<Self> {
+    fn from_item(
+        item: GraphicsCaptureItem,
+        capture_initial_frame: bool,
+        shader_source: bool,
+        streaming_headroom: bool,
+    ) -> Result<Self> {
         let d3d = acquire_d3d()?;
         let item_size = item
             .Size()
@@ -670,6 +715,7 @@ impl PersistentCapture {
                 sequence: 0,
                 captured_at: chrono::Utc::now(),
                 pool_size: (item_size.Width, item_size.Height),
+                shader_source,
                 demand,
             }),
             Condvar::new(),
@@ -763,7 +809,7 @@ impl PersistentCapture {
             );
         }
         let requested_fps = crate::screenshot_rate::current();
-        let interval_ticks = min_update_interval_ticks(requested_fps);
+        let interval_ticks = configured_interval_ticks(requested_fps, streaming_headroom);
         let native_interval_status = AtomicU8::new(NativeIntervalStatus::NotAttempted as u8);
         let native_interval_capability = AtomicU8::new(NativeIntervalCapability::Unknown as u8);
         let interval_outcome = session.SetMinUpdateInterval(TimeSpan {
@@ -798,6 +844,7 @@ impl PersistentCapture {
             native_interval_status,
             native_interval_capability,
             native_interval_update: Mutex::new(()),
+            streaming_headroom,
             closed,
             stopped: AtomicBool::new(false),
         })
@@ -815,6 +862,9 @@ impl PersistentCapture {
         let frame = frame_pool
             .TryGetNextFrame()
             .map_err(|e| anyhow!("TryGetNextFrame failed: {}", e))?;
+
+        #[cfg(feature = "screenshot-benchmark")]
+        stats.native_arrivals.fetch_add(1, Ordering::Relaxed);
 
         let stored = Self::store_frame(&frame, frame_pool, d3d, latest, closed, stats);
 
@@ -932,6 +982,13 @@ impl PersistentCapture {
             })
             .map(Ok)
             .unwrap_or_else(|| {
+                if slot.shader_source {
+                    return gpu_d3d11::create_texture(&d3d.device, (desc.Width, desc.Height),
+                        desc.Format, windows::Win32::Graphics::Direct3D11::D3D11_USAGE_DEFAULT,
+                        windows::Win32::Graphics::Direct3D11::D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                        0, None);
+                }
+
                 create_texture_like(
                     &d3d.device,
                     &desc,
@@ -1012,7 +1069,7 @@ impl PersistentCapture {
         let result = self.get_image_inner(timeout, FrameReadPolicy::Fresh);
         if override_applied {
             let requested_fps = crate::screenshot_rate::current();
-            let interval_ticks = min_update_interval_ticks(requested_fps);
+            let interval_ticks = configured_interval_ticks(requested_fps, self.streaming_headroom);
             let outcome = self.session.SetMinUpdateInterval(TimeSpan {
                 Duration: interval_ticks,
             });
@@ -1067,11 +1124,47 @@ impl PersistentCapture {
             .ok_or_else(|| anyhow!("WGC returned no image for an unconditional read"))
     }
 
+    pub(crate) fn get_gpu_frame_streaming(
+        &self,
+        timeout: Duration,
+        renderer: &mut Option<gpu_d3d11::Renderer>,
+        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>,
+        max_width: u32,
+    ) -> Result<NativeFrame> {
+        self.refresh_min_update_interval();
+        self.decode_native_frame(timeout, FrameReadPolicy::CachedWhileRefreshing, None, |texture, width, height, qpc| {
+            let masks = latest_masks(width, height, qpc)?;
+            let Some(masks) = masks.as_deref().map(Vec::as_slice) else {
+                return Ok((DynamicImage::ImageRgba8(RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]))), None));
+            };
+            if renderer.is_none() {
+                *renderer = Some(gpu_d3d11::Renderer::new(&self.d3d.device)?);
+                tracing::info!("D3D11 streaming screenshot masking active");
+            }
+            let renderer = renderer.as_mut().unwrap();
+            let dims = (width, height);
+            let output = crate::screenshot_privacy::gpu::snapshot_dimensions(dims, max_width);
+            let image = renderer.render(&self.d3d, texture, Some(masks), dims, 0)?;
+            let snapshot = (output != dims)
+                .then(|| renderer.render(&self.d3d, texture, Some(masks), output, 1)).transpose()?;
+            Ok((image, snapshot))
+        })?.ok_or_else(|| anyhow!("WGC returned no image for unconditional GPU read"))
+    }
+
     fn get_native_frame_inner(
+        &self, timeout: Duration, policy: FrameReadPolicy, previous_sequence: Option<u64>,
+    ) -> Result<Option<NativeFrame>> {
+        self.decode_native_frame(timeout, policy, previous_sequence, |texture, width, height, _| {
+            Ok((self.readback(texture, width, height)?, None))
+        })
+    }
+
+    fn decode_native_frame(
         &self,
         timeout: Duration,
         policy: FrameReadPolicy,
         previous_sequence: Option<u64>,
+        decode: impl FnOnce(&ID3D11Texture2D, u32, u32, i64) -> Result<(DynamicImage, Option<DynamicImage>)>,
     ) -> Result<Option<NativeFrame>> {
         let deadline = Instant::now() + timeout;
         let (frame_lock, frame_ready) = &*self.latest;
@@ -1126,10 +1219,10 @@ impl PersistentCapture {
         // FrameArrived isn't blocked from swapping in newer frames meanwhile.
         drop(slot);
 
-        let image = self.readback(&texture, width, height);
+        let decoded = decode(&texture, width, height, system_relative_time);
         if let Ok(mut slot) = frame_lock.lock() {
             if !self.closed.load(Ordering::Acquire) && slot.pool_size == pool_size {
-                if slot.texture.is_none() && slot.sequence == sequence && image.is_ok() {
+                if slot.texture.is_none() && slot.sequence == sequence && decoded.is_ok() {
                     slot.texture = Some(texture);
                     frame_ready.notify_all();
                 } else if slot.reusable.len() < 2 {
@@ -1137,8 +1230,10 @@ impl PersistentCapture {
                 }
             }
         }
+        let (image, snapshot_image) = decoded?;
         Ok(Some(NativeFrame {
-            image: image?,
+            image,
+            snapshot_image,
             session_id: self.session_id,
             system_relative_time,
             sequence,
@@ -1148,6 +1243,18 @@ impl PersistentCapture {
 
     pub fn stats(&self) -> CaptureStats {
         self.stats.snapshot()
+    }
+
+    #[cfg(feature = "screenshot-benchmark")]
+    pub(crate) fn benchmark_adapter(&self) -> Result<(String, bool)> {
+        use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, DXGI_ADAPTER_FLAG_SOFTWARE};
+        let adapter: IDXGIAdapter1 = unsafe { self.d3d.dxgi.GetAdapter()? }.cast()?;
+        let desc = unsafe { adapter.GetDesc1()? };
+        let name = desc.Description.split(|&ch| ch == 0).next().unwrap_or_default();
+        Ok((
+            String::from_utf16_lossy(name),
+            desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
+        ))
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -1186,7 +1293,7 @@ impl PersistentCapture {
         {
             return;
         }
-        let interval_ticks = min_update_interval_ticks(requested_fps);
+        let interval_ticks = configured_interval_ticks(requested_fps, self.streaming_headroom);
         let outcome = self.session.SetMinUpdateInterval(TimeSpan {
             Duration: interval_ticks,
         });

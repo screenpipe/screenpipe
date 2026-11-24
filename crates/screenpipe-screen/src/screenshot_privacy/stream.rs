@@ -7,7 +7,7 @@
 
 use anyhow::{anyhow, ensure, Result};
 use cidre::sc::stream::{Delegate, Output};
-use cidre::{arc, cm, cv, define_obj_type, dispatch, ns, objc, sc};
+use cidre::{arc, cg, cm, cv, define_obj_type, dispatch, ns, objc, sc};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{
@@ -51,8 +51,11 @@ impl Drop for SourceOwner {
 pub(super) struct Slot {
     id: u32,
     active: AtomicBool,
+    display_generation: u64,
     stream: Mutex<Option<Arc<NativeStream>>>,
     sequence: Arc<AtomicU64>,
+    #[cfg(feature = "screenshot-benchmark")]
+    pub(super) benchmark: Arc<StreamBenchmark>,
     pub(super) producer: Mutex<Option<Arc<super::macos::Producer>>>,
     pub(super) cancelled: Notify,
 }
@@ -60,25 +63,32 @@ pub(super) struct Slot {
 impl Slot {
     pub(super) fn is_active(&self) -> bool {
         self.active.load(Ordering::Acquire)
+            && self.display_generation == crate::stream_invalidation::display_generation()
     }
 }
 
 pub(super) fn slot(id: u32) -> Arc<Slot> {
-    SLOTS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(id)
-        .or_insert_with(|| {
-            Arc::new(Slot {
-                id,
-                active: AtomicBool::new(true),
-                stream: Mutex::new(None),
-                sequence: Arc::new(AtomicU64::new(0)),
-                producer: Mutex::new(None),
-                cancelled: Notify::new(),
-            })
-        })
-        .clone()
+    let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = slots.get(&id).filter(|slot| slot.is_active()) {
+        return existing.clone();
+    }
+    let slot = Arc::new(Slot {
+        id,
+        active: AtomicBool::new(true),
+        display_generation: crate::stream_invalidation::display_generation(),
+        stream: Mutex::new(None),
+        sequence: Arc::new(AtomicU64::new(0)),
+        #[cfg(feature = "screenshot-benchmark")]
+        benchmark: Arc::new(StreamBenchmark::default()),
+        producer: Mutex::new(None),
+        cancelled: Notify::new(),
+    });
+    let stale = slots.insert(id, slot.clone());
+    drop(slots);
+    if let Some(stale) = stale {
+        close(stale);
+    }
+    slot
 }
 
 pub(super) fn suspend(slot: &Slot) {
@@ -130,11 +140,49 @@ pub(super) fn existing_slot(id: u32) -> Option<Arc<Slot>> {
         .cloned()
 }
 
+#[cfg(feature = "screenshot-benchmark")]
+#[derive(Default)]
+pub(super) struct StreamBenchmark {
+    callbacks: AtomicU64,
+    native_arrivals: AtomicU64,
+    native_buffer_publications: AtomicU64,
+    pub(super) prepared: super::BenchmarkFrameKeys,
+    pub(super) redaction_work: super::BenchmarkFrameKeys,
+}
+
+#[cfg(feature = "screenshot-benchmark")]
+pub(super) fn benchmark_counters(id: u32) -> Option<super::ScreenshotBenchmarkCounters> {
+    let slot = existing_slot(id)?;
+    let counts = &slot.benchmark;
+    let (redaction_distinct, redaction_repeated) = counts.redaction_work.counts();
+    Some(super::ScreenshotBenchmarkCounters {
+        callbacks: counts.callbacks.load(Ordering::Relaxed),
+        native_arrivals: counts.native_arrivals.load(Ordering::Relaxed),
+        native_buffer_publications: counts.native_buffer_publications.load(Ordering::Relaxed),
+        cache_publications: counts.prepared.counts().0,
+        redaction_distinct,
+        redaction_repeated,
+    })
+}
+
 // CoreVideo reference counting is thread safe. A retained SCK image owns an
 // immutable IOSurface until released. Only the serialized screenshot worker
 // locks its base address for reading; callbacks never access its bytes.
 #[derive(Clone)]
-pub(super) struct NativeFrame(pub(super) arc::R<cv::ImageBuf>);
+pub(super) struct NativeFrame(
+    pub(super) arc::R<cv::ImageBuf>,
+    #[cfg(feature = "screenshot-benchmark")] pub(super) u64,
+);
+impl NativeFrame {
+    pub(super) fn new(buffer: arc::R<cv::ImageBuf>) -> Self {
+        Self(
+            buffer,
+            #[cfg(feature = "screenshot-benchmark")]
+            0,
+        )
+    }
+}
+
 unsafe impl Send for NativeFrame {}
 // Consumers clone the retained immutable buffer, then read it only on the
 // serialized rendering worker. The producer and callbacks never lock its bytes.
@@ -185,6 +233,8 @@ struct Shared {
     enabled: AtomicBool,
     state: Mutex<State>,
     sequence: Arc<AtomicU64>,
+    #[cfg(feature = "screenshot-benchmark")]
+    benchmark: Arc<StreamBenchmark>,
     changed: Notify,
 }
 
@@ -250,6 +300,22 @@ impl sc::stream::OutputImpl for Receiver {
             .and_then(|a| a.get(sc::FrameInfo::status().as_cf()))
             .and_then(|value| value.try_as_number())
             .and_then(|n| n.to_i64());
+        let pixels = if status == Some(sc::FrameStatus::Complete as i64) {
+            sample.image_buf()
+        } else {
+            None
+        };
+        #[cfg(feature = "screenshot-benchmark")]
+        let benchmark_id = {
+            shared.benchmark.callbacks.fetch_add(1, Ordering::Relaxed);
+            pixels.map(|_| {
+                shared
+                    .benchmark
+                    .native_arrivals
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1
+            })
+        };
         // Never block the OS callback or convert/copy pixels here. A busy
         // reader may miss a preview update; accepted screenshots are saved by
         // the existing writer, independently of this replaceable native latch.
@@ -261,9 +327,18 @@ impl sc::stream::OutputImpl for Receiver {
         }
         // Preserve SCK's timestamp even for idle callbacks: it may repeat an
         // older image time and cannot be replaced with callback-arrival time.
-        let frame = (status == Some(sc::FrameStatus::Complete as i64))
-            .then(|| sample.image_buf().map(|b| NativeFrame(b.retained())))
-            .flatten();
+        let frame = pixels.map(|pixels| {
+            #[cfg(feature = "screenshot-benchmark")]
+            {
+                shared
+                    .benchmark
+                    .native_buffer_publications
+                    .fetch_add(1, Ordering::Relaxed);
+                NativeFrame(pixels.retained(), benchmark_id.unwrap())
+            }
+            #[cfg(not(feature = "screenshot-benchmark"))]
+            NativeFrame::new(pixels.retained())
+        });
         state.observe(status, frame, sample.pts());
         shared.sequence.fetch_add(1, Ordering::Release);
         drop(state);
@@ -278,8 +353,16 @@ pub(super) struct Key {
     pub fps: u32,
 }
 
-struct NativeStream {
-    key: Key,
+/// Geometry belongs to the stream generation that captured the pixels.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct DisplayGeometry {
+    pub bounds: cg::Rect,
+    pub key: Key,
+    pub capture_max_width: u32,
+}
+
+pub(super) struct NativeStream {
+    pub geometry: DisplayGeometry,
     stream: arc::R<sc::Stream>,
     output: arc::R<Receiver>,
     queue: arc::R<dispatch::Queue>,
@@ -312,15 +395,13 @@ impl Drop for NativeStream {
     }
 }
 
-async fn source(
+pub(super) async fn source(
     slot: &Arc<Slot>,
     filter: &sc::ContentFilter,
-    key: Key,
+    geometry: DisplayGeometry,
 ) -> Result<Arc<NativeStream>> {
-    ensure!(
-        slot.active.load(Ordering::Acquire),
-        "screenshot stream invalidated"
-    );
+    let key = geometry.key;
+    ensure!(slot.is_active(), "screenshot stream invalidated");
     // This is called by the scene producer, never by an event consumer. A new
     // native generation captures the whole display for its entire lifetime.
     let existing = slot
@@ -328,7 +409,7 @@ async fn source(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    if let Some(native) = existing.filter(|s| s.key == key) {
+    if let Some(native) = existing.filter(|s| s.geometry == geometry) {
         Ok(native)
     } else {
         let removed = slot.stream.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -341,6 +422,8 @@ async fn source(
             enabled: AtomicBool::new(true),
             state: Mutex::new(State::default()),
             sequence: slot.sequence.clone(),
+            #[cfg(feature = "screenshot-benchmark")]
+            benchmark: slot.benchmark.clone(),
             changed: Notify::new(),
         });
         let output = Receiver::with(shared.clone());
@@ -357,7 +440,7 @@ async fn source(
         }
         let stream = sc::Stream::with_delegate(filter, &cfg, output.as_ref());
         let native = Arc::new(NativeStream {
-            key,
+            geometry,
             stream,
             output,
             queue,
@@ -380,15 +463,15 @@ async fn source(
         {
             let mut entry = slot.stream.lock().unwrap_or_else(|e| e.into_inner());
             ensure!(
-                slot.active.load(Ordering::Acquire),
+                slot.is_active(),
                 "screenshot stream invalidated during start"
             );
             *entry = Some(native.clone());
         }
         tracing::info!(
-            width = native.key.width,
-            height = native.key.height,
-            fps = native.key.fps,
+            width = native.geometry.key.width,
+            height = native.geometry.key.height,
+            fps = native.geometry.key.fps,
             capture_scope = "display",
             redaction_stage = "after_capture",
             legacy_preview_active = sck_rs::monitor_frame_seq(slot.id).is_some(),
@@ -398,16 +481,27 @@ async fn source(
     }
 }
 
-pub(super) async fn start(slot: &Arc<Slot>, filter: &sc::ContentFilter, key: Key) -> Result<()> {
-    source(slot, filter, key).await.map(|_| ())
+/// Read only a current Streaming session. An absent or retired session
+/// is resolved by the producer on its setup path.
+pub(super) fn active_streaming_source(slot: &Slot) -> Option<Arc<NativeStream>> {
+    if !slot.is_active() {
+        return None;
+    }
+    slot.stream
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|native| {
+            native.geometry.key.fps == frame_rate()
+                && native.geometry.capture_max_width == crate::monitor::sck_capture_max_width()
+        })
+        .cloned()
 }
 
 pub(super) async fn frame(
     slot: &Arc<Slot>,
-    filter: &sc::ContentFilter,
-    key: Key,
+    native: &Arc<NativeStream>,
 ) -> Result<(NativeFrame, chrono::DateTime<chrono::Utc>, bool)> {
-    let native = source(slot, filter, key).await?;
     let previous_revision = native
         .shared
         .state
@@ -510,7 +604,31 @@ mod tests {
     use super::*;
 
     fn pixels() -> NativeFrame {
-        NativeFrame(cv::PixelBuf::new(2, 2, cv::PixelFormat::_32_BGRA, None).unwrap())
+        NativeFrame::new(cv::PixelBuf::new(2, 2, cv::PixelFormat::_32_BGRA, None).unwrap())
+    }
+
+    #[test]
+    fn an_earlier_display_generation_cannot_keep_its_screenshot_slot() {
+        let id = u32::MAX - 100;
+        let stale = Arc::new(Slot {
+            id,
+            active: AtomicBool::new(true),
+            display_generation: crate::stream_invalidation::display_generation().wrapping_sub(1),
+            stream: Mutex::new(None),
+            sequence: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "screenshot-benchmark")]
+            benchmark: Arc::new(StreamBenchmark::default()),
+            producer: Mutex::new(None),
+            cancelled: Notify::new(),
+        });
+        SLOTS.lock().unwrap().insert(id, stale.clone());
+
+        assert!(!stale.is_active());
+        let replacement = slot(id);
+        assert!(!Arc::ptr_eq(&stale, &replacement));
+        assert!(!stale.active.load(Ordering::Acquire));
+        assert!(replacement.is_active());
+        invalidate(id);
     }
 
     #[test]

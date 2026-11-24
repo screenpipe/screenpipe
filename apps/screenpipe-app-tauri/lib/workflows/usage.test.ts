@@ -48,9 +48,48 @@ describe("local Workflows telemetry", () => {
     expect(eventNames()).toEqual(["workflow_analysis_requested"]);
   });
   it("keeps rejected requests separate from completion and propagates the original error", async () => {
-    const { p, tracked } = fixture(); vi.mocked(p.startAnalysisJob!).mockRejectedValue(new Error("access denied"));
+    const { p, tracked } = fixture(); vi.mocked(p.startAnalysisJob!).mockRejectedValue(Object.assign(new Error("access denied: /Users/private"), { status: 403 }));
     await expect(tracked.startAnalysisJob!(1)).rejects.toThrow("access denied");
     expect(eventNames()).toEqual(["workflow_analysis_requested", "workflow_analysis_failed"]);
+    const failedCall = vi.mocked(posthog.capture).mock.calls.find(c => c[0] === "workflow_analysis_failed");
+    expect(failedCall?.[1]).toEqual(expect.objectContaining({
+      operation: "analysis",
+      failure_stage: "start",
+      error_code: "http_4xx",
+    }));
+    expect(JSON.stringify(failedCall)).not.toContain("access denied");
+    expect(JSON.stringify(failedCall)).not.toContain("/Users/private");
+  });
+  it("emits enumerated error_code and failure_stage for failed jobs and sanitizes arbitrary values", async () => {
+    const { p, tracked } = fixture(); await tracked.startAnalysisJob!(1);
+    vi.mocked(p.getLatestAnalysisJob!).mockResolvedValue({
+      id: "private-job",
+      cycleId: "private-cycle",
+      status: "failed",
+      errorCode: "allowance_paused",
+      message: "raw secret path /Users/alice",
+    } as never);
+    await tracked.getLatestAnalysisJob!();
+    const failedCall = vi.mocked(posthog.capture).mock.calls.find(c => c[0] === "workflow_analysis_failed");
+    expect(failedCall?.[1]).toEqual(expect.objectContaining({
+      operation: "analysis",
+      failure_stage: "execution",
+      error_code: "allowance_paused",
+    }));
+    expect(JSON.stringify(failedCall)).not.toContain("alice");
+
+    vi.clearAllMocks();
+    captureWorkflowUsage({
+      event: "workflow_analysis_failed",
+      error_code: "arbitrary_secret_error: /Users/bob" as never,
+      failure_stage: "execution",
+    } as never);
+    const sanitized = vi.mocked(posthog.capture).mock.calls[0];
+    expect(sanitized?.[1]).toEqual(expect.objectContaining({
+      error_code: "unknown",
+      failure_stage: "execution",
+    }));
+    expect(JSON.stringify(sanitized)).not.toContain("bob");
   });
   it("counts outputs only after persistence succeeds", async () => {
     const { p, tracked } = fixture();

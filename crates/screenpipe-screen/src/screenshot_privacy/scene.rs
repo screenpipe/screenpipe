@@ -7,7 +7,7 @@
 use image::{Rgba, RgbaImage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Rect {
+pub(crate) struct Rect {
     pub x: i64,
     pub y: i64,
     pub width: u32,
