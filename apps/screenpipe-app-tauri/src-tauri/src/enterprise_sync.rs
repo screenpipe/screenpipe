@@ -462,6 +462,21 @@ mod imp {
 
     #[async_trait::async_trait]
     impl LocalApiClient for ScreenpipeLocalClient {
+        fn screenshot_capture_disabled(&self) -> Result<bool, EnterpriseSyncError> {
+            // Missing or unreadable settings fail closed.
+            let settings = crate::store::SettingsStore::get(&self.app)
+                .map_err(|error| {
+                    tracing::warn!(
+                        "enterprise screenshot recovery: recording settings read failed: {error}"
+                    );
+                    EnterpriseSyncError::BackfillImages("screenshot_settings_unavailable")
+                })?
+                .ok_or(EnterpriseSyncError::BackfillImages(
+                    "screenshot_settings_unavailable",
+                ))?;
+            Ok(settings.recording.disable_screenshots)
+        }
+
         fn screenshot_work_accepted(&self) {
             self.screenshot_work.notify_one();
         }
@@ -1153,21 +1168,9 @@ mod imp {
             &self,
             frame_id: i64,
         ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
-            // Separate the local recording preference from the org sync mode.
-            // Missing/unreadable settings fail closed and remain retryable too.
-            let settings = crate::store::SettingsStore::get(&self.app)
-                .map_err(|error| {
-                    tracing::warn!(
-                        "enterprise screenshot recovery: recording settings read failed: {error}"
-                    );
-                    EnterpriseSyncError::BackfillImages("screenshot_settings_unavailable")
-                })?
-                .ok_or(EnterpriseSyncError::BackfillImages(
-                    "screenshot_settings_unavailable",
-                ))?;
-            if settings.recording.disable_screenshots {
+            if self.screenshot_capture_disabled()? {
                 return Err(EnterpriseSyncError::BackfillImages(
-                    "screenshot_local_settings_disabled",
+                    ee_sync::SCREENSHOT_LOCAL_SETTINGS_DISABLED,
                 ));
             }
 

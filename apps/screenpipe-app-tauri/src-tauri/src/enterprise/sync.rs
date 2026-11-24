@@ -380,6 +380,10 @@ pub use export_filter::{ExportFilterReport, ExportRows};
 
 #[async_trait::async_trait]
 pub trait LocalApiClient: Send + Sync {
+    fn screenshot_capture_disabled(&self) -> Result<bool, EnterpriseSyncError> {
+        Ok(false)
+    }
+
     /// A page acknowledgement wakes idle screenshot discovery without
     /// cancelling a JPEG read or bypassing retry deadlines.
     fn screenshot_work_accepted(&self) {}
@@ -678,6 +682,8 @@ pub use screenpipe_telemetry_wire::{
 };
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
+
+pub(crate) const SCREENSHOT_LOCAL_SETTINGS_DISABLED: &str = "screenshot_local_settings_disabled";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnterpriseSyncError {
