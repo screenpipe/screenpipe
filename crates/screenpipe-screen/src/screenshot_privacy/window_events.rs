@@ -64,7 +64,10 @@ impl<T: Send + Sync + 'static> Watcher<T> {
     /// Local capture may retain a prior plan after observation fails. Streaming
     /// must not send pixels rendered with a plan known to be uncertain.
     pub(super) fn observation(&self) -> (Option<Arc<T>>, bool) {
-        self.latest.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 

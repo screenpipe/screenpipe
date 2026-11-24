@@ -279,7 +279,10 @@ impl VisionManager {
         self
     }
 
-    pub fn with_recording_stream(mut self, endpoint: Option<crate::recording_stream::StreamEndpoint>) -> Self {
+    pub fn with_recording_stream(
+        mut self,
+        endpoint: Option<crate::recording_stream::StreamEndpoint>,
+    ) -> Self {
         self.recording_stream = endpoint.map(Arc::new);
         self
     }
@@ -756,7 +759,9 @@ impl VisionManager {
         // One display on the wire; never stream stale monitor-allowlist fallback.
         let stream_endpoint = self.recording_stream.clone().filter(|_| {
             monitor.is_primary()
-                && !self.stale_allowlist_fallback.load(std::sync::atomic::Ordering::Relaxed)
+                && !self
+                    .stale_allowlist_fallback
+                    .load(std::sync::atomic::Ordering::Relaxed)
         });
         let monitor = Arc::new(monitor);
         let vision_metrics = self.config.vision_metrics.clone();
