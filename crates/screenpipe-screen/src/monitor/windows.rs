@@ -78,7 +78,10 @@ impl SafeMonitor {
     }
 
     pub(crate) fn streaming_geometry(&self) -> Arc<MonitorData> {
-        self.streaming_geometry.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.streaming_geometry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Reconcile a running recorder with the monitor watcher's fresh topology.
@@ -88,7 +91,10 @@ impl SafeMonitor {
     }
 
     fn set_streaming_geometry(&self, fresh: &Arc<MonitorData>) {
-        let mut geometry = self.streaming_geometry.write().unwrap_or_else(|e| e.into_inner());
+        let mut geometry = self
+            .streaming_geometry
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         if geometry.bounds() != fresh.bounds() {
             tracing::info!(
                 monitor_id = self.id(), previous = ?geometry.bounds(), current = ?fresh.bounds(),
@@ -119,11 +125,15 @@ impl SafeMonitor {
     #[cfg(feature = "screenshot-benchmark")]
     #[doc(hidden)]
     pub fn benchmark_active_wgc_adapter(&self) -> Result<(String, bool)> {
-        let active = self.recorder_capture.lock()
+        let active = self
+            .recorder_capture
+            .lock()
             .map_err(|_| anyhow::anyhow!("WGC recorder lock poisoned"))?;
-        active.as_ref()
+        active
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no active WGC screenshot session"))?
-            .capture.benchmark_adapter()
+            .capture
+            .benchmark_adapter()
     }
 
     // Windows: Use persistent WGC capture to avoid orange border flash.
@@ -208,8 +218,15 @@ impl SafeMonitor {
     pub(crate) async fn capture_gpu_frame_streaming(
         &self,
         geometry: Arc<MonitorData>,
-        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>
-            + Send + 'static,
+        latest_masks: impl FnOnce(
+                u32,
+                u32,
+                i64,
+            ) -> Result<(
+                Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>,
+                bool,
+            )> + Send
+            + 'static,
         max_width: u32,
         permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<NativeFrame> {
@@ -217,9 +234,14 @@ impl SafeMonitor {
         let persistent = self.recorder_capture.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut guard = persistent.lock().map_err(|_| anyhow::anyhow!("WGC recorder lock poisoned"))?;
-            if !guard.as_ref().is_some_and(|recorder| recorder.gpu_source && !recorder.capture.is_closed()
-                && same_streaming_geometry(recorder.geometry.as_ref(), Some(&geometry))) {
+            let mut guard = persistent
+                .lock()
+                .map_err(|_| anyhow::anyhow!("WGC recorder lock poisoned"))?;
+            if !guard.as_ref().is_some_and(|recorder| {
+                recorder.gpu_source
+                    && !recorder.capture.is_closed()
+                    && same_streaming_geometry(recorder.geometry.as_ref(), Some(&geometry))
+            }) {
                 guard.take();
                 *guard = Some(RecorderCapture {
                     capture: PersistentCapture::new_streaming(monitor_id, true)?,
@@ -230,13 +252,18 @@ impl SafeMonitor {
                 });
             }
             let recorder = guard.as_mut().unwrap();
-            let result = recorder.capture.get_gpu_frame_streaming(std::time::Duration::from_millis(500),
-                &mut recorder.renderer, latest_masks, max_width);
+            let result = recorder.capture.get_gpu_frame_streaming(
+                std::time::Duration::from_millis(500),
+                &mut recorder.renderer,
+                latest_masks,
+                max_width,
+            );
             if result.is_err() {
                 guard.take();
             }
             result
-        }).await?
+        })
+        .await?
     }
 
     async fn capture_image_inner(&self, streaming: bool) -> Result<DynamicImage> {
@@ -544,6 +571,7 @@ mod recorder_cache_tests {
                 image::Rgba([value, value, value, 255]),
             )),
             snapshot_image: None,
+            streaming_mask_verified: false,
             session_id: 17,
             system_relative_time: sequence as i64,
             sequence,

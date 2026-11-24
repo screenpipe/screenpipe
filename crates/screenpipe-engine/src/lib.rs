@@ -87,6 +87,7 @@ mod qualified_value;
 pub mod recording_config;
 pub mod recording_coverage;
 pub mod recording_detail;
+pub mod recording_stream;
 mod resource_monitor;
 mod resource_summary;
 pub mod retention;

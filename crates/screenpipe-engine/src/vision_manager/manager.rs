@@ -150,6 +150,7 @@ pub struct VisionManager {
     linker_stop: Arc<AtomicBool>,
     /// Hot frame cache — capture pushes frames here for zero-DB timeline reads.
     hot_frame_cache: Option<Arc<HotFrameCache>>,
+    recording_stream: Option<Arc<crate::recording_stream::StreamEndpoint>>,
     /// Power profile receiver — each monitor gets a clone.
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
     /// Focus-aware capture controller — always constructed.
@@ -258,6 +259,7 @@ impl VisionManager {
             linker_tx,
             linker_stop,
             hot_frame_cache: None,
+            recording_stream: None,
             power_profile_rx: None,
             focus_controller,
             high_fps_controller: None,
@@ -274,6 +276,14 @@ impl VisionManager {
     /// hot cache is only consumed by the timeline streaming endpoint).
     pub fn with_hot_frame_cache(mut self, cache: Option<Arc<HotFrameCache>>) -> Self {
         self.hot_frame_cache = cache;
+        self
+    }
+
+    pub fn with_recording_stream(
+        mut self,
+        endpoint: Option<crate::recording_stream::StreamEndpoint>,
+    ) -> Self {
+        self.recording_stream = endpoint.map(Arc::new);
         self
     }
 
@@ -746,6 +756,13 @@ impl VisionManager {
         // Stop signal
         let stop_signal = Arc::new(AtomicBool::new(false));
 
+        // One display on the wire; never stream stale monitor-allowlist fallback.
+        let stream_endpoint = self.recording_stream.clone().filter(|_| {
+            monitor.is_primary()
+                && !self
+                    .stale_allowlist_fallback
+                    .load(std::sync::atomic::Ordering::Relaxed)
+        });
         let monitor = Arc::new(monitor);
         let vision_metrics = self.config.vision_metrics.clone();
         let hot_frame_cache = self.hot_frame_cache.clone();
@@ -818,6 +835,7 @@ impl VisionManager {
                 high_fps_controller,
                 semantic_tx,
                 recording_detail,
+                stream_endpoint,
             )
             .await
             {

@@ -68,7 +68,9 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     let _source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor.id());
     let filters = match mode {
-        "exclude" | "policy-cycle" | "streaming" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
+        "exclude" | "policy-cycle" | "streaming" => {
+            WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[])
+        }
         #[cfg(target_os = "windows")]
         "cadence" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         "none" => WindowFilters::new(&[], &[], &[]),
@@ -88,11 +90,18 @@ async fn main() -> anyhow::Result<()> {
         "nomatch" => WindowFilters::new(&["::NeverPresentWindow".into()], &[], &[]),
         "title-churn" => WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]),
         _ => anyhow::bail!("unknown mode: {mode}"),
-    }.with_streaming_mode(mode == "streaming");
-    anyhow::ensure!(mode != "streaming" || filters.streaming_mode(), "streaming masks unsupported in this session");
+    }
+    .with_streaming_mode(mode == "streaming");
+    anyhow::ensure!(
+        mode != "streaming" || filters.streaming_mode(),
+        "streaming masks unsupported in this session"
+    );
     let snapshot_width = args.get(8).map(|s| s.parse()).transpose()?.unwrap_or(0);
-    let writer =
-        screenpipe_screen::snapshot_writer::SnapshotWriter::new(out.join("snapshots"), 90, snapshot_width);
+    let writer = screenpipe_screen::snapshot_writer::SnapshotWriter::new(
+        out.join("snapshots"),
+        90,
+        snapshot_width,
+    );
     #[cfg(target_os = "windows")]
     let mut previous_frame = if cadence {
         let warmup = capture_monitor_frame_for_snapshot(
@@ -172,7 +181,11 @@ async fn main() -> anyhow::Result<()> {
                 let gpu_resized = frame.snapshot_image.is_some();
                 let image = frame.image;
                 let write_start = Instant::now();
-                let path = writer.write(frame.snapshot_image.as_ref().unwrap_or(&image), frame.captured_at, monitor.id())?;
+                let path = writer.write(
+                    frame.snapshot_image.as_ref().unwrap_or(&image),
+                    frame.captured_at,
+                    monitor.id(),
+                )?;
                 let write_ms = write_start.elapsed().as_secs_f64() * 1000.0;
                 #[cfg(target_os = "windows")]
                 if cadence && tokio::time::Instant::now() > next_capture {
@@ -288,7 +301,10 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     if mode == "streaming" {
-        anyhow::ensure!(saved == count && usable > 0, "streaming recorded {saved}/{count} frames, {usable} with allowed content");
+        anyhow::ensure!(
+            saved == count && usable > 0,
+            "streaming recorded {saved}/{count} frames, {usable} with allowed content"
+        );
     }
     anyhow::ensure!(
         !matches!(

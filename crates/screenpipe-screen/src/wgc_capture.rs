@@ -235,7 +235,10 @@ fn min_update_interval_ticks(fps: u32) -> i64 {
 }
 
 fn configured_interval_ticks(requested_fps: u32, streaming_headroom: bool) -> i64 {
-    min_update_interval_ticks(crate::screenshot_rate::wgc_source_fps(requested_fps, streaming_headroom))
+    min_update_interval_ticks(crate::screenshot_rate::wgc_source_fps(
+        requested_fps,
+        streaming_headroom,
+    ))
 }
 
 #[cfg(feature = "screenshot-benchmark")]
@@ -629,6 +632,7 @@ pub struct PersistentCapture {
 pub(crate) struct NativeFrame {
     pub image: DynamicImage,
     pub snapshot_image: Option<DynamicImage>,
+    pub streaming_mask_verified: bool,
     pub session_id: u64,
     pub system_relative_time: i64,
     pub sequence: u64,
@@ -983,10 +987,15 @@ impl PersistentCapture {
             .map(Ok)
             .unwrap_or_else(|| {
                 if slot.shader_source {
-                    return gpu_d3d11::create_texture(&d3d.device, (desc.Width, desc.Height),
-                        desc.Format, windows::Win32::Graphics::Direct3D11::D3D11_USAGE_DEFAULT,
+                    return gpu_d3d11::create_texture(
+                        &d3d.device,
+                        (desc.Width, desc.Height),
+                        desc.Format,
+                        windows::Win32::Graphics::Direct3D11::D3D11_USAGE_DEFAULT,
                         windows::Win32::Graphics::Direct3D11::D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                        0, None);
+                        0,
+                        None,
+                    );
                 }
 
                 create_texture_like(
@@ -1128,35 +1137,68 @@ impl PersistentCapture {
         &self,
         timeout: Duration,
         renderer: &mut Option<gpu_d3d11::Renderer>,
-        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>,
+        latest_masks: impl FnOnce(
+            u32,
+            u32,
+            i64,
+        ) -> Result<(
+            Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>,
+            bool,
+        )>,
         max_width: u32,
     ) -> Result<NativeFrame> {
         self.refresh_min_update_interval();
-        self.decode_native_frame(timeout, FrameReadPolicy::CachedWhileRefreshing, None, |texture, width, height, qpc| {
-            let masks = latest_masks(width, height, qpc)?;
-            let Some(masks) = masks.as_deref().map(Vec::as_slice) else {
-                return Ok((DynamicImage::ImageRgba8(RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]))), None));
-            };
-            if renderer.is_none() {
-                *renderer = Some(gpu_d3d11::Renderer::new(&self.d3d.device)?);
-                tracing::info!("D3D11 streaming screenshot masking active");
-            }
-            let renderer = renderer.as_mut().unwrap();
-            let dims = (width, height);
-            let output = crate::screenshot_privacy::gpu::snapshot_dimensions(dims, max_width);
-            let image = renderer.render(&self.d3d, texture, Some(masks), dims, 0)?;
-            let snapshot = (output != dims)
-                .then(|| renderer.render(&self.d3d, texture, Some(masks), output, 1)).transpose()?;
-            Ok((image, snapshot))
-        })?.ok_or_else(|| anyhow!("WGC returned no image for unconditional GPU read"))
+        let mut verified = false;
+        let mut frame = self
+            .decode_native_frame(
+                timeout,
+                FrameReadPolicy::CachedWhileRefreshing,
+                None,
+                |texture, width, height, qpc| {
+                    let (masks, certain) = latest_masks(width, height, qpc)?;
+                    let Some(masks) = masks.as_deref().map(Vec::as_slice) else {
+                        return Ok((
+                            DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+                                width,
+                                height,
+                                image::Rgba([0, 0, 0, 255]),
+                            )),
+                            None,
+                        ));
+                    };
+                    if renderer.is_none() {
+                        *renderer = Some(gpu_d3d11::Renderer::new(&self.d3d.device)?);
+                        tracing::info!("D3D11 streaming screenshot masking active");
+                    }
+                    let renderer = renderer.as_mut().unwrap();
+                    let dims = (width, height);
+                    let output =
+                        crate::screenshot_privacy::gpu::snapshot_dimensions(dims, max_width);
+                    let image = renderer.render(&self.d3d, texture, Some(masks), dims, 0)?;
+                    let snapshot = (output != dims)
+                        .then(|| renderer.render(&self.d3d, texture, Some(masks), output, 1))
+                        .transpose()?;
+                    verified = certain;
+                    Ok((image, snapshot))
+                },
+            )?
+            .ok_or_else(|| anyhow!("WGC returned no image for unconditional GPU read"))?;
+        frame.streaming_mask_verified = verified;
+        Ok(frame)
     }
 
     fn get_native_frame_inner(
-        &self, timeout: Duration, policy: FrameReadPolicy, previous_sequence: Option<u64>,
+        &self,
+        timeout: Duration,
+        policy: FrameReadPolicy,
+        previous_sequence: Option<u64>,
     ) -> Result<Option<NativeFrame>> {
-        self.decode_native_frame(timeout, policy, previous_sequence, |texture, width, height, _| {
-            Ok((self.readback(texture, width, height)?, None))
-        })
+        self.decode_native_frame(
+            timeout,
+            policy,
+            previous_sequence,
+            |texture, width, height, _| Ok((self.readback(texture, width, height)?, None)),
+        )
     }
 
     fn decode_native_frame(
@@ -1164,7 +1206,12 @@ impl PersistentCapture {
         timeout: Duration,
         policy: FrameReadPolicy,
         previous_sequence: Option<u64>,
-        decode: impl FnOnce(&ID3D11Texture2D, u32, u32, i64) -> Result<(DynamicImage, Option<DynamicImage>)>,
+        decode: impl FnOnce(
+            &ID3D11Texture2D,
+            u32,
+            u32,
+            i64,
+        ) -> Result<(DynamicImage, Option<DynamicImage>)>,
     ) -> Result<Option<NativeFrame>> {
         let deadline = Instant::now() + timeout;
         let (frame_lock, frame_ready) = &*self.latest;
@@ -1234,6 +1281,7 @@ impl PersistentCapture {
         Ok(Some(NativeFrame {
             image,
             snapshot_image,
+            streaming_mask_verified: false,
             session_id: self.session_id,
             system_relative_time,
             sequence,
@@ -1250,7 +1298,11 @@ impl PersistentCapture {
         use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, DXGI_ADAPTER_FLAG_SOFTWARE};
         let adapter: IDXGIAdapter1 = unsafe { self.d3d.dxgi.GetAdapter()? }.cast()?;
         let desc = unsafe { adapter.GetDesc1()? };
-        let name = desc.Description.split(|&ch| ch == 0).next().unwrap_or_default();
+        let name = desc
+            .Description
+            .split(|&ch| ch == 0)
+            .next()
+            .unwrap_or_default();
         Ok((
             String::from_utf16_lossy(name),
             desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,

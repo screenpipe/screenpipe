@@ -11704,6 +11704,7 @@ dependencies = [
  "tinfoil",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tokio-util",
  "tower 0.4.13",
  "tower-http 0.5.2",

@@ -2255,7 +2255,7 @@ async fn main() {
                                 .load(std::sync::atomic::Ordering::SeqCst)
                             {
                                 match capture_session::CaptureSession::start(
-                                    &server, &config, true,
+                                    &app_for_owned, &server, &config, true,
                                 )
                                 .await
                                 {

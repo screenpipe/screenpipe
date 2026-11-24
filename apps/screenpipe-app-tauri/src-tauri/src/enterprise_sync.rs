@@ -1296,6 +1296,23 @@ mod imp {
             .or_else(crate::commands::get_enterprise_license_key)
     }
 
+    pub(crate) fn recording_stream_endpoint(
+        app: &tauri::AppHandle,
+    ) -> Option<screenpipe_engine::recording_stream::StreamEndpoint> {
+        if !crate::app_mode::is_managed(app) { return None; }
+        let device = settings_device_id(app)?;
+        let license = license_key_from_env_or_config()?;
+        let file = crate::commands::get_enterprise_file_config();
+        let ingest = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok()
+            .filter(|url| !url.trim().is_empty()).or(file.ingest_url)
+            .unwrap_or_else(crate::enterprise::sync::default_ingest_url);
+        let origin = crate::enterprise::sync::control_plane_base(&ingest)?;
+        let host = origin.strip_prefix("https://")?;
+        screenpipe_engine::recording_stream::StreamEndpoint::new(
+            &format!("wss://{host}/api/enterprise/recordings/stream"), &license, &device,
+        ).ok()
+    }
+
     /// Default policy endpoint on the baked control-plane base
     /// (crate::web_base — `NEXT_PUBLIC_SCREENPIPE_WEB_URL` at build time).
     fn default_policy_url() -> String {
@@ -4612,7 +4629,7 @@ pub use imp::{configure_telemetry_context, spawn};
 pub(crate) use imp::device_id_tests::check_protected_upload_revocations;
 
 #[cfg(feature = "enterprise-support")]
-pub(crate) use imp::{authorize_startup, verify_recording_authorization};
+pub(crate) use imp::{authorize_startup, recording_stream_endpoint, verify_recording_authorization};
 
 #[cfg(not(feature = "enterprise-support"))]
 pub fn configure_telemetry_context(_app: &tauri::AppHandle) {}
