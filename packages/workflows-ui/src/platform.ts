@@ -26,11 +26,32 @@ export type WorkflowRunActivity = {
   status: "running" | "complete" | "error";
 };
 
+export type WorkflowAnalysisErrorCode =
+  | "cancelled"
+  | "allowance_paused"
+  | "business_required"
+  | "usage_unavailable"
+  | "sign_in_required"
+  | "rollout_disabled"
+  | "context_compaction"
+  | "missing_output"
+  | "timeout"
+  | "context_length_exceeded"
+  | "tasks_disabled"
+  | "no_work_ready"
+  | "missing_execution_id"
+  | "http_4xx"
+  | "http_5xx"
+  | "network_error"
+  | "unknown";
+
 export type WorkflowAnalysisJob = {
   id: string;
   /** Stable across agent executions belonging to one update. */
   cycleId?: string;
   status: "queued" | "processing" | "complete" | "incomplete" | "failed";
+  /** Enumerated failure category for local diagnostics and telemetry; never raw provider text. */
+  errorCode?: WorkflowAnalysisErrorCode;
   progress?: number;
   startedAt?: string;
   message?: string;

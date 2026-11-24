@@ -4,7 +4,11 @@
 import { trackWorkflowOutcome } from "./notification";
 import { requireWorkflowsRollout, syncWorkflowsRollout } from "./rollout";
 import { localFetch } from "@/lib/api";
-import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
+import type { WorkflowAnalysis, WorkflowAnalysisErrorCode, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
+
+function workflowError(message: string, errorCode: WorkflowAnalysisErrorCode) {
+  return Object.assign(new Error(message), { errorCode });
+}
 
 export const WORKFLOW_TASKS = ["workflow-discover", "workflow-deepen", "workflow-review", "workflow-maintain"] as const;
 const LEGACY_TASKS = ["workflow-activity", "workflow-patterns", "workflow-procedures", "workflow-timing", "workflow-discovery"];
@@ -110,23 +114,51 @@ export async function loadScheduledCatalog(signal?: AbortSignal): Promise<Workfl
   }
 }
 
+function classifyExecutionErrorCode(execution: any): WorkflowAnalysisErrorCode {
+  if (execution.status === "cancelled") return "cancelled";
+  const combined = String(`${execution.error_type || ""} ${execution.error_message || ""}`);
+  if (combined.includes("workflow_allowance_paused")) return "allowance_paused";
+  if (combined.includes("workflow_business_required")) return "business_required";
+  if (combined.includes("workflow_usage_unavailable")) return "usage_unavailable";
+  if (combined.includes("workflow_sign_in_required")) return "sign_in_required";
+  if (combined.includes("workflow_rollout_disabled")) return "rollout_disabled";
+  if (execution.error_type === "context_compaction") return "context_compaction";
+  if (execution.error_type === "missing_output") return "missing_output";
+  if (
+    execution.error_type === "timeout" ||
+    execution.status === "timed_out" ||
+    /(?:execution|request|connection) timed out/i.test(execution.error_message || "")
+  ) {
+    return "timeout";
+  }
+  if (
+    /context_length_exceeded|conversation is too long|context size has been exceeded/i.test(
+      execution.error_message || "",
+    )
+  ) {
+    return "context_length_exceeded";
+  }
+  return "unknown";
+}
+
 function job(execution: any): WorkflowAnalysisJob {
   const interrupted = execution.error_type === "interrupted" || execution.status === "interrupted";
   const status = interrupted ? "incomplete" : execution.status === "completed" ? "complete"
     : ["failed", "cancelled", "interrupted", "timed_out"].includes(execution.status) ? "failed"
     : execution.status === "running" ? "processing" : "queued";
-  return { id: String(execution.id), status, startedAt: execution.started_at,
+  const errorCode = status === "failed" ? classifyExecutionErrorCode(execution) : undefined;
+  return { id: String(execution.id), status, ...(errorCode ? { errorCode } : {}), startedAt: execution.started_at,
     message: interrupted ? "Screenpipe restarted during the update. Resume to continue from saved progress."
-      : execution.status === "cancelled" ? "Update stopped. Your saved workflows are still available."
-      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_allowance_paused") ? "Workflow updates paused to preserve AI allowance. Manage usage to increase capacity or check reset times."
-      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_business_required") ? "Automatic workflow discovery requires Business. Your saved workflows are still available."
-      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_usage_unavailable") ? "Could not check AI allowance. Reconnect and try again."
-      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_sign_in_required") ? "Sign in again to resume workflow updates."
-      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_rollout_disabled") ? "Workflows access was not confirmed. Try Update now to reconnect."
-      : execution.error_type === "context_compaction" ? "The update could not prepare its next step. Any saved progress is kept. Try again to continue."
-      : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
-      : execution.error_type === "timeout" || execution.status === "timed_out" || /(?:execution|request|connection) timed out/i.test(execution.error_message || "") ? "The update ran out of time. Saved workflows and research are kept. Try again to continue."
-      : /context_length_exceeded|conversation is too long|context size has been exceeded/i.test(execution.error_message || "") ? "The update reached the AI context limit. Saved workflows and research are kept. Try again to continue."
+      : errorCode === "cancelled" ? "Update stopped. Your saved workflows are still available."
+      : errorCode === "allowance_paused" ? "Workflow updates paused to preserve AI allowance. Manage usage to increase capacity or check reset times."
+      : errorCode === "business_required" ? "Automatic workflow discovery requires Business. Your saved workflows are still available."
+      : errorCode === "usage_unavailable" ? "Could not check AI allowance. Reconnect and try again."
+      : errorCode === "sign_in_required" ? "Sign in again to resume workflow updates."
+      : errorCode === "rollout_disabled" ? "Workflows access was not confirmed. Try Update now to reconnect."
+      : errorCode === "context_compaction" ? "The update could not prepare its next step. Any saved progress is kept. Try again to continue."
+      : errorCode === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
+      : errorCode === "timeout" ? "The update ran out of time. Saved workflows and research are kept. Try again to continue."
+      : errorCode === "context_length_exceeded" ? "The update reached the AI context limit. Saved workflows and research are kept. Try again to continue."
       : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
   };
@@ -197,7 +229,7 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
   requireWorkflowsRollout();
   await syncWorkflowsRollout(true);
   const setup = await loadWorkflowTaskSetup();
-  if (!setup.enabled) throw new Error("Enable workflow tasks with Automatic updates before updating.");
+  if (!setup.enabled) throw workflowError("Enable workflow tasks with Automatic updates before updating.", "tasks_disabled");
   const tasks = await latestTasks();
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
   if (running) return getWorkflowJob(`${running.task}:${running.execution.id}`);
@@ -209,11 +241,11 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
     task, input: await request(`/workflows/workspace?task=${task}`),
   })));
   const pending = ready.filter(item => item.input.ready);
-  if (!pending.length) throw new Error("No workflow work is ready. Check the saved draft status.");
+  if (!pending.length) throw workflowError("No workflow work is ready. Check the saved draft status.", "no_work_ready");
   const started = await Promise.all(pending.map(async ({task}) => {
     try {
       const value = await request(`/pipes/${task}/run`, {});
-      if (!Number.isInteger(value.execution_id)) throw new Error("The task did not return a tracked execution.");
+      if (!Number.isInteger(value.execution_id)) throw workflowError("The task did not return a tracked execution.", "missing_execution_id");
       return {task, id:value.execution_id};
     } catch (error) {
       // A scheduler wake can win between readiness and the manual start. Only
