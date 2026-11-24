@@ -751,6 +751,67 @@ fn classify_activity_run_event(event: &Value, empty_completion_retries: u8) -> A
     }
 }
 
+/// Stateful event tracker for a background Pi/ACP run.
+///
+/// Raw Pi (>=0.84) emits `agent_end` before post-run compaction/continuation
+/// finishes and only clears `_isAgentRunActive` at `agent_settled`. Waiting for
+/// `agent_settled` before sending `EMPTY_COMPLETION_PROMPT` prevents both
+/// racing Pi's compaction loop and sending a duplicate follow-up when Pi's own
+/// continuation recovers with valid output.
+struct ActivityRunTracker {
+    awaits_agent_settled: bool,
+    empty_completion_retries: u8,
+    pending_empty_completion: bool,
+}
+
+impl ActivityRunTracker {
+    fn new(awaits_agent_settled: bool) -> Self {
+        Self {
+            awaits_agent_settled,
+            empty_completion_retries: 0,
+            pending_empty_completion: false,
+        }
+    }
+
+    fn on_event(&mut self, event: &Value) -> ActivityRunEvent {
+        let event_type = event.get("type").and_then(Value::as_str);
+        if self.awaits_agent_settled {
+            match event_type {
+                Some("agent_start") => {
+                    self.pending_empty_completion = false;
+                    return ActivityRunEvent::Ignore;
+                }
+                Some("agent_settled") => {
+                    if self.pending_empty_completion {
+                        self.pending_empty_completion = false;
+                        self.empty_completion_retries += 1;
+                        return ActivityRunEvent::RetryEmptyCompletion;
+                    }
+                    return ActivityRunEvent::Ignore;
+                }
+                _ => {}
+            }
+        }
+
+        match classify_activity_run_event(event, self.empty_completion_retries) {
+            ActivityRunEvent::RetryEmptyCompletion if self.awaits_agent_settled => {
+                self.pending_empty_completion = true;
+                ActivityRunEvent::Ignore
+            }
+            ActivityRunEvent::RetryEmptyCompletion => {
+                self.empty_completion_retries += 1;
+                ActivityRunEvent::RetryEmptyCompletion
+            }
+            other => {
+                if !matches!(other, ActivityRunEvent::Ignore) {
+                    self.pending_empty_completion = false;
+                }
+                other
+            }
+        }
+    }
+}
+
 fn generation_prompt(start: DateTime<Utc>, end: DateTime<Utc>, minimum_entries: usize) -> String {
     format!(
         r#"Build a concise activity timeline for the exact boundary below.
@@ -1158,7 +1219,7 @@ pub(crate) async fn run_background_pi_with_config(
     }
 
     let wait_for_result = async {
-        let mut empty_completion_retries = 0;
+        let mut tracker = ActivityRunTracker::new(!is_agent);
         loop {
             let envelope = match events.recv().await {
                 Ok(envelope) => envelope,
@@ -1168,10 +1229,9 @@ pub(crate) async fn run_background_pi_with_config(
             if envelope.session_id != session_id {
                 continue;
             }
-            match classify_activity_run_event(&envelope.event, empty_completion_retries) {
+            match tracker.on_event(&envelope.event) {
                 ActivityRunEvent::Complete(text) => return Ok(text),
                 ActivityRunEvent::RetryEmptyCompletion => {
-                    empty_completion_retries += 1;
                     pi::pi_prompt_inner(
                         app,
                         state.inner(),
@@ -2517,6 +2577,60 @@ mod tests {
             &SettingsStore::default(),
             false,
         ));
+    }
+
+    #[test]
+    fn raw_pi_empty_completion_waits_for_agent_settled_and_cancels_on_continuation() {
+        let empty_end = json!({ "type": "agent_end", "messages": [] });
+        let final_end = json!({
+            "type": "agent_end",
+            "messages": [{
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "{\"entries\":[]}" }]
+            }]
+        });
+
+        // Raw Pi defers empty completion retry across compaction until agent_settled.
+        let mut tracker = ActivityRunTracker::new(true);
+        assert_eq!(tracker.on_event(&empty_end), ActivityRunEvent::Ignore);
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "compaction_start" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "compaction_end" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            tracker.on_event(&json!({ "type": "agent_settled" })),
+            ActivityRunEvent::RetryEmptyCompletion
+        );
+        // A second empty turn fails instead of looping.
+        assert_eq!(
+            tracker.on_event(&empty_end),
+            ActivityRunEvent::Fail("AI returned an empty activity history".to_string())
+        );
+
+        // If Pi's own post-compaction continuation produces output before agent_settled,
+        // complete immediately without triggering an extra follow-up prompt.
+        let mut continued = ActivityRunTracker::new(true);
+        assert_eq!(continued.on_event(&empty_end), ActivityRunEvent::Ignore);
+        assert_eq!(
+            continued.on_event(&json!({ "type": "agent_start" })),
+            ActivityRunEvent::Ignore
+        );
+        assert_eq!(
+            continued.on_event(&final_end),
+            ActivityRunEvent::Complete("{\"entries\":[]}".to_string())
+        );
+        assert_eq!(
+            continued.on_event(&json!({ "type": "agent_settled" })),
+            ActivityRunEvent::Ignore
+        );
+
+        // ACP does not emit agent_settled and still retries on agent_end.
+        let mut acp = ActivityRunTracker::new(false);
+        assert_eq!(acp.on_event(&empty_end), ActivityRunEvent::RetryEmptyCompletion);
     }
 
     #[test]
