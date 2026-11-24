@@ -2247,6 +2247,40 @@ Rules:
 }
 
 impl SettingsStore {
+    /// Older builds (and external writers) could persist a fractional
+    /// `screenshotFrameRate` such as `0.2` (one frame every 5 s). The native
+    /// capture path only accepts whole fps in `1..=MAX_SCREENSHOT_FRAME_RATE`,
+    /// and a single invalid value makes the entire settings store fail to
+    /// deserialize. Coerce positive values up to the nearest valid whole fps
+    /// (preserving the user's low-rate intent as closely as possible) and drop
+    /// non-positive values so the default applies.
+    fn sanitize_screenshot_frame_rate(obj: &mut serde_json::Map<String, Value>) {
+        let Some(raw) = obj.get("screenshotFrameRate") else {
+            return;
+        };
+        let Some(fps) = raw.as_f64() else {
+            // Non-numeric values are left for serde to report.
+            return;
+        };
+        let max = screenpipe_config::MAX_SCREENSHOT_FRAME_RATE;
+        if raw.is_u64() && (1.0..=f64::from(max)).contains(&fps) {
+            return;
+        }
+        let original = raw.clone();
+        if fps.is_finite() && fps > 0.0 {
+            let coerced = fps.ceil().clamp(1.0, f64::from(max)) as u32;
+            warn!("migrating invalid screenshotFrameRate {} to {} fps", original, coerced);
+            obj.insert("screenshotFrameRate".to_string(), json!(coerced));
+        } else {
+            warn!(
+                "removing invalid screenshotFrameRate {}; using default {} fps",
+                original,
+                screenpipe_config::DEFAULT_SCREENSHOT_FRAME_RATE
+            );
+            obj.remove("screenshotFrameRate");
+        }
+    }
+
     /// Remove legacy field aliases that conflict with their renamed counterparts.
     /// e.g. `enableUiEvents` was renamed to `enableAccessibility` — if both exist
     /// in the stored JSON, serde rejects it as a duplicate field.
@@ -2254,6 +2288,8 @@ impl SettingsStore {
     /// (e.g. synced settings from a newer version with a provider this version doesn't know).
     fn sanitize_legacy_fields(mut val: Value) -> Value {
         if let Some(obj) = val.as_object_mut() {
+            Self::sanitize_screenshot_frame_rate(obj);
+
             if obj.contains_key("enableAccessibility") {
                 obj.remove("enableUiEvents");
             } else if let Some(v) = obj.remove("enableUiEvents") {
@@ -5546,6 +5582,30 @@ mod tests {
     }
 
     // ---- Existing tests ----
+
+    #[test]
+    fn sanitize_legacy_fields_migrates_fractional_screenshot_frame_rate() {
+        let fps_after = |input: Value| {
+            SettingsStore::sanitize_legacy_fields(json!({ "screenshotFrameRate": input }))
+                .get("screenshotFrameRate")
+                .cloned()
+        };
+        assert_eq!(fps_after(json!(0.2)), Some(json!(1)));
+        assert_eq!(fps_after(json!(2.7)), Some(json!(3)));
+        assert_eq!(fps_after(json!(5)), Some(json!(5)));
+        assert_eq!(fps_after(json!(0)), None);
+        assert_eq!(fps_after(json!(-1)), None);
+        assert_eq!(
+            fps_after(json!(u64::from(u32::MAX))),
+            Some(json!(screenpipe_config::MAX_SCREENSHOT_FRAME_RATE))
+        );
+
+        let recording: screenpipe_config::RecordingSettings = serde_json::from_value(
+            SettingsStore::sanitize_legacy_fields(json!({ "screenshotFrameRate": 0.2 })),
+        )
+        .expect("sanitized fractional frame rate must deserialize");
+        assert_eq!(recording.screenshot_frame_rate, 1);
+    }
 
     #[test]
     fn test_sanitize_legacy_fields_does_not_panic() {
