@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const LOG_NAME: &str = "enterprise-screenshot-delivery.log";
+const CAPTURE_PAUSED: &str = "capture_paused";
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Round {
     after: i64,
@@ -219,7 +220,28 @@ pub(super) struct Turn {
     pub unavailable: usize,
     pub progressed: bool,
     pub failed: bool,
+    capture_paused: bool,
 }
+fn pause_capture(
+    cfg: &EnterpriseSyncConfig,
+    state: &mut State,
+    mut turn: Turn,
+) -> Result<Turn, String> {
+    // A policy pause changes neither the server queue nor local retry deadlines.
+    // Retain one report across polls and restarts while the pause is in force.
+    state.phase = CAPTURE_PAUSED.into();
+    state.frame_id = None;
+    state.error = Some(Failure {
+        occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        code: SCREENSHOT_LOCAL_SETTINGS_DISABLED.into(),
+        message: "Screenshot capture is disabled by current recording settings; accepted screenshots remain queued".into(),
+        frame_id: None,
+    });
+    save(cfg, state)?;
+    turn.capture_paused = true;
+    Ok(turn)
+}
+
 pub(super) async fn turn(
     cfg: &mut EnterpriseSyncConfig,
     local: &dyn LocalApiClient,
@@ -236,6 +258,18 @@ async fn turn_with_recovery<R: LicenseKeyRecovery + ?Sized>(
     recovery: &R,
 ) -> Result<Turn, String> {
     let mut state = load(cfg, "")?;
+    if state.phase == CAPTURE_PAUSED
+        && state.source_confirmed
+        && local
+            .screenshot_capture_disabled()
+            .map_err(|e| e.to_string())?
+        && local.initialized_upload_source_id().await.as_deref() == Some(state.source_id.as_str())
+    {
+        return Ok(Turn {
+            capture_paused: true,
+            ..Default::default()
+        });
+    }
     state.frame_id = None;
     state.phase = "authorizing".into();
     save(cfg, &state)?;
@@ -290,6 +324,12 @@ async fn turn_with_recovery<R: LicenseKeyRecovery + ?Sized>(
     state = load(prepared, &prepared.device_id)?;
     state.source_confirmed = true;
     identity(prepared, local).await.map_err(|e| e.to_string())?;
+    if local
+        .screenshot_capture_disabled()
+        .map_err(|e| e.to_string())?
+    {
+        return pause_capture(prepared, &mut state, Turn::default());
+    }
     state.phase = "listing".into();
     save(prepared, &state)?;
     let base = control_plane_base(&prepared.ingest_url).ok_or("invalid screenshot endpoint")?;
@@ -339,6 +379,12 @@ async fn turn_with_recovery<R: LicenseKeyRecovery + ?Sized>(
             break;
         }
         identity(prepared, local).await?;
+        if local
+            .screenshot_capture_disabled()
+            .map_err(|e| e.to_string())?
+        {
+            return pause_capture(prepared, &mut state, result);
+        }
         state.frame_id = Some(id);
         state.phase = "reading_image".into();
         if entries.is_empty() {
@@ -363,6 +409,9 @@ async fn turn_with_recovery<R: LicenseKeyRecovery + ?Sized>(
                 }
             }
             Ok(None) => FrameUploadEntry::err(id, "not_found"),
+            Err(EnterpriseSyncError::BackfillImages(SCREENSHOT_LOCAL_SETTINGS_DISABLED)) => {
+                return pause_capture(prepared, &mut state, result);
+            }
             Err(e) => {
                 fail(prepared, &mut state, "screenshot_fetch_failed", e).await?;
                 result.failed = true;
@@ -408,6 +457,12 @@ async fn turn_with_recovery<R: LicenseKeyRecovery + ?Sized>(
             state.phase = "uploading".into();
             save(prepared, &state)?;
             for batch in split_frame_upload_requests(std::mem::take(&mut entries)) {
+                if local
+                    .screenshot_capture_disabled()
+                    .map_err(|e| e.to_string())?
+                {
+                    return pause_capture(prepared, &mut state, result);
+                }
                 match upload_frame_batch(&upload_cfg, http, &batch).await {
                     Ok(ack) => {
                         for entry in &batch {
@@ -511,10 +566,12 @@ pub(super) async fn once(
     if !allowed(cfg) {
         return FrameFulfillReport::default();
     }
-    if let Ok(mut state) = load(cfg, "") {
-        state.retry_at.clear();
-        if let Err(error) = save(cfg, &state) {
-            warn!(%error,"Screenshot retry state could not be saved");
+    if matches!(local.screenshot_capture_disabled(), Ok(false)) {
+        if let Ok(mut state) = load(cfg, "") {
+            state.retry_at.clear();
+            if let Err(error) = save(cfg, &state) {
+                warn!(%error,"Screenshot retry state could not be saved");
+            }
         }
     }
     match turn(&mut cfg.clone(), local, http, None).await {
@@ -588,8 +645,9 @@ async fn run_with_recovery<R: LicenseKeyRecovery>(
                 Err(error) => warn!(%error,%cause,"Screenshot failure state is unreadable"),
             }
         }
+        let capture_paused = matches!(&result, Some(Ok(turn)) if turn.capture_paused);
         if let Some(Ok(turn)) = &result {
-            if turn.progressed {
+            if turn.progressed && !capture_paused {
                 tokio::task::yield_now().await;
                 continue;
             }
@@ -599,7 +657,7 @@ async fn run_with_recovery<R: LicenseKeyRecovery>(
         let delay = LOG_REQUEST_INTERVAL;
         tokio::select! {
             _=tokio::time::sleep(delay)=>{},
-            _=local.wait_for_screenshot_work()=>{},
+            _=local.wait_for_screenshot_work(), if !capture_paused=>{},
             changed=updates.changed()=>{ if changed.is_err(){break;} cfg=updates.borrow().clone(); },
             _=stopped(&mut shutdown)=>break,
         }

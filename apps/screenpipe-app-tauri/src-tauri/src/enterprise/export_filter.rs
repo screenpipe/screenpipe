@@ -401,7 +401,7 @@ impl ExportRows<'_> {
                 Ok(jpeg) => jpeg,
                 Err(EnterpriseSyncError::BackfillImages(
                     "screenshot_policy_disabled"
-                    | "screenshot_local_settings_disabled"
+                    | SCREENSHOT_LOCAL_SETTINGS_DISABLED
                     | "screenshot_settings_unavailable",
                 )) => None,
                 Err(error) => return Err(error),
