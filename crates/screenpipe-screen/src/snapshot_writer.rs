@@ -50,6 +50,11 @@ impl SnapshotWriter {
         self.max_width.store(width, Ordering::Relaxed);
     }
 
+    /// Maximum width of the JPEG, independent of the screenshot used for OCR.
+    pub fn max_width(&self) -> u32 {
+        self.max_width.load(Ordering::Relaxed)
+    }
+
     /// Write a screenshot as JPEG. Returns the absolute path to the written file.
     ///
     /// File layout: `{base_dir}/YYYY-MM-DD/{timestamp_ms}_m{monitor_id}.jpg`.

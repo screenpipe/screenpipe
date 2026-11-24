@@ -9,7 +9,7 @@
 use screenpipe_screen::{
     capture_screenshot_by_window::{ExclusionSources, WindowFilters},
     monitor::{get_default_monitor, get_monitor_by_id},
-    screenshot_privacy::capture_monitor_frame_filtered,
+    screenshot_privacy::capture_monitor_frame_for_snapshot,
 };
 use std::{
     path::PathBuf,
@@ -68,9 +68,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     let _source = screenpipe_screen::screenshot_privacy::own_cached_source(monitor.id());
     let filters = match mode {
-        "exclude" | "policy-cycle" | "streaming" => {
-            WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[])
-        }
+        "exclude" | "policy-cycle" | "streaming" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         #[cfg(target_os = "windows")]
         "cadence" => WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]),
         "none" => WindowFilters::new(&[], &[], &[]),
@@ -90,22 +88,20 @@ async fn main() -> anyhow::Result<()> {
         "nomatch" => WindowFilters::new(&["::NeverPresentWindow".into()], &[], &[]),
         "title-churn" => WindowFilters::new(&["whatsapp".into(), "zee5".into()], &[], &[]),
         _ => anyhow::bail!("unknown mode: {mode}"),
-    }
-    .with_streaming_mode(mode == "streaming");
-    anyhow::ensure!(
-        mode != "streaming" || filters.streaming_mode(),
-        "streaming masks unsupported in this session"
-    );
+    }.with_streaming_mode(mode == "streaming");
+    anyhow::ensure!(mode != "streaming" || filters.streaming_mode(), "streaming masks unsupported in this session");
+    let snapshot_width = args.get(8).map(|s| s.parse()).transpose()?.unwrap_or(0);
     let writer =
-        screenpipe_screen::snapshot_writer::SnapshotWriter::new(out.join("snapshots"), 90, 0);
+        screenpipe_screen::snapshot_writer::SnapshotWriter::new(out.join("snapshots"), 90, snapshot_width);
     #[cfg(target_os = "windows")]
     let mut previous_frame = if cadence {
-        let warmup = capture_monitor_frame_filtered(
+        let warmup = capture_monitor_frame_for_snapshot(
             &monitor,
             &filters,
             ExclusionSources::default(),
             &[],
             true,
+            snapshot_width,
         )
         .await?;
         Some((
@@ -144,12 +140,13 @@ async fn main() -> anyhow::Result<()> {
                 &[],
             ),
         });
-        match capture_monitor_frame_filtered(
+        match capture_monitor_frame_for_snapshot(
             &monitor,
             cycle_filters.as_ref().unwrap_or(&filters),
             ExclusionSources::default(),
             &[],
             true,
+            snapshot_width,
         )
         .await
         {
@@ -172,9 +169,10 @@ async fn main() -> anyhow::Result<()> {
                     }
                     *previous = (session_id, native_sequence, system_relative_time);
                 }
+                let gpu_resized = frame.snapshot_image.is_some();
                 let image = frame.image;
                 let write_start = Instant::now();
-                let path = writer.write(&image, frame.captured_at, monitor.id())?;
+                let path = writer.write(frame.snapshot_image.as_ref().unwrap_or(&image), frame.captured_at, monitor.id())?;
                 let write_ms = write_start.elapsed().as_secs_f64() * 1000.0;
                 #[cfg(target_os = "windows")]
                 if cadence && tokio::time::Instant::now() > next_capture {
@@ -227,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 println!(
                     "{}",
-                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"capture_ms":time.as_secs_f64()*1000.0,"requested_at":requested_at,"captured_at":frame.captured_at,"native_timestamp":frame.native_timestamp,"session_id":session_id,"system_relative_time":system_relative_time,"native_sequence":native_sequence,"cache_age_ms":cache_age_ms,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
+                    serde_json::json!({"index":index,"saved":true,"path":path,"width":image.width(),"height":image.height(),"jpeg_width":stored.width(),"jpeg_height":stored.height(),"gpu_resized":gpu_resized,"capture_ms":time.as_secs_f64()*1000.0,"requested_at":requested_at,"captured_at":frame.captured_at,"native_timestamp":frame.native_timestamp,"session_id":session_id,"system_relative_time":system_relative_time,"native_sequence":native_sequence,"cache_age_ms":cache_age_ms,"write_ms":write_ms,"read_ms":read_ms,"forbidden_pixels":forbidden,"stored_forbidden_pixels":stored_forbidden,"allowed_pixels":allowed,"stored_allowed_pixels":stored_allowed,"partial_alpha_pixels":partial_alpha})
                 );
                 saved += 1;
             }
@@ -290,10 +288,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     if mode == "streaming" {
-        anyhow::ensure!(
-            saved == count && usable > 0,
-            "streaming recorded {saved}/{count} frames, {usable} with allowed content"
-        );
+        anyhow::ensure!(saved == count && usable > 0, "streaming recorded {saved}/{count} frames, {usable} with allowed content");
     }
     anyhow::ensure!(
         !matches!(

@@ -86,13 +86,25 @@ pub fn screencapturekit_process_exhausted() -> bool {
 /// stream teardown happens in a safe context — not inside the C callback.
 #[cfg(target_os = "macos")]
 pub mod stream_invalidation {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static DISPLAY_GENERATION: AtomicU64 = AtomicU64::new(0);
     static NEEDS_INVALIDATION: AtomicBool = AtomicBool::new(false);
 
     /// Request that all persistent SCStream handles be invalidated.
     /// Safe to call from any thread (including CFNotification callbacks).
     pub fn request() {
         NEEDS_INVALIDATION.store(true, Ordering::SeqCst);
+    }
+
+    /// Mark display geometry stale immediately in the existing CoreGraphics callback.
+    /// Stream teardown remains on the capture side of the callback boundary.
+    pub fn display_reconfigured() {
+        DISPLAY_GENERATION.fetch_add(1, Ordering::AcqRel);
+        request();
+    }
+
+    pub(crate) fn display_generation() -> u64 {
+        DISPLAY_GENERATION.load(Ordering::Acquire)
     }
 
     /// Check and clear the invalidation flag. If `true`, the caller should
