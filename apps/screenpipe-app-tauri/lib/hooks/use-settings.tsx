@@ -17,6 +17,7 @@ import {
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { syncPostHogIdentity } from "@/lib/posthog-identity";
 import { captureSettingsChange } from "@/lib/analytics/settings-change";
 import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
 import { User } from "../utils/tauri";
@@ -1833,12 +1834,6 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 		const identifyNow = () => {
 			const clerkId = settings.user?.clerk_id || undefined;
-			const distinctId = clerkId || settings.analyticsId;
-
-			if (clerkId) {
-				try { posthog.alias(clerkId); } catch {}
-			}
-
 			const baseProps = {
 				email: settings.user?.email,
 				name: settings.user?.name,
@@ -1856,11 +1851,19 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			getVersion()
 				.then((appVersion) => {
 					if (cancelled) return;
-					posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
+					syncPostHogIdentity(posthog, {
+						analyticsId: settings.analyticsId,
+						clerkId,
+						properties: { ...baseProps, app_version: appVersion },
+					});
 				})
 				.catch(() => {
 					if (cancelled) return;
-					posthog.identify(distinctId, baseProps);
+					syncPostHogIdentity(posthog, {
+						analyticsId: settings.analyticsId,
+						clerkId,
+						properties: baseProps,
+					});
 				});
 		};
 

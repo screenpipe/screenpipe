@@ -6,6 +6,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { render } from "@/lib/i18n/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { PostHog } from "posthog-js";
+import { syncPostHogIdentity } from "@/lib/posthog-identity";
 
 const mocks = vi.hoisted(() => ({
   enterprisePolicy: {
@@ -1428,6 +1429,7 @@ describe("enterprise onboarding authentication", () => {
     });
 
     afterEach(() => {
+      mocks.sdk?.persistence?.clear();
       mocks.sdk = null;
       vi.restoreAllMocks();
       vi.useRealTimers();
@@ -1552,6 +1554,33 @@ describe("enterprise onboarding authentication", () => {
       expect(mocks.capture).toHaveBeenCalledWith("trial_activation_assignment_failed", expect.objectContaining({
         reason: "timeout", stage: "waiting_for_response", response_count: 0, elapsed_ms: 5_000, outcome: "continue_setup",
       }), { send_instantly: true });
+    });
+
+    it("settles after machine-to-clerk identity sync without waiting_for_identity timeout", async () => {
+      syncPostHogIdentity(mocks.sdk!, {
+        analyticsId: "machine-1",
+        properties: { machine_analytics_id: "machine-1" },
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "control");
+
+      syncPostHogIdentity(mocks.sdk!, {
+        analyticsId: "machine-1",
+        clerkId: "clerk-1",
+        properties: { clerk_id: "clerk-1", machine_analytics_id: "machine-1" },
+      });
+      expect(mocks.sdk!.get_distinct_id()).toBe("clerk-1");
+
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      expect(requests[1].data.distinct_id).toBe("clerk-1");
+      await respond(1, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      expect(requests[2].data.distinct_id).toBe("clerk-1");
+      await respond(2, "summary_first");
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("summary_first");
+      expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
     });
 
     it("does not identify an opted-out user or use their machine assignment", async () => {
