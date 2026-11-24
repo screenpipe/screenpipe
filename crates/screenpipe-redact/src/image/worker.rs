@@ -644,7 +644,10 @@ mod tests {
             db.pool.clone(),
             db.coordinated_writer(),
             Arc::new(StubRedactor),
-            ImageWorkerConfig::default(),
+            ImageWorkerConfig {
+                policy: ImageRedactionPolicy::from_labels(&["email".into()]),
+                ..Default::default()
+            },
         )
         .with_release_storage(db.clone());
         worker.release_oldest.store(true, Ordering::SeqCst);
