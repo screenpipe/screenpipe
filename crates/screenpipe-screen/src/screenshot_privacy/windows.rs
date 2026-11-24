@@ -423,30 +423,42 @@ fn streaming_masks(
 ) -> Option<std::sync::Arc<Vec<super::scene::Rect>>> {
     if !session.streaming.as_ref().is_some_and(|plan| {
         std::sync::Arc::ptr_eq(&plan.geometry, geometry)
-            && plan.filters == *filters && plan.sources == sources && plan.excluded_ids == excluded_ids
+            && plan.filters == *filters
+            && plan.sources == sources
+            && plan.excluded_ids == excluded_ids
     }) {
         let info = geometry.clone();
         let watched = filters.clone();
         let ids = excluded_ids.to_vec();
         session.streaming = Some(StreamingPlan {
             geometry: geometry.clone(),
-            filters: filters.clone(), sources, excluded_ids: ids.clone(),
+            filters: filters.clone(),
+            sources,
+            excluded_ids: ids.clone(),
             masks: super::window_events::Watcher::start(move || {
-                Ok(snapshot(&info, &watched, sources, &ids)?.iter().filter_map(|window| {
-                    if window.policy == SurfacePolicy::Allowed {
-                        return None;
-                    }
-                    let (left, top, right, bottom) = clipped_bounds(window, &info);
-                    Some(super::scene::Rect {
-                        x: left as i64, y: top as i64,
-                        width: (right - left) as u32, height: (bottom - top) as u32,
+                Ok(snapshot(&info, &watched, sources, &ids)?
+                    .iter()
+                    .filter_map(|window| {
+                        if window.policy == SurfacePolicy::Allowed {
+                            return None;
+                        }
+                        let (left, top, right, bottom) = clipped_bounds(window, &info);
+                        Some(super::scene::Rect {
+                            x: left as i64,
+                            y: top as i64,
+                            width: (right - left) as u32,
+                            height: (bottom - top) as u32,
+                        })
                     })
-                }).collect())
+                    .collect())
             }),
         });
         tracing::info!("regular screenshot streaming mode active on Windows");
     }
-    session.streaming.as_ref().and_then(|plan| plan.masks.latest())
+    session
+        .streaming
+        .as_ref()
+        .and_then(|plan| plan.masks.latest())
 }
 
 fn clipped_bounds(window: &NativeWindow, monitor: &MonitorData) -> (usize, usize, usize, usize) {
@@ -660,29 +672,69 @@ pub(super) async fn capture_filtered(
                 {
                     return Ok(None);
                 }
-                let mut session = privacy.inner.lock()
+                let mut session = privacy
+                    .inner
+                    .lock()
                     .map_err(|_| anyhow!("privacy session mutex poisoned"))?;
-                Ok(streaming_masks(&mut session, &planned, &watched_filters, sources, &ids))
+                Ok(streaming_masks(
+                    &mut session,
+                    &planned,
+                    &watched_filters,
+                    sources,
+                    &ids,
+                ))
             };
-            match monitor.capture_gpu_frame_streaming(geometry.clone(), latest_masks, _snapshot_max_width, permit).await {
+            match monitor
+                .capture_gpu_frame_streaming(
+                    geometry.clone(),
+                    latest_masks,
+                    _snapshot_max_width,
+                    permit,
+                )
+                .await
+            {
                 Ok(frame) => {
-                    let pixels = pixels(frame.image, frame.snapshot_image, frame.session_id,
-                        frame.system_relative_time, frame.sequence, frame.captured_at);
+                    let pixels = pixels(
+                        frame.image,
+                        frame.snapshot_image,
+                        frame.session_id,
+                        frame.system_relative_time,
+                        frame.sequence,
+                        frame.captured_at,
+                    );
                     return Ok(black_if_geometry_changed(monitor, &geometry, pixels));
                 }
                 Err(error) => tracing::warn!(%error, screenshot_outcome = "cpu_fallback",
                     "D3D11 streaming screenshot masking failed"),
             }
             // The GPU blocking worker owns the permit until it completes.
-            let permit = tokio::time::timeout(Duration::from_secs(1), monitor.privacy_session().gate.clone().acquire_owned())
-                .await.map_err(|_| anyhow!("window-filtered capture is still busy"))??;
-            return capture_streaming_cpu(monitor, monitor.streaming_geometry(), filters, sources, excluded_ids, permit).await;
+            let permit = tokio::time::timeout(
+                Duration::from_secs(1),
+                monitor.privacy_session().gate.clone().acquire_owned(),
+            )
+            .await
+            .map_err(|_| anyhow!("window-filtered capture is still busy"))??;
+            return capture_streaming_cpu(
+                monitor,
+                monitor.streaming_geometry(),
+                filters,
+                sources,
+                excluded_ids,
+                permit,
+            )
+            .await;
         }
-        return capture_streaming_cpu(monitor, geometry, filters, sources, excluded_ids, permit).await;
+        return capture_streaming_cpu(monitor, geometry, filters, sources, excluded_ids, permit)
+            .await;
     }
     let monitor_info = monitor.get_info();
     let candidate = monitor.capture_native_frame_streaming().await?;
-    privacy.inner.lock().map_err(|_| anyhow!("privacy session mutex poisoned"))?.streaming.take();
+    privacy
+        .inner
+        .lock()
+        .map_err(|_| anyhow!("privacy session mutex poisoned"))?
+        .streaming
+        .take();
     let filters = filters.clone();
     let excluded_ids = excluded_ids.to_vec();
     let before_info = monitor_info.clone();
@@ -731,12 +783,17 @@ async fn capture_streaming_cpu(
     excluded_ids: &[u32],
     permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<super::CapturedPixels> {
-    let candidate = monitor.capture_native_frame_at_geometry(Some(geometry.clone())).await?;
+    let candidate = monitor
+        .capture_native_frame_at_geometry(Some(geometry.clone()))
+        .await?;
     let privacy = monitor.privacy_session();
-    let masks = if (candidate.image.width(), candidate.image.height()) == (geometry.width, geometry.height)
+    let masks = if (candidate.image.width(), candidate.image.height())
+        == (geometry.width, geometry.height)
         && std::sync::Arc::ptr_eq(&monitor.streaming_geometry(), &geometry)
     {
-        let mut session = privacy.inner.lock()
+        let mut session = privacy
+            .inner
+            .lock()
             .map_err(|_| anyhow!("privacy session mutex poisoned"))?;
         streaming_masks(&mut session, &geometry, filters, sources, excluded_ids)
     } else {
@@ -745,9 +802,15 @@ async fn capture_streaming_cpu(
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         #[cfg(feature = "screenshot-benchmark")]
-        privacy.redaction_work.record(candidate.system_relative_time);
+        privacy
+            .redaction_work
+            .record(candidate.system_relative_time);
         let image = if let Some(masks) = masks {
-            let mut rgba = candidate.image.as_rgba8().context("WGC display frame is not RGBA8")?.clone();
+            let mut rgba = candidate
+                .image
+                .as_rgba8()
+                .context("WGC display frame is not RGBA8")?
+                .clone();
             for rect in masks.iter() {
                 super::scene::paint_black(&mut rgba, *rect);
             }
@@ -755,14 +818,26 @@ async fn capture_streaming_cpu(
         } else {
             opaque_black(candidate.image.width(), candidate.image.height())
         };
-        Ok::<_, anyhow::Error>(pixels(image, None, candidate.session_id,
-            candidate.system_relative_time, candidate.sequence, candidate.captured_at))
-    }).await.context("Windows streaming mask worker failed")??;
+        Ok::<_, anyhow::Error>(pixels(
+            image,
+            None,
+            candidate.session_id,
+            candidate.system_relative_time,
+            candidate.sequence,
+            candidate.captured_at,
+        ))
+    })
+    .await
+    .context("Windows streaming mask worker failed")??;
     Ok(black_if_geometry_changed(monitor, &geometry, result))
 }
 
 fn opaque_black(width: u32, height: u32) -> DynamicImage {
-    DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255])))
+    DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        width,
+        height,
+        image::Rgba([0, 0, 0, 255]),
+    ))
 }
 
 fn black_if_geometry_changed(
@@ -778,11 +853,17 @@ fn black_if_geometry_changed(
 }
 
 fn pixels(
-    image: DynamicImage, snapshot_image: Option<DynamicImage>, session_id: u64,
-    qpc: i64, sequence: u64, captured_at: chrono::DateTime<chrono::Utc>,
+    image: DynamicImage,
+    snapshot_image: Option<DynamicImage>,
+    session_id: u64,
+    qpc: i64,
+    sequence: u64,
+    captured_at: chrono::DateTime<chrono::Utc>,
 ) -> super::CapturedPixels {
     super::CapturedPixels {
-        image, snapshot_image, captured_at,
+        image,
+        snapshot_image,
+        captured_at,
         // QPC is explicit; wall time remains the callback-time estimate.
         native_timestamp: false,
         system_relative_time: Some(qpc),
