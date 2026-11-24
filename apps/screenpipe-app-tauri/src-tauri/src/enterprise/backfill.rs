@@ -483,6 +483,7 @@ mod tests {
             let ts = "2026-01-01T01:00:00+00:00";
             // A full page plus one row at one timestamp exercise the durable tie offset.
             let rows = (1..=super::FRAME_PAGE_LIMIT as i64 + 1).map(|id| FrameRow {
+                text_redaction: None,
                 accessibility_tree: Some(serde_json::json!([{"role":"Button","text":"", "properties":{"automation_id":"search"}}])),
                 frame_id: id,
                 timestamp: ts.into(),
@@ -1489,6 +1490,7 @@ mod tests {
                     .skip(offset as usize)
                     .take(limit as usize)
                     .map(|id| FrameRow {
+                        text_redaction: None,
                         accessibility_tree: None,
                         frame_id: id,
                         timestamp: "2026-01-01T01:00:00+00:00".into(),

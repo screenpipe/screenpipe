@@ -3467,6 +3467,7 @@ pub(crate) mod tests {
 
     fn frame(id: i64, ts: &str, app: &str, text: &str) -> FrameRow {
         FrameRow {
+            text_redaction: None,
             accessibility_tree: None,
             frame_id: id,
             timestamp: ts.to_string(),
@@ -5618,6 +5619,7 @@ pub(crate) mod tests {
                     window_name: None,
                     browser_url: None,
                     text: Some("retained frame".into()),
+                    text_redaction: None,
                     accessibility_tree: None,
                 }])
             }

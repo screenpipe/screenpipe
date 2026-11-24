@@ -4,6 +4,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PrivacyProcessingStatus, PrivacyStatusView, type PrivacyQueueStatus } from "./privacy-processing-status";
+import { RedactionHistory } from "./redaction-history";
 import { localFetch } from "@/lib/api";
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
 vi.mock("gt-react", () => ({ useGT: () => (text: string) => text }));
@@ -80,4 +81,32 @@ describe("privacy processing status", () => {
     await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});
     expect(screen.getByRole("status").textContent).toBe("Privacy processing");
   });
+});
+
+
+it("opens history on demand and pages by the final visible event", async () => {
+  const timestamp = "2026-11-24T16:22:00.000Z";
+  const event = { captured_at: timestamp, processed_at: timestamp, text_fields: ["full_text"], image_regions: null };
+  vi.mocked(localFetch)
+    .mockResolvedValueOnce(Response.json(Array.from({ length: 11 }, (_, index) => ({
+      ...event, id: 21 - index, frame_id: 42 - index,
+    }))))
+    .mockResolvedValueOnce(Response.json([
+      { ...event, id: 11, frame_id: 7, text_fields: null, image_regions: 2 },
+    ]));
+  render(<RedactionHistory />);
+  expect(localFetch).not.toHaveBeenCalled();
+
+  const details = screen.getByText("Redaction history").closest("details")!;
+  await act(async () => {
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+  });
+  expect(await screen.findAllByText("Screen text")).toHaveLength(10);
+  fireEvent.click(screen.getByRole("button", { name: "Older redactions" }));
+  expect(await screen.findByText("Screenshot regions masked 2")).toBeVisible();
+  expect(localFetch).toHaveBeenLastCalledWith(
+    "/privacy/redaction-history?limit=11&before=12",
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
 });

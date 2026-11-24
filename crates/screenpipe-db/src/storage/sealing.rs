@@ -142,13 +142,14 @@ impl DatabaseManager {
         release: Option<(
             &crate::privacy_release::ReleaseJob,
             &std::collections::BTreeMap<String, Option<String>>,
+            Option<&str>,
         )>,
     ) -> Result<bool, sqlx::Error> {
         let Some(storage) = &self.storage else {
             return Err(storage_error("replacement requires hybrid storage"));
         };
         let mut tx = self.begin_immediate_with_retry().await?;
-        if let Some((job, _)) = release {
+        if let Some((job, _, _)) = release {
             let current:(String,i64,bool)=sqlx::query_as("SELECT identity,COALESCE((SELECT revision FROM _privacy_release WHERE kind=? AND id=? AND policy IS NULL),-1),text_required FROM _privacy_policy WHERE id=1").bind(&job.kind).bind(&job.id).fetch_one(&mut **tx.conn()).await?;
             if current != (job.policy.clone(), job.revision, true) {
                 return Ok(false);
@@ -191,7 +192,7 @@ impl DatabaseManager {
             .bind(window_name).bind(browser_url).bind(&payload.full_text).bind(&payload.accessibility_text)
             .bind(&payload.full_text).bind(&payload.accessibility_text).bind(&payload.accessibility_tree_json).bind(&payload.text_json).bind(payload.id)
             .execute(&mut **tx.conn()).await?;
-        if let Some((_, values)) = release {
+        if let Some((_, values, _)) = release {
             sqlx::query("UPDATE frames SET app_name=?,document_path=? WHERE id=?")
                 .bind(&values["app_name"])
                 .bind(&values["document_path"])
@@ -216,8 +217,8 @@ impl DatabaseManager {
         sqlx::query("UPDATE storage_metadata SET maintenance=0")
             .execute(&mut **tx.conn())
             .await?;
-        if let Some((job, _)) = release {
-            crate::privacy_release::certify(&mut **tx.conn(), job).await?;
+        if let Some((job, _, fields)) = release {
+            crate::privacy_release::certify(&mut **tx.conn(), job, fields, None).await?;
         }
         tx.commit().await?;
         Ok(true)

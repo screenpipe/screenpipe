@@ -113,6 +113,26 @@ async fn pending_capture_is_durable_but_not_released_and_late_completion_is_not_
     let second = db.ready_changes(first[0].sequence, 10).await.unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].id, "1");
+    let history = protected.frame_redaction_history(None, 1).await.unwrap();
+    assert_eq!(history[0].frame_id, 1);
+    assert_eq!(
+        history[0].text_fields.as_deref(),
+        Some(&["full_text".to_owned()][..])
+    );
+    let older = protected
+        .frame_redaction_history(Some(history[0].id), 1)
+        .await
+        .unwrap();
+    assert_eq!(older[0].frame_id, 2);
+    assert_eq!(older[0].captured_at, "2026-10-14T10:01:00Z");
+    db.execute_raw_sql_write("DELETE FROM frames WHERE id=2")
+        .await
+        .unwrap();
+    assert!(protected
+        .frame_redaction_history(Some(history[0].id), 1)
+        .await
+        .unwrap()
+        .is_empty());
     assert!(!db.release_ready("image", "1").await.unwrap());
     protected.close().await;
     db.close().await;

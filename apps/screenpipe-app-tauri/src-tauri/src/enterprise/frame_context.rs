@@ -125,6 +125,7 @@ mod tests {
                 window_name: None,
                 browser_url: None,
                 text: None,
+                text_redaction: None,
                 accessibility_tree: None,
             };
             let mut frames = vec![row(1), row(2)];

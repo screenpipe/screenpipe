@@ -511,6 +511,7 @@ mod tests {
             window_name: None,
             browser_url: None,
             text: Some(text.into()),
+            text_redaction: None,
             accessibility_tree: None,
         }
     }
@@ -684,6 +685,7 @@ mod snapshot_refusal_tests {
             window_name: None,
             browser_url: None,
             text: Some("allowed AX".into()),
+            text_redaction: None,
             accessibility_tree: Some(
                 serde_json::json!([{ "role": "Button", "text": "", "properties": { "automation_id": "retained" } }]),
             ),

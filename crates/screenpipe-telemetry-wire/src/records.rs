@@ -36,6 +36,28 @@ pub struct FrameRow {
     /// into ordinary screen-text search results or agent context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accessibility_tree: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_redaction: Option<FrameTextRedaction>,
+}
+
+/// Content-free evidence from a committed redaction pass.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FrameTextRedaction {
+    pub processed_at: String,
+    pub fields: Vec<FrameTextRedactionField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameTextRedactionField {
+    FullText,
+    AccessibilityText,
+    AccessibilityTreeJson,
+    TextJson,
+    WindowName,
+    BrowserUrl,
+    AppName,
+    DocumentPath,
 }
 
 /// One app-specific semantic projection produced from a captured frame.
@@ -581,6 +603,7 @@ mod tests {
 
     fn frame(id: i64, text: &str) -> FrameRow {
         FrameRow {
+            text_redaction: None,
             accessibility_tree: None,
             frame_id: id,
             timestamp: "2026-07-22T10:00:00Z".to_string(),

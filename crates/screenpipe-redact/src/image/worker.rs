@@ -465,7 +465,10 @@ impl ImageWorker {
                     anyhow::bail!("image changed during privacy processing");
                 }
                 let outcome = redact_frame(path, &regions, &self.cfg.policy)?;
-                if !db.publish_image_release(&job).await? {
+                if !db
+                    .publish_image_release_with_regions(&job, outcome.regions_redacted)
+                    .await?
+                {
                     return Ok::<_, anyhow::Error>(None);
                 }
                 let mut status = self.status.lock().await;
@@ -648,6 +651,12 @@ mod tests {
         assert!(worker.process_release_image(&db).await.unwrap().is_some());
         assert!(!db.release_ready("image", "1").await.unwrap());
         assert!(db.release_ready("image", "2").await.unwrap());
+        let protected = db.protected_reads().await.unwrap();
+        let history = protected.frame_redaction_history(None, 10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].frame_id, 2);
+        assert_eq!(history[0].image_regions, Some(1));
+        assert!(history[0].text_fields.is_none());
         let attempts: i64 = sqlx::query_scalar(
             "SELECT attempts FROM _privacy_release WHERE kind='image' AND id='1'",
         )

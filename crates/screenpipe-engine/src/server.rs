@@ -1175,6 +1175,10 @@ impl SCServer {
                 get(crate::routes::privacy_release::status),
             )
             .route(
+                "/privacy/redaction-history",
+                get(crate::routes::privacy_release::redaction_history),
+            )
+            .route(
                 "/privacy/ready/:kind",
                 get(crate::routes::privacy_release::ready_page),
             )

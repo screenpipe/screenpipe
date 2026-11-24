@@ -793,6 +793,7 @@ mod imp {
             for item in body.data {
                 if let LocalSearchItem::OCR(o) = item {
                     out.push(FrameRow {
+                        text_redaction: None,
                         accessibility_tree: None,
                         frame_id: o.frame_id,
                         timestamp: o.timestamp.to_rfc3339(),
@@ -2985,6 +2986,7 @@ mod imp {
                     app_name: None,
                     window_name: None,
                     browser_url: None,
+                    text_redaction: None,
                     accessibility_tree: None,
                 }];
                 let mut survivor = frames[0].clone();
@@ -3705,6 +3707,7 @@ mod imp {
                     let rows = payloads
                         .into_iter()
                         .map(|(id, payload)| FrameRow {
+                            text_redaction: None,
                             accessibility_tree: None,
                             frame_id: id,
                             timestamp: "2026-10-09T00:00:00Z".into(),

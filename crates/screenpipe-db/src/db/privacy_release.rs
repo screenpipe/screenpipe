@@ -33,6 +33,16 @@ pub struct ReadyChange {
     pub revision: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FrameRedactionEvent {
+    pub id: i64,
+    pub frame_id: i64,
+    pub captured_at: String,
+    pub processed_at: String,
+    pub text_fields: Option<Vec<String>>,
+    pub image_regions: Option<i64>,
+}
+
 pub(crate) struct Surface {
     pub kind: &'static str,
     pub table: &'static str,
@@ -652,6 +662,39 @@ impl DatabaseManager {
             .bind(&job.kind).bind(&job.id).bind(job.revision).bind(&job.policy).fetch_one(&self.pool).await
     }
 
+    /// Newest first. Pagination uses event IDs so delayed redaction and
+    /// simultaneous frames cannot cause skipped or repeated entries.
+    pub async fn frame_redaction_history(
+        &self,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<FrameRedactionEvent>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id,frame_id,captured_at,processed_at,text_fields,image_regions
+             FROM frame_redaction_history WHERE id < ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(before.unwrap_or(i64::MAX))
+        .bind(limit.clamp(1, 200))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let text_fields: Option<&str> = row.try_get("text_fields")?;
+                Ok(FrameRedactionEvent {
+                    id: row.try_get("id")?,
+                    frame_id: row.try_get("frame_id")?,
+                    captured_at: row.try_get("captured_at")?,
+                    processed_at: row.try_get("processed_at")?,
+                    text_fields: text_fields
+                        .map(serde_json::from_str)
+                        .transpose()
+                        .map_err(|_| err("invalid frame redaction metadata"))?,
+                    image_regions: row.try_get("image_regions")?,
+                })
+            })
+            .collect()
+    }
+
     /// Commit sanitized values and their receipt together. A concurrent source
     /// edit or policy change rejects the complete result, leaving it retryable.
     pub async fn publish_release(
@@ -671,6 +714,34 @@ impl DatabaseManager {
         if job.kind == "image" {
             return Err(err("image certification requires the media adapter"));
         }
+        let changed_fields = if job.kind == "frames" {
+            let changed = surface
+                .columns
+                .iter()
+                .copied()
+                .filter(|column| {
+                    let before = job.values.get(*column).and_then(|value| value.as_deref());
+                    let after = values[*column].as_deref();
+                    if before == after {
+                        return false;
+                    }
+                    if column.ends_with("json") {
+                        let parse = |text: Option<&str>| {
+                            text.and_then(|text| {
+                                serde_json::from_str::<serde_json::Value>(text).ok()
+                            })
+                        };
+                        if let (Some(before), Some(after)) = (parse(before), parse(after)) {
+                            return before != after;
+                        }
+                    }
+                    true
+                })
+                .collect::<Vec<_>>();
+            (!changed.is_empty()).then(|| serde_json::json!(changed).to_string())
+        } else {
+            None
+        };
         // Hybrid frame replacements must use generation-aware storage. Never
         // update archived payload columns through raw SQL.
         if self.storage.is_some() && surface.table == "frames" {
@@ -691,7 +762,7 @@ impl DatabaseManager {
                     63,
                     values["window_name"].as_deref(),
                     values["browser_url"].as_deref(),
-                    Some((job, values)),
+                    Some((job, values, changed_fields.as_deref())),
                 )
                 .await;
         }
@@ -751,7 +822,7 @@ impl DatabaseManager {
                 .execute(&mut **tx.conn())
                 .await?;
         }
-        certify(&mut **tx.conn(), job).await?;
+        certify(&mut **tx.conn(), job, changed_fields.as_deref(), None).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -969,6 +1040,8 @@ impl DatabaseManager {
 pub(crate) async fn certify(
     conn: &mut sqlx::SqliteConnection,
     job: &ReleaseJob,
+    text_fields: Option<&str>,
+    image_regions: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO _privacy_release(kind,id,revision,policy) VALUES(?,?,0,(SELECT receipt_key FROM _privacy_policy WHERE identity=?)) ON CONFLICT(kind,id) DO UPDATE SET policy=excluded.policy,attempts=0,retry_at=NULL")
         .bind(&job.kind).bind(&job.id).bind(&job.policy).execute(&mut *conn).await?;
@@ -980,8 +1053,20 @@ pub(crate) async fn certify(
         .bind(&job.id)
         .execute(&mut *conn)
         .await?;
-    sqlx::query("INSERT INTO _privacy_ready(kind,id,revision,policy) SELECT kind,id,revision,policy FROM _privacy_release WHERE kind=? AND id=?")
+    let ready = sqlx::query("INSERT INTO _privacy_ready(kind,id,revision,policy) SELECT kind,id,revision,policy FROM _privacy_release WHERE kind=? AND id=?")
         .bind(&job.kind).bind(&job.id).execute(&mut *conn).await?;
+    if text_fields.is_some() || image_regions.is_some() {
+        sqlx::query(
+            "INSERT INTO frame_redaction_history(frame_id,ready_sequence,captured_at,processed_at,text_fields,image_regions)
+             SELECT id,?,timestamp,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?,? FROM frames WHERE id=?",
+        )
+        .bind(ready.last_insert_rowid())
+        .bind(text_fields)
+        .bind(image_regions)
+        .bind(&job.id)
+        .execute(&mut *conn)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1001,6 +1086,14 @@ impl DatabaseManager {
     /// The image adapter calls this only after successful inference and a
     /// durable atomic replacement. Missing/legacy media never calls it.
     pub async fn publish_image_release(&self, job: &ReleaseJob) -> Result<bool, sqlx::Error> {
+        self.publish_image_release_with_regions(job, 0).await
+    }
+
+    pub async fn publish_image_release_with_regions(
+        &self,
+        job: &ReleaseJob,
+        regions: usize,
+    ) -> Result<bool, sqlx::Error> {
         if job.kind != "image" {
             return Err(err("expected image receipt"));
         }
@@ -1017,7 +1110,14 @@ impl DatabaseManager {
         if updated.rows_affected() == 0 {
             return Ok(false);
         }
-        certify(&mut **tx.conn(), job).await?;
+        let regions = i64::try_from(regions).map_err(|_| err("invalid image region count"))?;
+        certify(
+            &mut **tx.conn(),
+            job,
+            None,
+            (regions > 0).then_some(regions),
+        )
+        .await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -1178,6 +1278,10 @@ impl DatabaseManager {
             }
             if kind == "frames" {
                 for item in items.iter_mut() {
+                    if let Some(audit) = item["text_redaction"].as_str() {
+                        item["text_redaction"] = serde_json::from_str(audit)
+                            .map_err(|_| err("invalid frame redaction metadata"))?;
+                    }
                     if let Some(tree) = item["accessibility_tree"].as_str() {
                         item["accessibility_tree"] = serde_json::from_str(tree)
                             .map_err(|_| err("invalid accessibility tree"))?;
@@ -1293,7 +1397,7 @@ impl DatabaseManager {
 
 fn export_surface(kind: &str) -> Result<(&'static str, &'static str, &'static str), sqlx::Error> {
     Ok(match kind {
-            "frames"=>("frames","s.id AS frame_id,s.timestamp,s.app_name,s.window_name,s.browser_url,s.accessibility_tree_json AS accessibility_tree,COALESCE(s.full_text,s.accessibility_text,'') AS text","timestamp"),
+            "frames"=>("frames","s.id AS frame_id,s.timestamp,s.app_name,s.window_name,s.browser_url,s.accessibility_tree_json AS accessibility_tree,COALESCE(s.full_text,s.accessibility_text,'') AS text,(SELECT json_object('processed_at',h.processed_at,'fields',json(h.text_fields)) FROM _privacy_ready current JOIN frame_redaction_history h ON h.ready_sequence=current.sequence WHERE current.kind=r.kind AND current.id=r.id AND current.revision=r.revision AND current.policy=r.policy) AS text_redaction","timestamp"),
             "audio"=>("audio_transcriptions","s.id AS transcription_id,s.timestamp,s.transcription,NULL AS speaker,s.device","timestamp"),
             "input"=>("ui_events","s.id AS event_id,s.timestamp,s.event_type,s.app_name,s.window_title,s.browser_url,s.element_role,s.element_name,s.text_content","timestamp"),
             "memory"=>("memories","s.id AS memory_id,s.created_at,s.updated_at,s.content,s.source,s.tags,s.importance,s.frame_id","created_at"),

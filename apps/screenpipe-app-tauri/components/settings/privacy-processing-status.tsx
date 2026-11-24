@@ -3,6 +3,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { RedactionHistory } from "./redaction-history";
 import { useGT } from "gt-react";
 import { ChevronDown } from "lucide-react";
 import { localFetch } from "@/lib/api";
@@ -117,5 +118,8 @@ export function PrivacyProcessingStatus() {
     void poll();
     return () => { stopped = true; clearTimeout(timer); controller?.abort(); };
   }, []);
-  return <PrivacyStatusView status={status} unavailable={unavailable} />;
+  return <>
+    <PrivacyStatusView status={status} unavailable={unavailable} />
+    <RedactionHistory />
+  </>;
 }

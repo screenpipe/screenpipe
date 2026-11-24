@@ -72,6 +72,7 @@ impl LocalApiClient for Local {
             *self.source.lock().unwrap() = RESET.into();
         }
         Ok(vec![FrameRow {
+            text_redaction: None,
             accessibility_tree: None,
             frame_id: 1,
             timestamp: chrono::Utc::now().to_rfc3339(),

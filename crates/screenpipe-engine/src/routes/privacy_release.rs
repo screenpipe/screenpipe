@@ -68,6 +68,26 @@ pub(crate) async fn status(State(state): State<Arc<AppState>>) -> Response {
 }
 
 #[derive(serde::Deserialize)]
+pub(crate) struct HistoryQuery {
+    before: Option<i64>,
+    limit: Option<u32>,
+}
+
+pub(crate) async fn redaction_history(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
+) -> Response {
+    match state
+        .db
+        .frame_redaction_history(query.before, query.limit.unwrap_or(50))
+        .await
+    {
+        Ok(events) => Json(events).into_response(),
+        Err(_) => pending(),
+    }
+}
+
+#[derive(serde::Deserialize)]
 pub(crate) struct ReadyQuery {
     #[serde(default)]
     after: i64,
@@ -451,6 +471,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(page["rows"][0]["text"], "[PRIVATE]");
+        let redaction = &page["rows"][0]["text_redaction"];
+        assert_eq!(redaction["fields"], serde_json::json!(["full_text"]));
+        let history: serde_json::Value = client
+            .get(format!("{base}/privacy/redaction-history"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(history[0]["frame_id"], 1);
+        assert_eq!(history[0]["captured_at"], "2026-10-14T10:00:00Z");
+        assert_eq!(history[0]["text_fields"], redaction["fields"]);
+        assert_eq!(history[0]["processed_at"], redaction["processed_at"]);
+        assert!(!history.to_string().contains("SYNTHETIC_SECRET"));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             before,
