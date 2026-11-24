@@ -208,7 +208,7 @@ impl SafeMonitor {
     pub(crate) async fn capture_gpu_frame_streaming(
         &self,
         geometry: Arc<MonitorData>,
-        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>
+        latest_masks: impl FnOnce(u32, u32, i64) -> Result<(Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>, bool)>
             + Send + 'static,
         max_width: u32,
         permit: tokio::sync::OwnedSemaphorePermit,
@@ -544,6 +544,7 @@ mod recorder_cache_tests {
                 image::Rgba([value, value, value, 255]),
             )),
             snapshot_image: None,
+            streaming_mask_verified: false,
             session_id: 17,
             system_relative_time: sequence as i64,
             sequence,

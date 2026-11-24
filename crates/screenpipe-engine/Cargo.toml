@@ -92,8 +92,9 @@ dirs = { workspace = true }
 # Password input (no-echo for vault CLI)
 rpassword = "5"
 
-# Client http
+# Client http and WebSocket
 reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 
 # Tinfoil enclave attestation: AMD SEV-SNP attestation + Sigstore code-provenance
 # verification + TLS cert pinning for the privacy-filter PII redaction service
@@ -153,7 +154,6 @@ chrono-tz = "0.10"
 env_logger = { workspace = true }
 serial_test = "3.2.0"
 tempfile = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tower = { version = "0.4", features = ["util"] }
 tiktoken-rs = "0.11.0"
 wiremock = { workspace = true }

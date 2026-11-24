@@ -899,7 +899,7 @@ async fn start_capture_inner(
         .as_ref()
         .ok_or_else(|| "Server not running — cannot start capture".to_string())?;
     let config = build_config(&app)?;
-    let session = CaptureSession::start(server, &config, false).await?;
+    let session = CaptureSession::start(&app, server, &config, false).await?;
     drop(server_guard);
 
     install_capture_session(&mut capture_guard, session);
@@ -1729,6 +1729,7 @@ async fn spawn_screenpipe_after_migration(
     // Oneshot for result
     let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
 
+    let app_for_capture = app.clone();
     // Spawn dedicated thread with its own runtime
     std::thread::Builder::new()
         .name("screenpipe-server".to_string())
@@ -1796,6 +1797,7 @@ async fn spawn_screenpipe_after_migration(
                 let mut capture_guard = capture_arc.lock().await;
                 let capture = if capture_intended_now(&wants_recording) {
                     match CaptureSession::start(
+                        &app_for_capture,
                         &server,
                         &recording_config,
                         close_orphaned_meetings_on_start,
@@ -1933,7 +1935,7 @@ pub(crate) async fn start_capture_internal(
         .ok_or_else(|| "Server not running".to_string())?;
 
     let config = build_config(app)?;
-    let session = CaptureSession::start(server, &config, false).await?;
+    let session = CaptureSession::start(app, server, &config, false).await?;
     drop(server_guard);
 
     install_capture_session(&mut capture_guard, session);

@@ -1042,6 +1042,7 @@ pub(crate) async fn event_driven_capture_loop(
     high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
     semantic_tx: Option<SemanticProjectionSender>,
     recording_detail: Arc<crate::recording_detail::RecordingDetailController>,
+    stream_endpoint: Option<Arc<crate::recording_stream::StreamEndpoint>>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -1338,6 +1339,48 @@ pub(crate) async fn event_driven_capture_loop(
     } else {
         false
     };
+
+    // Consume the existing redacted/resized native cache at acquisition cadence,
+    // independently of screenshot persistence, metadata resolution, and OCR.
+    let _recording_stream = stream_endpoint
+        .filter(|_| {
+            capture_params.window_filters.streaming_mode() && !screenshots_disabled_by_config
+        })
+        .map(|endpoint| {
+            let power = power_profile_rx.clone();
+            let stop = stop_signal.clone();
+            let focus = focus_controller.clone();
+            let focus_monitor = monitor.clone();
+            let paused = Arc::new(move || {
+                stop.load(Ordering::Relaxed)
+                    || crate::sleep_monitor::screen_is_locked()
+                    || crate::drm_detector::drm_content_paused()
+                    || crate::schedule_monitor::schedule_paused()
+                    || !matches!(
+                        focus.state_for_monitor(&focus_monitor),
+                        crate::focus_aware_controller::CaptureState::Active
+                    )
+                    || power.as_ref().is_some_and(|rx| {
+                        let profile = rx.borrow();
+                        profile.capture_paused || profile.screenshot_disabled
+                    })
+            });
+            let worker_paused = paused.clone();
+            let monitor = monitor.clone();
+            let filters = capture_params.window_filters.clone();
+            let sources = exclusion_sources(&tree_walker_config);
+            let writer = snapshot_writer.clone();
+            tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                let sender = crate::recording_stream::RecordingStream::start(endpoint, move || {
+                    worker_paused()
+                });
+                sender.capture_at_rate(&*paused, screenpipe_screen::screenshot_rate::current, || {
+                    capture_monitor_frame_for_snapshot(
+                        &monitor, &filters, sources, &[], false, writer.max_width(),
+                    )
+                }).await;
+            }))
+        });
 
     loop {
         if stop_signal.load(Ordering::Relaxed) {

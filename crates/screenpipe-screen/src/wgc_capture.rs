@@ -629,6 +629,7 @@ pub struct PersistentCapture {
 pub(crate) struct NativeFrame {
     pub image: DynamicImage,
     pub snapshot_image: Option<DynamicImage>,
+    pub streaming_mask_verified: bool,
     pub session_id: u64,
     pub system_relative_time: i64,
     pub sequence: u64,
@@ -1128,12 +1129,13 @@ impl PersistentCapture {
         &self,
         timeout: Duration,
         renderer: &mut Option<gpu_d3d11::Renderer>,
-        latest_masks: impl FnOnce(u32, u32, i64) -> Result<Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>>,
+        latest_masks: impl FnOnce(u32, u32, i64) -> Result<(Option<Arc<Vec<crate::screenshot_privacy::scene::Rect>>>, bool)>,
         max_width: u32,
     ) -> Result<NativeFrame> {
         self.refresh_min_update_interval();
-        self.decode_native_frame(timeout, FrameReadPolicy::CachedWhileRefreshing, None, |texture, width, height, qpc| {
-            let masks = latest_masks(width, height, qpc)?;
+        let mut verified = false;
+        let mut frame = self.decode_native_frame(timeout, FrameReadPolicy::CachedWhileRefreshing, None, |texture, width, height, qpc| {
+            let (masks, certain) = latest_masks(width, height, qpc)?;
             let Some(masks) = masks.as_deref().map(Vec::as_slice) else {
                 return Ok((DynamicImage::ImageRgba8(RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]))), None));
             };
@@ -1147,8 +1149,11 @@ impl PersistentCapture {
             let image = renderer.render(&self.d3d, texture, Some(masks), dims, 0)?;
             let snapshot = (output != dims)
                 .then(|| renderer.render(&self.d3d, texture, Some(masks), output, 1)).transpose()?;
+            verified = certain;
             Ok((image, snapshot))
-        })?.ok_or_else(|| anyhow!("WGC returned no image for unconditional GPU read"))
+        })?.ok_or_else(|| anyhow!("WGC returned no image for unconditional GPU read"))?;
+        frame.streaming_mask_verified = verified;
+        Ok(frame)
     }
 
     fn get_native_frame_inner(
@@ -1234,6 +1239,7 @@ impl PersistentCapture {
         Ok(Some(NativeFrame {
             image,
             snapshot_image,
+            streaming_mask_verified: false,
             session_id: self.session_id,
             system_relative_time,
             sequence,

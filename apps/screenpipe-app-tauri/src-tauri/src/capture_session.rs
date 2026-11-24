@@ -66,6 +66,7 @@ impl CaptureSession {
     /// - Schedule monitor
     /// - Snapshot compaction
     pub async fn start(
+        _app: &tauri::AppHandle,
         server: &ServerCore,
         config: &RecordingConfig,
         close_orphaned_meetings_on_start: bool,
@@ -147,8 +148,15 @@ impl CaptureSession {
             } else {
                 Some(server.hot_frame_cache.clone())
             };
+            #[cfg(feature = "enterprise-support")]
+            let recording_stream = config.streaming_mode.then(|| {
+                crate::enterprise_sync::recording_stream_endpoint(_app)
+            }).flatten();
+            #[cfg(not(feature = "enterprise-support"))]
+            let recording_stream = None;
             let vision_manager = Arc::new(
                 VisionManager::new(vision_config, db_clone, tokio::runtime::Handle::current())
+                    .with_recording_stream(recording_stream)
                     .with_hot_frame_cache(hot_cache_for_capture)
                     .with_power_profile(server.power_manager.subscribe())
                     .with_high_fps_controller(server.high_fps_controller.clone()),

@@ -85,6 +85,7 @@ pub mod privacy_filter;
 pub mod process_priority;
 mod qualified_value;
 pub mod recording_config;
+pub mod recording_stream;
 pub mod recording_coverage;
 pub mod recording_detail;
 mod resource_monitor;
