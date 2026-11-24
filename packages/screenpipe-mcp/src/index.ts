@@ -51,6 +51,7 @@ import {
   zeroHitCoverageText,
 } from "./result-contracts";
 import { resolveScreenpipeApiBase } from "./api-base";
+import { findMeetingScreenRefs, MEETING_LIST_SCREEN_REF_LIMIT } from "./meeting-screen-refs";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -446,7 +447,7 @@ const TOOLS: Tool[] = [
       "looking for a meeting with a person or on a topic ('when did I last talk to Noah?'), pass `q` and OMIT start_time. " +
       "Only constrain the time range when the question itself is time-bound. Results are newest-first; without `q`, old " +
       "meetings only surface via time range or offset pagination. Follow up with get-meeting (id from results) for the " +
-      "full note and transcript.",
+      "full note and transcript. Set include_screen_refs=true for one related screenshot/accessibility frame ID per meeting.",
     annotations: { title: "List Meetings", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -456,6 +457,7 @@ const TOOLS: Tool[] = [
         q: { type: "string", description: "Case-insensitive substring filter on title, attendees (names/emails), and note. Searches all history." },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
+        include_screen_refs: { type: "boolean", description: "Look up one matching screen frame for each of the first 10 results. Use smaller pages and offset to cover more meetings." },
       },
     },
   },
@@ -781,12 +783,14 @@ const TOOLS: Tool[] = [
     description:
       "Get a meeting by ID: title, attendees, times, and the full note. " +
       "Pass include_transcript=true to also get the speaker-attributed transcript segments — do this when the note is " +
-      "empty and you need to reconstruct what was said (much better than searching raw audio by time range).",
+      "empty and you need to reconstruct what was said (much better than searching raw audio by time range). " +
+      "Set include_screen_refs=true for related screenshot/accessibility frame IDs.",
     annotations: { title: "Get Meeting", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "integer", description: "Meeting ID (from list-meetings results)" },
+        include_screen_refs: { type: "boolean", description: "Look up up to three matching screen frame IDs and screenshot links. Use each frame_id with frame-context or get-frame-elements." },
         include_transcript: {
           type: "boolean",
           description: "Also return the meeting's transcript segments with speaker names and timestamps.",
@@ -1720,7 +1724,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
       }
 
       case "list-meetings": {
-        const normalized = normalizeTimeFields(args);
+        const { include_screen_refs, ...filters } = args;
+        const normalized = normalizeTimeFields(filters);
         const params = new URLSearchParams();
         for (const [key, value] of Object.entries(normalized)) {
           if (value !== null && value !== undefined) {
@@ -1746,7 +1751,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
 
         qualifiedValue.meetingResult();
 
-        const formatted = meetings.map((m: Record<string, unknown>) => {
+        let meetingRefs: Awaited<ReturnType<typeof findMeetingScreenRefs>>[] | undefined;
+        if (include_screen_refs === true) {
+          meetingRefs = [];
+          const lookupMeetings = meetings.slice(0, MEETING_LIST_SCREEN_REF_LIMIT);
+          for (let i = 0; i < lookupMeetings.length; i += 2) {
+            meetingRefs.push(...await Promise.all(
+              lookupMeetings.slice(i, i + 2).map(m => findMeetingScreenRefs(m, 1, callAPI)),
+            ));
+          }
+        }
+
+        const formatted = meetings.map((m: Record<string, unknown>, i: number) => {
           const start = m.meeting_start as string;
           const end = (m.meeting_end as string) || "ongoing";
           const app = m.meeting_app as string;
@@ -1756,7 +1772,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           const note = noteStr
             ? `\nNote: ${noteStr.length > 200 ? `${noteStr.slice(0, 200)}…` : noteStr}`
             : "\nNote: (none — use get-meeting with include_transcript to reconstruct)";
-          return `[id ${m.id}] [${m.detection_source}] ${app}${title}\n  ${start} → ${end}${attendees}${note}`;
+          const refs = meetingRefs
+            ? `\nScreen refs: ${JSON.stringify(meetingRefs[i] ?? { screen_refs: [], screen_refs_status: "not_checked" })}`
+            : "";
+          return `[id ${m.id}] [${m.detection_source}] ${app}${title}\n  ${start} → ${end}${attendees}${note}${refs}`;
         });
 
         return {
@@ -2183,7 +2202,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         }
         const response = await callAPI(`/meetings/${meetingId}`);
         const meeting = await response.json();
-        let text = JSON.stringify(meeting, null, 2);
+        const refs = args.include_screen_refs === true ? await findMeetingScreenRefs(meeting, 3, callAPI) : undefined;
+        let text = JSON.stringify(refs ? { ...meeting, ...refs } : meeting, null, 2);
 
         if (args.include_transcript) {
           const tRes = await callAPI(`/meetings/${meetingId}/transcript`);
