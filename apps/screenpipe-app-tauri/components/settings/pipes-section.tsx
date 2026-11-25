@@ -45,6 +45,7 @@ import {
   type AvailableConnection,
   fetchAvailablePipeConnections,
   isMcpConnectionKey,
+  isPipeConnectionAvailable,
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
@@ -538,6 +539,10 @@ function pipeConnectionDisplayName(
   connection: AvailableConnection | undefined,
   instanceName: string | null
 ): string {
+  if (connection?.id === "imap") {
+    return connection.instances?.find((account) => account.instanceKey === connectionId)?.instanceLabel
+      ?? (instanceName ? "Disconnected email account" : "Default email inbox");
+  }
   if (instanceName) return `${connection?.name || pipeConnectionLookupKey(connectionId)} (${instanceName})`;
   if (connection) return connection.name;
   if (isMcpConnectionKey(connectionId)) return "Deleted MCP server";
@@ -562,7 +567,7 @@ function buildPipeConnectionOptions(
 
   return connections
     .flatMap((connection) => {
-      if (connection.instances && connection.instances.length > 1) {
+      if (connection.instances && (connection.id === "imap" || connection.instances.length > 1)) {
         return connection.instances
           .filter((instance) => !selected.has(instance.instanceKey))
           .map((instance) => ({
@@ -2185,7 +2190,7 @@ export function PipesSection() {
         const missing = requiredConnections.filter((id) => {
           const baseId = pipeConnectionLookupKey(id);
           const conn = availableConnections.find((c) => c.id === baseId);
-          return !conn || !conn.connected;
+          return !isPipeConnectionAvailable(id, conn);
         });
         if (missing.length > 0) {
           setConnectionModal({ pipeName: name, connections: requiredConnections });
@@ -2784,10 +2789,9 @@ export function PipesSection() {
                   ? "starting"
                   : "now";
               const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
-                // support instance keys like "notion:crm" — match on base id
                 const baseId = pipeConnectionLookupKey(id);
                 const conn = availableConnections.find((c) => c.id === baseId);
-                return !conn || !conn.connected;
+                return !isPipeConnectionAvailable(id, conn);
               });
               const lastStatus = isRunning
                 ? "running"
@@ -3493,7 +3497,7 @@ export function PipesSection() {
                               const baseId = pipeConnectionLookupKey(connId);
                               const instanceName = pipeConnectionInstanceName(connId);
                               const conn = availableConnections.find((c) => c.id === baseId);
-                              const isConnected = conn?.connected ?? false;
+                              const isConnected = isPipeConnectionAvailable(connId, conn);
                               const label = pipeConnectionDisplayName(connId, conn, instanceName);
                               const setupLabel = pipeConnectionSetupLabel(connId, conn);
                               return (
@@ -4380,7 +4384,7 @@ export function PipesSection() {
               const stillMissing = connectionModal.connections.some((id) => {
                 const baseId = pipeConnectionLookupKey(id);
                 const conn = latestConnections.find((c) => c.id === baseId);
-                return !conn || !conn.connected;
+                return !isPipeConnectionAvailable(id, conn);
               });
               if (stillMissing) {
                 disablePipe(connectionModal.pipeName);

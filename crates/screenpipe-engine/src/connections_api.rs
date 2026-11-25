@@ -9,12 +9,15 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use screenpipe_connect::connections::{bee, build_default_client, telegram, ConnectionManager};
+use screenpipe_connect::connections::{
+    bee, build_default_client, imap, require_str, telegram, ConnectionManager,
+};
 use screenpipe_connect::oauth::{self as oauth_store, OAuthCallbackResult, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use screenpipe_secrets::SecretStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -1647,27 +1650,93 @@ struct ImapMessagesQuery {
     limit: Option<usize>,
     mailbox: Option<String>,
     query: Option<String>,
+    instance: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ImapMailboxQuery {
     mailbox: Option<String>,
+    instance: Option<String>,
+    uid_validity: Option<u32>,
 }
 
-/// Load stored IMAP credentials or produce the standard "not connected" error.
+#[derive(Deserialize)]
+struct ImapChangesQuery {
+    mailbox: Option<String>,
+    instance: Option<String>,
+    after_uid: Option<u32>,
+    uid_validity: Option<u32>,
+}
+
+/// POST /connections/imap/accounts — save a tested account without replacing
+/// an existing default. The manager lock serializes deciding which slot to use.
+async fn save_imap_account(
+    State(state): State<ConnectionsState>,
+    Json(body): Json<ConnectRequest>,
+) -> (StatusCode, Json<Value>) {
+    let mgr = state.cm.lock().await;
+    match store_imap_account(&mgr, body.credentials).await {
+        Ok(instance) => (StatusCode::OK, Json(json!({ "instance": instance }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn store_imap_account(
+    mgr: &ConnectionManager,
+    credentials: Map<String, Value>,
+) -> anyhow::Result<Option<String>> {
+    let identity = imap::account_identity(&credentials)?;
+    anyhow::ensure!(!identity.0.is_empty(), "IMAP host is required");
+    anyhow::ensure!(!identity.2.is_empty(), "IMAP username is required");
+    anyhow::ensure!(
+        !require_str(&credentials, "password")?.trim().is_empty(),
+        "IMAP password is required"
+    );
+    let accounts = mgr.get_all_instances("imap").await?;
+    let existing_account = accounts.iter().find(|(_, conn)| {
+        imap::account_identity(&conn.credentials).is_ok_and(|saved| saved == identity)
+    });
+    let instance = match existing_account {
+        Some((instance, _)) => instance.clone(),
+        None => {
+            // A previously disconnected account must keep its selector on
+            // reconnect, even if all accounts were removed in the meantime.
+            // The unqualified slot remains reserved for the existing default.
+            let key = serde_json::to_vec(&identity)?;
+            Some(format!("{:x}", Sha256::digest(key)))
+        }
+    };
+    mgr.connect_instance("imap", instance.as_deref(), credentials)
+        .await?;
+    Ok(instance)
+}
+
+/// A missing selected account must never fall back to a different inbox.
 async fn imap_creds(
     state: &ConnectionsState,
+    instance: Option<&str>,
 ) -> Result<Map<String, Value>, (StatusCode, Json<Value>)> {
-    let creds = {
+    let connection = {
         let cm = state.cm.lock().await;
-        cm.get_credentials("imap").await
+        cm.get_saved_instance("imap", instance).await
     };
-    match creds {
-        Ok(Some(c)) if !c.is_empty() => Ok(c),
+    match connection {
+        Ok(Some(c)) if c.enabled && !c.credentials.is_empty() => Ok(c.credentials),
+        Ok(_) if instance.is_some() => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "The selected IMAP account is disconnected. Reconnect it in Settings → Connections.",
+                "reason": "imap_account_not_connected",
+                "connected": false,
+            })),
+        )),
         Ok(_) => Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({
-                "error": "Email inbox (IMAP) is not connected. Connect it from the Connections page in the desktop app.",
+                "error": "The default IMAP inbox is disconnected. Select a connected inbox or add an account in Settings → Connections.",
                 "reason": "auth_required",
                 "connected": false,
             })),
@@ -1684,20 +1753,13 @@ async fn imap_messages(
     State(state): State<ConnectionsState>,
     Query(q): Query<ImapMessagesQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let creds = match imap_creds(&state).await {
+    let creds = match imap_creds(&state, q.instance.as_deref()).await {
         Ok(c) => c,
         Err(e) => return e,
     };
     let limit = q.limit.unwrap_or(20).clamp(1, 100);
     let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
-    match screenpipe_connect::connections::imap::list_messages(
-        &creds,
-        mailbox,
-        limit,
-        q.query.as_deref(),
-    )
-    .await
-    {
+    match imap::list_messages(&creds, mailbox, limit, q.query.as_deref()).await {
         Ok(messages) => (StatusCode::OK, Json(json!({ "messages": messages }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1712,27 +1774,87 @@ async fn imap_message(
     Path(uid): Path<u32>,
     Query(q): Query<ImapMailboxQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let creds = match imap_creds(&state).await {
+    let creds = match imap_creds(&state, q.instance.as_deref()).await {
         Ok(c) => c,
         Err(e) => return e,
     };
     let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
-    match screenpipe_connect::connections::imap::get_message(&creds, mailbox, uid).await {
+    match imap::get_message(&creds, mailbox, uid, q.uid_validity).await {
         Ok(message) => (StatusCode::OK, Json(message)),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("{e:#}") })),
-        ),
+        Err(e) => match e.downcast_ref::<imap::UidValidityChanged>() {
+            Some(reset) => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": reset.to_string(),
+                    "reason": "imap_uid_validity_changed",
+                    "expected_uid_validity": reset.expected,
+                    "uid_validity": reset.actual,
+                })),
+            ),
+            None => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("{e:#}") })),
+            ),
+        },
+    }
+}
+
+/// GET /connections/imap/changes — initialize a pipe cursor or read its next batch.
+async fn imap_changes(
+    State(state): State<ConnectionsState>,
+    Query(q): Query<ImapChangesQuery>,
+) -> (StatusCode, Json<Value>) {
+    if q.uid_validity.is_some() && q.after_uid.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "IMAP uid_validity requires after_uid" })),
+        );
+    }
+    let creds = match imap_creds(&state, q.instance.as_deref()).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
+    match imap::trigger_page(
+        &creds,
+        mailbox,
+        q.after_uid,
+        q.uid_validity,
+        screenpipe_core::pipes::connection_triggers::MAX_ITEMS_PER_FIRE as u32,
+    )
+    .await
+    {
+        Ok(page) => (StatusCode::OK, Json(json!(page))),
+        Err(error) => {
+            // Record the originating cause in the engine log collected by the
+            // normal feedback report. The cursor stays pending on every error.
+            tracing::warn!(
+                after_uid = ?q.after_uid,
+                uid_validity = ?q.uid_validity,
+                error = %format_args!("{error:#}"),
+                "IMAP pipe could not read a mailbox page; cursor unchanged"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": format!("{error:#}"),
+                    "reason": "imap_trigger_read_failed",
+                })),
+            )
+        }
     }
 }
 
 /// GET /connections/imap/mailboxes — list folder names.
-async fn imap_mailboxes(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
-    let creds = match imap_creds(&state).await {
+async fn imap_mailboxes(
+    State(state): State<ConnectionsState>,
+    Query(q): Query<ImapMailboxQuery>,
+) -> (StatusCode, Json<Value>) {
+    let creds = match imap_creds(&state, q.instance.as_deref()).await {
         Ok(c) => c,
         Err(e) => return e,
     };
-    match screenpipe_connect::connections::imap::list_mailboxes(&creds).await {
+    match imap::list_mailboxes(&creds).await {
         Ok(mailboxes) => (StatusCode::OK, Json(json!({ "mailboxes": mailboxes }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3699,9 +3821,11 @@ where
             axum::routing::delete(gcal_disconnect),
         )
         // IMAP inbox routes (must be before /:id to avoid conflict)
+        .route("/imap/accounts", post(save_imap_account))
         .route("/imap/messages", get(imap_messages))
         .route("/imap/messages/:uid", get(imap_message))
         .route("/imap/mailboxes", get(imap_mailboxes))
+        .route("/imap/changes", get(imap_changes))
         // Slack-specific send route (must be before /:id to avoid conflict)
         .route("/slack/send", post(slack_send))
         .route("/slack/search", get(slack_search))
@@ -4292,6 +4416,153 @@ mod tests {
         assert!(
             query.contains('\r') && query.contains('\n'),
             "transport must not be trusted to sanitize; got {query:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn imap_account_routes_preserve_the_legacy_default_and_never_fall_back() {
+        async fn request(
+            app: &Router,
+            method: &str,
+            uri: &str,
+            body: Value,
+        ) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+
+        let dir = TempDir::new().unwrap();
+        let screenpipe_dir = dir.path().to_path_buf();
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
+        let app = router(
+            cm.clone(),
+            Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone()))),
+            screenpipe_dir,
+            None,
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
+            None,
+        );
+
+        let legacy = json!({"credentials": {
+            "imap_host": "imap.example.com", "imap_port": "993",
+            "username": "personal@example.com", "password": "legacy-secret"
+        }});
+        assert_eq!(
+            request(&app, "PUT", "/imap", legacy).await.0,
+            StatusCode::OK
+        );
+        let work = json!({"credentials": {
+            "imap_host": "imap.example.com", "imap_port": "993",
+            "username": "work@example.com", "password": "work-secret"
+        }});
+        let (status, saved) = request(&app, "POST", "/imap/accounts", work.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        let instance = saved["instance"].as_str().unwrap();
+        assert_eq!(
+            request(&app, "POST", "/imap/accounts", work.clone()).await,
+            (StatusCode::OK, saved.clone())
+        );
+
+        let (_, listed) = request(&app, "GET", "/imap/instances", Value::Null).await;
+        let accounts = listed["instances"].as_array().unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0]["instance"], Value::Null);
+        assert_eq!(
+            accounts[0]["credentials"]["username"],
+            "personal@example.com"
+        );
+        assert_eq!(accounts[1]["instance"], instance);
+        assert_eq!(accounts[1]["credentials"]["username"], "work@example.com");
+        assert!(accounts
+            .iter()
+            .all(|account| account["credentials"].get("password").is_none()));
+
+        let context = screenpipe_connect::connections::render_context(dir.path(), 3030, None).await;
+        assert!(context.contains("GET /connections/imap/instances"));
+        assert!(context.contains("instance query parameter"));
+        assert!(context.contains(instance));
+        assert!(!context.contains("legacy-secret"));
+        assert!(!context.contains("work-secret"));
+
+        for route in [
+            "/imap/mailboxes",
+            "/imap/messages",
+            "/imap/messages/42",
+            "/imap/changes",
+        ] {
+            let (status, error) = request(
+                &app,
+                "GET",
+                &format!("{route}?instance=missing"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error["reason"], "imap_account_not_connected");
+        }
+        assert_eq!(
+            request(&app, "DELETE", "/imap", Value::Null).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(&app, "GET", "/imap/mailboxes", Value::Null).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            cm.lock()
+                .await
+                .get_credentials_instance("imap", Some(instance))
+                .await
+                .unwrap()
+                .unwrap()["username"],
+            "work@example.com"
+        );
+        let named_path = format!("/imap/instances/{instance}");
+        assert_eq!(
+            request(&app, "DELETE", &named_path, Value::Null).await.0,
+            StatusCode::OK
+        );
+        let (_, listed) = request(&app, "GET", "/imap/instances", Value::Null).await;
+        assert_eq!(listed["instances"], json!([]));
+
+        assert_eq!(
+            request(&app, "POST", "/imap/accounts", work).await,
+            (StatusCode::OK, saved.clone())
+        );
+        assert_eq!(
+            request(&app, "GET", "/imap/mailboxes", Value::Null).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let mut stored = screenpipe_connect::connections::load_store(dir.path());
+        stored.get_mut(&format!("imap:{instance}")).unwrap().enabled = false;
+        screenpipe_connect::connections::save_store(dir.path(), &stored).unwrap();
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                &format!("/imap/mailboxes?instance={instance}"),
+                Value::Null,
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
         );
     }
 

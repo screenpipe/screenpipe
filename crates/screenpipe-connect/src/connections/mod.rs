@@ -709,13 +709,21 @@ impl ConnectionManager {
         id: &str,
         instance: Option<&str>,
     ) -> Result<Option<Map<String, Value>>> {
+        Ok(self
+            .get_saved_instance(id, instance)
+            .await?
+            .map(|connection| connection.credentials))
+    }
+
+    /// Load the exact instance together with its enabled state.
+    pub async fn get_saved_instance(
+        &self,
+        id: &str,
+        instance: Option<&str>,
+    ) -> Result<Option<SavedConnection>> {
         self.find(id)?;
         let key = make_key(id, instance);
-        Ok(
-            load_connection(self.secret_store.as_deref(), &self.screenpipe_dir, &key)
-                .await
-                .map(|c| c.credentials),
-        )
+        Ok(load_connection(self.secret_store.as_deref(), &self.screenpipe_dir, &key).await)
     }
 
     /// Look up the proxy config for a connection by ID.

@@ -7,6 +7,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PipeTriggerPicker, type Trigger } from "../pipe-trigger-picker";
 import { localFetch } from "@/lib/api";
+import type { AvailableConnection } from "@/lib/pipe-connections";
 
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
 vi.mock("@/lib/connections-events", () => ({ notifyConnectionsUpdated: vi.fn() }));
@@ -29,7 +30,7 @@ function response(body: unknown) {
 }
 
 function renderPicker(
-  availableConnections: Array<{ id: string; name: string; icon: string; connected: boolean }> = [],
+  availableConnections: AvailableConnection[] = [],
 ) {
   const applyOptimistic = vi.fn<(trigger: Trigger | undefined) => void>();
   render(
@@ -164,6 +165,58 @@ describe("PipeTriggerPicker app trigger catalog", () => {
 
     expect(applyOptimistic).toHaveBeenCalledWith({
       sources: [{ app: "google-calendar", kind: "event_started", instance: "work@example.com" }],
+    });
+  });
+
+  it("uses the selected IMAP account for folders and persists the account with the trigger", async () => {
+    let finishDefault!: (value: Response) => void;
+    const defaultFolders = new Promise<Response>((resolve) => { finishDefault = resolve; });
+    fetchMock.mockImplementation(async (url) => {
+      if (url === "/connections/imap/mailboxes") return defaultFolders;
+      if (url === "/connections/imap/mailboxes?instance=work%40example.com") {
+        return response({ mailboxes: ["INBOX", "Work/Sent"] });
+      }
+      return response({});
+    });
+    const { applyOptimistic } = renderPicker([{
+      id: "imap",
+      name: "Email Inbox (IMAP)",
+      icon: "imap",
+      connected: true,
+      instances: [
+        { instanceKey: "imap", instanceLabel: "personal@example.com (default)" },
+        { instanceKey: "imap:work@example.com", instanceLabel: "work@example.com" },
+      ],
+    }]);
+
+    chooseOption(/^email sent/i);
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), { target: { value: "work@example.com" } });
+    await screen.findByDisplayValue("Work/Sent");
+    finishDefault(response({ mailboxes: ["INBOX", "Personal/Sent"] }));
+    await defaultFolders;
+
+    clickDetailAdd();
+    expect(applyOptimistic).toHaveBeenCalledWith({
+      sources: [{ app: "imap", kind: "sent_message", instance: "work@example.com", filter: { mailbox: "Work/Sent" } }],
+    });
+  });
+
+  it("uses a lone named IMAP account after the default was disconnected", async () => {
+    fetchMock.mockImplementation(async (url) => url === "/connections/imap/mailboxes?instance=work"
+      ? response({ mailboxes: ["INBOX"] })
+      : response({}));
+    const { applyOptimistic } = renderPicker([{
+      id: "imap",
+      name: "Email Inbox (IMAP)",
+      icon: "imap",
+      connected: true,
+      instances: [{ instanceKey: "imap:work", instanceLabel: "work@example.com" }],
+    }]);
+    chooseOption(/^new email/i);
+    await screen.findByDisplayValue("INBOX");
+    clickDetailAdd();
+    expect(applyOptimistic).toHaveBeenCalledWith({
+      sources: [{ app: "imap", kind: "message", instance: "work", filter: { mailbox: "INBOX" } }],
     });
   });
 

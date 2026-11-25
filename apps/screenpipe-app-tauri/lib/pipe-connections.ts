@@ -6,6 +6,7 @@ import {
   COMPOSIO_CONNECTIONS,
   fetchComposioStatus,
 } from "@/lib/composio";
+import { readImapAccounts } from "@/lib/imap-accounts";
 
 export const MCP_CONNECTION_PREFIX = "mcp:";
 
@@ -51,6 +52,12 @@ export function pipeConnectionInstanceName(connectionId: string): string | null 
   return connectionId.includes(":")
     ? connectionId.split(":").slice(1).join(":")
     : null;
+}
+
+export function isPipeConnectionAvailable(id: string, connection?: AvailableConnection): boolean {
+  if (!connection?.connected) return false;
+  if (connection.id !== "imap") return true;
+  return connection.instances?.some((account) => account.instanceKey === id) ?? (id === "imap");
 }
 
 export async function fetchAvailablePipeConnections(
@@ -106,6 +113,18 @@ export async function fetchAvailablePipeConnections(
         try {
           const instRes = await fetch(`${apiBase}/connections/${c.id}/instances`);
           if (!instRes.ok) return;
+          if (c.id === "imap") {
+            const accounts = await readImapAccounts(instRes);
+            c.instances = accounts.map(({ instance, username, server }) => {
+              const label = username || c.name;
+              const detail = server ? `${label} (${server})` : label;
+              return {
+                instanceKey: instance ? `imap:${instance}` : "imap",
+                instanceLabel: instance ? detail : `${detail} (default)`,
+              };
+            });
+            return;
+          }
           const instData = await instRes.json();
           const list = instData.data || instData.instances || instData || [];
           if (Array.isArray(list) && list.length > 1) {

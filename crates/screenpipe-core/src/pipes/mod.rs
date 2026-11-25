@@ -4349,6 +4349,9 @@ impl PipeManager {
             self.api_port,
             preset_prompt.as_deref(),
             combined_context.as_deref(),
+            event_context
+                .as_ref()
+                .map(|event| (event.name.as_str(), &event.data)),
         );
         let pipe_name = name.to_string();
 
@@ -5039,6 +5042,7 @@ impl PipeManager {
                 self.api_port,
                 preset_prompt.as_deref(),
                 combined_context.as_deref(),
+                event_context.map(|event| (event.name.as_str(), &event.data)),
             );
             let shared_pid_for_kill = shared_pid.clone();
 
@@ -6963,6 +6967,9 @@ impl PipeManager {
                         api_port,
                         preset_prompt.as_deref(),
                         combined_context.as_deref(),
+                        event_triggered
+                            .get(name)
+                            .map(|event| (event.name.as_str(), &event.data)),
                     );
                     let pipe_name = name.clone();
                     let has_chat_destination = config.run_in.is_some();
@@ -7666,7 +7673,7 @@ impl PipeManager {
             // can't stall the poll loop. API-poll sources (Slack/Notion) hit the
             // local proxy on api_base; the file source (Obsidian) ignores it.
             let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+                .timeout(connection_triggers::LOCAL_REQUEST_TIMEOUT)
                 .build()
                 .unwrap_or_default();
             // Learn when fired pipe runs finish so we can commit (or retry) the
@@ -8017,6 +8024,7 @@ fn render_prompt_with_port(
     _api_port: u16,
     _system_prompt: Option<&str>,
     extra_context: Option<&str>,
+    event: Option<(&str, &serde_json::Value)>,
 ) -> String {
     let now = Local::now();
     let date = now.format("%Y-%m-%d").to_string();
@@ -8060,6 +8068,31 @@ Pipe name: {}
 
     if let Some(ctx) = extra_context {
         prompt.push_str(ctx);
+    }
+
+    let triggered_by_imap = event.is_some_and(|(name, data)| {
+        name == "connection_trigger" && data["context"]["app"].as_str() == Some("imap")
+    });
+    if triggered_by_imap {
+        prompt.push_str(
+            "\nThis run was triggered by IMAP. Read instance, filter.mailbox, and uid_validity from `./.trigger-context.json`. Use that account and mailbox. When uid_validity is present, pass it as a query parameter when fetching messages by UID. A null instance means the default inbox. If the API reports that UIDVALIDITY changed, these UIDs are stale and must not be fetched in the new generation.\n",
+        );
+    } else {
+        let imap_accounts: Vec<_> = config
+            .connections
+            .iter()
+            .filter_map(|connection| match connection.split_once(':') {
+                Some(("imap", instance)) => Some(Some(instance)),
+                None if connection == "imap" => Some(None),
+                _ => None,
+            })
+            .collect();
+        if !imap_accounts.is_empty() {
+            prompt.push_str(&format!(
+                "\nUse the task's selected IMAP instances for email reads (null means the default inbox): {}\n",
+                serde_json::json!(imap_accounts)
+            ));
+        }
     }
 
     prompt.push_str("\nDo the work described above now. Do NOT re-run this pipe via CLI.");
@@ -13815,7 +13848,7 @@ Run the scheduled task.
 
     #[test]
     fn test_render_prompt_uses_port() {
-        // render_prompt_with_port is the *user* prompt (time context only).
+        // render_prompt_with_port supplies per-run context for the user prompt.
         // Port / body / system_prompt are handled by render_pipe_system_prompt.
         let config = PipeConfig {
             name: "test".to_string(),
@@ -13842,7 +13875,7 @@ Run the scheduled task.
             artifacts: vec![],
             trigger: None,
         };
-        let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
+        let prompt = render_prompt_with_port(&config, "body text", 3031, None, None, None);
         assert!(prompt.contains("Execution budget: 600 seconds."));
         let timestamp = prompt
             .lines()
@@ -13860,7 +13893,7 @@ Run the scheduled task.
             ..config.clone()
         };
         assert!(
-            render_prompt_with_port(&shorter, "body text", 3031, None, None)
+            render_prompt_with_port(&shorter, "body text", 3031, None, None, None)
                 .contains("Execution budget: 90 seconds.")
         );
         // User prompt contains a default lookback and the "Execute" instruction.
@@ -13875,6 +13908,25 @@ Run the scheduled task.
         assert!(!sys.contains("http://localhost:3030"));
         assert!(sys.contains("body text"));
 
+        let imap = PipeConfig {
+            connections: vec!["imap:work".into(), "imap".into(), "slack".into()],
+            ..config.clone()
+        };
+        let prompt = render_prompt_with_port(&imap, "", 3031, None, None, None);
+        assert!(prompt.contains("selected IMAP instances"));
+        assert!(prompt.contains(r#"["work",null]"#));
+        let event = serde_json::json!({"context": {"app": "imap", "instance": "personal"}});
+        let prompt = render_prompt_with_port(
+            &imap,
+            "",
+            3031,
+            None,
+            None,
+            Some(("connection_trigger", &event)),
+        );
+        assert!(prompt.contains("This run was triggered by IMAP"));
+        assert!(!prompt.contains("selected IMAP instances"));
+
         // Every workflow stage must resume its pipeline window, including
         // manual retries after more than the default eight-hour lookback.
         for task in crate::workflows::pipeline::TASKS {
@@ -13884,7 +13936,7 @@ Run the scheduled task.
                     schedule: schedule.to_string(),
                     ..config.clone()
                 };
-                let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
+                let prompt = render_prompt_with_port(&config, "body text", 3031, None, None, None);
                 assert!(prompt.contains("/workflows/pipeline"));
                 assert!(
                     !prompt.contains("screenpipe-api"),
