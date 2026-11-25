@@ -65,6 +65,14 @@ export type AppOrgSeatAvailable = {
   requested_at?: string | null;
 };
 
+export type AppDeviceLimitStatus = {
+  allowed?: boolean | null;
+  reason?: "device_limit_exceeded" | string | null;
+  limit?: number | null;
+  active_count?: number | null;
+  evicted_device_ids?: string[] | null;
+};
+
 export type AppUser = User & {
   app_entitled?: boolean | null;
   subscription_plan?: string | null;
@@ -72,6 +80,7 @@ export type AppUser = User & {
   entitlement?: AppEntitlement | JsonValue | null;
   enterprise_account?: AppEnterpriseAccount | JsonValue | null;
   org_seat_available?: AppOrgSeatAvailable | JsonValue | null;
+  device_limit_status?: AppDeviceLimitStatus | JsonValue | null;
   /**
    * Whether Stripe holds a payment method for this account. Server-derived
    * from the entitlement source; see website `/api/user`.
@@ -209,6 +218,25 @@ export function getOrgSeatAvailable(
     (typeof candidate.domain === "string" && candidate.domain.trim().length > 0);
   if (!hasTarget || !hasLabel) return null;
   return candidate;
+}
+
+export function getDeviceLimitStatus(
+  user: AppUser | null | undefined,
+): AppDeviceLimitStatus | null {
+  const status = user?.device_limit_status;
+  if (!status || typeof status !== "object" || Array.isArray(status)) {
+    return null;
+  }
+  return status as AppDeviceLimitStatus;
+}
+
+export function isDeviceLimitExceeded(
+  user: AppUser | null | undefined,
+): boolean {
+  const status = getDeviceLimitStatus(user);
+  return (
+    status?.allowed === false && status?.reason === "device_limit_exceeded"
+  );
 }
 
 function parseEntitlementTime(value: string | null | undefined) {

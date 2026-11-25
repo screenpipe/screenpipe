@@ -17,6 +17,7 @@ import {
   AppUser,
   ENTERPRISE_BUILDS_URL,
   ENTERPRISE_DOWNLOAD_URL,
+  getDeviceLimitStatus,
   getEnterpriseAccount,
   getLocalPlanPolicy,
   getOrgSeatAvailable,
@@ -26,6 +27,7 @@ import {
   isDevBillingBypassEnabled,
   isDevLoginSkipEnabled,
   isDevLoginEnabled,
+  isDeviceLimitExceeded,
   isTokenHydrationCandidate,
   isTokenHydrationPending,
   needsAppEntitlementRefresh,
@@ -144,6 +146,7 @@ export function AppEntitlementGate({
   const [seatRequestSubmitting, setSeatRequestSubmitting] = useState(false);
   const [seatRequestSent, setSeatRequestSent] = useState(false);
   const [seatRequestError, setSeatRequestError] = useState<string | null>(null);
+  const [isClaimingDevice, setIsClaimingDevice] = useState(false);
   const [devToken, setDevToken] = useState("");
   const [devSubmitting, setDevSubmitting] = useState(false);
   const [devError, setDevError] = useState<string | null>(null);
@@ -174,6 +177,8 @@ export function AppEntitlementGate({
   const needsRefresh = needsAppEntitlementRefresh(user);
   const enterpriseAccount = getEnterpriseAccount(user);
   const orgSeatAvailable = getOrgSeatAvailable(user);
+  const deviceLimitStatus = getDeviceLimitStatus(user);
+  const deviceLimitExceeded = isDeviceLimitExceeded(user);
   const isOnboardingRoute =
     typeof window !== "undefined" && window.location.pathname === "/onboarding";
 
@@ -292,6 +297,13 @@ export function AppEntitlementGate({
     !shouldGateForEnterpriseApp &&
     localPlanPolicy === "verified-free" &&
     Boolean(orgSeatAvailable);
+  const shouldGateForDeviceLimit =
+    !devBypass &&
+    !devLoginSkip &&
+    !isManagedDeployment &&
+    Boolean(user?.token) &&
+    !shouldGateForEnterpriseApp &&
+    deviceLimitExceeded;
   const shouldGateForEntitlement = shouldGateForUnknownConsumerPolicy;
   // Onboarding owns ordinary consumer sign-in and Enterprise-build auth.
   // Once build detection confirms this is the consumer app, however, a
@@ -308,6 +320,7 @@ export function AppEntitlementGate({
         ? !isManagedAuthenticated
         : shouldGateForEnterpriseApp ||
           shouldGateForOrgSeat ||
+          shouldGateForDeviceLimit ||
           shouldGateForConsumerLogin ||
           shouldGateForUnknownConsumerPolicy;
   const enterpriseAuthenticationPending =
@@ -365,9 +378,11 @@ export function AppEntitlementGate({
           ? "enterprise_app_required"
           : shouldGateForOrgSeat
             ? "org_seat_available"
-            : shouldGateForConsumerLogin
-              ? "consumer_login_required"
-              : "plan_verification_required",
+            : shouldGateForDeviceLimit
+              ? "device_limit_exceeded"
+              : shouldGateForConsumerLogin
+                ? "consumer_login_required"
+                : "plan_verification_required",
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
       // Diagnostics for the enterprise post-update loop (SCR-132).
@@ -379,7 +394,9 @@ export function AppEntitlementGate({
           ? "enterprise_app"
           : shouldGateForOrgSeat
             ? "org_seat"
-            : "entitlement",
+            : shouldGateForDeviceLimit
+              ? "device_limit"
+              : "entitlement",
     });
   }, [
     isSettingsLoaded,
@@ -389,6 +406,7 @@ export function AppEntitlementGate({
     shouldGateForUnknownConsumerPolicy,
     shouldGateForEnterpriseApp,
     shouldGateForOrgSeat,
+    shouldGateForDeviceLimit,
     isManagedDeployment,
     authenticationStatus,
     enterpriseAuthenticationPending,
@@ -499,6 +517,25 @@ export function AppEntitlementGate({
       setIsRefreshing(false);
     }
   }, [loadUser, user?.token]);
+
+  const claimThisDevice = useCallback(async () => {
+    const token = user?.token;
+    if (!token) return;
+    setIsClaimingDevice(true);
+    setRefreshError(null);
+    try {
+      await loadUser(token, false, { claimDevice: true });
+      posthog.capture("app_entitlement_device_claimed", {
+        plan: user?.subscription_plan ?? null,
+        limit: deviceLimitStatus?.limit ?? null,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "could not activate this device";
+      setRefreshError(message);
+    } finally {
+      setIsClaimingDevice(false);
+    }
+  }, [deviceLimitStatus?.limit, loadUser, user?.subscription_plan, user?.token]);
 
   const useDifferentAccount = useCallback(async () => {
     await updateSettings({ user: null as any });
@@ -975,6 +1012,50 @@ export function AppEntitlementGate({
           {(seatRequestError || refreshError) && (
             <p className="font-mono text-[11px] leading-5 text-destructive">
               {seatRequestError || refreshError}
+            </p>
+          )}
+        </div>
+        {devLoginBlock}
+      </EntitlementShell>
+    );
+  }
+
+  if (shouldGateForDeviceLimit) {
+    const deviceLimit = deviceLimitStatus?.limit ?? 1;
+    const deviceNoun = deviceLimit === 1 ? "active device" : "active devices";
+    return (
+      <EntitlementShell
+        title={ui("Device limit reached")}
+        description={ui(
+          "Your {value1} plan includes {value2} {value3}. Screenpipe is active on another device, so capture is paused here.",
+          { value1: planLabel, value2: String(deviceLimit), value3: deviceNoun },
+        )}
+      >
+        <div className="flex flex-col gap-3">
+          <Button onClick={openPricing} className="w-full gap-2">
+            <CreditCard className="h-4 w-4" />
+            {ui("Upgrade plan")}
+          </Button>
+          <Button
+            onClick={() => void claimThisDevice()}
+            variant="outline"
+            disabled={isClaimingDevice || isRefreshing}
+            className="w-full gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isClaimingDevice ? "animate-spin" : ""}`} />
+            {isClaimingDevice ? ui("Switching device…") : ui("Use this device instead")}
+          </Button>
+          <Button
+            onClick={() => void refreshUser()}
+            variant="ghost"
+            disabled={isRefreshing || isClaimingDevice}
+            className="w-full"
+          >
+            {isRefreshing ? ui("Checking…") : ui("Refresh status")}
+          </Button>
+          {refreshError && (
+            <p className="font-mono text-[11px] leading-5 text-destructive">
+              {refreshError}
             </p>
           )}
         </div>
