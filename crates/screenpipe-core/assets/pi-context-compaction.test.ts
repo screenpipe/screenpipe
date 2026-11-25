@@ -14,6 +14,7 @@ const install = process.env.SCREENPIPE_TEST_PI_DIR;
 if (!install) throw new Error("Run scripts/eval-pi-compaction.ts to use an isolated Pi runtime");
 const sdk = await import(pathToFileURL(join(install, "node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
 const { createAssistantMessageEventStream } = await import(pathToFileURL(join(install, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const { clampMaxTokensToContext } = await import(pathToFileURL(join(install, "node_modules/@earendil-works/pi-ai/dist/api/simple-options.js")).href);
 const roots: string[] = [];
 const sessions: any[] = [];
 afterEach(async () => {
@@ -375,3 +376,208 @@ test("failed chunked session compaction preserves restart history and can be ret
   await h.session.compact();
   expect(h.session.sessionManager.getBranch().some((entry: any) => entry.type === "compaction")).toBe(true);
 });
+
+async function lengthLoopHarness(options: {
+  enabled?: boolean;
+  seedHistory?: number;
+  maxGuardCalls?: number;
+  alwaysTruncateToolCall?: boolean;
+  fullBudgetTruncateCalls?: number;
+} = {}) {
+  const root = await mkdtemp(join(tmpdir(), "screenpipe-length-loop-"));
+  roots.push(root);
+  const modelDefinition = {
+    id: "test-32k", name: "test-32k", reasoning: false, input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 8192,
+  };
+  const runtime = await sdk.ModelRuntime.create({
+    authPath: join(root, "auth.json"), modelsPath: null,
+    modelsStorePath: join(root, "models-store.json"), refreshOnCreate: false, allowModelNetwork: false,
+  });
+  runtime.registerProvider("test", {
+    api: "openai-completions", baseUrl: "http://unused.invalid/v1", apiKey: "synthetic-key", models: [modelDefinition],
+  });
+  const settings = sdk.SettingsManager.inMemory({
+    compaction: { enabled: options.enabled ?? true },
+    retry: { enabled: false, maxRetries: 1, baseDelayMs: 1 },
+  });
+  const loader = new sdk.DefaultResourceLoader({
+    cwd: root, agentDir: root, settingsManager: settings,
+    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+    systemPromptOverride: () => "System context.",
+  });
+  await loader.reload();
+  const toolCalls: number[] = [];
+  const { session } = await sdk.createAgentSession({
+    cwd: root, agentDir: root, modelRuntime: runtime,
+    model: runtime.getModel("test", "test-32k"), settingsManager: settings, resourceLoader: loader,
+    thinkingLevel: "off", sessionManager: sdk.SessionManager.create(root, join(root, "sessions")), tools: ["lookup"],
+    customTools: [{
+      name: "lookup", label: "Lookup", description: "Retrieve a result",
+      parameters: { type: "object", properties: { step: { type: "number" } }, required: ["step"] },
+      execute: async (_id: string, args: { step: number }) => {
+        toolCalls.push(args.step);
+        return { content: [{ type: "text", text: `Lookup result ${args.step}.` }], details: {} };
+      },
+    }],
+  });
+  sessions.push(session);
+
+  let clock = Date.now() - 10_000;
+  // Seed prior turns below the 70% pre-prompt compaction threshold so the next
+  // user prompt (or tool result) pushes context past contextWindow - 4096 inside
+  // the active run, reproducing a 1M-window backend behind a smaller catalog window.
+  for (let i = 0; i < (options.seedHistory ?? 0); i++) {
+    const userMsg = { role: "user", content: [{ type: "text", text: `Turn ${i}: ` + "context ".repeat(500) }], timestamp: clock += 10 };
+    const assistantMsg = {
+      role: "assistant", provider: "test", model: "test-32k", api: "openai-completions",
+      content: [{ type: "text", text: `Answer ${i}: ` + "notes ".repeat(500) }], stopReason: "stop",
+      timestamp: clock += 10,
+      usage: { input: 2000 * (i + 1), output: 100, totalTokens: 2000 * (i + 1) + 100, cacheRead: 0, cacheWrite: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    session.sessionManager.appendMessage(userMsg);
+    session.sessionManager.appendMessage(assistantMsg);
+    session.agent.state.messages.push(userMsg, assistantMsg);
+  }
+
+  const events: any[] = [];
+  const calls: { summary: boolean; clampedMaxTokens: number; inputTokens: number; stopReason: string; outputTokens: number }[] = [];
+  session.subscribe((event: any) => events.push(event));
+
+  let modelCalls = 0;
+  let summaries = 0;
+  const maxGuardCalls = options.maxGuardCalls ?? 12;
+
+  session.agent.streamFunction = (model: any, context: any, requestOptions: any) => {
+    setSystemTime(new Date(clock += 100));
+    const stream = createAssistantMessageEventStream();
+    const summary = !context.tools?.length;
+    const clampedMaxTokens = clampMaxTokensToContext(model, context, requestOptions?.maxTokens ?? model.maxTokens);
+    const inputTokens = Math.ceil((context.systemPrompt?.length ?? 0) / 4)
+      + context.messages.reduce((n: number, m: any) => n + sdk.estimateTokens(m), 0);
+    // OpenAI enforces a 16-token minimum floor on clamped max_completion_tokens
+    // and accepts input above Pi's configured catalog window.
+    const effectiveLimit = Math.max(16, clampedMaxTokens);
+
+    let message: any = {
+      role: "assistant", provider: "test", model: "test-32k", api: "openai-completions",
+      content: [], stopReason: "stop", timestamp: Date.now(),
+      usage: { input: inputTokens, output: 32, totalTokens: inputTokens + 32, cacheRead: 0, cacheWrite: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    const finish = () => {
+      calls.push({ summary, clampedMaxTokens, inputTokens, stopReason: message.stopReason, outputTokens: message.usage.output });
+      stream.push(message.stopReason === "error" || message.stopReason === "aborted"
+        ? { type: "error", reason: message.stopReason, error: message }
+        : { type: "done", reason: message.stopReason, message });
+      stream.end(message);
+    };
+    if (requestOptions?.signal?.aborted) {
+      message = { ...message, stopReason: "aborted", errorMessage: "Aborted" };
+      finish();
+      return stream;
+    }
+    if (summary) {
+      summaries += 1;
+      message.content = [{ type: "text", text: "Compact summary of prior turns; continue the pending lookup." }];
+      finish();
+      return stream;
+    }
+
+    modelCalls += 1;
+    if (modelCalls > maxGuardCalls) {
+      // Safety valve so an infinite loop fails fast in tests instead of timing out.
+      message = { ...message, content: [{ type: "text", text: "GUARD_ABORTED_LOOP" }], stopReason: "stop" };
+      finish();
+      return stream;
+    }
+
+    const forceFullBudget = (options.fullBudgetTruncateCalls ?? 0) >= modelCalls;
+    const clampedToFloor = effectiveLimit <= 16;
+    if (options.alwaysTruncateToolCall || clampedToFloor || forceFullBudget) {
+      const outputTokens = forceFullBudget ? model.maxTokens : Math.min(16, effectiveLimit);
+      message.content = [{ type: "toolCall", id: `trunc-${modelCalls}`, name: "lookup", arguments: { step: 1 } }];
+      message.stopReason = "length";
+      message.usage = { ...message.usage, output: outputTokens, totalTokens: inputTokens + outputTokens };
+      finish();
+      return stream;
+    }
+
+    if (toolCalls.length === 0) {
+      message.content = [{ type: "toolCall", id: `lookup-${modelCalls}`, name: "lookup", arguments: { step: 1 } }];
+      message.stopReason = "toolUse";
+    } else {
+      message.content = [{ type: "text", text: "Research complete." }];
+      message.stopReason = "stop";
+    }
+    finish();
+    return stream;
+  };
+
+  return { session, toolCalls, events, calls, get summaries() { return summaries; }, get modelCalls() { return modelCalls; } };
+}
+
+test("compacts and recovers when a clamped 16-token floor truncates a tool call", async () => {
+  // 10 seeded turns sit at 20,100 tokens (< 70% pre-prompt compaction threshold).
+  // A 10,800-token user turn pushes total context past 32768 - 4096 = 28672, so
+  // clampMaxTokensToContext drops maxTokens to 1 and the backend rides its 16-token floor.
+  const h = await lengthLoopHarness({ seedHistory: 10 });
+  await h.session.prompt("Run lookup step 1 and report the result. " + "evidence ".repeat(4800));
+  expect(h.calls[0].clampedMaxTokens).toBe(1);
+  expect(h.calls[0].outputTokens).toBe(16);
+  expect(h.calls[0].stopReason).toBe("length");
+  expect(h.events.filter(e => e.type === "compaction_start")).toHaveLength(1);
+  expect(h.toolCalls).toEqual([1]);
+  expect(h.modelCalls).toBe(3); // 1 truncated -> compact -> 1 toolUse -> 1 final answer
+  expect(h.session.messages.at(-1).content[0].text).toBe("Research complete.");
+  expect(h.events.filter(e => e.type === "agent_start")).toHaveLength(1);
+  expect(h.events.filter(e => e.type === "agent_end")).toHaveLength(1);
+  expect(h.events.findIndex(e => e.type === "compaction_start")).toBeLessThan(h.events.findIndex(e => e.type === "agent_end"));
+}, 20000);
+
+test("stops cleanly when truncated tool calls cannot be compacted below the output floor", async () => {
+  // Compaction disabled: cannot shrink context, so retrying would repeat the 16-token loop forever.
+  const disabled = await lengthLoopHarness({ seedHistory: 10, enabled: false });
+  await disabled.session.prompt("Run lookup step 1. " + "evidence ".repeat(4800));
+  expect(disabled.calls[0].clampedMaxTokens).toBe(1);
+  expect(disabled.modelCalls).toBe(1);
+  expect(disabled.summaries).toBe(0);
+  expect(disabled.events.at(-1).type).toBe("agent_settled");
+
+  // Single oversized initial message with no prior history to cut (prepareCompaction returns undefined).
+  const uncompactable = await lengthLoopHarness({ seedHistory: 0, enabled: true });
+  await uncompactable.session.prompt("Oversized single turn: " + "payload ".repeat(16000));
+  expect(uncompactable.calls[0].clampedMaxTokens).toBe(1);
+  expect(uncompactable.modelCalls).toBe(1);
+  expect(uncompactable.summaries).toBe(0);
+  expect(uncompactable.events.at(-1).type).toBe("agent_settled");
+}, 20000);
+
+test("stops cleanly after one compaction retry if truncated tool calls persist", async () => {
+  const h = await lengthLoopHarness({ seedHistory: 10, alwaysTruncateToolCall: true });
+  await h.session.prompt("Run lookup step 1. " + "evidence ".repeat(4800));
+  expect(h.calls[0].clampedMaxTokens).toBe(1);
+  expect(h.events.filter(e => e.type === "compaction_start")).toHaveLength(1);
+  expect(h.modelCalls).toBe(2);
+  // Overflow recovery failure should be emitted once, never duplicated by post-run handling.
+  expect(h.events.filter(e => e.type === "compaction_end" && e.errorMessage)).toHaveLength(1);
+  expect(h.events.at(-1).type).toBe("agent_settled");
+}, 20000);
+
+test("allows one retry for a full-budget truncated tool call and stops if it repeats", async () => {
+  // Small context + full maxTokens truncation once: model recovers on retry without compaction.
+  const recovers = await lengthLoopHarness({ seedHistory: 0, fullBudgetTruncateCalls: 1 });
+  await recovers.session.prompt("Run lookup step 1.");
+  expect(recovers.summaries).toBe(0);
+  expect(recovers.toolCalls).toEqual([1]);
+  expect(recovers.modelCalls).toBe(3);
+  expect(recovers.session.messages.at(-1).content[0].text).toBe("Research complete.");
+
+  // If the model still emits truncated tool calls on retry, stop after 2 calls instead of spinning.
+  const stuck = await lengthLoopHarness({ seedHistory: 0, fullBudgetTruncateCalls: 10 });
+  await stuck.session.prompt("Run lookup step 1.");
+  expect(stuck.summaries).toBe(0);
+  expect(stuck.modelCalls).toBe(2);
+  expect(stuck.events.at(-1).type).toBe("agent_settled");
+}, 20000);
