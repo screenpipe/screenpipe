@@ -594,6 +594,34 @@ pub(crate) async fn stop_capture_with_reason(
     Ok(())
 }
 
+/// Stop the indexed capture writers, not the authorized source recorder.
+pub(crate) async fn keep_raw_capture_on_low_disk(
+    state: &RecordingState,
+    app: &tauri::AppHandle,
+) -> Result<bool, String> {
+    if !screenpipe_core::raw_capture_ledger::is_enabled() {
+        return Ok(false);
+    }
+    let mut slot = state.capture.lock().await;
+    if !state.capture_intended() {
+        return Ok(false);
+    }
+    let Some(session) = slot.as_ref() else { return Ok(false) };
+    if session.runs_without_database() {
+        return Ok(true);
+    }
+    let config = build_config(app)?;
+    if let Some(session) = slot.take() {
+        session.stop_checked_with_reason("local_history_disk_pressure").await?;
+    }
+    if !state.capture_intended() {
+        return Ok(false);
+    }
+    let session = CaptureSession::start_without_database(app, &config).await?;
+    install_capture_session(&mut slot, session);
+    Ok(true)
+}
+
 /// Whether capture is currently paused. Reads `capture_intended` which is
 /// flipped immediately in stop_capture/start_capture — no health-monitor
 /// delay. The frontend polls this so the UI stays in sync with the tray.
@@ -1177,9 +1205,8 @@ pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
                                         );
                                     }
                                     spawn_screenpipe_inner(&state, app.clone()).await?;
-                                    let server_running = state.server.lock().await.is_some();
                                     let capture_running = state.capture.lock().await.is_some();
-                                    if allowed() && (!server_running || !capture_running) {
+                                    if allowed() && !capture_running {
                                         return Err("native startup completed without an active capture session".into());
                                     }
                                     Ok(())
@@ -1506,9 +1533,15 @@ async fn spawn_screenpipe_after_migration(
     }
 
     // --- Full start: server + capture ---
-    // Stop any existing capture first (self-contained, no server lock needed)
-    if let Some(session) = state.capture.lock().await.take() {
-        session.stop_with_reason("session_replaced").await;
+    // A retry of derived database startup must not interrupt the native
+    // session that is already recording without it.
+    {
+        let mut slot = state.capture.lock().await;
+        if slot.as_ref().is_some_and(|session| !session.runs_without_database()) {
+            if let Some(session) = slot.take() {
+                session.stop_with_reason("session_replaced").await;
+            }
+        }
     }
     // Shutdown existing server if any
     if let Err(error) = shutdown_server(
@@ -1727,7 +1760,7 @@ async fn spawn_screenpipe_after_migration(
     }));
 
     // Oneshot for result
-    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<bool, String>>();
 
     let app_for_capture = app.clone();
     // Spawn dedicated thread with its own runtime
@@ -1751,7 +1784,39 @@ async fn spawn_screenpipe_after_migration(
 
             server_runtime.block_on(async move {
                 let (runtime_lifetime, runtime_finished) = tokio::sync::oneshot::channel();
-                // Phase 1: Start server
+                // Enterprise source capture precedes the derived database. It
+                // uses the normal recording intent and native permissions.
+                let mut early_shutdown = None;
+                if cfg!(feature = "enterprise-build") && crate::app_mode::is_managed(&app_for_capture) {
+                    let mut slot = capture_arc.lock().await;
+                    if capture_intended_now(&wants_recording) && slot.is_none() {
+                        match CaptureSession::start_without_database(&app_for_capture, &recording_config).await {
+                            Ok(mut capture) => {
+                                early_shutdown = Some(capture.hold_runtime_until_stopped());
+                                install_capture_session(&mut slot, capture);
+                            }
+                            Err(error) => warn!(%error, "could not start capture before SQLite"),
+                        }
+                    }
+                }
+
+                // The history reserve does not apply to the raw spool. Do not
+                // open or reattach history while an authorized raw session is running below it.
+                if crate::disk_pressure_notifications::guard_enabled(&app_for_capture)
+                    && screenpipe_core::raw_capture_ledger::is_enabled()
+                    && capture_arc.lock().await.as_ref().is_some_and(CaptureSession::runs_without_database)
+                    && screenpipe_engine::disk_pressure::available_space_for_path(&recording_config.data_dir)
+                        .is_some_and(|available| available <= screenpipe_events::LOW_DISK_THRESHOLD_BYTES)
+                {
+                    info!("local history deferred at its disk reserve; raw capture continues");
+                    let _ = result_tx.send(Ok(false));
+                    if let Some(shutdown) = early_shutdown {
+                        let _ = shutdown.await;
+                    }
+                    return;
+                }
+
+                // The HTTP server and its derived database initialize after capture.
                 let server = match ServerCore::start(
                     &recording_config,
                     on_pipe_output,
@@ -1772,6 +1837,16 @@ async fn spawn_screenpipe_after_migration(
                                 &app_for_port_conflict,
                                 recording_config.port,
                             );
+                        }
+                        let recording_without_database = capture_arc.lock().await.as_ref()
+                            .is_some_and(CaptureSession::runs_without_database);
+                        if recording_without_database {
+                            let _ = result_tx.send(Ok(false));
+                            // If this thread started capture, it owns its runtime.
+                            if let Some(shutdown) = early_shutdown {
+                                let _ = shutdown.await;
+                            }
+                            return;
                         }
                         let _ = result_tx.send(Err(e));
                         return;
@@ -1795,6 +1870,11 @@ async fn spawn_screenpipe_after_migration(
                 // so a stop racing a full server spawn either prevents capture
                 // from starting or waits and then tears down the new session.
                 let mut capture_guard = capture_arc.lock().await;
+                if capture_guard.as_ref().is_some_and(CaptureSession::runs_without_database) {
+                    if let Some(capture) = capture_guard.take() {
+                        capture.stop_with_reason("derived_database_ready").await;
+                    }
+                }
                 let capture = if capture_intended_now(&wants_recording) {
                     match CaptureSession::start(
                         &app_for_capture,
@@ -1834,7 +1914,7 @@ async fn spawn_screenpipe_after_migration(
                     info!("Server started with capture deliberately stopped");
                 }
                 drop(capture_guard);
-                let _ = result_tx.send(Ok(()));
+                let _ = result_tx.send(Ok(true));
 
                 // The core owns the sender through shutdown. The shared slot
                 // can be empty while database readers and pools are draining.
@@ -1845,7 +1925,13 @@ async fn spawn_screenpipe_after_migration(
         .map_err(|e| format!("Failed to spawn server thread: {}", e))?;
 
     match result_rx.await {
-        Ok(Ok(())) => {
+        Ok(Ok(false)) => {
+            info!("Capture is running without the derived database");
+            state.is_starting.store(false, Ordering::SeqCst);
+            state.is_starting_capture.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+        Ok(Ok(true)) => {
             info!("Screenpipe started successfully");
             crate::db_relaunch::reset_db_boot_failures();
             recovery_log::append(

@@ -117,7 +117,7 @@ pub(crate) struct MonitorLivenessSnapshot {
 /// Manages vision recording across multiple monitors with dynamic detection
 pub struct VisionManager {
     config: VisionManagerConfig,
-    db: Arc<DatabaseManager>,
+    db: Option<Arc<DatabaseManager>>,
     vision_handle: Handle,
     status: Arc<RwLock<VisionManagerStatus>>,
     /// Map of monitor_id -> JoinHandle
@@ -204,6 +204,16 @@ impl VisionManager {
         db: Arc<DatabaseManager>,
         vision_handle: Handle,
     ) -> Self {
+        Self::new_with_optional_db(config, Some(db), vision_handle)
+    }
+
+    /// `None` runs native capture with the configured raw ledger and without SQLite projections.
+    pub fn new_with_optional_db(
+        config: VisionManagerConfig,
+        db: Option<Arc<DatabaseManager>>,
+        runtime_handle: Handle,
+    ) -> Self {
+        let vision_handle = runtime_handle;
         // Single broadcast channel shared across all monitors + UI recorder.
         let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(
             crate::event_driven_capture::TRIGGER_CHANNEL_BUFFER,
@@ -215,7 +225,7 @@ impl VisionManager {
         // VisionManager.
         let (linker_tx, linker_rx) = linker_channel();
         let linker_stop = Arc::new(AtomicBool::new(false));
-        {
+        if let Some(db) = &db {
             let _guard = vision_handle.enter();
             spawn_frame_linker(db.clone(), linker_rx, linker_stop.clone());
         }
@@ -231,15 +241,18 @@ impl VisionManager {
             FocusAwareController::new(tracker)
         };
 
-        let semantic_tx = (config.enable_semantic_context
-            && config.semantic_context_mode.includes_memory())
-        .then(|| {
-            spawn_semantic_projection_worker(
-                db.clone(),
-                &vision_handle,
-                config.semantic_context_mode,
-            )
-        });
+        let semantic_tx = db
+            .as_ref()
+            .filter(|_| {
+                config.enable_semantic_context && config.semantic_context_mode.includes_memory()
+            })
+            .map(|db| {
+                spawn_semantic_projection_worker(
+                    db.clone(),
+                    &vision_handle,
+                    config.semantic_context_mode,
+                )
+            });
 
         Self {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -765,21 +778,21 @@ impl VisionManager {
         });
         let monitor = Arc::new(monitor);
         let vision_metrics = self.config.vision_metrics.clone();
-        let hot_frame_cache = self.hot_frame_cache.clone();
+        let hot_frame_cache = db.as_ref().and(self.hot_frame_cache.clone());
         let use_pii_removal = self.config.use_pii_removal;
         let pause_on_drm_content = self.config.pause_on_drm_content;
         let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
         let recording_detail = self.config.recording_detail.clone();
         let focus_controller = self.focus_controller.clone();
-        let linker_tx = Some(self.linker_tx.clone());
+        let linker_tx = db.as_ref().map(|_| self.linker_tx.clone());
         let high_fps_controller = self.high_fps_controller.clone();
         let semantic_tx = self.semantic_tx.clone();
 
         // Spawn the decoupled high-fps HD recorder only when screen pixels are
         // enabled. Otherwise an active meeting could open its own OS capture
         // stream despite `disableScreenshots`.
-        if !self.config.disable_screenshots {
+        if let Some(db) = db.as_ref().filter(|_| !self.config.disable_screenshots) {
             let hd_config = crate::hd_recorder::HdRecorderConfig {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
@@ -792,7 +805,7 @@ impl VisionManager {
             let hd_handle = self
                 .vision_handle
                 .spawn(crate::hd_recorder::hd_recorder_loop(
-                    self.db.clone(),
+                    db.clone(),
                     monitor.clone(),
                     monitor_id,
                     device_name.clone(),
@@ -895,7 +908,7 @@ impl VisionManager {
     /// Removes dead tasks (finished JoinHandles) so MonitorWatcher can restart them.
     /// DB handle for sibling vision_manager modules (the monitor watcher
     /// persists display-layout snapshots). Cheap Arc clone.
-    pub(crate) fn db_handle(&self) -> Arc<DatabaseManager> {
+    pub(crate) fn db_handle(&self) -> Option<Arc<DatabaseManager>> {
         self.db.clone()
     }
 
@@ -1158,7 +1171,7 @@ mod tests {
         vm.config.semantic_context_mode = SemanticContextMode::ComputerUse;
         let db = vm.db.clone();
         let config = vm.config.clone();
-        let automation_vm = VisionManager::new(config, db, Handle::current());
+        let automation_vm = VisionManager::new_with_optional_db(config, db, Handle::current());
         assert!(automation_vm.semantic_tx.is_none());
         assert!(automation_vm.prefers_computer_use_context());
     }
