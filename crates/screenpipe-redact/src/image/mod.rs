@@ -87,6 +87,21 @@ pub trait ImageRedactor: Send + Sync {
     /// Run inference on a single image at `image_path`. Returns the
     /// detected regions in pixel space. Empty vector = no PII found.
     async fn detect(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError>;
+
+    /// Run inference on `image_path` with optional text-free OS accessibility
+    /// nodes (`ax_nodes`) for V4 role/context fusion (`RfdetrRedactor` locally
+    /// and `TinfoilImageRedactor` on the CPU enclave).
+    ///
+    /// Defaults to ignoring `ax_nodes` and calling [`Self::detect`] so custom
+    /// or test implementors stay source-compatible.
+    async fn detect_with_a11y(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+    ) -> Result<Vec<ImageRegion>, RedactError> {
+        let _ = ax_nodes;
+        self.detect(image_path).await
+    }
 }
 
 /// Per-label allow-list + score floor for what actually gets blacked

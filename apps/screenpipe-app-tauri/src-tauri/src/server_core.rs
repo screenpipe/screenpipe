@@ -1189,7 +1189,7 @@ impl ServerCore {
         // The single `pii_backend` config flag selects the inner
         // adapter for BOTH modalities:
         //   - "local"   → on-device ONNX models for both text and image
-        //   - "tinfoil" → confidential-compute enclave (H200) for both
+        //   - "tinfoil" → confidential-compute CPU enclave (`cpus: 8, gpus: 0`) for both
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
 

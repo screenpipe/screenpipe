@@ -57,9 +57,10 @@ use crate::{RedactError, SpanLabel};
 
 const DEFAULT_ENCLAVE: &str = "pii.screenpipe.containers.tinfoil.dev";
 const DEFAULT_REPO: &str = "screenpipe/privacy-filter";
-// Image inference is faster than text on the enclave (single forward
-// pass per frame, no per-row tokenization) — but allow generous
-// headroom for first-call cold-start + larger payloads.
+// Tinfoil's privacy enclave runs CPU-only (`cpus: 8, gpus: 0`, ORT_NUM_THREADS=4,
+// `IMAGE_MAX_CONCURRENCY=2`). A 5-tile desktop pass + V4 role fusion takes
+// ~1.8–2.8 s on 4–8 EPYC vCPUs; 30 s leaves >10× headroom for cold-start
+// attestation and concurrent queueing.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const TINFOIL_IMAGE_NAME: &str = "tinfoil_image";
 pub(crate) const TINFOIL_IMAGE_VERSION: u32 = 1;
@@ -251,6 +252,11 @@ struct DetectRequest<'a> {
     /// regions for these classes. Sent only when non-empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     labels: &'a Vec<String>,
+    /// Optional strictly text-free OS accessibility nodes for V4 role/context
+    /// fusion (`role_fusion.py` inside the Tinfoil enclave). Omitted when
+    /// absent or empty; ignored cleanly by older enclave builds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ax_nodes: Option<&'a [crate::a11y_context::AxNode]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,10 +282,19 @@ impl ImageRedactor for TinfoilImageRedactor {
     }
 
     async fn detect(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+        self.detect_with_a11y(image_path, None).await
+    }
+
+    async fn detect_with_a11y(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+    ) -> Result<Vec<ImageRegion>, RedactError> {
         let bytes = tokio::fs::read(image_path)
             .await
             .map_err(|e| RedactError::Runtime(format!("read {}: {e}", image_path.display())))?;
         let image_b64 = B64.encode(&bytes);
+        let ax_nodes = ax_nodes.filter(|nodes| !nodes.is_empty());
 
         let http = self.http().await?;
         let mut req = http
@@ -289,6 +304,7 @@ impl ImageRedactor for TinfoilImageRedactor {
                 image_b64: &image_b64,
                 threshold: self.threshold,
                 labels: &self.labels,
+                ax_nodes,
             });
         if let Some(b) = &self.bearer {
             req = req.header(AUTHORIZATION, b.clone());
@@ -422,5 +438,33 @@ mod tests {
         let r = TinfoilImageRedactor::new(cfg());
         let res = r.detect(std::path::Path::new("/nonexistent.jpg")).await;
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn detect_request_omits_empty_ax_and_strips_raw_text_when_present() {
+        let labels = vec!["secret".to_string()];
+        let no_ax = serde_json::to_string(&DetectRequest {
+            image_b64: "YWJj",
+            threshold: 0.30,
+            labels: &labels,
+            ax_nodes: None,
+        })
+        .unwrap();
+        assert!(!no_ax.contains("ax_nodes"));
+
+        let nodes = crate::a11y_context::extract_text_free_ax_nodes(
+            r#"[{"role":"AXTextField","depth":1,"value":"sk-live-secret-999","placeholder":"API token","bounds":{"left":0.2,"top":0.3,"width":0.4,"height":0.05}}]"#,
+        );
+        let with_ax = serde_json::to_string(&DetectRequest {
+            image_b64: "YWJj",
+            threshold: 0.30,
+            labels: &labels,
+            ax_nodes: Some(&nodes),
+        })
+        .unwrap();
+        assert!(with_ax.contains("\"ax_nodes\""));
+        assert!(with_ax.contains("\"has_cred_hint\":true"));
+        assert!(!with_ax.contains("sk-live-secret-999"));
+        assert!(!with_ax.contains("API token"));
     }
 }

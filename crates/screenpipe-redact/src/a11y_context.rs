@@ -13,6 +13,7 @@
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{ImageRegion, RedactedSpan, SpanLabel};
@@ -20,13 +21,44 @@ use crate::{ImageRegion, RedactedSpan, SpanLabel};
 const MAX_CONTEXT_VALUE_BYTES: usize = 4096;
 const MAX_CONTEXT_BYTES: usize = 16 * 1024;
 const MAX_CONTEXT_FIELDS: usize = 32;
+pub const MAX_TEXT_FREE_AX_NODES: usize = 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct NormalizedBounds {
     pub left: f32,
     pub top: f32,
     pub width: f32,
     pub height: f32,
+}
+
+/// Strictly text-free OS accessibility node metadata for V4 image role/context
+/// fusion (`RfdetrRedactor` locally and `TinfoilImageRedactor` over HTTPS).
+///
+/// Raw strings (`text`, `value`, `placeholder`, `help_text`, `url`) are never
+/// stored here — credential hints are collapsed to the single boolean
+/// `has_cred_hint` on extraction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AxNode {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subrole: Option<String>,
+    pub landmark: String,
+    pub depth: u32,
+    pub parent_idx: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<NormalizedBounds>,
+    #[serde(default)]
+    pub is_editable: bool,
+    #[serde(default)]
+    pub is_focused: bool,
+    #[serde(default)]
+    pub is_selected: bool,
+    #[serde(default)]
+    pub is_password: bool,
+    #[serde(default)]
+    pub is_keyboard_focusable: bool,
+    #[serde(default)]
+    pub has_cred_hint: bool,
 }
 
 impl NormalizedBounds {
@@ -394,10 +426,13 @@ fn looks_credential_label(label: &str) -> bool {
         "passphrase",
         "api key",
         "api_key",
+        "api token",
         "access token",
         "auth token",
+        "bearer token",
         "refresh token",
         "client secret",
+        "secret key",
         "private key",
         "credential",
     ]
@@ -464,6 +499,187 @@ fn sanitize_metadata(value: &str) -> String {
         })
         .take(256)
         .collect()
+}
+
+fn infer_landmark_tag(role: &str, subrole: &str) -> Option<&'static str> {
+    let rl = role.trim().to_ascii_lowercase();
+    let sr = subrole.trim().to_ascii_lowercase();
+    if sr.contains("navigation") || matches!(rl.as_str(), "navigation" | "axnavigation") {
+        Some("nav")
+    } else if sr.contains("toolbar")
+        || sr.contains("banner")
+        || matches!(rl.as_str(), "toolbar" | "axtoolbar")
+    {
+        Some("toolbar")
+    } else if sr.contains("complementary")
+        || sr.contains("sidebar")
+        || matches!(rl.as_str(), "complementary" | "axcomplementary")
+    {
+        Some("sidebar")
+    } else if matches!(
+        rl.as_str(),
+        "table"
+            | "axtable"
+            | "row"
+            | "listitem"
+            | "axrow"
+            | "columnheader"
+            | "axcolumnheader"
+            | "cell"
+            | "dataitem"
+            | "gridcell"
+            | "axcell"
+    ) {
+        Some("table")
+    } else if sr.contains("code") || matches!(rl.as_str(), "code" | "axcodeblock") {
+        Some("code")
+    } else if sr.contains("article") || matches!(rl.as_str(), "article" | "axarticle") {
+        Some("article")
+    } else if sr.contains("main") || matches!(rl.as_str(), "main" | "document" | "axmain") {
+        Some("main")
+    } else {
+        None
+    }
+}
+
+fn is_valid_landmark(lm: &str) -> bool {
+    matches!(
+        lm,
+        "root" | "toolbar" | "nav" | "sidebar" | "main" | "table" | "article" | "code"
+    )
+}
+
+/// Parse `frames.accessibility_tree_json` into strictly text-free [`AxNode`]s
+/// for V4 image role/context fusion (`local` ONNX and `tinfoil` HTTPS).
+///
+/// Reconstructs `parent_idx` and inherited `landmark` tags from pre-order
+/// `depth` walks (`AccessibilityTreeNode`) while preserving explicit
+/// `parent_idx` / `landmark` fields when already present.
+pub fn extract_text_free_ax_nodes(blob: &str) -> Vec<AxNode> {
+    let Ok(root) = serde_json::from_str::<Value>(blob) else {
+        return Vec::new();
+    };
+    let mut flat_objs: Vec<(&serde_json::Map<String, Value>, u32)> = Vec::new();
+    fn flatten<'a>(
+        v: &'a Value,
+        fallback_depth: u32,
+        out: &mut Vec<(&'a serde_json::Map<String, Value>, u32)>,
+    ) {
+        if out.len() >= MAX_TEXT_FREE_AX_NODES {
+            return;
+        }
+        match v {
+            Value::Array(items) => {
+                for item in items {
+                    flatten(item, fallback_depth, out);
+                    if out.len() >= MAX_TEXT_FREE_AX_NODES {
+                        break;
+                    }
+                }
+            }
+            Value::Object(obj) => {
+                let depth = obj
+                    .get("depth")
+                    .and_then(Value::as_u64)
+                    .map(|d| d as u32)
+                    .unwrap_or(fallback_depth);
+                if obj.contains_key("role") {
+                    out.push((obj, depth));
+                }
+                if let Some(Value::Array(children)) = obj.get("children") {
+                    for child in children {
+                        flatten(child, depth.saturating_add(1), out);
+                        if out.len() >= MAX_TEXT_FREE_AX_NODES {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    flatten(&root, 0, &mut flat_objs);
+
+    let mut out: Vec<AxNode> = Vec::with_capacity(flat_objs.len());
+    // Stack of (depth, emitted_index, raw_index, inherited_landmark)
+    let mut stack: Vec<(u32, i32, i32, String)> = Vec::new();
+
+    for (raw_idx, (obj, depth)) in flat_objs.into_iter().enumerate() {
+        if obj.get("on_screen").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        while let Some(&(top_depth, _, _, _)) = stack.last() {
+            if top_depth >= depth {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+
+        let explicit_parent = obj
+            .get("parent_idx")
+            .and_then(Value::as_i64)
+            .map(|p| p as i32);
+        let parent_idx = explicit_parent.unwrap_or_else(|| {
+            stack
+                .last()
+                .map(|&(_, emitted_idx, _, _)| emitted_idx)
+                .unwrap_or(-1)
+        });
+
+        let role = obj
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("AXGroup")
+            .to_string();
+        let subrole = obj
+            .get("subrole")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+
+        let landmark = if let Some(lm) = obj
+            .get("landmark")
+            .and_then(Value::as_str)
+            .filter(|s| is_valid_landmark(s))
+        {
+            lm.to_string()
+        } else if let Some(inferred) = infer_landmark_tag(&role, subrole.as_deref().unwrap_or("")) {
+            inferred.to_string()
+        } else {
+            stack
+                .last()
+                .map(|(_, _, _, lm)| lm.clone())
+                .unwrap_or_else(|| "root".to_string())
+        };
+
+        let is_editable = obj.get("is_editable").and_then(Value::as_bool) == Some(true)
+            || is_editable_node(&role, obj);
+        let is_password =
+            obj.get("is_password").and_then(Value::as_bool) == Some(true) || role_is_secure(&role);
+        let has_cred_hint = obj.get("has_cred_hint").and_then(Value::as_bool) == Some(true)
+            || looks_credential_label(&metadata_hint(obj));
+
+        let emitted_idx = out.len() as i32;
+        stack.push((depth, emitted_idx, raw_idx as i32, landmark.clone()));
+
+        out.push(AxNode {
+            role,
+            subrole,
+            landmark,
+            depth,
+            parent_idx,
+            bounds: obj.get("bounds").and_then(NormalizedBounds::from_value),
+            is_editable,
+            is_focused: obj.get("is_focused").and_then(Value::as_bool) == Some(true),
+            is_selected: obj.get("is_selected").and_then(Value::as_bool) == Some(true),
+            is_password,
+            is_keyboard_focusable: obj.get("is_keyboard_focusable").and_then(Value::as_bool)
+                == Some(true),
+            has_cred_hint,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
