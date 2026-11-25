@@ -30,12 +30,17 @@ export function workflowIndex(workflow: any) {
 
 export default function (pi: ExtensionAPI) {
   const task = process.env.SCREENPIPE_PIPE_NAME || "";
+  const tool = workflowWorkspaceTool(task);
+  if (tool) pi.registerTool(tool);
+}
+
+export function workflowWorkspaceTool(task: string, fileSnapshots = true) {
   if (!tasks.includes(task)) return;
   const actions = ["context", "checkpoint", "handoff", "finish"];
   if (task === "workflow-discover") actions.push("start", "propose");
   if (task === "workflow-maintain") actions.push("propose");
   if (task === "workflow-review") actions.push("reject", "publish");
-  pi.registerTool({
+  return {
     name: "workflow_workspace",
     label: "Workflow drafts",
     description: "Read shared drafts and durable review decisions, hand a draft to another workflow agent, publish a reviewed draft, or finish your work. Research uses the normal Screenpipe tools and skill. Use checkpoint to replace your unfinished research note (up to 8000 characters) without finishing the role or advancing coverage. Read it from context on resume. All writes return a durable receipt and remaining work. A draft save is not cycle completion; Review calls finish when remaining.canFinish is true. On conflict, reread context and reconsider before retrying. Publishing requires Review to first inspect original recorder evidence with normal Screenpipe tools, then supply a catalog_revision from context, and an assigned draft matching the catalog output contract.",
@@ -128,7 +133,7 @@ export default function (pi: ExtensionAPI) {
         // Use the existing snapshot path before the smallest supported
         // transport's 8K text boundary can cut JSON in the middle. Preserve the
         // full context for both modes, without choosing what the agent reads.
-        if (text.length > 8_000) {
+        if (fileSnapshots && text.length > 8_000) {
           // Preserve the exact snapshot. The normal read tool supports bounded
           // reads; a truncated preview is never a substitute for agent context.
           const path = join(process.cwd(),`.workflow-context-${randomUUID()}.json`);
@@ -142,5 +147,5 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`Workflow operation failed: ${error.message}`);
       }
     },
-  });
+  };
 }

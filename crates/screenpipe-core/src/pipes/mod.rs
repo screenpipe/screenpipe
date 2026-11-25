@@ -25,6 +25,7 @@ use crate::agents::{
     },
     cloud::CloudAgentConfig,
     pi::{pi_event_protocol_error, pi_package_enabled, PiExecutor},
+    workflow_mastra::{self, WorkflowMastraExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::builtin_migrations::migrate_builtin_pipe_text;
@@ -2995,6 +2996,23 @@ async fn setup_pipe_permissions(
     }
 }
 
+fn mastra_workflow_preset(
+    config: &PipeConfig,
+    executors: &HashMap<String, Arc<dyn AgentExecutor>>,
+) -> Option<ResolvedPreset> {
+    if config.agent != "pi"
+        || config.run_in.is_some()
+        || is_enterprise_managed(config)
+        || !crate::workflows::workspace::is_task(&config.name)
+        || !executors.contains_key(workflow_mastra::AGENT)
+    {
+        return None;
+    }
+    // Pi handles other preset transports and reports any invalid saved choice.
+    let preset = crate::workflows::model_choice::selected_provider().ok()?;
+    matches!(preset.provider.as_deref(), Some("screenpipe" | "ollama")).then_some(preset)
+}
+
 fn event_runs_are_read_only(config: &PipeConfig) -> bool {
     config
         .config
@@ -3101,10 +3119,17 @@ pub struct PipeManager {
 impl PipeManager {
     pub fn new(
         pipes_dir: PathBuf,
-        executors: HashMap<String, Arc<dyn AgentExecutor>>,
+        mut executors: HashMap<String, Arc<dyn AgentExecutor>>,
         store: Option<Arc<dyn PipeStore>>,
         api_port: u16,
     ) -> Self {
+        if let Some(executor) = executors
+            .get("pi")
+            .cloned()
+            .and_then(WorkflowMastraExecutor::from_env)
+        {
+            executors.insert(workflow_mastra::AGENT.to_string(), Arc::new(executor));
+        }
         // Initialize fallback registry from the screenpipe data dir
         let screenpipe_dir = pipes_dir.parent().unwrap_or(&pipes_dir);
         let registry = Arc::new(preset_fallback::PresetFallbackRegistry::new(screenpipe_dir));
@@ -4172,7 +4197,17 @@ impl PipeManager {
             preset_prompt,
             run_agent,
             run_executor_config,
-        ) = if let Some(chat_config) = existing_chat_executor_config(&config) {
+        ) = if let Some(preset) = mastra_workflow_preset(&config, &self.executors) {
+            (
+                preset.model,
+                preset.provider,
+                preset.url,
+                None,
+                preset.prompt,
+                workflow_mastra::AGENT.to_string(),
+                None,
+            )
+        } else if let Some(chat_config) = existing_chat_executor_config(&config) {
             (
                 "existing chat".to_string(),
                 None,
@@ -4398,7 +4433,7 @@ impl PipeManager {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
         }
-        if matches!(run_agent.as_str(), "pi" | "acp") {
+        if matches!(run_agent.as_str(), "pi" | "acp" | workflow_mastra::AGENT) {
             pipe_token = setup_pipe_permissions(
                 &pipe_dir,
                 &config,
@@ -4810,7 +4845,19 @@ impl PipeManager {
                 active_preset_idx,
                 run_agent,
                 run_executor_config,
-            ) = if let Some(chat_config) = existing_chat_executor_config(&config) {
+            ) = if let Some(preset) = mastra_workflow_preset(&config, &self.executors) {
+                (
+                    preset.model,
+                    preset.provider,
+                    preset.url,
+                    None,
+                    preset.prompt,
+                    None,
+                    None,
+                    workflow_mastra::AGENT.to_string(),
+                    None,
+                )
+            } else if let Some(chat_config) = existing_chat_executor_config(&config) {
                 (
                     "existing chat".to_string(),
                     None,
@@ -5087,7 +5134,7 @@ impl PipeManager {
                     warn!("failed to pre-configure pi provider: {}", e);
                 }
             }
-            if matches!(run_agent.as_str(), "pi" | "acp") {
+            if matches!(run_agent.as_str(), "pi" | "acp" | workflow_mastra::AGENT) {
                 pipe_token = setup_pipe_permissions(
                     &self.pipes_dir.join(name),
                     &config,
@@ -6649,7 +6696,19 @@ impl PipeManager {
                         executor_config,
                         active_preset_id,
                         active_preset_idx,
-                    ) = if let Some(chat_config) = existing_chat_executor_config(config) {
+                    ) = if let Some(preset) = mastra_workflow_preset(config, &executors) {
+                        (
+                            preset.model,
+                            preset.provider,
+                            preset.url,
+                            None,
+                            preset.prompt,
+                            workflow_mastra::AGENT.to_string(),
+                            None,
+                            None,
+                            None,
+                        )
+                    } else if let Some(chat_config) = existing_chat_executor_config(config) {
                         (
                             "existing chat".to_string(),
                             None,
@@ -6924,7 +6983,7 @@ impl PipeManager {
                             warn!("scheduler: failed to pre-configure pi provider: {}", e);
                         }
                     }
-                    if matches!(run_agent.as_str(), "pi" | "acp") {
+                    if matches!(run_agent.as_str(), "pi" | "acp" | workflow_mastra::AGENT) {
                         pipe_token = setup_pipe_permissions(
                             &pipes_dir.join(name),
                             config,
