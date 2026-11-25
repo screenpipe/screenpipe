@@ -1914,7 +1914,8 @@ jobs:
   enterprise-start:
     name: Mark enterprise artifacts pending
     needs: [check_commit, localization, publish-tauri]
-    # Enterprise recovery intentionally skips the consumer matrix.
+    # Enterprise recovery intentionally skips the consumer matrix. Each
+    # Enterprise build gates on this job instead of implicit ancestor success.
     if: >-
       !cancelled() && needs.check_commit.result == 'success' &&
       needs.localization.result == 'success' &&
@@ -1944,6 +1945,7 @@ jobs:
   # ─── Windows x64 ──────────────────────────────────────────────────────────
   release-enterprise-windows:
     needs: [check_commit, localization, enterprise-start]
+    if: "!cancelled() && needs.enterprise-start.result == 'success'"
     permissions:
       contents: read
       actions: read
@@ -2454,6 +2456,7 @@ jobs:
   # ─── Linux x64 ────────────────────────────────────────────────────────────
   release-enterprise-linux:
     needs: [check_commit, localization, enterprise-start]
+    if: "!cancelled() && needs.enterprise-start.result == 'success'"
     permissions:
       contents: read
       actions: read
@@ -2777,6 +2780,7 @@ jobs:
   # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
   release-enterprise-macos:
     needs: [check_commit, localization, enterprise-start]
+    if: "!cancelled() && needs.enterprise-start.result == 'success'"
     permissions:
       contents: read
       actions: read
