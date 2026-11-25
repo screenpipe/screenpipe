@@ -1787,7 +1787,9 @@ async fn spawn_screenpipe_after_migration(
                 // Enterprise source capture precedes the derived database. It
                 // uses the normal recording intent and native permissions.
                 let mut early_shutdown = None;
-                if cfg!(feature = "enterprise-build") && crate::app_mode::is_managed(&app_for_capture) {
+                if crate::app_mode::is_enterprise_package()
+                    && crate::app_mode::is_managed(&app_for_capture)
+                {
                     let mut slot = capture_arc.lock().await;
                     if capture_intended_now(&wants_recording) && slot.is_none() {
                         match CaptureSession::start_without_database(&app_for_capture, &recording_config).await {
