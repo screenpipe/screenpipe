@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
+    "@sentry/react": "^8.55.0",
     "gt-react": "11.4.0",
     "lucide-react": "^0.414.0",
     "next": "15.5.21",
