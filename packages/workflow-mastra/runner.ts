@@ -2,6 +2,7 @@
 // https://screenpipe.com
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { Mastra } from "@mastra/core";
 import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
@@ -169,10 +170,13 @@ ${reviewInstructions}`,
     tools: { workflow_workspace, recorder_read, read_snapshot },
   });
 
-  const result = await agent.stream(job.prompt, {
+  // Use the existing discovery budget. Reasoning tokens count toward the
+  // output cap and can consume a small cap before a tool call is emitted.
+  const mastra = new Mastra({ agents: { workflow: agent }, logger: false });
+  const result = await mastra.getAgent("workflow").stream(job.prompt, {
     maxSteps: 40,
     maxRetries: 0,
-    modelSettings: { maxOutputTokens: 4_096, temperature: 0.2 },
+    modelSettings: { maxOutputTokens: 20_000, temperature: 0.2 },
   });
   for await (const event of result.fullStream) {
     if (event.type === "text-delta") {
