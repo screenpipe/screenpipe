@@ -159,6 +159,103 @@ pub fn is_error(error: &str, port: u16) -> bool {
     error.starts_with(&format!("port {port} is already in use"))
 }
 
+/// Best-effort description of the process listening on `port`, for boot
+/// diagnostics (SCREENPIPE-APP-SZ: bind keeps failing after reclaim + 5
+/// retries, and the error event never names the holder). Read-only: this
+/// never signals a process. Returns None on timeout, missing tooling, or no
+/// listener, so the boot error keeps its current shape when discovery fails.
+pub async fn describe_port_owner(port: u16) -> Option<String> {
+    #[cfg(unix)]
+    let owner = describe_port_owner_unix(port).await;
+    #[cfg(windows)]
+    let owner = describe_port_owner_windows(port).await;
+    owner
+}
+
+#[cfg(unix)]
+async fn describe_port_owner_unix(port: u16) -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::process::Command::new(LSOF)
+            .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    // lsof -iTCP -sTCP:LISTEN rows: COMMAND PID USER FD TYPE DEVICE SIZE NODE NAME
+    let mut owners = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines().skip(1) {
+        let mut fields = line.split_whitespace();
+        let (Some(command), Some(pid)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        owners.push(format!("pid {} ({command})", pid));
+        if owners.len() >= 3 {
+            break;
+        }
+    }
+    (!owners.is_empty()).then(|| owners.join(", "))
+}
+
+#[cfg(windows)]
+async fn describe_port_owner_windows(port: u16) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let my_pid = std::process::id();
+    let mut netstat = tokio::process::Command::new("netstat");
+    netstat.args(["-ano", "-p", "tcp"]);
+    netstat.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(3), netstat.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut pids = std::collections::HashSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(pid) = listening_pid_on_port(line, port, my_pid) {
+            pids.insert(pid);
+        }
+        if pids.len() >= 3 {
+            break;
+        }
+    }
+    let mut owners = Vec::new();
+    for pid in pids.iter().take(3) {
+        if *pid == my_pid {
+            owners.push(format!("pid {pid} (this screenpipe)"));
+            continue;
+        }
+        let mut tasklist = tokio::process::Command::new("tasklist");
+        tasklist.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+        tasklist.creation_flags(CREATE_NO_WINDOW);
+        let image = match tokio::time::timeout(std::time::Duration::from_secs(3), tasklist.output())
+            .await
+        {
+            Ok(Ok(out)) if out.status.success() => {
+                let first = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("");
+                first
+                    .split(',')
+                    .next()
+                    .map(|name| name.trim_matches('"').to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            }
+            _ => "unknown".to_string(),
+        };
+        owners.push(format!("pid {pid} ({image})"));
+    }
+    (!owners.is_empty()).then(|| owners.join(", "))
+}
+
 pub async fn reclaim_owner(port: u16, healthy_screenpipe: bool) {
     if !should_reclaim_owner(healthy_screenpipe) {
         return;

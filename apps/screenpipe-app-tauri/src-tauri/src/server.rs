@@ -420,7 +420,14 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16, reserved_listen
             }
         }
         Err(error) => {
-            error!("failed to bind to {addr}: {error:#}");
+            // Name whoever still holds the port so the Sentry event
+            // (SCREENPIPE-APP-SZ) says what to reclaim instead of only that
+            // the bind failed.
+            let port_owner = crate::port_conflict::describe_port_owner(port).await;
+            error!(
+                port_owner = port_owner.as_deref().unwrap_or("unknown"),
+                "failed to bind to {addr}: {error:#}"
+            );
             if crate::port_conflict::healthy_control_server_present() {
                 crate::port_conflict::show_healthy_screenpipe(&app_handle, port);
             } else {

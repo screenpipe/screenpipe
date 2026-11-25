@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 #[cfg(windows)]
 const WINDOWS_STORE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
@@ -2900,7 +2900,11 @@ fn backfill_default_ai_preset(settings: &mut SettingsStore) -> bool {
 }
 
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
-    println!("Initializing settings store");
+    // tracing, not println!: when the app is launched detached the stdout pipe
+    // is already closed, and println! panics ("failed printing to stdout:
+    // Broken pipe") which registers as a fatal Sentry crash
+    // (SCREENPIPE-APP-HD / SCREENPIPE-APP-WJ) for a purely cosmetic message.
+    info!("Initializing settings store");
 
     // Access errors are not deserialization errors. In particular, the locked
     // encrypted-store path must reach the setup caller so startup aborts before
@@ -3145,7 +3149,10 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
 }
 
 pub fn init_onboarding_store(app: &AppHandle) -> Result<OnboardingStore, String> {
-    println!("Initializing onboarding store");
+    // Same detached-launch broken-pipe panic as the settings store init above
+    // (SCREENPIPE-APP-WJ culprit). tracing is a no-op before the subscriber
+    // exists and never panics on a closed pipe.
+    info!("Initializing onboarding store");
 
     let (onboarding, should_save) = match OnboardingStore::get(app) {
         Ok(Some(mut onboarding)) => {
