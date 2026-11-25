@@ -11,7 +11,7 @@ import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { IntegrationIcon } from "@/components/settings/connections-section";
 import { PipeScheduleBuilder } from "./pipe-schedule-builder";
 import type { ScheduleConfig } from "@/lib/utils/schedule-builder";
-import type { AvailableConnection } from "@/lib/pipe-connections";
+import { pipeConnectionInstanceName, type AvailableConnection } from "@/lib/pipe-connections";
 import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check, Mic } from "lucide-react";
 import { useGT } from "gt-react";
 import { msg, useMessages } from "gt-react";
@@ -140,13 +140,18 @@ function eventLabel(e: string): string {
   if (e.startsWith("pipe_completed:")) return `After ${e.slice(15)} finishes`;
   return e.replace(/_/g, " ");
 }
-function sourceLabel(s: TriggerSource): string {
+function sourceLabel(s: TriggerSource, connections: AvailableConnection[]): string {
   if (s.app === "audio") return `When ${s.filter?.device === "all" ? "audio contains" : "you say"} ${(s.filter?.phrases || "").split("\n").filter(Boolean).map((p) => `“${p}”`).join(" or ")}`;
   const acct = s.instance ? ` (${s.instance})` : "";
   if (s.app === "slack") return `slack${acct} · ${s.filter?.channel_name || s.filter?.channel || "a channel"}`;
   if (s.app === "notion") return `notion${acct} · ${s.filter?.database_name || "any page edited"}`;
   if (s.app === "obsidian") return `Obsidian · ${s.path || "vault"}`;
-  if (s.app === "imap") return `Email · ${s.kind === "sent_message" ? "sent in" : "new in"} ${s.filter?.mailbox || "INBOX"}`;
+  if (s.app === "imap") {
+    const accountKey = s.instance ? `imap:${s.instance}` : "imap";
+    const account = connections.find((c) => c.id === "imap")?.instances?.find((i) => i.instanceKey === accountKey);
+    const name = account?.instanceLabel || (s.instance ? "Disconnected email account" : "Default email inbox");
+    return `${name} · ${s.kind === "sent_message" ? "sent in" : "new in"} ${s.filter?.mailbox || "INBOX"}`;
+  }
   if (s.app === "google-calendar") return `Google calendar${acct} · event starts`;
   if (s.app === "outlook-email") return `outlook${acct} · ${s.kind === "sent_message" ? "email sent" : "new email"}`;
   if (s.app === "github") return `github${acct} · new ${s.kind === "pull_request" ? "pull request" : "issue"} in ${s.filter?.repository || "repository"}`;
@@ -167,7 +172,7 @@ function sourceLabel(s: TriggerSource): string {
 export function PipeTriggerPicker(props: PickerProps) {
 
   const ui = useGT();
-  const { pipeName, trigger, fetchPipes, applyOptimistic } = props;
+  const { pipeName, trigger, fetchPipes, applyOptimistic, availableConnections } = props;
   const [open, setOpen] = useState(false);
 
   const events = trigger?.events ?? [];
@@ -208,7 +213,7 @@ export function PipeTriggerPicker(props: PickerProps) {
         ))}
         {sources.map((s, i) => (
           <div key={`s${i}`} className="flex items-center gap-1.5 group/item">
-            <span className={chip} title={s.path || s.filter?.channel || ""}>› {sourceLabel(s)}</span>
+            <span className={chip} title={s.path || s.filter?.channel || ""}>› {sourceLabel(s, availableConnections)}</span>
             <button className={xBtn} aria-label={ui("Remove")} onClick={() => remove("sources", i)}>×</button>
           </div>
         ))}
@@ -515,9 +520,9 @@ interface LinearTeam { id: string; name: string; key?: string }
 /** Accounts for an app: [] = single/default, else one per connected workspace. */
 function accountsFor(conns: AvailableConnection[], app: string): { value: string; label: string }[] {
   const c = conns.find((x) => x.id === app);
-  if (!c?.instances || c.instances.length < 2) return [];
+  if (!c?.instances || (app !== "imap" && c.instances.length < 2)) return [];
   return c.instances.map((i) => ({
-    value: i.instanceKey.includes(":") ? i.instanceKey.split(":").slice(1).join(":") : "",
+    value: pipeConnectionInstanceName(i.instanceKey) ?? "",
     label: i.instanceLabel,
   }));
 }
@@ -557,7 +562,8 @@ function SourceDetail({
   const connected = !!conns.find((c) => c.id === app)?.connected;
   const [connecting, setConnecting] = useState(false);
   const accounts = accountsFor(conns, app);
-  const [instance, setInstance] = useState<string>(accounts[0]?.value ?? "");
+  const [selectedInstance, setInstance] = useState<string>(accounts[0]?.value ?? "");
+  const instance = accounts.find((account) => account.value === selectedInstance)?.value ?? accounts[0]?.value ?? "";
 
   useEffect(() => setConns(availableConnections), [availableConnections]);
 
@@ -595,8 +601,8 @@ function SourceDetail({
     <div>
       {accounts.length > 1 && (
         <div className="mb-3">
-          <label className={LABEL}>Account</label>
-          <select value={instance} onChange={(e) => setInstance(e.target.value)} className={`${INPUT} mt-1`}>
+          <label className={LABEL} htmlFor="trigger-source-account">Account</label>
+          <select id="trigger-source-account" value={instance} onChange={(e) => setInstance(e.target.value)} className={`${INPUT} mt-1`}>
             {accounts.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
           </select>
         </div>
@@ -604,7 +610,7 @@ function SourceDetail({
       {app === "slack" && <SlackPicker key={inst ?? ""} instance={inst} onAdd={onAdd} />}
       {app === "notion" && <NotionPicker key={inst ?? ""} instance={inst} onAdd={onAdd} />}
       {app === "obsidian" && <ObsidianPicker onAdd={onAdd} />}
-      {app === "imap" && <MailboxPicker kind={kind || "message"} onAdd={onAdd} />}
+      {app === "imap" && <MailboxPicker key={instance} instance={inst} kind={kind || "message"} onAdd={onAdd} />}
       {app === "google-calendar" && (
         <SimpleSourceDetail
           text="Runs when a timed event reaches its start time. All-day events are excluded."
@@ -814,7 +820,7 @@ function preferredMailbox(mailboxes: string[], kind: string): string {
   return mailboxes.find((name) => name.toLowerCase() === "inbox") || mailboxes[0] || "";
 }
 
-function MailboxPicker({ kind, onAdd }: { kind: string; onAdd: (s: TriggerSource) => void }) {
+function MailboxPicker({ instance, kind, onAdd }: { instance?: string; kind: string; onAdd: (s: TriggerSource) => void }) {
 
   const ui = useGT();
   const [mailboxes, setMailboxes] = useState<string[] | null>(null);
@@ -824,8 +830,10 @@ function MailboxPicker({ kind, onAdd }: { kind: string; onAdd: (s: TriggerSource
   useEffect(() => {
     (async () => {
       try {
-        const r = await localFetch("/connections/imap/mailboxes");
+        const query = instance ? `?instance=${encodeURIComponent(instance)}` : "";
+        const r = await localFetch(`/connections/imap/mailboxes${query}`);
         const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || "Could not read email folders.");
         const rawMailboxes: unknown = j?.mailboxes;
         const list: string[] = Array.isArray(rawMailboxes)
           ? rawMailboxes.filter((name: unknown): name is string => typeof name === "string" && !!name)
@@ -836,12 +844,12 @@ function MailboxPicker({ kind, onAdd }: { kind: string; onAdd: (s: TriggerSource
         else if (kind === "sent_message" && !list.some((name) => name.toLowerCase().includes("sent"))) {
           setErr("choose the folder your provider uses for sent mail.");
         }
-      } catch {
+      } catch (error) {
         setMailboxes([]);
-        setErr("couldn't read email folders.");
+        setErr(error instanceof Error ? error.message : "Could not read email folders.");
       }
     })();
-  }, [kind]);
+  }, [instance, kind]);
 
   return (
     <div>
@@ -850,11 +858,11 @@ function MailboxPicker({ kind, onAdd }: { kind: string; onAdd: (s: TriggerSource
           ? ui("Runs when a message appears in the sent-mail folder you choose.")
           : ui("Runs when a message arrives in the mailbox you choose.")}
       </p>
-      <label className={LABEL}>Mailbox</label>
+      <label className={LABEL} htmlFor="trigger-imap-mailbox">Mailbox</label>
       {mailboxes === null ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading mailboxes…</div>
       ) : (
-        <select value={picked} onChange={(e) => setPicked(e.target.value)} className={`${INPUT} mt-1`}>
+        <select id="trigger-imap-mailbox" value={picked} onChange={(e) => setPicked(e.target.value)} className={`${INPUT} mt-1`}>
           <option value="">Choose a mailbox…</option>
           {mailboxes.map((mailbox) => <option key={mailbox} value={mailbox}>{mailbox}</option>)}
         </select>
@@ -862,7 +870,7 @@ function MailboxPicker({ kind, onAdd }: { kind: string; onAdd: (s: TriggerSource
       {err && <p className="text-[10px] text-muted-foreground mt-1.5">{err}</p>}
       <PrimaryAdd
         disabled={!picked}
-        onClick={() => onAdd({ app: "imap", kind, filter: { mailbox: picked } })}
+        onClick={() => onAdd({ app: "imap", kind, instance, filter: { mailbox: picked } })}
       />
     </div>
   );

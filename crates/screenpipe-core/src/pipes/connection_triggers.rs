@@ -585,9 +585,11 @@ async fn fetch_imap(ctx: &SourceCtx<'_>, src: &SourceTrigger) -> Option<Vec<Dete
         .unwrap_or("INBOX");
     let url = format!("{}/connections/imap/messages", ctx.api_base);
     let limit = API_PAGE_SIZE.to_string();
-    let value = ctx
-        .get_json_q(&url, &[("mailbox", mailbox), ("limit", &limit)])
-        .await?;
+    let mut query = vec![("mailbox", mailbox), ("limit", limit.as_str())];
+    if let Some(instance) = src.instance.as_deref().filter(|s| !s.is_empty()) {
+        query.push(("instance", instance));
+    }
+    let value = ctx.get_json_q(&url, &query).await?;
     Some(parse_imap_messages(&value))
 }
 
@@ -2221,13 +2223,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn imap_fetch_uses_the_selected_mailbox_and_local_auth() {
+    async fn imap_fetch_uses_the_selected_account_mailbox_and_local_auth() {
         use wiremock::matchers::{header, method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/connections/imap/messages"))
+            .and(query_param("instance", "work@example.com"))
             .and(query_param("mailbox", "[Gmail]/Sent Mail"))
             .and(query_param("limit", API_PAGE_SIZE.to_string()))
             .and(header("authorization", "Bearer local-key"))
@@ -2246,9 +2249,19 @@ mod tests {
         let mut src = source("imap", "sent_message");
         src.filter
             .insert("mailbox".into(), "[Gmail]/Sent Mail".into());
+        let default_key = subscription_key("follow-up", &src);
+        src.instance = Some("work@example.com".into());
+        let named_key = subscription_key("follow-up", &src);
+        assert_ne!(named_key, default_key);
         let items = fetch_items(&ctx, &src, "").await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "44");
+        assert_eq!(
+            trigger_context(&src, &items)["instance"],
+            "work@example.com"
+        );
+        src.filter.insert("mailbox".into(), "INBOX".into());
+        assert_ne!(subscription_key("follow-up", &src), named_key);
     }
 
     #[tokio::test]

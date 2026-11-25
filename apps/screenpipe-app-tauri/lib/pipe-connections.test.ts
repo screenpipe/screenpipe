@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchAvailablePipeConnections } from "./pipe-connections";
+import { fetchAvailablePipeConnections, isPipeConnectionAvailable } from "./pipe-connections";
 
 const jsonResponse = (data: unknown, ok = true) => ({
   ok,
@@ -15,9 +15,11 @@ describe("fetchAvailablePipeConnections", () => {
   const fetchMock = vi.fn();
   let nativeConnections: Record<string, unknown>[];
   let composioStatus: Record<string, unknown>;
+  let imapInstances: unknown[];
 
   beforeEach(() => {
     fetchMock.mockReset();
+    imapInstances = [];
     nativeConnections = [
       {
         id: "slack",
@@ -41,6 +43,9 @@ describe("fetchAvailablePipeConnections", () => {
       }
       if (url === "https://screenpipe.com/api/composio/status") {
         return jsonResponse(composioStatus);
+      }
+      if (url === "http://localhost:3030/connections/imap/instances") {
+        return jsonResponse({ instances: imapInstances });
       }
       if (url.endsWith("/instances")) {
         return jsonResponse({}, false);
@@ -107,5 +112,20 @@ describe("fetchAvailablePipeConnections", () => {
     expect(connections.filter(({ id }) => id === "google-docs")).toEqual([
       expect.objectContaining({ connected: true }),
     ]);
+  });
+
+  it("exposes a lone named IMAP account and recognizes that the default is disconnected", async () => {
+    nativeConnections.push({ id: "imap", name: "Email Inbox (IMAP)", icon: "imap", connected: true });
+    imapInstances.push(
+      { instance: "work", connected: true, credentials: { username: "work@example.com" } },
+      { instance: "other", connected: false, credentials: { username: "other@example.com" } },
+    );
+
+    const connections = await fetchAvailablePipeConnections("http://localhost:3030");
+    const imap = connections.find((connection) => connection.id === "imap");
+    expect(imap?.instances).toEqual([{ instanceKey: "imap:work", instanceLabel: "work@example.com" }]);
+    expect(isPipeConnectionAvailable("imap:work", imap)).toBe(true);
+    expect(isPipeConnectionAvailable("imap", imap)).toBe(false);
+    expect(isPipeConnectionAvailable("imap:other", imap)).toBe(false);
   });
 });

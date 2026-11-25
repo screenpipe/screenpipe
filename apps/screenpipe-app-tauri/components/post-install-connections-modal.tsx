@@ -22,7 +22,9 @@ import {
   IntegrationInfo,
 } from "@/components/settings/connections-section";
 import { ComposioCard } from "@/components/settings/composio-card";
+import { ImapCard } from "@/components/settings/imap-card";
 import { localFetch } from "@/lib/api";
+import { readImapAccounts } from "@/lib/imap-accounts";
 import {
   COMPOSIO_CONNECTIONS,
   composioStatusToMap,
@@ -111,6 +113,7 @@ export function PostInstallConnectionsModal({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [removingConnection, setRemovingConnection] = useState<string | null>(null);
+  const [imapRevision, setImapRevision] = useState(0);
 
   useEffect(() => {
     if (!open || connections.length === 0) return;
@@ -125,12 +128,16 @@ export function PostInstallConnectionsModal({
             (connection) => connection.id === baseId
           );
         });
-        const [res, mcpRes, composioStatus] = await Promise.all([
+        const needsImap = connections.some((id) => pipeConnectionLookupKey(id) === "imap");
+        const [res, mcpRes, composioStatus, imapAccounts] = await Promise.all([
           localFetch("/connections"),
           localFetch("/mcp-servers").catch(() => null),
           needsComposio && composioToken
             ? fetchComposioStatus(composioToken)
             : Promise.resolve(null),
+          needsImap
+            ? localFetch("/connections/imap/instances").then(readImapAccounts).catch(() => [])
+            : Promise.resolve([]),
         ]);
         const data = await res.json();
         const integrations: IntegrationInfo[] = data.data || [];
@@ -195,6 +202,19 @@ export function PostInstallConnectionsModal({
 
           const integration = integrations.find((i) => i.id === baseId) || null;
 
+          if (baseId === "imap") {
+            const account = imapAccounts.find((item) => item.instance === instanceName);
+            newStatuses[connId] = {
+              integration,
+              configured: !!account,
+              loading: false,
+              kind: "connection",
+              displayName: account?.username || (instanceName ? "Disconnected email account" : "Default email inbox"),
+              instanceName: account?.server || null,
+            };
+            continue;
+          }
+
           let configured = integration?.connected ?? false;
 
           // for non-OAuth named instances, check the specific instance status
@@ -241,7 +261,7 @@ export function PostInstallConnectionsModal({
     };
 
     init();
-  }, [open, connections, composioToken]);
+  }, [open, connections, composioToken, imapRevision]);
 
   const handleSaved = (connId: string) => {
     setStatuses((prev) => ({
@@ -419,7 +439,23 @@ export function PostInstallConnectionsModal({
                     )}
                   </button>
 
-                  {isExpanded && integration && integration.fields.length > 0 && (
+                  {isExpanded && integration?.id === "imap" && (
+                    <div className="px-3 pb-3 border-t border-border pt-3 space-y-2">
+                      <ImapCard onChanged={() => setImapRevision((revision) => revision + 1)} />
+                      {!status?.configured && onConnectionRemoved && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={removingConnection === connId}
+                          onClick={() => void removeConnectionFromPipe(connId)}
+                        >
+                          {ui("Remove from scheduled task")}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {isExpanded && integration && integration.id !== "imap" && integration.fields.length > 0 && (
                     <div className="px-3 pb-3 border-t border-border pt-3">
                       <ConnectionCredentialForm
                         integrationId={integration.id}
