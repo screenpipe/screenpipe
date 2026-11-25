@@ -1102,4 +1102,88 @@ describe("AppEntitlementGate", () => {
     );
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
   });
+
+  it("prompts free users whose corporate domain matches a paid org to request a seat and calls /api/team/seat-request", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "pending",
+            already_requested: false,
+            org_name: "Acme Corp",
+            domain: "acme.io",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+
+    mocks.state.user = baseUser({
+      email: "shadow@acme.io",
+      org_seat_available: {
+        team_id: "team_acme",
+        license_id: null,
+        org_name: "Acme Corp",
+        domain: "acme.io",
+        request_status: "none",
+        requested_at: null,
+      },
+    });
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(
+      screen.getByText(/your team is already on screenpipe/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /request a seat from your admin/i }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/seat request sent/i)).toBeInTheDocument(),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/api/team/seat-request"),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("does not show the shadow-seat prompt for a verified paid user", () => {
+    mocks.state.user = baseUser({
+      email: "paid@acme.io",
+      cloud_subscribed: true,
+      app_entitled: true,
+      subscription_plan: "pro",
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: minsAgo(1),
+        features: { app: true, cloud: true },
+      },
+      org_seat_available: {
+        team_id: "team_acme",
+        license_id: null,
+        org_name: "Acme Corp",
+        domain: "acme.io",
+        request_status: "none",
+        requested_at: null,
+      },
+    });
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(
+      screen.queryByText(/your team is already on screenpipe/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
 });

@@ -8,6 +8,7 @@ import {
   APP_ENTITLEMENT_MAX_STALE_MS,
   getLocalPlanPolicy,
   getBusinessCapacityUpgrade,
+  getOrgSeatAvailable,
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
   hasCloudEntitlement,
@@ -929,5 +930,42 @@ describe("planDisplayName", () => {
   it("surfaces the real org label on the enterprise build", () => {
     expect(planDisplayName("team", true)).toBe("Team");
     expect(planDisplayName("enterprise", true)).toBe("Enterprise");
+  });
+});
+
+describe("getOrgSeatAvailable", () => {
+  it("parses valid shadow-seat org metadata and preserves it through normalizeAppUser", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "u_shadow",
+        email: "shadow@acme.io",
+        cloud_subscribed: false,
+        app_entitled: false,
+        subscription_plan: "none",
+        org_seat_available: {
+          team_id: "team_1",
+          license_id: null,
+          org_name: "Acme Corp",
+          domain: "acme.io",
+          request_status: "none",
+          requested_at: null,
+        },
+      },
+      "tok",
+    );
+    expect(getOrgSeatAvailable(normalized)).toEqual({
+      team_id: "team_1",
+      license_id: null,
+      org_name: "Acme Corp",
+      domain: "acme.io",
+      request_status: "none",
+      requested_at: null,
+    });
+  });
+
+  it("ignores missing or malformed org_seat_available payloads", () => {
+    expect(getOrgSeatAvailable(user({ org_seat_available: null }))).toBeNull();
+    expect(getOrgSeatAvailable(user({ org_seat_available: { org_name: "NoTarget" } }))).toBeNull();
+    expect(getOrgSeatAvailable(user({ org_seat_available: { team_id: "t1" } }))).toBeNull();
   });
 });

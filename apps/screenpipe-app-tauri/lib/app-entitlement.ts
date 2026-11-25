@@ -56,12 +56,22 @@ export type AppEnterpriseAccount = {
   is_screenpipe_user?: boolean | null;
 };
 
+export type AppOrgSeatAvailable = {
+  team_id?: string | null;
+  license_id?: string | null;
+  org_name?: string | null;
+  domain?: string | null;
+  request_status?: "none" | "pending" | string | null;
+  requested_at?: string | null;
+};
+
 export type AppUser = User & {
   app_entitled?: boolean | null;
   subscription_plan?: string | null;
   plan_expires_at?: string | null;
   entitlement?: AppEntitlement | JsonValue | null;
   enterprise_account?: AppEnterpriseAccount | JsonValue | null;
+  org_seat_available?: AppOrgSeatAvailable | JsonValue | null;
   /**
    * Whether Stripe holds a payment method for this account. Server-derived
    * from the entitlement source; see website `/api/user`.
@@ -86,6 +96,7 @@ export const TOKEN_HYDRATION_GRACE_MS = 60 * 1000;
 export const PRICING_URL = screenpipeWebUrl("/onboarding", "https://screenpipe.com");
 export const ENTERPRISE_BUILDS_URL = screenpipeWebUrl("/enterprise?tab=builds", "https://screenpipe.com");
 export const ENTERPRISE_DOWNLOAD_URL = screenpipeWebUrl("/api/download", "https://screenpipe.com");
+export const TEAM_SEAT_REQUEST_URL = screenpipeWebUrl("/api/team/seat-request", "https://screenpipe.com");
 const VERIFIED_PAID_PLAN_IDS = new Set([
   "basic",
   "standard",
@@ -180,6 +191,24 @@ export function getEnterpriseAccount(
     return null;
   }
   return account as AppEnterpriseAccount;
+}
+
+export function getOrgSeatAvailable(
+  user: AppUser | null | undefined,
+): AppOrgSeatAvailable | null {
+  const match = user?.org_seat_available;
+  if (!match || typeof match !== "object" || Array.isArray(match)) {
+    return null;
+  }
+  const candidate = match as AppOrgSeatAvailable;
+  const hasTarget =
+    (typeof candidate.team_id === "string" && candidate.team_id.trim().length > 0) ||
+    (typeof candidate.license_id === "string" && candidate.license_id.trim().length > 0);
+  const hasLabel =
+    (typeof candidate.org_name === "string" && candidate.org_name.trim().length > 0) ||
+    (typeof candidate.domain === "string" && candidate.domain.trim().length > 0);
+  if (!hasTarget || !hasLabel) return null;
+  return candidate;
 }
 
 function parseEntitlementTime(value: string | null | undefined) {

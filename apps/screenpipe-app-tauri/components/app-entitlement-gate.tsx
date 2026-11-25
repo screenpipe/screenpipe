@@ -19,6 +19,7 @@ import {
   ENTERPRISE_DOWNLOAD_URL,
   getEnterpriseAccount,
   getLocalPlanPolicy,
+  getOrgSeatAvailable,
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
   hasConsumerAppSubscription,
@@ -30,6 +31,7 @@ import {
   needsAppEntitlementRefresh,
   normalizePlanLabel,
   PRICING_URL,
+  TEAM_SEAT_REQUEST_URL,
   TOKEN_HYDRATION_GRACE_MS,
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -139,6 +141,9 @@ export function AppEntitlementGate({
   const licenseKeyAllowed = !managedPolicy?.requireAccountLogin;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [seatRequestSubmitting, setSeatRequestSubmitting] = useState(false);
+  const [seatRequestSent, setSeatRequestSent] = useState(false);
+  const [seatRequestError, setSeatRequestError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
   const [devSubmitting, setDevSubmitting] = useState(false);
   const [devError, setDevError] = useState<string | null>(null);
@@ -168,8 +173,14 @@ export function AppEntitlementGate({
   const localPlanPolicy = getLocalPlanPolicy(user);
   const needsRefresh = needsAppEntitlementRefresh(user);
   const enterpriseAccount = getEnterpriseAccount(user);
+  const orgSeatAvailable = getOrgSeatAvailable(user);
   const isOnboardingRoute =
     typeof window !== "undefined" && window.location.pathname === "/onboarding";
+
+  useEffect(() => {
+    setSeatRequestSent(orgSeatAvailable?.request_status === "pending");
+    setSeatRequestError(null);
+  }, [orgSeatAvailable?.team_id, orgSeatAvailable?.license_id, orgSeatAvailable?.request_status]);
 
   // loadUser is re-created on every render (it is NOT memoized), so the
   // background re-verify poll below can't depend on its identity without
@@ -273,19 +284,30 @@ export function AppEntitlementGate({
     enterpriseAccount?.requires_enterprise_app === true &&
     (!hasConsumerSubscription ||
       enterpriseAccount.restrict_consumer_build_access === true);
+  const shouldGateForOrgSeat =
+    !devBypass &&
+    !devLoginSkip &&
+    !isManagedDeployment &&
+    Boolean(user?.token) &&
+    !shouldGateForEnterpriseApp &&
+    localPlanPolicy === "verified-free" &&
+    Boolean(orgSeatAvailable);
   const shouldGateForEntitlement = shouldGateForUnknownConsumerPolicy;
   // Onboarding owns ordinary consumer sign-in and Enterprise-build auth.
   // Once build detection confirms this is the consumer app, however, a
-  // restricted enterprise member must not advance into consumer setup.
+  // restricted enterprise member or a shadow-seat corporate signup must not
+  // advance into standalone consumer setup.
   const shouldGate = authenticationStatus === "not_required"
     ? false
     : isOnboardingRoute
-    ? isManagedDeploymentResolved && shouldGateForEnterpriseApp
+    ? isManagedDeploymentResolved &&
+      (shouldGateForEnterpriseApp || shouldGateForOrgSeat)
     : !isManagedDeploymentResolved
       ? true
       : isManagedDeployment
         ? !isManagedAuthenticated
         : shouldGateForEnterpriseApp ||
+          shouldGateForOrgSeat ||
           shouldGateForConsumerLogin ||
           shouldGateForUnknownConsumerPolicy;
   const enterpriseAuthenticationPending =
@@ -341,9 +363,11 @@ export function AppEntitlementGate({
         ? "enterprise_login_required"
         : shouldGateForEnterpriseApp
           ? "enterprise_app_required"
-          : shouldGateForConsumerLogin
-            ? "consumer_login_required"
-            : "plan_verification_required",
+          : shouldGateForOrgSeat
+            ? "org_seat_available"
+            : shouldGateForConsumerLogin
+              ? "consumer_login_required"
+              : "plan_verification_required",
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
       // Diagnostics for the enterprise post-update loop (SCR-132).
@@ -353,7 +377,9 @@ export function AppEntitlementGate({
         ? "enterprise_login"
         : shouldGateForEnterpriseApp
           ? "enterprise_app"
-          : "entitlement",
+          : shouldGateForOrgSeat
+            ? "org_seat"
+            : "entitlement",
     });
   }, [
     isSettingsLoaded,
@@ -362,6 +388,7 @@ export function AppEntitlementGate({
     shouldGateForConsumerLogin,
     shouldGateForUnknownConsumerPolicy,
     shouldGateForEnterpriseApp,
+    shouldGateForOrgSeat,
     isManagedDeployment,
     authenticationStatus,
     enterpriseAuthenticationPending,
@@ -495,6 +522,38 @@ export function AppEntitlementGate({
     });
     openUrl(url).catch(() => window.open(url, "_blank"));
   }, [enterpriseAccount?.org_name]);
+
+  const requestOrgSeat = useCallback(async () => {
+    const token = user?.token;
+    if (!token) return;
+    setSeatRequestSubmitting(true);
+    setSeatRequestError(null);
+    try {
+      const response = await fetch(TEAM_SEAT_REQUEST_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error || `request failed (${response.status})`);
+      }
+      setSeatRequestSent(true);
+      posthog.capture("app_entitlement_org_seat_requested", {
+        org_name: orgSeatAvailable?.org_name ?? null,
+        domain: orgSeatAvailable?.domain ?? null,
+      });
+      await loadUser(token, false).catch(() => {});
+    } catch (err) {
+      setSeatRequestError(
+        err instanceof Error ? err.message : "could not send seat request",
+      );
+    } finally {
+      setSeatRequestSubmitting(false);
+    }
+  }, [loadUser, orgSeatAvailable?.domain, orgSeatAvailable?.org_name, user?.token]);
 
   // Dev/preview only: deep links do not reach the `bun tauri dev` binary on
   // macOS, so paste the login token (or the whole screenpipe://...api_key=...
@@ -856,6 +915,68 @@ export function AppEntitlementGate({
           >
             Use different account
           </Button>
+        </div>
+        {devLoginBlock}
+      </EntitlementShell>
+    );
+  }
+
+  if (shouldGateForOrgSeat && orgSeatAvailable) {
+    const targetOrgName =
+      orgSeatAvailable.org_name || orgSeatAvailable.domain || "your organization";
+    return (
+      <EntitlementShell
+        title={
+          seatRequestSent
+            ? ui("Seat request sent")
+            : ui("Your team is already on Screenpipe")
+        }
+        description={
+          seatRequestSent
+            ? ui(
+                "We notified your {value1} admin about {value2}. Once they invite you, click Refresh access to unlock Screenpipe.",
+                { value1: targetOrgName, value2: email },
+              )
+            : ui(
+                "{value1} belongs to {value2}. Request a seat from your admin instead of starting a standalone free account.",
+                { value1: email, value2: targetOrgName },
+              )
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {!seatRequestSent && (
+            <Button
+              onClick={() => void requestOrgSeat()}
+              disabled={seatRequestSubmitting}
+              className="w-full gap-2"
+            >
+              <Building2 className="h-4 w-4" />
+              {seatRequestSubmitting
+                ? ui("Sending request…")
+                : ui("Request a seat from your admin")}
+            </Button>
+          )}
+          <Button
+            onClick={() => void refreshUser()}
+            variant={seatRequestSent ? "default" : "outline"}
+            disabled={isRefreshing}
+            className="w-full gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? ui("Checking…") : ui("Refresh access")}
+          </Button>
+          <Button
+            onClick={useDifferentAccount}
+            variant="ghost"
+            className="w-full"
+          >
+            {ui("Use different account")}
+          </Button>
+          {(seatRequestError || refreshError) && (
+            <p className="font-mono text-[11px] leading-5 text-destructive">
+              {seatRequestError || refreshError}
+            </p>
+          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>
