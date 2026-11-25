@@ -63,7 +63,7 @@ const DEFAULT_REPO: &str = "screenpipe/privacy-filter";
 // attestation and concurrent queueing.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const TINFOIL_IMAGE_NAME: &str = "tinfoil_image";
-pub(crate) const TINFOIL_IMAGE_VERSION: u32 = 1;
+pub(crate) const TINFOIL_IMAGE_VERSION: u32 = 2; // V4 768px rfdetr_v108b + zero-text ax_nodes role fusion
 /// Same rationale as the text adapter — see
 /// [`crate::adapters::tinfoil`] for the full incident note. Keep this
 /// in lockstep with that constant so both modalities pick up enclave

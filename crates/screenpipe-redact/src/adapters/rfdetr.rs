@@ -77,7 +77,7 @@ use crate::RedactError;
 use crate::SpanLabel;
 
 const RFDETR_NAME: &str = "rfdetr";
-pub(crate) const RFDETR_VERSION: u32 = 38; // matches the rfdetr_v38 ONNX (fp16, 512px, real-app trained)
+pub(crate) const RFDETR_VERSION: u32 = 108; // matches rfdetr_v108b.onnx (W16A32 dl36, 768px, V4 real+synth bridge)
 
 #[cfg(feature = "onnx-cpu")]
 const NUM_CLASSES: usize = 12;
@@ -182,20 +182,24 @@ impl Default for RfdetrConfig {
             conf_threshold: 0.50,
             tiled_inference: true,
             extend_wrapped_secrets: true,
-            role_model_path: std::env::var_os("SCREENPIPE_PII_ROLE_MODEL_PATH").map(PathBuf::from),
+            role_model_path: match std::env::var_os("SCREENPIPE_PII_ROLE_MODEL_PATH") {
+                Some(v) if v.is_empty() => None,
+                Some(v) => Some(PathBuf::from(v)),
+                None => Some(Self::default_role_model_path()),
+            },
         }
     }
 }
 
 impl RfdetrConfig {
-    /// `~/.screenpipe/models/rfdetr_v38.onnx`. Created lazily by
+    /// `~/.screenpipe/models/rfdetr_v108b.onnx`. Created lazily by
     /// [`Self::ensure_model_present`] on first run.
     pub fn default_model_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx")
+            .join("rfdetr_v108b.onnx")
     }
 
     /// `~/.screenpipe/models/pii_role_fusion_v4.onnx` — canonical local cache
@@ -208,28 +212,26 @@ impl RfdetrConfig {
             .join("pii_role_fusion_v4.onnx")
     }
 
-    /// HuggingFace download URL for the canonical ONNX. Pinned to
-    /// `main` so a model bump goes through a deliberate code change
-    /// (URL + expected SHA-256 + [`RFDETR_VERSION`] all bumped
-    /// together).
+    /// Immutable public download URL for the canonical `rfdetr_v108b.onnx`
+    /// (`35.16 MiB` HTTP gzip), pinned to an exact `models-static` commit so a
+    /// model bump goes through a deliberate code change (URL + expected SHA-256
+    /// + [`RFDETR_VERSION`] all bumped together).
     pub const HF_DOWNLOAD_URL: &'static str =
-        "https://huggingface.co/screenpipe/pii-image-redactor/resolve/main/rfdetr_v38.onnx";
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/6e3d5f7ea20ad43fab39a292c0f273ee13701c62/rfdetr_v108b.onnx";
 
-    /// Expected SHA-256 of the canonical `rfdetr_v38.onnx`. Verified
-    /// after every download. If a future training run produces a new
-    /// best, bump [`RFDETR_VERSION`], re-publish to HF, update this
-    /// constant. Note: the worker is destructive-only and does NOT
-    /// re-redact already-processed frames, so a model-version bump
-    /// only takes effect for newly-captured frames going forward.
+    /// Expected SHA-256 of the canonical `rfdetr_v108b.onnx`. Verified
+    /// after every download before atomic rename into place.
     pub const EXPECTED_SHA256: &'static str =
-        "0e968657aafcfb2c5d61ece264d5959ddeeec53091171fae226b45ecd3a8a880";
+        "884018d88343ab1ceb0aeb18f558bc76cac6fb7100f8760cdc28aed809e18dfd";
 
-    /// Optional pinned download URL + SHA-256 for `pii_role_fusion_v4.onnx` (~2.1 MB).
-    /// Kept `None` until the V4 champion pair is published to HF; once set,
-    /// [`Self::ensure_model_present`] atomically fetches and SHA-256-verifies
-    /// [`Self::default_role_model_path`] alongside the vision backbone.
-    pub const ROLE_HF_DOWNLOAD_URL: Option<&'static str> = None;
-    pub const ROLE_EXPECTED_SHA256: Option<&'static str> = None;
+    /// Pinned public download URL + SHA-256 for `pii_role_fusion_v4.onnx`
+    /// (`1.68 MiB` HTTP gzip; combined `36.84 MiB < 40 MB`).
+    pub const ROLE_HF_DOWNLOAD_URL: Option<&'static str> = Some(
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/6e3d5f7ea20ad43fab39a292c0f273ee13701c62/pii_role_fusion_v4.onnx",
+    );
+    pub const ROLE_EXPECTED_SHA256: Option<&'static str> = Some(
+        "5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789",
+    );
 
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
@@ -1119,11 +1121,32 @@ mod tests {
     }
 
     #[test]
+    fn shipped_model_constants_are_coherent() {
+        assert_eq!(RFDETR_VERSION, 108, "model bump must move the version");
+        assert!(
+            RfdetrConfig::default_model_path().ends_with(Path::new("rfdetr_v108b.onnx")),
+            "default filename must track RFDETR_VERSION"
+        );
+        assert!(
+            RfdetrConfig::HF_DOWNLOAD_URL.ends_with("/rfdetr_v108b.onnx"),
+            "download URL must track RFDETR_VERSION"
+        );
+        assert_eq!(
+            RfdetrConfig::EXPECTED_SHA256,
+            "884018d88343ab1ceb0aeb18f558bc76cac6fb7100f8760cdc28aed809e18dfd"
+        );
+        assert_eq!(
+            RfdetrConfig::ROLE_EXPECTED_SHA256,
+            Some("5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789")
+        );
+    }
+
+    #[test]
     fn default_path_lives_under_screenpipe_dir() {
         let p = RfdetrConfig::default_model_path();
         let expected_suffix = Path::new(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx");
+            .join("rfdetr_v108b.onnx");
         assert!(
             p.ends_with(&expected_suffix),
             "default path {} should end with {}",
@@ -1192,7 +1215,7 @@ mod tests {
         // (Real download path is exercised by integration tests off
         // the unit-test harness.)
         let d = tempdir().unwrap();
-        let p = d.path().join("models").join("rfdetr_v38.onnx");
+        let p = d.path().join("models").join("rfdetr_v108b.onnx");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"not the real model").unwrap();
         let cfg = RfdetrConfig {

@@ -2387,7 +2387,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     if !config.async_image_pii_redaction {
         info!(
             "image-PII worker skipped at startup — async_image_pii_redaction=false. \
-             rfdetr_v9 model (~108 MB) will NOT be downloaded or loaded. \
+             rfdetr_v108b + pii_role_fusion_v4 (~37 MiB) will NOT be downloaded or loaded. \
              Toggle via Settings → Privacy → AI PII removal."
         );
     }
@@ -2467,8 +2467,8 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                     // redactor (if enabled) keeps running.
                     tracing::warn!(
                         "image-PII redaction enabled but couldn't load model; skipping: {e}. \
-                         check network reachability to huggingface.co or pre-stage \
-                         rfdetr_v9.onnx at ~/.screenpipe/models/."
+                         check network reachability or pre-stage \
+                         rfdetr_v108b.onnx (+ optional pii_role_fusion_v4.onnx) at ~/.screenpipe/models/."
                     );
                 }
             }
