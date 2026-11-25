@@ -14,6 +14,7 @@ on:
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/stamp-linux-release-edition.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts
@@ -39,6 +40,7 @@ on:
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/stamp-linux-release-edition.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts

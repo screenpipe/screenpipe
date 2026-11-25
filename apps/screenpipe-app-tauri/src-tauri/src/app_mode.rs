@@ -6,7 +6,78 @@
 
 use crate::store::SettingsStore;
 use once_cell::sync::Lazy;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+const ENTERPRISE_IDENTIFIER: &str = "screenpi.pe.enterprise";
+const ENTERPRISE_PRODUCT_NAME: &str = "screenpipe enterprise";
+
+// Installation identity owns updater routing, IPC and relaunch behavior. It is
+// separate from the mutable managed session and never authorizes recording.
+static ENTERPRISE_PACKAGE: Lazy<bool> = Lazy::new(|| {
+    cfg!(feature = "enterprise-build")
+        || std::env::current_exe().is_ok_and(|exe| executable_is_enterprise_package(&exe))
+});
+
+pub(crate) fn is_enterprise_package() -> bool {
+    *ENTERPRISE_PACKAGE
+}
+
+#[cfg(target_os = "macos")]
+fn executable_is_enterprise_package(exe: &Path) -> bool {
+    exe.parent()
+        .and_then(Path::parent)
+        .and_then(|contents| plist::Value::from_file(contents.join("Info.plist")).ok())
+        .and_then(|metadata| {
+            metadata.as_dictionary()
+                .and_then(|info| info.get("CFBundleIdentifier"))
+                .and_then(plist::Value::as_string)
+                .map(|id| id == ENTERPRISE_IDENTIFIER)
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn executable_is_enterprise_package(exe: &Path) -> bool {
+    crate::windows_enterprise_takeover::executable_product_name(exe)
+        .is_ok_and(|name| name.is_some_and(|name| name.eq_ignore_ascii_case(ENTERPRISE_PRODUCT_NAME)))
+}
+
+// Tauri marks the ELF's bundle format in a similar way. The release packager
+// stamps a copy before packaging, keeping the original linked executable and
+// avoiding filesystem, filename, or environment heuristics for deb installs.
+#[cfg(target_os = "linux")]
+#[used]
+static mut LINUX_PACKAGE_IDENTITY: [u8; 32] = *b"SP_APP_PACKAGE_EDITION_PERSONAL!";
+
+#[cfg(target_os = "linux")]
+fn executable_is_enterprise_package(_: &Path) -> bool {
+    // SAFETY: The static is initialized in the executable and is never
+    // mutated in-process. A volatile read prevents constant propagation.
+    let edition = unsafe { std::ptr::read_volatile(&raw const LINUX_PACKAGE_IDENTITY) };
+    edition == *b"SP_APP_PACKAGE_EDITION_MANAGED!!"
+}
+
+pub(crate) fn apply_package_identity(context: &mut tauri::Context<tauri::Wry>) {
+    if !is_enterprise_package() || context.config().identifier != "screenpi.pe" {
+        return;
+    }
+    configure_enterprise_package(context.config_mut());
+    context.package_info_mut().name = ENTERPRISE_PRODUCT_NAME.into();
+}
+
+fn configure_enterprise_package(config: &mut tauri::Config) {
+    config.identifier = ENTERPRISE_IDENTIFIER.into();
+    config.product_name = Some(ENTERPRISE_PRODUCT_NAME.into());
+    if let Some(deep_link) = config.plugins.0.get_mut("deep-link") {
+        deep_link["desktop"]["schemes"] = serde_json::json!([crate::deep_link::ENTERPRISE_SCHEME]);
+    }
+    if let Some(updater) = config.plugins.0.get_mut("updater") {
+        updater["endpoints"] = serde_json::json!([
+            "https://screenpipe.com/api/app-update/enterprise/{{target}}-{{arch}}/{{current_version}}"
+        ]);
+    }
+}
 
 // Deployment configuration is immutable for a process. User/account state is
 // read live so sign-in can enter managed mode without restarting the app.
@@ -52,7 +123,7 @@ fn has_managed_config_marker() -> bool {
 }
 
 pub(crate) fn deployment_or_session_is_managed() -> bool {
-    cfg!(feature = "enterprise-build")
+    is_enterprise_package()
         || *MANAGED_DEPLOYMENT
         || MANAGED_SESSION.load(Ordering::SeqCst)
 }
@@ -60,7 +131,7 @@ pub(crate) fn deployment_or_session_is_managed() -> bool {
 pub(crate) fn for_settings(settings: &SettingsStore) -> bool {
     resolve_mode(
         &MANAGED_SESSION,
-        cfg!(feature = "enterprise-build"),
+        is_enterprise_package(),
         *MANAGED_DEPLOYMENT,
         settings,
     )
@@ -82,7 +153,7 @@ pub(crate) fn is_managed(app: &tauri::AppHandle) -> bool {
         Ok(Some(settings)) => for_settings(&settings),
         Ok(None) => {
             MANAGED_SESSION.load(Ordering::SeqCst)
-                || cfg!(feature = "enterprise-build")
+                || is_enterprise_package()
                 || *MANAGED_DEPLOYMENT
         }
         // A failed store read cannot downgrade managed enforcement.
@@ -96,6 +167,35 @@ mod tests {
     use crate::store::SettingsStore;
     use serde_json::json;
     use std::sync::atomic::AtomicBool;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_metadata_selects_the_package_independently_of_its_filename() {
+        let root = tempfile::tempdir().unwrap();
+        let contents = root.path().join("Renamed.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let exe = contents.join("MacOS/screenpipe-app");
+        for (id, expected) in [("screenpi.pe", false), (super::ENTERPRISE_IDENTIFIER, true)] {
+            let mut info = plist::Dictionary::new();
+            info.insert("CFBundleIdentifier".into(), plist::Value::String(id.into()));
+            plist::Value::Dictionary(info).to_file_xml(contents.join("Info.plist")).unwrap();
+            assert_eq!(super::executable_is_enterprise_package(&exe), expected);
+        }
+    }
+
+    #[test]
+    fn shared_context_matches_legacy_enterprise_runtime_configuration() {
+        let mut shared: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.prod.conf.json")).unwrap();
+        let legacy: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.enterprise.conf.json")).unwrap();
+        super::configure_enterprise_package(&mut shared);
+        assert_eq!(shared.identifier, legacy.identifier);
+        assert_eq!(shared.product_name, legacy.product_name);
+        for plugin in ["deep-link", "updater"] {
+            assert_eq!(shared.plugins.0.get(plugin), legacy.plugins.0.get(plugin));
+        }
+    }
 
     #[test]
     fn sign_in_enters_managed_mode_and_sign_out_cannot_downgrade_it() {

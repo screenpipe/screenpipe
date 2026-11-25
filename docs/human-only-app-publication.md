@@ -15,7 +15,11 @@ It has no route for updater pointers, enterprise publication state, GitHub tags,
 
 One `Release App` dispatch validates the commit and version, then builds the static frontend alongside the finalized translation snapshot. Consumer and enterprise targets package that same export. Historical source revisions use their original build hooks.
 
-Enterprise jobs start after the consumer matrix succeeds. The `Enterprise artifacts` commit status tracks enterprise readiness, with a separate status for dry runs. Retry enterprise alone by dispatching `release-app.yml` for the exact same commit and version with `enterprise_only=true`. Native packaging produces both application identities and retains the enterprise updater and managed installers.
+The consumer matrix compiles each target once. Enterprise packaging takes the matching executable from that run and preserves the platform package identity before signing. macOS gets its identity from the app bundle, Windows from the executable's product metadata, and Linux from an edition marker in the linked executable. Package identity drives updater routing and operating system integration. Account and deployment policy still control managed access.
+
+The `Enterprise artifacts` commit status tracks enterprise readiness, with a separate status for dry runs. To retry enterprise, rerun the failed jobs or dispatch `release-app.yml` for the same commit and version with `enterprise_only=true` and `native_run_id` set to the original run. Native artifacts are retained for seven days. When the native artifacts expire, rerun the complete workflow.
+
+Before the first shared executable is published, test signed clean installs and upgrades from both previous packages. Verify the correct sign-in callback and updater channel, Mac permissions and login items, standard and persistent Enterprise installers, and managed policy before recording starts.
 
 ## Only a human may publish
 

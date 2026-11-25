@@ -2311,7 +2311,7 @@ mod imp {
                         if settings_prepared {
                             crate::recording::resume_enterprise_recording(&app).await;
                             if raw_upload_attestation::startup_allowed(
-                                cfg!(feature = "enterprise-build"),
+                                crate::app_mode::is_enterprise_package(),
                                 policy.locked_settings.get("cloudProcessing"),
                             ) && !raw_upload_attestation::startup_verified()
                                 && raw_upload_check.as_ref().is_none_or(|check| check.is_finished())

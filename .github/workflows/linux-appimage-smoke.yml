@@ -16,12 +16,14 @@ on:
       - ".github/scripts/linux/verify-pipewire-runtime-packages.sh"
       - ".github/workflows/linux-appimage-smoke.yml"
       - ".github/workflows/release-app.yml"
+      - ".github/scripts/stamp-linux-release-edition.ts"
       - "apps/screenpipe-app-tauri/scripts/pre_build.js"
       - "apps/screenpipe-app-tauri/package.json"
       - "apps/screenpipe-app-tauri/bun.lock"
       - "apps/screenpipe-app-tauri/src-tauri/Cargo.toml"
       - "apps/screenpipe-app-tauri/src-tauri/Cargo.lock"
       - "apps/screenpipe-app-tauri/src-tauri/build.rs"
+      - "apps/screenpipe-app-tauri/src-tauri/src/app_mode.rs"
       - "apps/screenpipe-app-tauri/src-tauri/tauri*.conf.json"
 
 concurrency:
@@ -142,14 +144,14 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cp apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json \
-             apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          config_path = Path("apps/screenpipe-app-tauri/src-tauri/tauri.conf.json")
-          data = json.loads(config_path.read_text())
+          config = Path("apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json")
+          config_path = Path(os.environ["RUNNER_TEMP"]) / "tauri.enterprise.smoke.json"
+          data = json.loads(config.read_text())
           data["bundle"]["createUpdaterArtifacts"] = False
           data.setdefault("plugins", {}).setdefault("updater", {})["active"] = False
           config_path.write_text(json.dumps(data, indent=2) + "\n")
@@ -195,7 +197,16 @@ jobs:
           BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
-          bunx tauri build -v --target x86_64-unknown-linux-gnu --features enterprise-build,redact-onnx-cpu
+          cp src-tauri/tauri.prod.conf.json src-tauri/tauri.conf.json
+          bunx tauri build -v --no-bundle --target x86_64-unknown-linux-gnu --features official-build,redact-onnx-cpu
+
+          executable="${BUNDLE_DIR%/bundle}/screenpipe-app"
+          "$executable" --release-package-smoke consumer
+          bun "$GITHUB_WORKSPACE/.github/scripts/stamp-linux-release-edition.ts" "$executable"
+          "$executable" --release-package-smoke enterprise
+
+          cp "$RUNNER_TEMP/tauri.enterprise.smoke.json" src-tauri/tauri.conf.json
+          bunx tauri bundle -v --target x86_64-unknown-linux-gnu --features official-build,redact-onnx-cpu
 
       - name: Repack AppImage with bundled runtime deps
         working-directory: apps/screenpipe-app-tauri
@@ -330,6 +341,7 @@ jobs:
               fi
 
               export LD_LIBRARY_PATH=/smoke/squashfs-root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+              su smoke-user -c "LD_LIBRARY_PATH=/smoke/squashfs-root/usr/lib /smoke/squashfs-root/usr/bin/screenpipe-app --release-package-smoke enterprise"
               squashfs-root/usr/bin/ffmpeg -version
               squashfs-root/usr/bin/ffprobe -version
               squashfs-root/usr/bin/tesseract --version

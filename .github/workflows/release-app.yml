@@ -28,6 +28,10 @@ on:
         description: "Rebuild only enterprise artifacts for recovery"
         type: boolean
         default: false
+      native_run_id:
+        description: "Original Release App run ID for enterprise-only recovery"
+        type: string
+        required: false
       dry_run:
         description: "Build/sign/notarize without uploading release artifacts or debug symbols"
         type: boolean
@@ -56,6 +60,7 @@ jobs:
       linux_runner: ${{ steps.check-runner.outputs.linux_runner }}
       release_sha: ${{ steps.resolve-release.outputs.sha }}
       release_version: ${{ steps.resolve-release.outputs.version }}
+      shared_native: ${{ steps.resolve-release.outputs.shared_native }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +102,30 @@ jobs:
 
           echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+          if git show "${RELEASE_SHA}:apps/screenpipe-app-tauri/src-tauri/src/main.rs" |
+              grep -F -- '--release-package-smoke' >/dev/null; then
+            echo "shared_native=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Validate native artifact recovery run
+        if: inputs.enterprise_only && steps.resolve-release.outputs.shared_native == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$NATIVE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Enterprise recovery requires the original Release App run ID"
+            exit 1
+          fi
+          # Only release runs on main can supply executables to signing jobs.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN_ID" |
+            jq -e --arg repo "$GITHUB_REPOSITORY" '
+              .path == ".github/workflows/release-app.yml" and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .head_repository.full_name == $repo
+            ' >/dev/null
       - id: check
         env:
           RELEASE_SHA: ${{ steps.resolve-release.outputs.sha }}
@@ -187,6 +216,7 @@ jobs:
         uses: ./.release-workflow/.github/actions/prepare-desktop-localization
         with:
           build-frontend: "true"
+          source-run-id: ${{ inputs.enterprise_only && needs.check_commit.outputs.shared_native == 'true' && inputs.native_run_id || '' }}
           release-sha: ${{ needs.check_commit.outputs.release_sha }}
           token: ${{ github.token }}
           gt-project-id: ${{ secrets.GT_PROJECT_ID }}
@@ -1711,6 +1741,48 @@ jobs:
             throw 'prepared Windows attribution installer lost its Authenticode validity'
           }
 
+      - name: Collect linked executable and generated resources
+        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        shell: bash
+        working-directory: apps/screenpipe-app-tauri/src-tauri
+        env:
+          TARGET: ${{ matrix.target }}
+          OS_TYPE: ${{ matrix.os_type }}
+        run: |
+          set -euo pipefail
+          output="target/$TARGET/release"
+          artifact_dir="$RUNNER_TEMP"
+          if [[ "$OS_TYPE" == windows ]]; then
+            artifact_dir=$(cygpath -u "$RUNNER_TEMP")
+          fi
+          stage=$(mktemp -d)
+          trap 'rm -rf "$stage"' EXIT
+          case "$OS_TYPE" in
+            macos)
+              cp "$output/screenpipe-app" "$stage/"
+              cp -R PermissionFlow_PermissionFlow.bundle "$stage/"
+              ;;
+            linux) cp "$output/screenpipe-app" "$stage/" ;;
+            windows)
+              cp "$output/screenpipe-app.exe" "$stage/"
+              cp -R wer "$stage/"
+              if [[ -f "$output/WebView2Loader.dll" ]]; then
+                cp "$output/WebView2Loader.dll" "$stage/"
+              fi
+              ;;
+          esac
+          tar -cf "$artifact_dir/screenpipe-native.tar" -C "$stage" .
+
+      - name: Share linked executable with enterprise packaging
+        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/screenpipe-native.tar
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
       - name: Upload Linux dry-run artifacts
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -1872,7 +1944,11 @@ jobs:
   # ─── Windows x64 ──────────────────────────────────────────────────────────
   release-enterprise-windows:
     needs: [check_commit, localization, enterprise-start]
+    permissions:
+      contents: read
+      actions: read
     env:
+      SHARED_NATIVE: ${{ needs.check_commit.outputs.shared_native == 'true' }}
       SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
@@ -1890,6 +1966,15 @@ jobs:
         if: runner.environment == 'self-hosted'
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
+
+      - name: Download linked executable
+        if: needs.check_commit.outputs.shared_native == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-x86_64-pc-windows-msvc
+          path: ${{ runner.temp }}/screenpipe-native-${{ github.run_id }}
+          run-id: ${{ inputs.enterprise_only && inputs.native_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
@@ -2169,7 +2254,50 @@ jobs:
             }
           }
 
+      - name: Package shared enterprise executable (Windows x64)
+        if: needs.check_commit.outputs.shared_native == 'true'
+        working-directory: apps/screenpipe-app-tauri
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+        run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP "screenpipe-native-${{ github.run_id }}"
+          & "$env:SystemRoot\System32\tar.exe" -xf (Join-Path $artifactDir "screenpipe-native.tar") -C $artifactDir
+          if ($LASTEXITCODE -ne 0) { throw "Could not extract the shared native executable" }
+          $output = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          $bundles = Join-Path $output "bundle"
+          if (Test-Path -LiteralPath $bundles) {
+            Remove-Item -LiteralPath $bundles -Recurse -Force
+          }
+          $exe = Join-Path $output "screenpipe-app.exe"
+          Copy-Item (Join-Path $artifactDir "screenpipe-app.exe") $exe -Force
+          $loader = Join-Path $artifactDir "WebView2Loader.dll"
+          if (Test-Path -LiteralPath $loader) { Copy-Item $loader $output -Force }
+          Copy-Item (Join-Path $artifactDir "wer") src-tauri -Recurse -Force
+          $rcedit = Join-Path $env:RUNNER_TEMP "rcedit-x64.exe"
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile $rcedit
+          $expectedHash = "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a"
+          if ((Get-FileHash $rcedit -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw "Unexpected rcedit checksum"
+          }
+          # The existing Windows handoff validates ProductName before taking
+          # over a legacy install. Preserve it before Tauri signs the binary.
+          & $rcedit $exe --set-version-string ProductName "screenpipe enterprise"
+          if ($LASTEXITCODE -ne 0) { throw "Could not set enterprise executable metadata" }
+          $probe = Start-Process -FilePath $exe -ArgumentList "--release-package-smoke", "enterprise" -Wait -PassThru
+          if ($probe.ExitCode -ne 0) { throw "Shared executable did not resolve enterprise identity" }
+
+          bunx tauri bundle -v --target x86_64-pc-windows-msvc --features official-build,directml,vulkan,redact-onnx-directml --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Enterprise NSIS packaging failed" }
+
       - name: Build (enterprise, Windows x64)
+        if: needs.check_commit.outputs.shared_native != 'true'
         uses: tauri-apps/tauri-action@v0.5.17
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2324,7 +2452,11 @@ jobs:
   # ─── Linux x64 ────────────────────────────────────────────────────────────
   release-enterprise-linux:
     needs: [check_commit, localization, enterprise-start]
+    permissions:
+      contents: read
+      actions: read
     env:
+      SHARED_NATIVE: ${{ needs.check_commit.outputs.shared_native == 'true' }}
       SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
@@ -2334,6 +2466,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.check_commit.outputs.release_sha }}
+
+      - name: Download linked executable
+        if: needs.check_commit.outputs.shared_native == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/screenpipe-native-${{ github.run_id }}
+          run-id: ${{ inputs.enterprise_only && inputs.native_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
@@ -2542,7 +2683,17 @@ jobs:
           echo "Cleaning stale bundle artifacts from ${BUNDLE_DIR}..."
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
-          bunx tauri build -v --target x86_64-unknown-linux-gnu --features enterprise-build,redact-onnx-cpu
+          if [[ "$SHARED_NATIVE" == true ]]; then
+            artifact_dir="$RUNNER_TEMP/screenpipe-native-${{ github.run_id }}"
+            tar -xf "$artifact_dir/screenpipe-native.tar" -C "$artifact_dir"
+            EXECUTABLE="${BUNDLE_DIR%/bundle}/screenpipe-app"
+            install -D -m 0755 "$artifact_dir/screenpipe-app" "$EXECUTABLE"
+            bun "$GITHUB_WORKSPACE/.release-workflow/.github/scripts/stamp-linux-release-edition.ts" "$EXECUTABLE"
+            "$EXECUTABLE" --release-package-smoke enterprise
+            bunx tauri bundle -v --target x86_64-unknown-linux-gnu --features official-build,redact-onnx-cpu
+          else
+            bunx tauri build -v --target x86_64-unknown-linux-gnu --features enterprise-build,redact-onnx-cpu
+          fi
 
           # Strip bundled GLib/libmount/libblkid/libpcre2 (ABI mismatch on newer
           # distros) plus libavif/libsharpyuv: linuxdeploy bundles the old Ubuntu
@@ -2622,7 +2773,11 @@ jobs:
   # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
   release-enterprise-macos:
     needs: [check_commit, localization, enterprise-start]
+    permissions:
+      contents: read
+      actions: read
     env:
+      SHARED_NATIVE: ${{ needs.check_commit.outputs.shared_native == 'true' }}
       SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
@@ -2635,11 +2790,13 @@ jobs:
             runner: screenpipe-release-macos-arm64
             target: aarch64-apple-darwin
             features: metal,parakeet-mlx,enterprise-build
+            shared_features: metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml,official-build
             package_arch: arm64
           - platform: macos-26
             runner: screenpipe-release-macos-x64
             target: x86_64-apple-darwin
             features: metal,redact-onnx-coreml,enterprise-build
+            shared_features: metal,redact-onnx-coreml,official-build
             package_arch: x64
     runs-on: ${{ inputs.force_github_runners && matrix.platform || matrix.runner }}
     timeout-minutes: 120
@@ -2647,6 +2804,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.check_commit.outputs.release_sha }}
+
+      - name: Download linked executable
+        if: needs.check_commit.outputs.shared_native == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/screenpipe-native-${{ github.run_id }}
+          run-id: ${{ inputs.enterprise_only && inputs.native_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
@@ -2740,6 +2906,11 @@ jobs:
           SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
+
+      - name: Prepare localized macOS bundle resources
+        if: needs.check_commit.outputs.shared_native == 'true'
+        working-directory: apps/screenpipe-app-tauri
+        run: bun scripts/i18n/prepare.mjs
 
       - name: Use enterprise config
         run: cp -p apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
@@ -2864,11 +3035,22 @@ jobs:
           # Clean stale bundle artifacts
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
-          MAX_ATTEMPTS=3
-          if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+          COMMAND=build
+          FEATURES="${{ matrix.features }}"
+          if [[ "$SHARED_NATIVE" == true ]]; then
+            artifact_dir="$RUNNER_TEMP/screenpipe-native-${{ github.run_id }}"
+            tar -xf "$artifact_dir/screenpipe-native.tar" -C "$artifact_dir"
+            mkdir -p "${BUNDLE_DIR%/bundle}"
+            install -m 0755 "$artifact_dir/screenpipe-app" "${BUNDLE_DIR%/bundle}/screenpipe-app"
+            ditto "$artifact_dir/PermissionFlow_PermissionFlow.bundle" \
+              apps/screenpipe-app-tauri/src-tauri/PermissionFlow_PermissionFlow.bundle
+            COMMAND=bundle
+            FEATURES="${{ matrix.shared_features }}"
+          elif [[ "$TARGET" == aarch64-apple-darwin ]]; then
             bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}"
           fi
 
+          MAX_ATTEMPTS=3
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "=== Build attempt $attempt/$MAX_ATTEMPTS ==="
 
@@ -2885,10 +3067,10 @@ jobs:
             cd apps/screenpipe-app-tauri
             # Build the styled DMG below, with the app and Applications shortcut.
             BUNDLE_ARGS=(--bundles app)
-            if bunx tauri build -v --target "$TARGET" --features "${{ matrix.features }}" "${BUNDLE_ARGS[@]}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
+            if bunx tauri "$COMMAND" -v --target "$TARGET" --features "$FEATURES" "${BUNDLE_ARGS[@]}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "Build succeeded on attempt $attempt"
               cd ../..
-              if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+              if [[ "$SHARED_NATIVE" != true && "$TARGET" == aarch64-apple-darwin ]]; then
                 bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}" commit
               fi
               break
@@ -2927,6 +3109,10 @@ jobs:
           for app in "${apps[@]}"; do
             echo "Verifying ${app##*/} before notarization"
             codesign --verify --deep --strict --verbose=2 "$app"
+            if [[ "$SHARED_NATIVE" == true ]]; then
+              EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+              "$app/Contents/MacOS/$EXECUTABLE" --release-package-smoke enterprise
+            fi
           done
           echo "All enterprise .app bundles pass strict codesign verification"
 

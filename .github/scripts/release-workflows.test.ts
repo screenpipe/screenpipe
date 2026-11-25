@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { enterpriseEditionOffset } from "./stamp-linux-release-edition";
 import { markEnterprisePending, reportEnterprise } from "./enterprise-release.cjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -231,7 +232,7 @@ test("every platform waits for and downloads one finalized snapshot", () => {
     expect(job.needs).toContain("localization");
     expect(job.env.SCREENPIPE_I18N_MODE).toBe("cached");
     expect(job.env.SCREENPIPE_I18N_SNAPSHOT).toContain(".release-localization/snapshot.json");
-    const download = job.steps.find((step: any) => step.uses === "actions/download-artifact@v4");
+    const download = job.steps.find((step: any) => step.name === "Download shared desktop release inputs");
     expect(download.with.name).toContain("desktop-localization-");
     expect(download.with.path).toBe(".release-localization");
     const cleanIndex = job.steps.findIndex((step: any) => step.name === "Clean persistent Windows workspace");
@@ -242,6 +243,66 @@ test("every platform waits for and downloads one finalized snapshot", () => {
   const finalize = prepare.runs.steps.find((step: any) => step.name === "Finalize and validate translations");
   expect(finalize.env.SCREENPIPE_I18N_MODE).toContain("'cached' || 'generate'");
   expect(finalize["continue-on-error"]).toBeUndefined();
+});
+
+test("Linux package identity patch requires one marker in a linked ELF", () => {
+  const magic = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
+  const marker = Buffer.from("SP_APP_PACKAGE_EDITION_PERSONAL!");
+  const elf = Buffer.concat([magic, Buffer.alloc(16), marker, Buffer.alloc(32)]);
+  expect(enterpriseEditionOffset(elf)).toBe(20);
+  expect(() => enterpriseEditionOffset(Buffer.concat([elf, marker]))).toThrow("exactly one");
+  expect(() => enterpriseEditionOffset(magic)).toThrow("exactly one");
+  expect(() => enterpriseEditionOffset(marker)).toThrow("Linux ELF executable");
+});
+
+test("stamping a Linux release preserves the executable outside the edition bytes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "screenpipe-linux-edition-"));
+  try {
+    const executable = join(dir, "screenpipe-app");
+    const prefix = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3, 4]);
+    const suffix = Buffer.from("unchanged executable bytes");
+    const rust = readFileSync(join(root, "apps/screenpipe-app-tauri/src-tauri/src/app_mode.rs"), "utf8");
+    const [, personal, managed] = rust.match(/b"(SP_APP_PACKAGE_EDITION_PERSONAL!)"[\s\S]*?b"(SP_APP_PACKAGE_EDITION_MANAGED!!)"/) ?? [];
+    expect(personal).toBeDefined();
+    expect(managed).toBeDefined();
+    writeFileSync(executable, Buffer.concat([prefix, Buffer.from(personal), suffix]), { mode: 0o755 });
+    const stamp = Bun.spawnSync([process.execPath, join(root, ".github/scripts/stamp-linux-release-edition.ts"), executable]);
+    expect(stamp.success).toBe(true);
+    expect(readFileSync(executable)).toEqual(Buffer.concat([prefix, Buffer.from(managed), suffix]));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("enterprise packaging consumes the consumer executable for each supported target", () => {
+  const producer = app.jobs["publish-tauri"].steps.find(
+    (step: any) => step.name === "Share linked executable with enterprise packaging",
+  );
+  expect(producer.if).toContain("shared_native == 'true'");
+  expect(producer.if).toContain("matrix.target != 'aarch64-pc-windows-msvc'");
+  const targets = {
+    "release-enterprise-windows": "x86_64-pc-windows-msvc",
+    "release-enterprise-macos": "${{ matrix.target }}",
+    "release-enterprise-linux": "x86_64-unknown-linux-gnu",
+  };
+  for (const [job, target] of Object.entries(targets)) {
+    const download = app.jobs[job].steps.find((step: any) => step.name === "Download linked executable");
+    expect(download.if).toContain("shared_native == 'true'");
+    expect(download.with.name).toBe(producer.with.name.replace("${{ matrix.target }}", target));
+    expect(download.with["run-id"]).toBe("${{ inputs.enterprise_only && inputs.native_run_id || github.run_id }}");
+  }
+  const recovery = app.jobs.check_commit.steps.find((step: any) => step.name === "Validate native artifact recovery run");
+  expect(recovery.if).toContain("inputs.enterprise_only");
+  expect(recovery.run).toContain('.path == ".github/workflows/release-app.yml"');
+  expect(recovery.run).toContain('.head_branch == "main"');
+
+  const preparation = app.jobs.localization.steps.find((step: any) => step.id === "localization");
+  expect(preparation.with["source-run-id"]).toContain("inputs.native_run_id");
+  const windows = app.jobs["release-enterprise-windows"].steps;
+  expect(windows.find((step: any) => step.name?.startsWith("Package shared enterprise executable")).run)
+    .toContain("bunx tauri bundle");
+  expect(windows.find((step: any) => step.name === "Build (enterprise, Windows x64)").if)
+    .toContain("shared_native != 'true'");
 });
 
 test("every desktop target packages the shared export from its pinned release inputs", () => {

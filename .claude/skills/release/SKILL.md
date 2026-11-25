@@ -117,7 +117,7 @@ gh workflow run release-app.yml \
 
 Before dispatching, verify the remote `main` SHA still matches `BUMP_SHA`. After dispatching, read the run back and require its `headSha` to match. Never dispatch a second app run for the same version unless the first run failed and the retry is intentional.
 
-The same dispatch starts Enterprise packaging after the consumer matrix succeeds. For Enterprise-only recovery, dispatch `release-app.yml` with the original commit, version, and `-f enterprise_only=true`. Verify the Enterprise jobs and the `Enterprise artifacts` status on the pinned commit.
+The same dispatch starts Enterprise packaging after the consumer matrix succeeds. For Enterprise-only recovery, dispatch `release-app.yml` with the original commit, version, and `-f enterprise_only=true -f native_run_id=<original-run-id>`. Verify the Enterprise jobs and the `Enterprise artifacts` status on the pinned commit.
 
 ### 5. Monitor Build Status
 ```bash
