@@ -48,4 +48,5 @@ pub use transcription_result::get_or_create_speaker_from_embedding;
 pub use transcription_result::process_transcription_result;
 pub use transcription_result::TranscriptionResult;
 mod handle_new_transcript;
+pub(crate) use handle_new_transcript::handle_new_transcript_with_optional_db;
 pub use handle_new_transcript::{handle_new_transcript, AudioInsertCallback, AudioInsertInfo};

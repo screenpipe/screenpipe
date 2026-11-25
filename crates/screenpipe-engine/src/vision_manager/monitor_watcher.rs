@@ -640,14 +640,14 @@ pub async fn start_monitor_watcher(
         // recorded too. `None` seed (fresh DB / read failure) makes the first
         // successful write a 'startup' row.
         let db_for_layout = vision_manager.db_handle();
-        let mut last_layout_json: Option<String> = match tokio::time::timeout(
-            Duration::from_secs(5),
-            db_for_layout.latest_display_layout(),
-        )
-        .await
-        {
-            Ok(Ok(v)) => v,
-            _ => None,
+        let mut last_layout_json = if let Some(db) = &db_for_layout {
+            tokio::time::timeout(Duration::from_secs(5), db.latest_display_layout())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        } else {
+            None
         };
 
         // Never make the watcher's first ScreenCaptureKit call from a locked
@@ -1089,7 +1089,7 @@ pub async fn start_monitor_watcher(
             // Persist a display-layout snapshot when the arrangement changed
             // (origins/sizes/primary — not just the id set). Cheap when
             // unchanged: one string compare against the last persisted value.
-            {
+            if let Some(db) = &db_for_layout {
                 let mut geo: Vec<(u32, String, screenpipe_screen::monitor::MonitorData)> =
                     current_monitors
                         .iter()
@@ -1102,7 +1102,7 @@ pub async fn start_monitor_watcher(
                     } else {
                         "change"
                     };
-                    if persist_display_layout(&db_for_layout, &layout, reason).await {
+                    if persist_display_layout(db, &layout, reason).await {
                         last_layout_json = Some(layout);
                     }
                 }

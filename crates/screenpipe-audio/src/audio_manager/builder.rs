@@ -386,8 +386,17 @@ impl AudioManagerBuilder {
     }
 
     pub async fn build(&mut self, db: Arc<DatabaseManager>) -> Result<AudioManager> {
+        self.build_with_optional_db(Some(db)).await
+    }
+
+    /// Build the native audio pipeline. With no DB, transcribe live into the
+    /// configured raw capture ledger without writing timeline audio or rows.
+    pub async fn build_with_optional_db(
+        &mut self,
+        db: Option<Arc<DatabaseManager>>,
+    ) -> Result<AudioManager> {
         let options = self.build_options().await?;
-        AudioManager::new(options, db).await
+        AudioManager::new_with_optional_db(options, db).await
     }
 
     pub fn is_disabled(mut self, is_disabled: bool) -> Self {

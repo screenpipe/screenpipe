@@ -21,7 +21,8 @@ use screenpipe_a11y::tree::TreeWalkerConfig;
 use screenpipe_a11y::ActivityFeed;
 use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{
-    detach_tree_from_pixels, paired_capture_with_snapshot, CaptureContext, PairedCaptureResult,
+    detach_tree_from_pixels, paired_capture_with_optional_db, OptionalDbCaptureContext,
+    PairedCaptureOutcome, PairedCaptureResult,
 };
 use screenpipe_capture::{TreeWalkerWorker, TreeWalkerWorkerOutcome};
 use screenpipe_core::window_pattern::{self, WindowPattern};
@@ -310,7 +311,7 @@ async fn wait_for_warm_focus_or_timeout(
 /// Groups parameters that don't change between captures on the same monitor,
 /// keeping `do_capture`'s argument list manageable.
 pub(crate) struct CaptureParams<'a> {
-    pub db: &'a DatabaseManager,
+    pub db: Option<&'a DatabaseManager>,
     pub monitor: &'a SafeMonitor,
     pub monitor_id: u32,
     pub device_name: &'a str,
@@ -1016,7 +1017,7 @@ fn record_capture_skip(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn event_driven_capture_loop(
-    db: Arc<DatabaseManager>,
+    db: Option<Arc<DatabaseManager>>,
     monitor: Arc<SafeMonitor>,
     monitor_id: u32,
     device_name: String,
@@ -1056,13 +1057,19 @@ pub(crate) async fn event_driven_capture_loop(
     let screenshots_disabled_by_config = config.disable_screenshots;
     let focused_window_screenshots = config.focused_window_screenshots;
     let streaming_requested = config.streaming_mode;
-    let mut screenshot_disabled = screenshots_disabled_by_config;
+    let initially_power_pixel_paused = power_profile_rx
+        .as_ref()
+        .is_some_and(|rx| rx.borrow().screenshot_disabled);
+    let mut screenshot_disabled = screenshots_disabled_by_config || initially_power_pixel_paused;
     // Publish the effective state so /health can name an intentional pixel
     // pause instead of blaming Screen Recording permission for it (#5808).
     record_screenshot_capture_state(
         &vision_metrics,
         &monitor_liveness,
-        screenpipe_screen::ScreenshotCaptureState::resolve(screenshots_disabled_by_config, false),
+        screenpipe_screen::ScreenshotCaptureState::resolve(
+            screenshots_disabled_by_config,
+            initially_power_pixel_paused,
+        ),
     );
     let mut visual_check_enabled = config.visual_check_interval_ms > 0 && !screenshot_disabled;
     let mut visual_check_interval = Duration::from_millis(config.visual_check_interval_ms);
@@ -1176,7 +1183,7 @@ pub(crate) async fn event_driven_capture_loop(
         TreeWalkerWorker::spawn(format!("monitor-{monitor_id}"), tree_walker_config.clone())?;
 
     let capture_params = CaptureParams {
-        db: &db,
+        db: db.as_deref(),
         monitor: &monitor,
         monitor_id,
         device_name: &device_name,
@@ -1215,12 +1222,16 @@ pub(crate) async fn event_driven_capture_loop(
     // Skip if screen is locked — avoids storing black frames from sleep/lock.
     // Pre-capture DRM gate: skip if DRM content is focused (AX-only, no SCK).
     // Skip if outside work-hours schedule.
+    // Let the monitor settle before checking gates so a pause that starts
+    // during startup takes effect before the first capture.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     if !crate::sleep_monitor::screen_is_locked()
+        && !power_profile_rx
+            .as_ref()
+            .is_some_and(|rx| rx.borrow().capture_paused)
         && !crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, None)
         && !crate::schedule_monitor::schedule_paused()
     {
-        // Small delay to let the monitor settle after startup
-        tokio::time::sleep(Duration::from_millis(500)).await;
         // Let the capture proceed immediately after the settle delay.
         state.last_capture = Instant::now()
             .checked_sub(Duration::from_millis(500))
@@ -1238,7 +1249,10 @@ pub(crate) async fn event_driven_capture_loop(
                 None, // first capture — no elements ref
                 &mut walk_budget,
                 &mut ocr_gate,
-                screenshot_disabled,
+                screenshots_disabled_by_config
+                    || power_profile_rx
+                        .as_ref()
+                        .is_some_and(|rx| rx.borrow().screenshot_disabled),
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
                 &mut last_screenshot_focus_pid,
@@ -1256,7 +1270,7 @@ pub(crate) async fn event_driven_capture_loop(
                         let _ = comparer.compare(&output.image);
                     }
                 }
-                if let Some(ref result) = output.result {
+                if let Some(PairedCaptureOutcome::Indexed(ref result)) = output.result {
                     last_content_hash = result.content_hash;
                     // Only confirmed focused frames may anchor UI-event text.
                     last_frame_id = result.focused.then_some(result.frame_id);
@@ -1278,6 +1292,13 @@ pub(crate) async fn event_driven_capture_loop(
                     info!(
                         "startup capture for monitor {}: frame_id={}, dur={}ms",
                         monitor_id, result.frame_id, result.duration_ms
+                    );
+                } else if let Some(PairedCaptureOutcome::Raw { duration_ms }) = output.result {
+                    last_db_write = Instant::now();
+                    record_persisted_capture(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        Duration::from_millis(duration_ms),
                     );
                 } else if let Some(kind) = output.corrupt {
                     // Frame rejected as corrupt (black / green band) — distinct
@@ -1307,7 +1328,7 @@ pub(crate) async fn event_driven_capture_loop(
         }
     } else {
         info!(
-            "screen is locked on startup, skipping initial capture for monitor {}",
+            "capture is paused on startup, skipping initial capture for monitor {}",
             monitor_id
         );
     }
@@ -2271,7 +2292,7 @@ pub(crate) async fn event_driven_capture_loop(
                             monitor.release_capture_stream();
                         }
 
-                        if let Some(ref result) = output.result {
+                        if let Some(PairedCaptureOutcome::Indexed(ref result)) = output.result {
                             if focus_controller.hosts_focus_for_monitor(&monitor) {
                                 recording_detail.observe_capture(capture_started.elapsed());
                             }
@@ -2346,6 +2367,16 @@ pub(crate) async fn event_driven_capture_loop(
                                 result.duration_ms,
                                 output.elements_deduped,
                                 monitor_id
+                            );
+                        } else if let Some(PairedCaptureOutcome::Raw { duration_ms }) =
+                            output.result
+                        {
+                            last_db_write = Instant::now();
+                            correlation_ids.clear();
+                            record_persisted_capture(
+                                &vision_metrics,
+                                &monitor_liveness,
+                                Duration::from_millis(duration_ms),
                             );
                         } else {
                             // Capture skipped — content dedup, window filter, or
@@ -2562,7 +2593,7 @@ async fn push_to_hot_cache(
 /// Result of do_capture: paired capture result + the screenshot image for comparer reuse.
 struct CaptureOutput {
     /// None when content dedup skipped the capture (identical accessibility text).
-    result: Option<PairedCaptureResult>,
+    result: Option<PairedCaptureOutcome>,
     /// The captured image — reused for frame comparer update to avoid taking
     /// a redundant extra screenshot after each capture.
     image: image::DynamicImage,
@@ -3347,7 +3378,7 @@ async fn persist_masked_screenshot(
         .tree_walker
         .suspend_with_timeout(Duration::from_millis(250))
         .await;
-    let ctx = CaptureContext {
+    let ctx = OptionalDbCaptureContext {
         db: params.db,
         snapshot_writer: params.snapshot_writer,
         image: Arc::new(image),
@@ -3369,8 +3400,8 @@ async fn persist_masked_screenshot(
         ax_screenshot_coherent: false,
         focused_window_bounds: None,
     };
-    let result = paired_capture_with_snapshot(&ctx, None, None, true, snapshot_image).await?;
-    if let Some(sender) = params.semantic_tx {
+    let result = paired_capture_with_optional_db(&ctx, None, None, true, snapshot_image).await?;
+    if let (Some(sender), PairedCaptureOutcome::Indexed(result)) = (params.semantic_tx, &result) {
         sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
     }
     let image = Arc::try_unwrap(ctx.image).unwrap_or_else(|arc| (*arc).clone());
@@ -4272,7 +4303,7 @@ async fn do_capture(
         ax_screenshot_coherent,
     );
 
-    let ctx = CaptureContext {
+    let ctx = OptionalDbCaptureContext {
         db: params.db,
         snapshot_writer: params.snapshot_writer,
         image: Arc::new(image),
@@ -4301,9 +4332,9 @@ async fn do_capture(
     };
 
     let result = if defer_text_extraction {
-        paired_capture_with_snapshot(&ctx, None, None, true, snapshot_image).await?
+        paired_capture_with_optional_db(&ctx, None, None, true, snapshot_image).await?
     } else {
-        paired_capture_with_snapshot(
+        paired_capture_with_optional_db(
             &ctx,
             tree_snapshot.as_ref(),
             Some(ocr_gate),
@@ -4312,7 +4343,7 @@ async fn do_capture(
         )
         .await?
     };
-    if let Some(sender) = params.semantic_tx {
+    if let (Some(sender), PairedCaptureOutcome::Indexed(result)) = (params.semantic_tx, &result) {
         match tree_snapshot {
             Some(snapshot) if monitor_hosts_focus && ax_screenshot_coherent => {
                 let _ = sender.submit(SemanticProjectionJob::from_capture(
