@@ -22,7 +22,6 @@ import {
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
   hasConsumerAppSubscription,
-  isAppEntitlementAheadOfSystemClock,
   isDevBillingBypassEnabled,
   isDevLoginSkipEnabled,
   isDevLoginEnabled,
@@ -881,12 +880,6 @@ export function AppEntitlementGate({
   }
 
   const shouldVerifyPlan = localPlanPolicy === "unknown";
-  let clockRecovery: string | undefined;
-  if ((needsRefresh || shouldVerifyPlan) && isAppEntitlementAheadOfSystemClock(user)) {
-    clockRecovery = getDownloadPlatform()?.startsWith("windows")
-      ? ui("Your computer’s clock is behind. In Windows Settings, go to Time & language, then Date & time. Turn on Set time automatically, select Sync now, then refresh access.")
-      : ui("Your computer’s clock is behind. Sync the date and time in your system settings, then refresh access.");
-  }
 
   return (
     <EntitlementShell
@@ -896,11 +889,11 @@ export function AppEntitlementGate({
           : ui("Subscription required")
       }
       description={
-        clockRecovery ?? (needsRefresh
+        needsRefresh
           ? ui("{value1} has saved app access, but screenpipe needs to verify it again before recording starts.", { value1: email })
           : shouldVerifyPlan
             ? ui("Screenpipe could not verify the plan for {value1}. refresh the account before recording starts.", { value1: email })
-            : ui("{value1} is signed in, but {value2} does not include active app access.", { value1: email, value2: planLabel }))
+          : ui("{value1} is signed in, but {value2} does not include active app access.", { value1: email, value2: planLabel })
       }
     >
       <div className="flex flex-col gap-3">
@@ -940,7 +933,7 @@ export function AppEntitlementGate({
         >
           Use different account
         </Button>
-        {refreshError && !clockRecovery && (
+        {refreshError && (
           <p className="font-mono text-[11px] leading-5 text-destructive">
             Refresh failed
           </p>

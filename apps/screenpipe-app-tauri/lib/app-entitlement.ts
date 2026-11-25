@@ -553,11 +553,6 @@ export function hasPersistedEntitlementEvidence(user: AppUser | null | undefined
   return entitlement?.features?.app === true || entitlement?.active === true;
 }
 
-export function isAppEntitlementAheadOfSystemClock(user: AppUser | null | undefined): boolean {
-  const checkedAt = parseEntitlementTime(asEntitlement(user?.entitlement)?.checked_at);
-  return checkedAt !== null && checkedAt > Date.now() + APP_ENTITLEMENT_CLOCK_SKEW_MS;
-}
-
 export function needsAppEntitlementRefresh(user: AppUser | null | undefined) {
   if (!user?.token) return false;
 
@@ -659,9 +654,45 @@ export function getBusinessCapacityUpgrade(
   }
 }
 
-export function normalizeAppUser(rawUser: any, token: string): AppUser {
-  const checkedAt = new Date().toISOString();
-  const rawEntitlement = asEntitlement(rawUser?.entitlement);
+function alignFreshEntitlementClock(
+  entitlement: AppEntitlement,
+  receivedAt: number,
+  requestStartedAt: number,
+): AppEntitlement {
+  const serverCheckedAt = parseEntitlementTime(entitlement.checked_at);
+  if (serverCheckedAt === null || serverCheckedAt - receivedAt <= APP_ENTITLEMENT_CLOCK_SKEW_MS) {
+    return entitlement;
+  }
+
+  // The authenticated POST generated checked_at on the server. Anchor the
+  // local snapshot at request start so response latency cannot add time to
+  // any remaining entitlement window. Never rebase a cached snapshot.
+  const localCheckedAt = Math.min(requestStartedAt, receivedAt);
+  const offset = serverCheckedAt - localCheckedAt;
+  const localTime = (value: string | null | undefined) => {
+    const timestamp = parseEntitlementTime(value);
+    return timestamp === null ? value : new Date(timestamp - offset).toISOString();
+  };
+  return {
+    ...entitlement,
+    checked_at: new Date(localCheckedAt).toISOString(),
+    current_period_end: localTime(entitlement.current_period_end),
+    expires_at: localTime(entitlement.expires_at),
+    grace_until: localTime(entitlement.grace_until),
+  };
+}
+
+export function normalizeAppUser(
+  rawUser: any,
+  token: string,
+  requestStartedAt?: number,
+): AppUser {
+  const receivedAt = Date.now();
+  const checkedAt = new Date(receivedAt).toISOString();
+  const serverEntitlement = asEntitlement(rawUser?.entitlement);
+  const rawEntitlement = serverEntitlement && requestStartedAt !== undefined
+    ? alignFreshEntitlementClock(serverEntitlement, receivedAt, requestStartedAt)
+    : serverEntitlement;
   const cloudSubscribed = rawUser?.cloud_subscribed === true;
   const appEntitled =
     typeof rawUser?.app_entitled === "boolean"

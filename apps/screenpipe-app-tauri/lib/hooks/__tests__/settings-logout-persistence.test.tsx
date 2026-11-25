@@ -3,6 +3,7 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getLocalPlanPolicy } from "@/lib/app-entitlement";
 import { SettingsProvider, createDefaultSettingsObject, useSettings } from "../use-settings";
 
 const state = vi.hoisted(() => ({
@@ -71,6 +72,44 @@ beforeEach(() => {
   } }), { status: 200 })));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it("persists a verified Standard trial when the server clock is over five minutes ahead", async () => {
+  const serverCheckedAt = Date.now() + 321_000;
+  const trialLength = 7 * 24 * 60 * 60 * 1000;
+  const fetchAccount = vi.fn(async () => new Response(JSON.stringify({ user: {
+    id: "test-user",
+    email: "trial@example.test",
+    app_entitled: true,
+    cloud_subscribed: false,
+    subscription_plan: "standard",
+    entitlement: {
+      active: true,
+      plan: "standard",
+      source: "subscription",
+      status: "trialing",
+      checked_at: new Date(serverCheckedAt).toISOString(),
+      current_period_end: new Date(serverCheckedAt + trialLength).toISOString(),
+      grace_until: null,
+      features: { app: true, cloud: false },
+    },
+  } }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchAccount);
+  const hook = await mount();
+  const requestStartedAt = Date.now();
+
+  await act(async () => {
+    await hook.result.current.loadUser("synthetic-session-token", true);
+  });
+
+  const { user } = state.settings;
+  expect(getLocalPlanPolicy(user)).toBe("verified-paid");
+  const deviceCheckedAt = Date.parse(user.entitlement.checked_at);
+  expect(deviceCheckedAt).toBeGreaterThanOrEqual(requestStartedAt);
+  expect(deviceCheckedAt).toBeLessThanOrEqual(Date.now());
+  expect(Date.parse(user.entitlement.current_period_end) - deviceCheckedAt).toBe(trialLength);
+  expect(user.entitlement.grace_until).toBeNull();
+  expect(state.token).toBe("synthetic-session-token");
+});
 
 describe("logout during account persistence", () => {
   it.each([false, true])("does not restore the native session after signout (unknown plan=%s)", async unknownPlan => {
