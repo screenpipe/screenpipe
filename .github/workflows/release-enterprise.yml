@@ -21,7 +21,7 @@ on:
         description: "Version expected at commit_hash"
         required: false
       localization_run_id:
-        description: "Consumer run containing the finalized translation snapshot (omit for manual recovery)"
+        description: "Consumer run containing the shared desktop release inputs (omit for manual recovery)"
         required: false
         type: string
       force_github_runners:
@@ -100,6 +100,7 @@ jobs:
       actions: read
     outputs:
       enabled: ${{ steps.localization.outputs.enabled }}
+      frontend: ${{ steps.localization.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,6 +113,7 @@ jobs:
       - id: localization
         uses: ./.release-workflow/.github/actions/prepare-desktop-localization
         with:
+          build-frontend: "true"
           release-sha: ${{ needs.resolve-release.outputs.release_sha }}
           source-run-id: ${{ inputs.localization_run_id }}
           token: ${{ github.token }}
@@ -122,6 +124,7 @@ jobs:
   release-enterprise-windows:
     needs: [resolve-release, localization]
     env:
+      SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
     runs-on: ${{ inputs.force_github_runners && 'windows-2022' || 'screenpipe-release-windows' }}
@@ -139,7 +142,7 @@ jobs:
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
 
-      - name: Download finalized localization snapshot
+      - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
@@ -573,6 +576,7 @@ jobs:
   release-enterprise-linux:
     needs: [resolve-release, localization]
     env:
+      SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
     runs-on: ${{ inputs.force_github_runners && 'ubuntu-24.04' || 'screenpipe-release-linux' }}
@@ -582,7 +586,7 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
 
-      - name: Download finalized localization snapshot
+      - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
@@ -870,6 +874,7 @@ jobs:
   release-enterprise-macos:
     needs: [resolve-release, localization]
     env:
+      SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
     name: release-enterprise-macos (${{ matrix.target }})
@@ -894,7 +899,7 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
 
-      - name: Download finalized localization snapshot
+      - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:

@@ -7,7 +7,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
-import { computeInputHash } from './build-frontend.js'
+import { computeInputHash, verifyPrebuiltFrontend } from './build-frontend.js'
 
 test('localization mode and finalized snapshot invalidate the frontend cache; raw downloads do not', async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-localization-hash-'))
@@ -92,6 +92,23 @@ test('localized packaging rejects a missing or English-only snapshot, including 
 		await fs.writeFile(path.join(chunks, 'stale-provider.js'), '{"revision":"off"}')
 		await expect(verifyLocalizationArtifact(root, snapshot)).rejects.toThrow('English-only')
 		await verifyLocalizationArtifact(root, { mode: 'off' })
+	} finally {
+		await fs.rm(root, { recursive: true, force: true })
+	}
+})
+
+test('shared release exports require both an index and the finalized localization revision', async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-prebuilt-frontend-'))
+	const snapshot = { mode: 'cached', revision: 'release-snapshot' }
+	try {
+		await expect(verifyPrebuiltFrontend(root, snapshot)).rejects.toThrow('missing index.html')
+		await fs.writeFile(path.join(root, 'index.html'), '<!doctype html>')
+		await expect(verifyPrebuiltFrontend(root, snapshot)).rejects.toThrow('missing from the exported JavaScript')
+		const directory = path.join(root, '_next/static/chunks')
+		await fs.mkdir(directory, { recursive: true })
+		await fs.writeFile(path.join(directory, 'provider.js'), snapshot.revision)
+		await verifyPrebuiltFrontend(root, snapshot)
+		await expect(verifyPrebuiltFrontend(root, { mode: 'off' })).rejects.toThrow('requires localization')
 	} finally {
 		await fs.rm(root, { recursive: true, force: true })
 	}

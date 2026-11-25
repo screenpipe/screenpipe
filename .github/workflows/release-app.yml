@@ -168,6 +168,7 @@ jobs:
       actions: read
     outputs:
       enabled: ${{ steps.localization.outputs.enabled }}
+      frontend: ${{ steps.localization.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -180,6 +181,7 @@ jobs:
       - id: localization
         uses: ./.release-workflow/.github/actions/prepare-desktop-localization
         with:
+          build-frontend: "true"
           release-sha: ${{ needs.check_commit.outputs.release_sha }}
           token: ${{ github.token }}
           gt-project-id: ${{ secrets.GT_PROJECT_ID }}
@@ -227,6 +229,7 @@ jobs:
     runs-on: ${{ matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
     timeout-minutes: 120
     env:
+      SCREENPIPE_PREBUILT_FRONTEND: ${{ needs.localization.outputs.frontend == 'true' && format('{0}/.release-localization/frontend', github.workspace) || '' }}
       SCREENPIPE_I18N_MODE: cached
       SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
     steps:
@@ -260,7 +263,7 @@ jobs:
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
 
-      - name: Download finalized localization snapshot
+      - name: Download shared desktop release inputs
         if: needs.localization.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:

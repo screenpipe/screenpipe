@@ -13,7 +13,9 @@ The app release pipeline deliberately separates artifact preparation from public
 
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
-`Release App` builds consumer artifacts first, then dispatches `Release Enterprise` with the same validated commit and version. Before dispatch, it adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise build cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is retained for recovery, not as a separate step in a normal release.
+`Release App` builds consumer artifacts first, then dispatches `Release Enterprise` with the same validated commit and version. Before dispatch, it adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise build cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is available for recovery.
+
+The localization preparation job builds one static desktop frontend alongside the finalized translation snapshot. All native targets in both workflows consume the same export. A manual enterprise recovery can prepare its own export, and historical source revisions still use their original build hooks. Native packaging still produces both application identities. The enterprise package controls legacy updater routing and holds managed deployment behavior, including the persistence installers.
 
 ## Only a human may publish
 
