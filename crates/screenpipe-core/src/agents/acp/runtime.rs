@@ -6275,7 +6275,9 @@ mod tests {
         assert!(source.contains("name: \"user_profile\""));
         assert!(source.contains("name: \"skill_manage\""));
         assert!(source.contains("name: \"frame_image\""));
-        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__frame_image"));
+        assert!(is_screenpipe_read_tool(
+            "mcp__screenpipe-tools__frame_image"
+        ));
         assert!(source.contains("/agent/profile/manage"));
         assert!(source.contains("/agent/skills/manage"));
     }
