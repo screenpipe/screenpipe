@@ -787,8 +787,8 @@ pub(crate) struct ListArtifactsQuery {
     /// declarations (newest by mtime).
     #[serde(default = "default_per_pipe_limit")]
     pub per_pipe_limit: u32,
-    /// Include renderer-facing structured output records. Hidden by default so
-    /// internal Live View JSON does not appear in the user-facing Artifacts UI.
+    /// Include internal structured output records. Hidden by default so
+    /// machine-only JSON does not appear in the user-facing Artifacts UI.
     #[serde(default)]
     pub include_internal: bool,
 }

@@ -102,12 +102,6 @@ export const PORTABLE_AGENT_EXTENSION_CATALOG: PortableAgentExtensionCatalogItem
     summary: "Save finished reports, notes, code, and images to the Artifacts library.",
     tools: ["save_artifact"],
   },
-  {
-    id: "live-views",
-    name: "Live Views",
-    summary: "Read or update saved dashboards when the user asks for them.",
-    tools: ["live_view"],
-  },
 ];
 
 export const PI_EXTENSION_CATALOG: PiExtensionCatalogItem[] = [

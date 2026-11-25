@@ -29,12 +29,12 @@ import { commands } from "@/lib/utils/tauri";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
-import { ONBOARDING_GOALS } from "@/lib/live-views/onboarding-goals";
 import {
   DEFAULT_USER_GOAL_CATEGORY,
   normalizeUserGoalCategory,
+  ONBOARDING_GOALS,
   type UserGoalCategory,
-} from "@/lib/live-views/onboarding-activation";
+} from "@/lib/onboarding-goals";
 import posthog from "posthog-js";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */

@@ -65,7 +65,6 @@ pub mod health_identity;
 pub mod high_fps_controller;
 pub mod history_access;
 pub mod hot_frame_cache;
-pub mod live_views;
 pub mod local_chat;
 pub mod logging;
 mod mcp_call;

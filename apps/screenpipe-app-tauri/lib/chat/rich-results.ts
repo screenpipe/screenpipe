@@ -12,7 +12,6 @@ export const CHAT_RICH_RESULT_KINDS = [
   "scheduled-task",
   "artifact",
   "chat",
-  "live-view",
   "link",
 ] as const;
 
@@ -35,7 +34,6 @@ const CHAT_RICH_RESULT_KIND_LABELS: Record<ChatRichResultKind, string> = {
   "scheduled-task": "Scheduled task",
   artifact: "Artifact",
   chat: "Chat",
-  "live-view": "Live View",
   link: "Web resource",
 };
 
@@ -44,7 +42,7 @@ export type ChatRichResult = {
   state: ChatRichResultState;
   title: string;
   subtitle?: string;
-  /** Installed Pipe slug for scheduled tasks, conversation id for chats, or dashboard id for Live Views. */
+  /** Installed Pipe slug for scheduled tasks or conversation id for chats. */
   id?: string;
   /** Absolute local path for saved artifacts. */
   path?: string;
@@ -110,7 +108,7 @@ function validTarget(
     const path = safeAbsolutePath(attrs.path);
     return path ? { path } : null;
   }
-  if (kind === "chat" || kind === "live-view") {
+  if (kind === "chat") {
     return attrs.id && SAFE_LOCAL_ID.test(attrs.id) ? { id: attrs.id } : null;
   }
   const url = safeHttpUrl(attrs.url);

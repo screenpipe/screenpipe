@@ -18,27 +18,18 @@ import {
   LEARNING_WINDOW_RESET_EVENT,
   resetLearningWindow,
 } from "@/lib/first-run/learning-window";
-import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
 export type OnboardingCompletionContext = {
   method:
-    // Setup finished at its last slide. This is now the ordinary path: setup
-    // no longer builds a dashboard, so completion is not tied to a Live View
-    // outcome. The live_view_* methods remain for installs that resume mid
-    // flow and for the enterprise short-circuit.
     | "setup_finished"
     | "pipes_installed"
     | "pipe_step_skipped"
-    | "live_view_deferred"
     | "hidden_enterprise"
-    | "live_view_created"
-    | "existing_live_view_selected"
     | "ai_connections_selected";
   pipeCount?: number;
   customized?: boolean;
-  dashboardBlockCount?: number;
   goalCategory?: string;
-} & Partial<OnboardingLiveViewFlowProperties>;
+};
 
 interface OnboardingState {
   onboardingData: OnboardingStore;
@@ -107,18 +98,8 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           completion_method: context.method,
           pipe_count: context.pipeCount,
           customized: context.customized,
-          ...(context.dashboardBlockCount !== undefined
-            ? { dashboard_block_count: context.dashboardBlockCount }
-            : {}),
           ...(context.goalCategory
             ? { goal_category: context.goalCategory }
-            : {}),
-          ...(context.live_view_flow_variant
-            ? {
-                live_view_flow_variant: context.live_view_flow_variant,
-                existing_live_view_count_bucket:
-                  context.existing_live_view_count_bucket,
-              }
             : {}),
         },
         { send_instantly: true },

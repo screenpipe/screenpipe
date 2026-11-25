@@ -411,7 +411,6 @@ Never access Screenpipe's live db.sqlite, db.sqlite-wal, or db.sqlite-shm direct
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
 - for a connection returned with mcp=true (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive), use `sp_mcp_list_tools` then `sp_mcp_call` (with its `mcp_server_id`) to actually use it — not the connection proxy.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
-- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard. A turn that asks you to design a dashboard for review uses `screenpipe_live_view` and `screenpipe_live_view_propose` instead, and those tools are already registered.
 - screenpipe seeds on-demand task guides in `.pi/skills/*/SKILL.md` under your working directory. When tool descriptions are not enough for specialized work, read only the closest matching skill. Do not enumerate or preload unrelated skills. If the task already supplies a complete tool workflow, use that narrower contract instead of loading a general skill.
 Do not curl localhost for these; call the tools.";
 
@@ -2723,22 +2722,21 @@ fn valid_terminal_result_directive(line: &str) -> bool {
     let Some(state) = attributes.get("state").map(String::as_str) else {
         return false;
     };
-    if !matches!(
-        kind,
-        "scheduled-task" | "artifact" | "chat" | "live-view" | "link"
-    ) || !matches!(
-        state,
-        "proposed"
-            | "created"
-            | "updated"
-            | "completed"
-            | "paused"
-            | "deleted"
-            | "missing"
-            | "error"
-    ) || attributes
-        .get("title")
-        .is_none_or(|title| title.trim().is_empty())
+    if !matches!(kind, "scheduled-task" | "artifact" | "chat" | "link")
+        || !matches!(
+            state,
+            "proposed"
+                | "created"
+                | "updated"
+                | "completed"
+                | "paused"
+                | "deleted"
+                | "missing"
+                | "error"
+        )
+        || attributes
+            .get("title")
+            .is_none_or(|title| title.trim().is_empty())
     {
         return false;
     }
@@ -2750,7 +2748,7 @@ fn valid_terminal_result_directive(line: &str) -> bool {
             "artifact" => attributes
                 .get("path")
                 .is_some_and(|path| valid_absolute_result_path(path)),
-            "chat" | "live-view" => attributes
+            "chat" => attributes
                 .get("id")
                 .is_some_and(|id| valid_local_result_id(id)),
             "link" => attributes.get("url").is_some_and(|url| {
@@ -3633,7 +3631,7 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
     // http-only agents (Cursor, Copilot) — all plain GETs of the user's own
     // recordings, so auto-approved exactly like their mcp__screenpipe__*
     // equivalents on stdio. The write/bridge tools (save_artifact, sp_mcp_call,
-    // screenpipe_connect_app, live_view, sp_web_search, send_to_chat) stay NOT
+    // screenpipe_connect_app, sp_web_search, send_to_chat) stay NOT
     // auto-approved. `search_chats` is local and read-only.
     matches!(
         tool_title,
@@ -3657,10 +3655,10 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
 /// equal: raw Pi sends the bare name (`search-content`), stdio ACP agents send
 /// `mcp__screenpipe__search-content`, http-only agents (Cursor, Copilot) send
 /// `mcp__screenpipe-tools__frame_context`, and Cursor's permission id is
-/// `<server>-<tool>` (`screenpipe-tools-screenpipe_live_view`). Returns `None`
+/// `<server>-<tool>` (`screenpipe-tools-save_artifact`). Returns `None`
 /// for a human title like "Read /a/b.ts", which is a native agent step and not
 /// an MCP tool. Cursor's ACP permission title joins the id and the tool with
-/// `": "` (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`); that
+/// `": "` (`screenpipe-tools-save_artifact: save_artifact`); that
 /// joined string is split in `scoped_tool_name` before it gets here.
 fn normalized_tool_name(title: &str) -> Option<String> {
     let title = title.trim();
@@ -3697,7 +3695,7 @@ fn scoped_tool_allowed(allowlist: &[String], title: Option<&str>) -> bool {
 /// The tool a permission title names, or `None` when it names no single tool.
 ///
 /// Cursor's MCP approval title is `${registeredName}: ${toolName}`
-/// (`screenpipe-tools-screenpipe_live_view: screenpipe_live_view`). The joined
+/// (`screenpipe-tools-save_artifact: save_artifact`). The joined
 /// string contains a space, so it is not itself a tool id. Both halves must
 /// name the same tool: a title is agent-supplied text, and accepting either
 /// half alone would approve a native step whose description merely ends in
@@ -5632,14 +5630,13 @@ mod tests {
             Some("frame-context")
         );
         // Cursor's permission title is `<server>-<tool>`, not the mcp__ form.
-        // Missing this cancelled every Live View read as "User rejected".
         assert_eq!(
-            normalized_tool_name("screenpipe-tools-screenpipe_live_view").as_deref(),
-            Some("screenpipe-live-view")
+            normalized_tool_name("screenpipe-tools-save_artifact").as_deref(),
+            Some("save-artifact")
         );
         assert_eq!(
-            normalized_tool_name("screenpipe-tools-screenpipe_live_view_propose").as_deref(),
-            Some("screenpipe-live-view-propose")
+            normalized_tool_name("screenpipe-tools-query_recordings").as_deref(),
+            Some("query-recordings")
         );
 
         // Human titles are native agent steps, not MCP tools.
@@ -5661,40 +5658,33 @@ mod tests {
             &allowlist,
             Some("mcp__screenpipe-tools__get_meeting")
         ));
-        let live_view = vec!["screenpipe-live-view".to_owned()];
+        let save_artifact = vec!["save-artifact".to_owned()];
         assert!(scoped_tool_allowed(
-            &live_view,
-            Some("screenpipe-tools-screenpipe_live_view")
+            &save_artifact,
+            Some("screenpipe-tools-save_artifact")
         ));
         // Cursor's ACP permission title is `${registeredName}: ${toolName}`.
-        // The space used to make the whole string look like a human title, so
-        // every Live View call came back "User rejected MCP ... Cancelled".
         assert!(scoped_tool_allowed(
-            &live_view,
-            Some("screenpipe-tools-screenpipe_live_view: screenpipe_live_view")
-        ));
-        let propose = vec!["screenpipe-live-view-propose".to_owned()];
-        assert!(scoped_tool_allowed(
-            &propose,
-            Some("screenpipe-tools-screenpipe_live_view_propose: screenpipe_live_view_propose")
+            &save_artifact,
+            Some("screenpipe-tools-save_artifact: save_artifact")
         ));
         assert!(!scoped_tool_allowed(
-            &live_view,
+            &save_artifact,
             Some("Read `src/main.rs`: notes")
         ));
         // Agent-supplied text that only ends in an allowlisted tool name is
         // not that tool: both halves of a joined title must agree.
         assert!(!scoped_tool_allowed(
-            &live_view,
-            Some("rm -rf ~: screenpipe_live_view")
+            &save_artifact,
+            Some("rm -rf ~: save_artifact")
         ));
         assert!(!scoped_tool_allowed(
-            &live_view,
-            Some("Shell: screenpipe_live_view")
+            &save_artifact,
+            Some("Shell: save_artifact")
         ));
         assert!(!scoped_tool_allowed(
-            &live_view,
-            Some("screenpipe-tools-screenpipe_live_view: get_meeting")
+            &save_artifact,
+            Some("screenpipe-tools-save_artifact: get_meeting")
         ));
 
         // A screenpipe tool outside the list, another MCP server, a native step,
@@ -6725,7 +6715,6 @@ mod tests {
             r#"::screenpipe-result{kind="artifact" state="completed" title="Export" path="/tmp/export.json"}"#,
             r#"::screenpipe-result{kind="artifact" state="completed" title="Export" path="C:\\tmp\\export.json"}"#,
             r#"::screenpipe-result{kind="chat" state="created" title="Follow-up" id="chat:123"}"#,
-            r#"::screenpipe-result{kind="live-view" state="updated" title="Dashboard" id="focus.view"}"#,
             r#"::screenpipe-result{kind="link" state="completed" title="Docs" url="https://screenpipe.com/docs"}"#,
             r#"::screenpipe-result{kind="scheduled-task" state="error" title="Schedule failed"}"#,
         ] {

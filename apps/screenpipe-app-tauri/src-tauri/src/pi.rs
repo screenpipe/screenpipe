@@ -254,12 +254,11 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 10] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
     "answer-recovery.ts",
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
-    "live-views.ts",
     "connection-gate.ts",
     "context-pruning.ts",
     "tinfoil.ts",
@@ -315,11 +314,7 @@ fn coding_workspace_resource_args(project_dir: &Path) -> Result<Vec<String>, Str
     let mut extension_names = MANAGED_PI_EXTENSION_FILES
         .iter()
         .copied()
-        .chain([
-            "self-improvement.ts",
-            "chat-control.ts",
-            "context-usage.ts",
-        ])
+        .chain(["self-improvement.ts", "chat-control.ts", "context-usage.ts"])
         .collect::<Vec<_>>();
     extension_names.sort();
     extension_names.dedup();
@@ -1845,10 +1840,6 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_mcp_bridge_extension(project_dir)?;
     // Save artifact: lets the agent register deliverables in the Artifacts library.
     ensure_save_artifact_extension(project_dir)?;
-    // Live Views: lazy read/edit access for normal chat and focused composers.
-    // pi-acp is pi but can't consume the bundled MCP server, so it needs the
-    // extension for the same reason native pi does.
-    ensure_live_views_extension(project_dir)?;
     // Connection gate: lets Pi block on inline app authorization before
     // continuing app-dependent tasks.
     ensure_connection_gate_extension(project_dir)?;
@@ -1866,7 +1857,6 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "tinfoil.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
-    "live-views.ts",
     "connection-gate.ts",
 ];
 
@@ -2003,25 +1993,6 @@ fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to write save-artifact extension: {}", e))?;
 
     debug!("save-artifact extension installed at {:?}", ext_path);
-    Ok(())
-}
-
-/// Install one compact Live View tool for every normal chat session. The tool
-/// loads a selected definition only when the model calls it, so dashboard
-/// contents never become ambient prompt context.
-fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
-    let ext_dir = std::path::Path::new(project_dir)
-        .join(".pi")
-        .join("extensions");
-    std::fs::create_dir_all(&ext_dir)
-        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
-
-    let ext_path = ext_dir.join("live-views.ts");
-    let ext_content = include_str!("../assets/extensions/live-views.ts");
-    std::fs::write(&ext_path, ext_content)
-        .map_err(|e| format!("Failed to write Live Views extension: {}", e))?;
-
-    debug!("Live Views extension installed at {:?}", ext_path);
     Ok(())
 }
 
@@ -7926,7 +7897,6 @@ error: InstallFailed extracting tarball"#;
         super::ensure_workflow_feedback_extension(temp.path().to_str().unwrap()).unwrap();
         let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
         std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
-        std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
         std::fs::write(extension_dir.join("context-pruning.ts"), header).unwrap();
         std::fs::write(extension_dir.join("third-party.ts"), header).unwrap();
 
@@ -7938,9 +7908,8 @@ error: InstallFailed extracting tarball"#;
             .collect::<Vec<_>>();
 
         assert_eq!(args[0], "--no-extensions");
-        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 4);
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 3);
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
-        assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("context-pruning.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("workflow-feedback.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
@@ -7973,7 +7942,7 @@ error: InstallFailed extracting tarball"#;
     #[test]
     fn test_tool_allowlist_restricts_bounded_pi_sessions() {
         let mut config = make_provider_config("screenpipe-cloud", "auto");
-        config.allowed_tools = Some(vec!["screenpipe_live_view".to_string()]);
+        config.allowed_tools = Some(vec!["save_artifact".to_string()]);
         let mut command = Command::new("pi");
         super::apply_pi_tool_allowlist(&mut command, Some(&config));
         let args = command
@@ -7981,7 +7950,7 @@ error: InstallFailed extracting tarball"#;
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        assert_eq!(args, vec!["--tools", "screenpipe_live_view"]);
+        assert_eq!(args, vec!["--tools", "save_artifact"]);
     }
 
     #[test]
@@ -8319,7 +8288,7 @@ error: InstallFailed extracting tarball"#;
     /// baseline seeds Screenpipe skills, self-improvement and Live Views
     /// extensions, and registers
     /// the required pi-subagents package — the exact pieces the pi-acp path now
-    /// calls ensure_screenpipe_skill / ensure_live_views_extension /
+    /// calls ensure_screenpipe_skill / ensure_save_artifact_extension /
     /// ensure_pi_config (which registers the setting) + ensure_required_pi_-
     /// extension_package for. So an existing raw-Pi install can't be what makes
     /// these appear. The physical pi-subagents npm install and a real pinned
@@ -8364,18 +8333,6 @@ error: InstallFailed extracting tarball"#;
                 .join("context-usage.ts")
                 .is_file(),
             "context-usage extension must be seeded for native Pi"
-        );
-
-        // The Live Views extension (the pi-acp parity fix) materializes too.
-        super::ensure_live_views_extension(project_dir).expect("seed live-views");
-        assert!(
-            project
-                .path()
-                .join(".pi")
-                .join("extensions")
-                .join("live-views.ts")
-                .is_file(),
-            "live-views extension must be seeded for pi-acp on a fresh profile"
         );
 
         // The required pi-subagents package is registered from empty settings —

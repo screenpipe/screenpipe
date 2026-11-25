@@ -87,15 +87,16 @@ describe("submitNotificationFeedback", () => {
     expect(JSON.parse(request.body)).not.toHaveProperty("comment");
   });
 
-  it("shows feedback controls on the H1 onboarding follow-up", () => {
+  it("marks pipe notifications as feedback-eligible", () => {
+    expect(isNotificationFeedbackEligible(notification)).toBe(true);
     expect(
       isNotificationFeedbackEligible({
-        id: "onboarding-live-view-follow-up:first-dashboard",
+        id: "system-notice",
         type: "system",
-        title: "Launch focus has new context",
-        body: "open this Live View",
+        title: "Update",
+        body: "Ready",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

@@ -12,7 +12,6 @@ vi.mock("posthog-js", () => ({
 
 import {
   onboardingFunnel,
-  onboardingLiveViewFlowProperties,
   ONBOARDING_FUNNEL_STEPS,
 } from "./onboarding-funnel";
 
@@ -34,47 +33,22 @@ describe("onboardingFunnel", () => {
   });
 
   it("does not allow arbitrary goal text into the event", () => {
-    onboardingFunnel.goalSubmitted(
-      "private customer prompt" as never,
-      onboardingLiveViewFlowProperties(0),
-    );
+    onboardingFunnel.goalSubmitted("private customer prompt" as never);
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
       funnel_version: "onboarding_ui_v2",
       step: "goal_submitted",
       goal_category: "unknown",
-      live_view_flow_variant: "first_live_view",
-      existing_live_view_count_bucket: "none",
-    });
-  });
-
-  it("separates returning users with existing Live Views", () => {
-    onboardingFunnel.liveViewCreated(
-      "work_memory",
-      onboardingLiveViewFlowProperties(5),
-    );
-
-    expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-      funnel_version: "onboarding_ui_v2",
-      step: "live_view_created",
-      goal_category: "work_memory",
-      live_view_flow_variant: "existing_live_views",
-      existing_live_view_count_bucket: "multiple",
     });
   });
 
   it("keeps the AI-context choice in the stable goal-submission funnel", () => {
-    onboardingFunnel.goalSubmitted(
-      "ai_context",
-      onboardingLiveViewFlowProperties(0),
-    );
+    onboardingFunnel.goalSubmitted("ai_context");
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
       funnel_version: "onboarding_ui_v2",
       step: "goal_submitted",
       goal_category: "ai_context",
-      live_view_flow_variant: "first_live_view",
-      existing_live_view_count_bucket: "none",
     });
   });
 

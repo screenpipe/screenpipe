@@ -175,7 +175,7 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
 /// Explicitly install one trusted Pipe bundled with the app.
 ///
 /// Unlike startup installation, this clears a deletion tombstone because the
-/// user has chosen a Live View kit that requires the Pipe. Existing local
+/// user explicitly requested the bundled Pipe. Existing local
 /// customization is preserved and never overwritten.
 pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
     let content = BUNDLED_BUILTIN_PIPES
@@ -2861,7 +2861,7 @@ pub type SchedulerRunGuard = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// Per-pipe run context resolved at scheduler launch time.
 ///
-/// Set by the engine layer, which owns the Live View store. Returning
+/// Set by the engine layer. Returning
 /// `Some(block)` appends an already-rendered context block to that one run's
 /// prompt; returning `None` leaves the prompt untouched. Kept synchronous and
 /// infallible so a slow or failing lookup can never delay or skip a run.
@@ -3058,8 +3058,8 @@ pub struct PipeManager {
     /// Returning a reason consumes the due occurrence without launching it.
     scheduler_run_guard: Option<SchedulerRunGuard>,
     /// Optional per-pipe context resolved immediately before a scheduler run.
-    /// Lets the engine give a scheduled run the same Live View target authority
-    /// the foreground refresh path already sends.
+    /// Lets the engine give a scheduled run the same target context
+    /// the foreground run path already sends.
     scheduled_run_context: Option<ScheduledRunContext>,
     /// Generation counter — incremented on every start_scheduler, checked
     /// in the scheduler loop. If the loop's generation doesn't match, it
@@ -6119,9 +6119,7 @@ impl PipeManager {
 
     /// Resolve extra per-run context for scheduled and event runs.
     ///
-    /// Used by the engine to hand a run the Live View targets it owns, so a
-    /// Pipe feeding several dashboards refreshes all of them instead of
-    /// satisfying its prompt with whichever one it happens to pick.
+    /// Used by the engine to hand a run any structured output targets it owns.
     pub fn set_scheduled_run_context(&mut self, resolver: ScheduledRunContext) {
         self.scheduled_run_context = Some(resolver);
     }
@@ -6944,7 +6942,7 @@ impl PipeManager {
                         local_api_key.as_deref(),
                         run_agent == "pi" && pi_package_enabled("pi-subagents"),
                     );
-                    // Resolve this run's own context (Live View targets it owns)
+                    // Resolve this run's own context (structured output targets)
                     // and append it to the shared context, exactly as the
                     // foreground `/pipes/:id/run` path does.
                     let run_scoped_context = scheduled_run_context

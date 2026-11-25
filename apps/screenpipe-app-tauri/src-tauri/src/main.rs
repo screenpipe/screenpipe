@@ -56,7 +56,6 @@ mod audio_exclusions;
 mod whisper_vulkan_tests;
 mod auth_token;
 mod acquisition_handoff;
-mod brain_views;
 mod calendar;
 mod capture_session;
 mod chat_control;

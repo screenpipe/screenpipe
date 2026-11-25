@@ -147,18 +147,15 @@ describe("useOnboarding measurement", () => {
     expect(mocks.emit).not.toHaveBeenCalled();
   });
 
-  it("opens the personalized dashboard without launching the generic Pipe tour", async () => {
+  it("opens Home without launching the generic Pipe tour on setup completion", async () => {
     localStorage.setItem("screenpipe:pipes-collapsed", "true");
     localStorage.setItem("screenpipe:first-run-guide-pending", "true");
     mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
 
     await useOnboarding.getState().completeOnboarding({
-      method: "live_view_created",
+      method: "setup_finished",
       pipeCount: 2,
-      dashboardBlockCount: 5,
       goalCategory: "work_memory",
-      live_view_flow_variant: "existing_live_views",
-      existing_live_view_count_bucket: "multiple",
     });
 
     expect(
@@ -166,20 +163,17 @@ describe("useOnboarding measurement", () => {
     ).toBeNull();
     expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("true");
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
-      url: "screenpipe://home?section=brain",
+      url: "screenpipe://home?section=home",
     });
     expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_requested",
       {
         attempt_id: expect.any(String),
-        completion_method: "live_view_created",
+        completion_method: "setup_finished",
         pipe_count: 2,
         customized: undefined,
-        dashboard_block_count: 5,
         goal_category: "work_memory",
-        live_view_flow_variant: "existing_live_views",
-        existing_live_view_count_bucket: "multiple",
       },
       { send_instantly: true },
     );
@@ -191,8 +185,6 @@ describe("useOnboarding measurement", () => {
     await useOnboarding.getState().completeOnboarding({
       method: "ai_connections_selected",
       goalCategory: "ai_context",
-      live_view_flow_variant: "first_live_view",
-      existing_live_view_count_bucket: "none",
     });
 
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
@@ -206,8 +198,6 @@ describe("useOnboarding measurement", () => {
         pipe_count: undefined,
         customized: undefined,
         goal_category: "ai_context",
-        live_view_flow_variant: "first_live_view",
-        existing_live_view_count_bucket: "none",
       },
       { send_instantly: true },
     );
@@ -230,8 +220,7 @@ describe("useOnboarding measurement", () => {
     ).toBeNull();
 
     await useOnboarding.getState().completeOnboarding({
-      method: "live_view_created",
-      dashboardBlockCount: 4,
+      method: "setup_finished",
     });
 
     expect(
@@ -244,7 +233,7 @@ describe("useOnboarding measurement", () => {
     ).toBeNull();
     expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
-      url: "screenpipe://home?section=brain",
+      url: "screenpipe://home?section=home",
     });
   });
 });

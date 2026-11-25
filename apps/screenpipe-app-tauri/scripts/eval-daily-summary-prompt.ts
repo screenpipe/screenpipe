@@ -73,15 +73,6 @@ function resolveSkillPath(): string {
 			"screenpipe-api",
 			"SKILL.md",
 		),
-		join(
-			homedir(),
-			".screenpipe",
-			"pi-live-views",
-			".pi",
-			"skills",
-			"screenpipe-api",
-			"SKILL.md",
-		),
 	];
 	const found = candidates.find(existsSync);
 	if (found) return found;

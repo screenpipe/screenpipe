@@ -8,18 +8,6 @@ import { emitCardAskTrigger } from "@/lib/card-ask/trigger-bus";
 type Surface = "app" | "pipe";
 type Action = "search" | "chat" | "meeting" | "memory" | "artifact";
 type Strength = "retrieved" | "consumed" | "accepted";
-type LiveViewItemAction =
-  | "resolve"
-  | "snooze"
-  | "correct"
-  | "dismiss"
-  | "reopen";
-
-const ACCEPTED_LIVE_VIEW_ITEM_ACTIONS = new Set<LiveViewItemAction>([
-  "resolve",
-  "snooze",
-  "correct",
-]);
 
 function capture(surface: Surface, action: Action, strength: Strength): void {
   posthog.capture("qualified_value_event", {
@@ -47,12 +35,6 @@ export const qualifiedValue = {
   memoryOpened: () => capture("app", "memory", "consumed"),
   artifactOpened: (generatedByPipe: boolean) =>
     capture(generatedByPipe ? "pipe" : "app", "artifact", "consumed"),
-  liveViewResultAccepted: () => capture("app", "artifact", "accepted"),
-  liveViewItemActionCompleted: (action: LiveViewItemAction): boolean => {
-    if (!ACCEPTED_LIVE_VIEW_ITEM_ACTIONS.has(action)) return false;
-    capture("app", "artifact", "accepted");
-    return true;
-  },
   notificationFeedbackAccepted: (generatedByPipe: boolean) =>
     capture(generatedByPipe ? "pipe" : "app", "artifact", "accepted"),
   pipeOutputCopied: () => capture("pipe", "artifact", "accepted"),

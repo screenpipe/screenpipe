@@ -198,7 +198,7 @@ curl -sS -X POST -H "$auth" "$api/pipes/my-pipe/run"
 curl -sS -H "$auth" "$api/pipes/my-pipe/logs"
 ```
 
-`{"success":true}` means the run started, not that it passed. Poll for a new terminal log. Bind only after `success: true`; otherwise report its `stderr` and leave the Live View unchanged.
+`{"success":true}` means the run started, not that it passed. Poll for a new terminal log and report its `stderr` if it failed.
 
 ### Editing Config
 

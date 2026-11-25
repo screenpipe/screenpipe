@@ -116,7 +116,6 @@ import {
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import { getEnterpriseAccount, type AppUser } from "@/lib/app-entitlement";
 import { useTeamSummary } from "@/lib/hooks/use-team-summary";
-import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 import { ActivityLedger } from "@/components/activity-ledger";
 import { ShortcutKeycap } from "@/components/shortcut-keycap";
 import { ExperimentalShortcutGuide } from "@/components/shortcut-guide";
@@ -1315,9 +1314,6 @@ function HomeContent() {
       const mapped = section === "feedback" ? "help" : section;
       if (ALL_SECTIONS.includes(mapped)) {
         setActiveSection(mapped);
-        if (mapped === "brain") {
-          window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
-        }
       }
     }
   });

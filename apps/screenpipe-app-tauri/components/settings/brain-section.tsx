@@ -43,7 +43,6 @@ import {
   AlertCircle,
   FolderOpen,
   Eye,
-  LayoutDashboard,
   MessageSquare,
   MoreVertical,
 } from "lucide-react";
@@ -58,7 +57,6 @@ import { CompactMarkdown } from "@/components/settings/compact-markdown";
 import { SafArtifactBody } from "@/components/settings/saf-sop-view";
 import { ArtifactHtmlBody } from "@/components/settings/artifact-html-body";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
-import { BrainOverview } from "@/components/settings/brain-overview";
 import { isHtmlFileName, SANDBOX_CSP, withoutLinkElements } from "@/lib/utils/html-sandbox";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { localFetch } from "@/lib/api";
@@ -90,10 +88,6 @@ import {
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
-import {
-  consumeOnboardingBrainHandoff,
-  ONBOARDING_BRAIN_HANDOFF_EVENT,
-} from "@/lib/live-views/onboarding-activation";
 import { useGT } from "gt-react";
 import { useUiLocale } from "@/lib/i18n/provider";
 
@@ -189,10 +183,9 @@ type UnifiedItem =
   | { kind: "memory"; data: MemoryRecord; sortDate: number }
   | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
-type TypeFilter = "overview" | "memories" | "artifacts";
+type TypeFilter = "memories" | "artifacts";
 
 const BRAIN_TAB_DESCRIPTIONS: Record<TypeFilter, string> = {
-  overview: "live dashboards the AI builds from your activity, updated as you work",
   memories: "what the AI has learned about you from your activity",
   artifacts: "documents, pages and files the AI has generated for you",
 };
@@ -243,16 +236,14 @@ type BrainViewState = {
 };
 
 const brainViewState: BrainViewState = {
-  typeFilter: "overview",
+  typeFilter: "memories",
   searchQuery: "",
   activeTags: [],
   visibleCountByType: {
-    overview: 0,
     memories: RENDER_WINDOW,
     artifacts: RENDER_WINDOW,
   },
   scrollTopByType: {
-    overview: 0,
     memories: 0,
     artifacts: 0,
   },
@@ -264,10 +255,8 @@ export function resetBrainViewStateForTests() {
   brainViewState.activeTags = [];
   brainViewState.visibleCountByType.memories = RENDER_WINDOW;
   brainViewState.visibleCountByType.artifacts = RENDER_WINDOW;
-  brainViewState.visibleCountByType.overview = 0;
   brainViewState.scrollTopByType.memories = 0;
   brainViewState.scrollTopByType.artifacts = 0;
-  brainViewState.scrollTopByType.overview = 0;
 }
 
 function timeAgo(iso: string): string {
@@ -409,7 +398,6 @@ export function BrainSection() {
   const initialTypeFilterRef = useRef<TypeFilter>(brainViewState.typeFilter);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [liveViewsTabCount, setLiveViewsTabCount] = useState<number | null>(null);
   const [memoriesTabCount, setMemoriesTabCount] = useState<number | null>(null);
   const [artifactsTabCount, setArtifactsTabCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -436,11 +424,8 @@ export function BrainSection() {
   const memoryDisplayCacheRef = useRef<Map<string, MemoryCardDisplay>>(new Map());
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>(() => {
-    const initial = consumeOnboardingBrainHandoff()
-      ? "overview"
-      : brainViewState.typeFilter;
+    const initial = brainViewState.typeFilter;
     initialTypeFilterRef.current = initial;
-    brainViewState.typeFilter = initial;
     return initial;
   });
   const [visibleCount, setVisibleCount] = useState(
@@ -465,15 +450,11 @@ export function BrainSection() {
   }, []);
 
   const refreshTabCounts = useCallback(async () => {
-    const [viewsResult, memoriesResult, artifactsResult] = await Promise.allSettled([
-      commands.listBrainViews(),
+    const [memoriesResult, artifactsResult] = await Promise.allSettled([
       localFetch("/memories?limit=1&offset=0"),
       localFetch("/artifacts?limit=1&offset=0"),
     ]);
 
-    if (viewsResult.status === "fulfilled" && viewsResult.value.status === "ok") {
-      setLiveViewsTabCount(viewsResult.value.data.length);
-    }
     if (memoriesResult.status === "fulfilled" && memoriesResult.value.ok) {
       const data: MemoryListResponse = await memoriesResult.value.json();
       setMemoriesTabCount(data.pagination.total);
@@ -680,16 +661,6 @@ export function BrainSection() {
     },
     [saveCurrentListPosition, typeFilter],
   );
-
-  useEffect(() => {
-    const openOverview = () => {
-      consumeOnboardingBrainHandoff();
-      switchTypeFilter("overview");
-    };
-    window.addEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
-    return () =>
-      window.removeEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
-  }, [switchTypeFilter]);
 
   const openRequestedArtifact = useCallback(
     async (request: BrainArtifactOpenRequest, attempt = 0) => {
@@ -1559,12 +1530,6 @@ export function BrainSection() {
   const isStale = staleDays >= 1;
   const brainViewOptions = [
     {
-      value: "overview" as const,
-      label: ui("Live Views"),
-      count: liveViewsTabCount,
-      Icon: LayoutDashboard,
-    },
-    {
       value: "memories" as const,
       label: ui("Memories"),
       count: memoriesTabCount,
@@ -1624,11 +1589,7 @@ export function BrainSection() {
     <div data-testid="section-brain" className="h-full overflow-hidden">
     <div
       data-testid="brain-content"
-      className={`mx-auto flex h-full flex-col px-3 pb-6 pt-10 sm:px-6 ${
-        typeFilter === "overview"
-          ? "max-w-none space-y-2"
-          : "max-w-6xl space-y-4"
-      }`}
+      className="mx-auto flex h-full max-w-6xl flex-col space-y-4 px-3 pb-6 pt-10 sm:px-6"
     >
       <p className="mb-4 text-sm text-muted-foreground">
         {BRAIN_TAB_DESCRIPTIONS[typeFilter]}
@@ -1653,14 +1614,8 @@ export function BrainSection() {
         </div>
       )}
 
-      <div
-        className={
-          typeFilter === "overview"
-            ? "hidden"
-            : "flex items-center justify-between gap-3"
-        }
-      >
-        {typeFilter !== "overview" && brainViewSwitcher}
+      <div className="flex items-center justify-between gap-3">
+        {brainViewSwitcher}
         {showFilterButton && (
           <Popover
             open={filterOpen}
@@ -1755,14 +1710,6 @@ export function BrainSection() {
           </Popover>
         )}
       </div>
-
-      {typeFilter === "overview" ? (
-        <BrainOverview
-          navigation={brainViewSwitcher}
-          onViewCountChange={setLiveViewsTabCount}
-        />
-      ) : (
-        <>
 
       {/* search bar + add button */}
       <div className="flex items-center gap-2">
@@ -2953,8 +2900,6 @@ export function BrainSection() {
           </aside>
         )}
         </div>
-      )}
-        </>
       )}
     </div>
     </div>

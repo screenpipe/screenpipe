@@ -277,20 +277,11 @@ fn run_trigger_type(body: Option<&RunPipeBody>) -> &'static str {
 }
 
 /// Render a request-scoped context block for a Pipe prompt.
-///
-/// Shared with the scheduler so a scheduled Live View refresh reaches the model
-/// in exactly the same framing as the foreground refresh button.
 pub fn format_run_context(context: &Value) -> String {
     let serialized = serde_json::to_string_pretty(context).unwrap_or_default();
-    if context.get("source").and_then(Value::as_str) == Some("live-view") {
-        format!(
-            "\n---\nLIVE VIEW RUN CONTEXT\nThis request is authoritative for the named Live View targets. Its exact time_range overrides generic lookback wording in the Pipe body, and target_ids limits which structured targets should be updated.\n\nContext:\n{serialized}\n---\n"
-        )
-    } else {
-        format!(
-            "\n---\nRUN CONTEXT\nRespond to this request-scoped context.\n\nContext:\n{serialized}\n---\n"
-        )
-    }
+    format!(
+        "\n---\nRUN CONTEXT\nRespond to this request-scoped context.\n\nContext:\n{serialized}\n---\n"
+    )
 }
 
 /// POST /pipes/:id/run — trigger a manual pipe run.
@@ -874,41 +865,22 @@ mod tests {
     }
 
     #[test]
-    fn live_view_run_context_is_explicitly_authoritative_and_scoped() {
-        let out = format_run_context(&json!({
-            "source": "live-view",
-            "target_ids": ["live-view:focus:gtm-share"],
-            "time_range": {
-                "preset": "7d",
-                "start": "2026-07-17T12:00:00Z",
-                "end": "2026-07-24T12:00:00Z"
-            }
-        }));
-
-        assert!(out.contains("This request is authoritative"));
-        assert!(out.contains("exact time_range overrides generic lookback"));
-        assert!(out.contains("target_ids limits which structured targets should be updated"));
-        assert!(out.contains("live-view:focus:gtm-share"));
-        assert!(out.contains("2026-07-17T12:00:00Z"));
-    }
-
-    #[test]
-    fn ordinary_run_context_does_not_claim_live_view_authority() {
+    fn ordinary_run_context_formats_request_scoped_context() {
         let out = format_run_context(&json!({"source": "notification", "message": "retry"}));
 
         assert!(out.contains("RUN CONTEXT"));
-        assert!(!out.contains("This request is authoritative"));
+        assert!(out.contains("notification"));
     }
 
     #[test]
     fn run_body_accepts_canonical_and_legacy_context_fields() {
         let canonical: RunPipeBody =
-            serde_json::from_value(json!({"run_context": {"source": "live-view"}})).unwrap();
+            serde_json::from_value(json!({"run_context": {"source": "manual"}})).unwrap();
         let legacy: RunPipeBody =
             serde_json::from_value(json!({"notification_context": {"source": "notification"}}))
                 .unwrap();
 
-        assert_eq!(canonical.run_context.unwrap()["source"], "live-view");
+        assert_eq!(canonical.run_context.unwrap()["source"], "manual");
         assert_eq!(
             legacy.notification_context.unwrap()["source"],
             "notification"

@@ -25,7 +25,7 @@ Search the API only. Use at most 5 bounded searches with `limit=10`, covering me
 - User item state is authoritative. Apply corrections. Do not return dismissed items as active. Do not return resolved items as active unless later explicit evidence clearly reopens them. Do not return an item as active while its snooze time is in the future.
 - Absence of later evidence is never proof of completion. If completion is only inferred, keep the item open and label it `needs review`.
 - Keep source snippets minimal. Include enough source and timing for the user to understand why the item exists.
-- Never send messages, create external tasks, close issues, or change another app. The Live View's handoff button performs that separate, user-confirmed flow.
+- Never send messages, create external tasks, close issues, or change another app. Any external action must happen in a separate, user-confirmed flow.
 
 ## Interactive list items
 

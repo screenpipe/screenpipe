@@ -16,7 +16,8 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Never emit a success card");
     expect(prompt).toContain("unverified action");
     expect(prompt).toContain('kind="scheduled-task"');
-    expect(prompt).toContain('kind="live-view"');
+    expect(prompt).toContain('kind="artifact"');
+    expect(prompt).not.toContain('kind="live-view"');
   });
 
   it("opens by establishing the Screenpipe assistant role", () => {

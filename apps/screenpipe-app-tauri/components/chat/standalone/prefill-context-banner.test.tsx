@@ -13,12 +13,12 @@ describe("PrefillContextBanner", () => {
         prefill={{
           context: JSON.stringify({
             kind: "screenpipe_share_context",
-            source: "live-view",
+            source: "workflow",
             title: "Weekly product pulse",
             snapshot: "# Weekly product pulse\n\n## Wins\n\n- shipped",
           }),
           frameId: null,
-          source: "connected-share-live-view",
+          source: "connected-share-workflow",
           onClear: vi.fn(),
           onClearFrame: vi.fn(),
         }}
@@ -27,7 +27,7 @@ describe("PrefillContextBanner", () => {
 
     expect(screen.getByText(/frozen Screenpipe snapshot/i)).toBeInTheDocument();
     expect(
-      screen.getByText("Weekly product pulse · Live View · reviewed copy"),
+      screen.getByText("Weekly product pulse · workflow · reviewed copy"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/screenpipe_share_context/)).toBeNull();
   });

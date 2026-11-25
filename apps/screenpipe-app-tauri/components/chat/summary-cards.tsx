@@ -32,7 +32,7 @@ import type { ChatEntryCard, ChatEntrySource } from "@/lib/chat/types";
 import {
   DEFAULT_USER_GOAL_CATEGORY,
   type UserGoalCategory,
-} from "@/lib/live-views/onboarding-activation";
+} from "@/lib/onboarding-goals";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 import {
   HomeCardAgentActions,

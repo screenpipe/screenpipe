@@ -31,7 +31,7 @@ export function prefillContextPresentation(
       ) {
         return {
           label: "Frozen Screenpipe snapshot",
-          preview: `${value.title} · ${value.source === "live-view" ? "Live View" : "meeting notes"} · reviewed copy`,
+          preview: `${value.title} · ${value.source === "workflow" ? "workflow" : "meeting notes"} · reviewed copy`,
         };
       }
     } catch {

@@ -48,7 +48,7 @@ function describeSnapshot(
     if (value.kind !== "screenpipe_share_context") return null;
     const title = typeof value.title === "string" ? value.title : "snapshot";
     const surface =
-      value.source === "live-view" ? "Live View" : "meeting notes";
+      value.source === "workflow" ? "workflow" : "meeting notes";
     const size =
       typeof value.snapshot === "string"
         ? `${value.snapshot.length.toLocaleString()} characters`

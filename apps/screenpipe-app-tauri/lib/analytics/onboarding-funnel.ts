@@ -6,7 +6,7 @@ import posthog from "posthog-js";
 import type {
   OnboardingChoiceCategory,
   OnboardingGoalCategory,
-} from "@/lib/live-views/onboarding-goals";
+} from "@/lib/onboarding-goals";
 
 export const ONBOARDING_FUNNEL_VERSION = "onboarding_ui_v2" as const;
 
@@ -15,8 +15,6 @@ export const ONBOARDING_FUNNEL_STEPS = [
   "permissions_granted",
   "engine_ready",
   "goal_submitted",
-  "live_view_created",
-  "brain_handoff_viewed",
   "first_result_visible",
   "first_result_accepted",
 ] as const;
@@ -25,11 +23,6 @@ export type OnboardingFunnelStep = (typeof ONBOARDING_FUNNEL_STEPS)[number];
 
 type SafeGoalCategory = OnboardingChoiceCategory | "unknown";
 type AcceptanceAction = "positive_feedback" | "item_action";
-
-export type OnboardingLiveViewFlowProperties = {
-  live_view_flow_variant: "first_live_view" | "existing_live_views";
-  existing_live_view_count_bucket: "none" | "one" | "multiple";
-};
 
 const SAFE_GOAL_CATEGORIES = new Set<OnboardingChoiceCategory>([
   "work_memory",
@@ -45,20 +38,6 @@ function safeGoalCategory(value: unknown): SafeGoalCategory {
     SAFE_GOAL_CATEGORIES.has(value as OnboardingChoiceCategory)
     ? (value as OnboardingChoiceCategory)
     : "unknown";
-}
-
-export function onboardingLiveViewFlowProperties(
-  existingViewCount: number,
-): OnboardingLiveViewFlowProperties {
-  const count = Number.isFinite(existingViewCount)
-    ? Math.max(0, Math.floor(existingViewCount))
-    : 0;
-  return {
-    live_view_flow_variant:
-      count === 0 ? "first_live_view" : "existing_live_views",
-    existing_live_view_count_bucket:
-      count === 0 ? "none" : count === 1 ? "one" : "multiple",
-  };
 }
 
 function capture(
@@ -81,24 +60,8 @@ export const onboardingFunnel = {
   started: () => capture("started"),
   permissionsGranted: () => capture("permissions_granted"),
   engineReady: () => capture("engine_ready"),
-  goalSubmitted: (
-    goalCategory: OnboardingChoiceCategory,
-    flow: OnboardingLiveViewFlowProperties,
-  ) =>
+  goalSubmitted: (goalCategory: OnboardingChoiceCategory) =>
     capture("goal_submitted", {
-      goal_category: safeGoalCategory(goalCategory),
-      ...flow,
-    }),
-  liveViewCreated: (
-    goalCategory: OnboardingGoalCategory,
-    flow: OnboardingLiveViewFlowProperties,
-  ) =>
-    capture("live_view_created", {
-      goal_category: safeGoalCategory(goalCategory),
-      ...flow,
-    }),
-  brainHandoffViewed: (goalCategory: OnboardingGoalCategory) =>
-    capture("brain_handoff_viewed", {
       goal_category: safeGoalCategory(goalCategory),
     }),
   firstResultVisible: (goalCategory: OnboardingGoalCategory) =>

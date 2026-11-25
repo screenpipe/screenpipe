@@ -123,9 +123,6 @@ describe("screenpipe-tools MCP server", () => {
       [
         "query_recordings",
         "list_connections",
-        "live_view",
-        "screenpipe_live_view",
-        "screenpipe_live_view_propose",
         "save_artifact",
         "search_chats",
         "send_to_chat",
@@ -142,12 +139,6 @@ describe("screenpipe-tools MCP server", () => {
     const props = (saveArtifact?.inputSchema as { properties?: Record<string, { enum?: string[] }> })
       ?.properties;
     expect(props?.encoding?.enum).toEqual(["utf8", "base64"]);
-    // live_view advertises the list/get/save action set (Live Views parity).
-    const liveView = tools.find((t) => t.name === "live_view");
-    const actionEnum = (liveView?.inputSchema as {
-      properties?: Record<string, { enum?: string[] }>;
-    })?.properties?.action?.enum;
-    expect(actionEnum).toEqual(["list", "get", "save"]);
 
     const sendToChat = tools.find((t) => t.name === "send_to_chat");
     const sendProperties = sendToChat?.inputSchema as {
@@ -158,36 +149,6 @@ describe("screenpipe-tools MCP server", () => {
     expect(sendProperties.properties?.confirmed?.description).toContain(
       "explicit user authorization",
     );
-  });
-
-  it("accepts a reviewable Live View proposal and rejects an empty one", async () => {
-    server = new Server();
-    await server.request(1, "initialize", {});
-    const rejected = await server.request(2, "tools/call", {
-      name: "screenpipe_live_view_propose",
-      arguments: { note: "" },
-    });
-    expect(rejected.result).toMatchObject({ isError: true });
-
-    const accepted = await server.request(3, "tools/call", {
-      name: "screenpipe_live_view_propose",
-      arguments: {
-        note: "Adds a focus table.",
-        title: "Commitments",
-        timeRange: "7d",
-        blocks: [
-          {
-            title: "Open promises",
-            intent: "List explicit promises from the selected period, or say none were recorded.",
-            component: "list.v1",
-            width: 6,
-            pipeName: null,
-          },
-        ],
-      },
-    });
-    const text = (accepted.result as { content?: Array<{ text?: string }> })?.content?.[0]?.text;
-    expect(JSON.parse(text ?? "{}")).toMatchObject({ accepted: true, awaitingUserReview: true, blockCount: 1 });
   });
 
   it("errors clearly on an unknown tool", async () => {

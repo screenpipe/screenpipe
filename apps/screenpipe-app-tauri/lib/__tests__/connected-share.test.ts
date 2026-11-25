@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildConnectedShareChatPrompt,
   createLibraryShareArtifact,
-  createLiveViewShareArtifact,
   createMeetingShareArtifact,
   createWorkflowShareArtifact,
   directShareConnections,
@@ -15,7 +14,6 @@ import {
   shareConnectionAvailability,
 } from "@/lib/connected-share";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
-import type { BrainViewDefinition } from "@/lib/utils/tauri";
 
 describe("connected share artifacts", () => {
   it("shares workflow steps without raw evidence, screenshots, or private profile data", () => {
@@ -61,55 +59,6 @@ describe("connected share artifacts", () => {
     expect(markdown).toContain("[image omitted]");
     expect(markdown).not.toContain("data:image");
     expect(markdown).not.toContain("transcript");
-  });
-
-  it("renders only selected populated Live View Blocks", () => {
-    const view = {
-      id: "weekly",
-      title: "Weekly pulse",
-      revision: 1,
-      timeRange: "7d",
-      periodPolicy: { type: "selectable.v1", values: ["7d"] },
-      createdAt: "2026-07-29T16:00:00.000Z",
-      updatedAt: "2026-07-29T16:00:00.000Z",
-      slots: [
-        {
-          id: "wins",
-          title: "Wins",
-          component: "list.v1",
-          width: 6,
-          order: 1,
-          intent: null,
-          binding: null,
-          value: {
-            payload: { items: [{ title: "Shipped sharing", status: "done" }] },
-            evidence: [],
-            sourcePipe: "weekly",
-            artifactOutputId: 1,
-            artifactVersion: 1,
-            updatedAt: "2026-07-29T16:00:00.000Z",
-          },
-          feedback: { upCount: 0, downCount: 0, current: null },
-        },
-        {
-          id: "empty",
-          title: "Empty",
-          component: "metric.v1",
-          width: 6,
-          order: 2,
-          intent: null,
-          binding: null,
-          value: null,
-          feedback: { upCount: 0, downCount: 0, current: null },
-        },
-      ],
-    } satisfies BrainViewDefinition;
-    const artifact = createLiveViewShareArtifact(view);
-    const markdown = renderConnectedShareArtifact(artifact, ["wins"]);
-
-    expect(artifact.sections).toHaveLength(1);
-    expect(markdown).toContain("Shipped sharing");
-    expect(markdown).not.toContain("## Empty");
   });
 
   it("does not advertise MCP-only Linear as a direct-send target", () => {

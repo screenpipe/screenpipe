@@ -122,15 +122,6 @@ describe("calm app design token contract", () => {
     expect(chatSwitcher).toContain("overflow-hidden rounded-lg");
     expect(chatSwitcher).toContain("gap-4 rounded-md");
     expect(chatSwitcher).not.toContain("rounded-[22px]");
-
-    const structuralGeometry = readFileSync(
-      resolve(process.cwd(), "app/globals.css"),
-      "utf8",
-    );
-    expect(structuralGeometry).toContain(
-      ".live-view-process-canvas .react-flow__node",
-    );
-    expect(structuralGeometry).toContain("border-radius: 0");
   });
 
   it("keeps production UI callers on the shared semantic radius tiers", () => {

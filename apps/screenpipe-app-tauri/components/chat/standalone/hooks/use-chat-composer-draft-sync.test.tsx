@@ -58,7 +58,7 @@ describe("useChatComposerDraftSync", () => {
           attachedDocs: [],
           pendingDocs: [],
           clearConnectionChip: vi.fn(),
-          prefillSource: "connected-share-live-view",
+          prefillSource: "connected-share-meeting",
           setPrefillContext,
           setPrefillFrameId,
           setPrefillSource,

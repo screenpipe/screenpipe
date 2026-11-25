@@ -129,10 +129,6 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
-    listBrainViews: vi.fn(async () => ({
-      status: "ok",
-      data: [{ id: "daily" }, { id: "meetings" }, { id: "processes" }],
-    })),
     readViewerFile: vi.fn(async () => ({ status: "ok", data: { kind: "text", text: "full" } })),
     openViewerWindow: vi.fn(async () => undefined),
   },
@@ -169,17 +165,6 @@ vi.mock("@/lib/chat-utils", () => ({
 vi.mock("@/components/settings/compact-markdown", () => ({
   CompactMarkdown: ({ children, "data-testid": testId }: { children: string; "data-testid"?: string }) => (
     <div data-testid={testId}>{children}</div>
-  ),
-}));
-
-vi.mock("@/components/settings/brain-overview", () => ({
-  BrainOverview: ({ navigation }: { navigation?: React.ReactNode }) => (
-    <div data-testid="brain-overview-stub">
-      <div data-testid="overview-dashboard-row">
-        {navigation}
-        <span>Time &amp; focus</span>
-      </div>
-    </div>
   ),
 }));
 
@@ -269,7 +254,7 @@ const openBrainViewMenu = () =>
     pointerType: "mouse",
   });
 
-const selectBrainView = (view: "overview" | "memories" | "artifacts") => {
+const selectBrainView = (view: "memories" | "artifacts") => {
   openBrainViewMenu();
   fireEvent.click(screen.getByTestId(`brain-filter-${view}`));
 };
@@ -286,7 +271,7 @@ describe("BrainSection type filter", () => {
     });
 
     openBrainViewMenu();
-    expect(screen.getByTestId("brain-filter-overview")).toHaveTextContent("Live Views3");
+    expect(screen.queryByTestId("brain-filter-overview")).toBeNull();
     expect(screen.getByTestId("brain-filter-memories")).toHaveTextContent("Memories8");
     expect(screen.getByTestId("brain-filter-artifacts")).toHaveTextContent("Artifacts5");
   });
@@ -314,20 +299,6 @@ describe("BrainSection type filter", () => {
       "aria-label",
       "Switch Brain view, current: Artifacts",
     );
-
-    selectBrainView("overview");
-    await waitFor(() =>
-      expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
-        "aria-label",
-        "Switch Brain view, current: Live Views",
-      ),
-    );
-    const dashboardRow = screen.getByTestId("overview-dashboard-row");
-    const overviewSwitcher = within(dashboardRow).getByTestId(
-      "brain-view-switcher",
-    );
-    expect(overviewSwitcher).not.toHaveTextContent("Live Views");
-    expect(overviewSwitcher.querySelector("svg")).not.toBeNull();
 
     selectBrainView("memories");
     await waitFor(() => expect(memoryRows().length).toBe(8));

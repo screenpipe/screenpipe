@@ -54,7 +54,7 @@ describe("remembered share destination", () => {
     });
   });
 
-  it("keeps surfaces apart so a Live View does not inherit a meeting channel", () => {
+  it("keeps surfaces apart so a workflow does not inherit a meeting channel", () => {
     const store = new Map<string, string>();
     restore = installStorage({
       getItem: (k: string) => store.get(k) ?? null,
@@ -63,7 +63,7 @@ describe("remembered share destination", () => {
 
     writeRememberedShare("meeting", { destination: "slack", target: "C1" });
 
-    expect(readRememberedShare("live-view")).toBeNull();
+    expect(readRememberedShare("workflow")).toBeNull();
   });
 
   it("returns no memory when localStorage is missing entirely", () => {

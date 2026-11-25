@@ -534,30 +534,6 @@
       "notes": "Opt-in macOS cloud audio fallback seed."
     },
     {
-      "spec": "brain-overview.spec.ts",
-      "platforms": [
-        "windows",
-        "macos",
-        "linux"
-      ],
-      "layers": [
-        "real-ui-e2e",
-        "local-api",
-        "pipes"
-      ],
-      "features": [
-        "brain",
-        "brain-overview",
-        "brain-canvas",
-        "artifacts",
-        "pipes"
-      ],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "real-user-flow",
-      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
-    },
-    {
       "spec": "brain-section.spec.ts",
       "platforms": [
         "windows",
@@ -974,13 +950,12 @@
         "chat",
         "chat-results",
         "pipes",
-        "artifacts",
-        "live-views"
+        "artifacts"
       ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds durable scheduled-task, artifact, chat, Live View, and link results; proves directives stay hidden, all proposed/pending/success/paused/recovery states render truthfully, non-actionable states disable Open, light/dark review screenshots remain usable, and a created-chat card switches through the real Tauri conversation handoff."
+      "notes": "Seeds durable scheduled-task, artifact, chat, and link results; proves directives stay hidden, all proposed/pending/success/paused/recovery states render truthfully, non-actionable states disable Open, light/dark review screenshots remain usable, and a created-chat card switches through the real Tauri conversation handoff."
     },
     {
       "spec": "chat-local-ai-gateway.spec.ts",
@@ -1884,49 +1859,6 @@
       "notes": "Registers an HTML artifact, opens it in Brain, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window)."
     },
     {
-      "spec": "live-view-item-actions.spec.ts",
-      "platforms": [
-        "windows",
-        "macos",
-        "linux"
-      ],
-      "layers": [
-        "real-ui-e2e",
-        "local-api",
-        "pipes"
-      ],
-      "features": [
-        "brain-overview",
-        "live-view-item-actions",
-        "artifacts",
-        "pipes"
-      ],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "real-user-flow",
-      "notes": "Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots."
-    },
-    {
-      "spec": "live-view-pinch-zoom.spec.ts",
-      "platforms": [
-        "macos",
-        "linux"
-      ],
-      "layers": [
-        "real-ui-e2e",
-        "tauri-command"
-      ],
-      "features": [
-        "brain-overview",
-        "live-view-canvas-pinch-zoom",
-        "live-view-canvas-click-stability"
-      ],
-      "criticality": "medium",
-      "confidence": "strong",
-      "ux": "real-user-flow",
-      "notes": "Drives the Live View canvas with the same window-scoped native-magnify payload the macOS magnification gesture recognizer emits. Asserts pinch works even when WKWebView lacks DOM focus, the recognizer takes ownership so WebKit's duplicate ctrl+wheel stops zooming while plain scroll still pans, ordinary pane, Block, and double clicks do not change the viewport, and canvas zoom stays anchored, clamped at 25%, and persisted through load_brain_view_canvas."
-    },
-    {
       "spec": "macos-ui-performance.spec.ts",
       "platforms": [
         "macos"
@@ -2304,29 +2236,6 @@
       "ux": "real-user-flow",
       "tests": 9,
       "notes": "Fresh-install setup walk: signed-out users restoring a post-login step return to login; after account creation, the acquisition slide is reachable in the shipped order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and existing lifetime owners stay out of mandatory checkout."
-    },
-    {
-      "spec": "onboarding-h1-follow-up.spec.ts",
-      "platforms": [
-        "windows",
-        "macos",
-        "linux"
-      ],
-      "layers": [
-        "onboarding",
-        "notifications",
-        "pipes",
-        "real-ui-e2e"
-      ],
-      "features": [
-        "onboarding",
-        "notifications",
-        "pipes"
-      ],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "real-user-flow",
-      "notes": "A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks."
     },
     {
       "spec": "onboarding-redirect.spec.ts",
@@ -3118,14 +3027,12 @@
       ],
       "features": [
         "meeting-notes",
-        "brain-overview",
-        "live-views",
         "connections"
       ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Exercises the Send snapshot dialog from meeting notes and Live Views across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
+      "notes": "Exercises the Send snapshot dialog from meeting notes across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
     },
     {
       "spec": "zz-account-basic-upgrade-billing.spec.ts",

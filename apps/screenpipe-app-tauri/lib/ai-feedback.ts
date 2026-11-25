@@ -45,7 +45,6 @@ export function isNotificationFeedbackEligible(
 ): boolean {
   return (
     notification.type === "pipe" ||
-    notification.id.startsWith("onboarding-live-view-follow-up:") ||
     Boolean(notification.pipe_name || notification.source_session_id)
   );
 }

@@ -25,7 +25,6 @@ const typeMessage = [
   '::screenpipe-result{kind="scheduled-task" state="created" title="Recheck deployment" subtitle="In 5 minutes" id="day-recap"}',
   `::screenpipe-result{kind="chat" state="created" title="Result-card target" subtitle="Editable follow-up" id="${TARGET_ID}"}`,
   '::screenpipe-result{kind="artifact" state="created" title="Weekly report" subtitle="Saved to Artifacts" path="/tmp/screenpipe-e2e-weekly-report.md"}',
-  '::screenpipe-result{kind="live-view" state="updated" title="Focus dashboard" subtitle="3 blocks" id="starter-dashboard"}',
   '::screenpipe-result{kind="link" state="completed" title="Screenpipe docs" subtitle="Reference" url="https://docs.screenpi.pe"}',
 ].join("\n");
 
@@ -236,7 +235,6 @@ describe("Chat durable result cards", function () {
       "chat-rich-result-scheduled-task",
       "chat-rich-result-artifact",
       "chat-rich-result-chat",
-      "chat-rich-result-live-view",
       "chat-rich-result-link",
     ]));
     expect(snapshot.rawDirectiveVisible).toBe(false);

@@ -20,7 +20,6 @@ const REVIEWED_MARKDOWN_RENDERERS = [
   "components/announcement-body.tsx", // img shows alt text
   "components/markdown.tsx", // MemoizedReactMarkdown: local files only
   "components/notification-bell.tsx", // img shows alt text
-  "components/settings/live-view-card.tsx", // allowedElements excludes img
 ];
 
 // Runtime imports of `pkg` or its subpaths; `import type` renders nothing.

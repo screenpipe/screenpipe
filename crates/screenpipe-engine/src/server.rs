@@ -1249,30 +1249,6 @@ impl SCServer {
                 get(crate::routes::ai_feedback::list_ai_feedback_handler)
                     .post(crate::routes::ai_feedback::set_ai_feedback_handler),
             )
-            // Live View Templates are a versioned cross-surface protocol.
-            // Local app/API clients can edit them; pipe tokens can only fill
-            // their assigned structured output targets above.
-            .route(
-                "/live-views",
-                get(crate::routes::live_views::list_live_views_handler),
-            )
-            .route(
-                "/live-views/schema",
-                get(crate::routes::live_views::live_view_schema_handler),
-            )
-            .route(
-                "/live-views/catalog",
-                get(crate::routes::live_views::live_view_catalog_handler),
-            )
-            .route(
-                "/live-views/:id",
-                axum::routing::put(crate::routes::live_views::save_live_view_handler)
-                    .delete(crate::routes::live_views::delete_live_view_handler),
-            )
-            .route(
-                "/live-views/:id/template",
-                get(crate::routes::live_views::get_live_view_template_handler),
-            )
             .route(
                 "/speakers/sample/:audio_chunk_id",
                 get(get_speaker_sample_handler),

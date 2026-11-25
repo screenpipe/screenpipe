@@ -50,7 +50,7 @@ import {
 	normalizeUserGoalCategory,
 	readLegacyUserGoalCategory,
 	type UserGoalCategory,
-} from "@/lib/live-views/onboarding-activation";
+} from "@/lib/onboarding-goals";
 import {
 	cloneLocalDesktopRemotePolicy,
 	LOCAL_DESKTOP_REMOTE_POLICY,

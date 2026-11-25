@@ -4,9 +4,8 @@
 
 import { workflowAuthoredContext, type WorkflowMap } from "@screenpipe/workflows-ui";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
-import type { BrainViewDefinition, BrainViewSlot } from "@/lib/utils/tauri";
 
-export type ConnectedShareSurface = "meeting" | "live-view" | "workflow";
+export type ConnectedShareSurface = "meeting" | "workflow";
 
 export type ConnectedShareApp = "slack" | "notion" | "linear" | "obsidian";
 
@@ -68,75 +67,6 @@ function cleanInlineImages(
     .trim();
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" || typeof value === "number"
-    ? String(value)
-    : "";
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function itemLines(
-  items: unknown,
-  line: (item: Record<string, unknown>) => string,
-) {
-  if (!Array.isArray(items)) return [];
-  return items
-    .map(recordValue)
-    .filter((item): item is Record<string, unknown> => item !== null)
-    .map(line)
-    .filter(Boolean);
-}
-
-export function liveViewSlotMarkdown(slot: BrainViewSlot): string {
-  const payload = recordValue(slot.value?.payload);
-  if (!payload) return "";
-
-  if (slot.component === "metric.v1") {
-    const value = stringValue(payload.value);
-    const unit = stringValue(payload.unit);
-    const label = stringValue(payload.label);
-    const delta = stringValue(payload.delta);
-    return [label, `${value}${unit ? ` ${unit}` : ""}`, delta]
-      .filter(Boolean)
-      .join(" — ");
-  }
-
-  if (slot.component === "markdown.v1") {
-    return cleanInlineImages(stringValue(payload.content));
-  }
-
-  if (slot.component === "list.v1") {
-    return itemLines(payload.items, (item) => {
-      const title = stringValue(item.title);
-      const subtitle = stringValue(item.subtitle);
-      const status = stringValue(item.status);
-      return `- ${title}${subtitle ? ` — ${subtitle}` : ""}${status ? ` [${status}]` : ""}`;
-    }).join("\n");
-  }
-
-  if (slot.component === "timeline.v1") {
-    return itemLines(payload.items, (item) => {
-      const timestamp = stringValue(item.timestamp);
-      const title = stringValue(item.title);
-      const subtitle = stringValue(item.subtitle);
-      return `- ${timestamp ? `${timestamp}: ` : ""}${title}${subtitle ? ` — ${subtitle}` : ""}`;
-    }).join("\n");
-  }
-
-  return itemLines(payload.items, (item) => {
-    const label = stringValue(item.label) || stringValue(item.timestamp);
-    const value = stringValue(item.value) || stringValue(item.title);
-    const detail = stringValue(item.detail) || stringValue(item.subtitle);
-    const status = stringValue(item.status);
-    return `- ${label}${label && value ? ": " : ""}${value}${detail ? ` — ${detail}` : ""}${status ? ` [${status}]` : ""}`;
-  }).join("\n");
-}
-
 export function createMeetingShareArtifact(
   meeting: MeetingRecord,
 ): ConnectedShareArtifact {
@@ -188,29 +118,6 @@ export function createWorkflowShareArtifact(workflow: WorkflowMap): ConnectedSha
     metadata: [workflow.evidenceStatus === "supported-steps" ? "Source-backed steps · not execution-tested" : "Needs review"],
     sections: sections.filter(section => section.body.trim()),
     privacyNote: "Only the workflow text selected here is shared. Recordings, screenshots, raw captured text, and local file paths are not attached.",
-  };
-}
-
-export function createLiveViewShareArtifact(
-  view: BrainViewDefinition,
-): ConnectedShareArtifact {
-  const sections = view.slots
-    .slice()
-    .sort((left, right) => left.order - right.order)
-    .map((slot) => ({
-      id: slot.id,
-      title: slot.title,
-      body: liveViewSlotMarkdown(slot),
-    }))
-    .filter((section) => section.body.trim().length > 0);
-
-  return {
-    surface: "live-view",
-    title: view.title,
-    metadata: [`view updated ${new Date(view.updatedAt).toLocaleString()}`],
-    sections,
-    privacyNote:
-      "This is a frozen snapshot of the selected Blocks. Source evidence, screenshots, and future Live View updates are not included.",
   };
 }
 

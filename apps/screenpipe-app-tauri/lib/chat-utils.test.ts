@@ -277,7 +277,7 @@ describe("Home chat handoff", () => {
       prompt: "Prepare this report for Obsidian",
       useHomeChat: true,
       autoSend: false,
-      source: "connected-share-live-view",
+      source: "connected-share-meeting",
     };
     const unlisten = vi.fn();
     listenMock.mockImplementation(async (event, handler) => {

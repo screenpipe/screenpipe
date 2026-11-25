@@ -10,7 +10,6 @@ import {
   Clock3,
   ExternalLink,
   FileText,
-  Gauge,
   Loader2,
   MessageSquare,
   Pause,
@@ -35,7 +34,6 @@ function ResultKindIcon({ result }: { result: ChatRichResult }) {
   if (result.kind === "scheduled-task") return <Clock3 className={className} />;
   if (result.kind === "artifact") return <FileText className={className} />;
   if (result.kind === "chat") return <MessageSquare className={className} />;
-  if (result.kind === "live-view") return <Gauge className={className} />;
   return <ExternalLink className={className} />;
 }
 

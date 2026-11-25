@@ -17,7 +17,7 @@ import { attachContextToUserMessage } from "@/lib/chat/attached-context";
 // the fold.
 const SNAPSHOT_PAYLOAD = JSON.stringify({
   kind: "screenpipe_share_context",
-  source: "live-view",
+  source: "workflow",
   title: "How I Spend My Time Today",
   snapshot: `# How I Spend My Time Today\n\n## Total Tracked Time\n\n${"x".repeat(4000)}`,
 });
@@ -67,7 +67,7 @@ describe("attached context", () => {
     expect(parsed!.label).toBe("Frozen Screenpipe snapshot");
     // Title, surface and size — enough to recognise it without reading it.
     expect(parsed!.detail).toContain("How I Spend My Time Today");
-    expect(parsed!.detail).toContain("Live View");
+    expect(parsed!.detail).toContain("workflow");
     expect(parsed!.detail).toMatch(/characters/);
     expect(parsed!.message).toBe(PROMPT);
   });

@@ -130,7 +130,7 @@ async function reloadBrainSection() {
   await waitForTestId("section-brain", 10_000);
 }
 
-async function selectBrainView(view: "overview" | "memories" | "artifacts") {
+async function selectBrainView(view: "memories" | "artifacts") {
   const switcher = await $('[data-testid="brain-view-switcher"]');
   await switcher.click();
   const option = await $(`[data-testid="brain-filter-${view}"]`);
