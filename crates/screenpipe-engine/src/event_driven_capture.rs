@@ -319,6 +319,7 @@ pub(crate) struct CaptureParams<'a> {
     pub tree_walker_config: &'a TreeWalkerConfig,
     pub tree_walker: &'a TreeWalkerWorker,
     pub window_filters: WindowFilters,
+    ledger_window_filters: WindowFilters,
     pub ignored_patterns: Vec<WindowPattern>,
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
@@ -1182,6 +1183,17 @@ pub(crate) async fn event_driven_capture_loop(
     let tree_walker =
         TreeWalkerWorker::spawn(format!("monitor-{monitor_id}"), tree_walker_config.clone())?;
 
+    let window_filters = WindowFilters::with_url_rules(
+        &tree_walker_config.ignored_windows,
+        &tree_walker_config.included_windows,
+        &tree_walker_config.ignored_urls,
+        &tree_walker_config.included_urls,
+    );
+    let ledger_window_filters = ledger_window_filters(
+        &window_filters,
+        focused_window_screenshots,
+        pause_on_drm_content,
+    );
     let capture_params = CaptureParams {
         db: db.as_deref(),
         monitor: &monitor,
@@ -1190,15 +1202,10 @@ pub(crate) async fn event_driven_capture_loop(
         snapshot_writer: &snapshot_writer,
         tree_walker_config: &tree_walker_config,
         tree_walker: &tree_walker,
-        window_filters: WindowFilters::with_url_rules(
-            &tree_walker_config.ignored_windows,
-            &tree_walker_config.included_windows,
-            &tree_walker_config.ignored_urls,
-            &tree_walker_config.included_urls,
-        )
-        .with_streaming_mode(
+        window_filters: window_filters.with_streaming_mode(
             streaming_requested && !focused_window_screenshots && !pause_on_drm_content,
         ),
+        ledger_window_filters,
         ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
         pause_on_drm_content,
@@ -3413,6 +3420,16 @@ async fn persist_masked_screenshot(
     })
 }
 
+fn ledger_window_filters(
+    filters: &WindowFilters,
+    focused_window_screenshots: bool,
+    pause_on_drm_content: bool,
+) -> WindowFilters {
+    filters
+        .clone()
+        .with_streaming_mode(!focused_window_screenshots && !pause_on_drm_content)
+}
+
 /// Perform a single event-driven capture.
 ///
 /// When `previous_content_hash` is `Some` and matches the current accessibility
@@ -3436,6 +3453,13 @@ async fn do_capture(
     in_meeting: bool,
     #[allow(unused_variables)] last_screenshot_focus_pid: &mut Option<i32>,
 ) -> Result<CaptureOutput> {
+    // Select once per capture, so enabling the ledger does not require
+    // restarting an already running monitor or changing preview settings.
+    let window_filters = if screenpipe_core::raw_capture_ledger::is_enabled() {
+        &params.ledger_window_filters
+    } else {
+        &params.window_filters
+    };
     // Scheduling can use hysteresis, cached notifications, and cursor fallback.
     // Text admission instead requires fresh focused-window geometry, including
     // at startup. Unknown ownership permits no text extraction.
@@ -3473,12 +3497,12 @@ async fn do_capture(
     // applies its own independent window filtering) rather than storing a
     // frame that may contain a window the user asked to hide.
     let storage_exclusions = if screenshot_disabled
-        || screenpipe_screen::screenshot_privacy::uses_positive_selection(&params.window_filters)
+        || screenpipe_screen::screenshot_privacy::uses_positive_selection(window_filters)
     {
         Some(Vec::new())
     } else {
         storage_excluded_sck_window_ids(
-            &params.window_filters,
+            window_filters,
             exclusion_sources(params.tree_walker_config),
         )
         .await
@@ -3532,7 +3556,7 @@ async fn do_capture(
         // Other platforms retain their existing positive-selection boundary.
         match capture_monitor_frame_for_snapshot(
             params.monitor,
-            &params.window_filters,
+            window_filters,
             exclusion_sources(params.tree_walker_config),
             &excluded_ids,
             capture_needs_fresh_pixels(trigger, context_changed),
@@ -3554,7 +3578,7 @@ async fn do_capture(
             }
             Err(error)
                 if screenpipe_screen::screenshot_privacy::uses_positive_selection(
-                    &params.window_filters,
+                    window_filters,
                 ) =>
             {
                 debug!("window-filtered screenshot withheld: {error}");
@@ -3599,13 +3623,12 @@ async fn do_capture(
     // (prevents re-triggering on the same bad frame). The caller records the
     // matching telemetry counter from `corrupt`.
     if !screenshot_disabled && !skip_pixels_for_unknown_exclusions {
-        if let Some(kind) = frame_corruption_with_privacy_padding(
-            &image,
-            params.window_filters.has_window_patterns(),
-        )
-        .filter(|kind| {
-            !params.window_filters.streaming_mode() || !matches!(kind, CorruptKind::Black)
-        }) {
+        if let Some(kind) =
+            frame_corruption_with_privacy_padding(&image, window_filters.has_window_patterns())
+                .filter(|kind| {
+                    !window_filters.streaming_mode() || !matches!(kind, CorruptKind::Black)
+                })
+        {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
                 // shows up in shared logs. Black is common (DRM / excluded window).
@@ -3633,13 +3656,13 @@ async fn do_capture(
     // path or reused element reference can escape through this narrow path.
     let verified_filtered_pixels = !screenshot_disabled
         && !skip_pixels_for_unknown_exclusions
-        && params.window_filters.has_window_patterns();
+        && window_filters.has_window_patterns();
     let focus_decision = if verified_filtered_pixels {
         redacted_focus_check(
-            &params.window_filters,
+            window_filters,
             params.tree_walker_config.clone(),
             permits_redacted_desktop_without_focus(
-                &params.window_filters,
+                window_filters,
                 params.tree_walker_config,
                 true,
                 params.pause_on_drm_content,
@@ -3671,7 +3694,7 @@ async fn do_capture(
         )
         .await;
     }
-    let streaming_pixels = params.window_filters.streaming_mode()
+    let streaming_pixels = window_filters.streaming_mode()
         && !screenshot_disabled
         && !skip_pixels_for_unknown_exclusions;
 
@@ -4204,11 +4227,10 @@ async fn do_capture(
     // independent of the URL scheme.
     // Native apps remain governed by app/window filters; unknown ownership,
     // hostless browser pages and missing browser URLs fail closed.
-    if !params.window_filters.is_valid(
+    if !window_filters.is_valid(
         app_name_owned.as_deref().unwrap_or_default(),
         window_name_owned.as_deref().unwrap_or_default(),
-    ) || !params
-        .window_filters
+    ) || !window_filters
         .should_capture_window_url(app_name_owned.as_deref(), browser_url_owned.as_deref())
     {
         debug!(
@@ -4284,7 +4306,7 @@ async fn do_capture(
     // If the platform cannot provide trustworthy bounds, keep the allowed snapshot but
     // suppress pixels and OCR for this frame rather than widening capture.
     let scope_to_focused_window =
-        params.focused_window_screenshots || params.window_filters.has_url_allowlist();
+        params.focused_window_screenshots || window_filters.has_url_allowlist();
     let snapshot_image = snapshot_image.as_ref().filter(|_| !scope_to_focused_window);
     let (image, scoped_pixels_unverified) = apply_screenshot_scope(
         image,
@@ -4727,6 +4749,31 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ledger_defaults_to_streaming_without_overriding_strict_capture_rules() {
+        let exclusions = WindowFilters::with_url_rules(&["Excluded".into()], &[], &[], &[]);
+        #[cfg(target_os = "macos")]
+        let supported = cidre::api::macos_available("14.0");
+        #[cfg(not(target_os = "macos"))]
+        let supported = cfg!(target_os = "windows");
+        assert_eq!(
+            ledger_window_filters(&exclusions, false, false).streaming_mode(),
+            supported
+        );
+        assert!(!exclusions.streaming_mode());
+        assert!(!ledger_window_filters(&exclusions, true, false).streaming_mode());
+        assert!(!ledger_window_filters(&exclusions, false, true).streaming_mode());
+        let window_allowlist = WindowFilters::with_url_rules(&[], &["Allowed".into()], &[], &[]);
+        assert!(!ledger_window_filters(&window_allowlist, false, false).streaming_mode());
+        let url_policy = WindowFilters::with_url_rules(
+            &[],
+            &[],
+            &[screenpipe_config::UrlRule::Legacy("example.com".into())],
+            &[],
+        );
+        assert!(!ledger_window_filters(&url_policy, false, false).streaming_mode());
+    }
+
     use super::*;
 
     #[cfg(target_os = "windows")]
