@@ -19,7 +19,10 @@ const researchNotes=process.argv.includes("--research-notes");
 const repairSource=process.argv.includes("--repair-source");
 let task=timingCase?"workflow-maintain":discovery?"workflow-discover":feedbackOnly?"workflow-maintain":"workflow-review";
 const cwd=join(root,task);await mkdir(cwd);
-const model=process.env.WORKFLOW_EVAL_MODEL || "auto";
+const mastra = process.argv.includes("--mastra");
+const model = mastra ? process.env.SCREENPIPE_MASTRA_MODEL : process.env.WORKFLOW_EVAL_MODEL || "auto";
+if (!model) throw new Error("Set SCREENPIPE_MASTRA_MODEL to a local tool-capable model");
+const mastraRunner = resolve(import.meta.dir, "../../../packages/workflow-mastra/runner.ts");
 const timeoutMs=Number(process.env.WORKFLOW_EVAL_TIMEOUT_MS || 180000);
 if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 900000) throw new Error("Evaluation timeout must be between 1 and 900 seconds");
 const noChange=feedbackOnly||process.argv.includes("--no-change"), fault=process.argv.includes("--conflict");
@@ -202,7 +205,7 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
 const base=`http://127.0.0.1:${server.port}`;
 const pi=join(homedir(),".screenpipe/pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
 const transport:string[]=[];
-if(model.includes("glm")){
+if(!mastra && model.includes("glm")){
   await mkdir(join(cwd,"lib"));
   await writeFile(join(cwd,"tinfoil.ts"),(await Bun.file(join(assets,"extensions/tinfoil.ts")).text()).replace("__SCREENPIPE_PI_PACKAGE_JSON__",JSON.stringify(join(homedir(),".screenpipe/pi-agent/package.json"))));
   for(const file of ["tinfoil-transport.ts","glm-protocol.ts"])await writeFile(join(cwd,"lib",file),await Bun.file(join(assets,"extensions/lib",file)).text());
@@ -220,7 +223,15 @@ try{
   const allow_rules=[...template.matchAll(/Api\((GET|POST) ([^)]+)\)/g)].map(m=>({type:"api",method:m[1],path:m[2]}));
   await writeFile(join(cwd,".screenpipe-permissions.json"),JSON.stringify({pipe_token:"fixture-workspace",api_base:base,pipe_name:task,pipe_dir:cwd,allow_rules,deny_rules:[],use_default_allowlist:false}));
   const instructions=template.replace(/^---[\s\S]*?---\s*/,"");
-  const child=Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",`Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`,"--print",`${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
+  const prompt = `${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`;
+  const isolatedInstructions = `Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`;
+  const child = mastra ? Bun.spawn([process.execPath, mastraRunner], {
+    cwd,
+    env: { SCREENPIPE_MASTRA_MODEL_URL: process.env.SCREENPIPE_MASTRA_MODEL_URL },
+    stdin: new Blob([JSON.stringify({ task, model, prompt, instructions: isolatedInstructions })]),
+    stdout: "pipe",
+    stderr: "pipe",
+  }) : Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",isolatedInstructions,"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
   const timer=setTimeout(()=>child.kill(),Math.max(1,deadline-Date.now()));
   const [out,err,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timer);
   stdout+=out;stderr+=err;exit=code;
@@ -243,7 +254,7 @@ try{
   }
   await writeFile(join(root,"trajectory.jsonl"),stdout,{mode:0o600});await writeFile(join(root,"stderr.txt"),stderr,{mode:0o600});
   const events=stdout.split("\n").flatMap(s=>{try{return[JSON.parse(s)]}catch{return[]}});
-  const verified=!model.includes("glm")||events.some(e=>e.type==="extension_ui_request"&&e.key==="screenpipe-confidential"&&e.text?.includes("response_verified"));
+  const verified=mastra||!model.includes("glm")||events.some(e=>e.type==="extension_ui_request"&&e.key==="screenpipe-confidential"&&e.text?.includes("response_verified"));
   const discovered=Object.values(ws.drafts).filter((d:any)=>d.status==="open"&&d.assignee!==task) as any[];
   let checks: Record<string, boolean>={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad?.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
   if(discovery)Object.assign(checks,{distinctJobs:discovered.some(d=>JSON.stringify(d.payload).includes(rows[0].timestamp)&&!JSON.stringify(d.payload).includes(rows[2].timestamp))&&discovered.some(d=>JSON.stringify(d.payload).includes(rows[2].timestamp)&&!JSON.stringify(d.payload).includes(rows[0].timestamp)),separateJobs:discovered.length>=2});
@@ -277,7 +288,7 @@ try{
     noInventedScreenshot:published.every(w=>w.stages.every((s:any)=>!s.screenshotFrameId && !(s.screenshotFrameIds?.length))),
   });
   if(contextHistoryCount)Object.assign(checks,{
-    contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
+    contextSnapshotExposed:events.some(e=>mastra ? e.type === "workflow_snapshot_ready" : e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
     preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
   });
   if(repeatCycle) {

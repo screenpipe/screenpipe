@@ -1,0 +1,10 @@
+{
+  "name": "@screenpipe/workflow-mastra",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.94",
+    "@mastra/core": "1.86.0",
+    "zod": "4.6.7"
+  }
+}

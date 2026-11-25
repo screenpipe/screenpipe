@@ -19,6 +19,7 @@ pub mod cloud;
 mod cloud_context;
 pub mod pi;
 pub mod pi_compaction;
+pub(crate) mod workflow_mastra;
 pub mod worktree;
 
 use anyhow::Result;
