@@ -90,6 +90,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { AppEntitlementGate } from "./app-entitlement-gate";
+import { normalizeAppUser } from "@/lib/app-entitlement";
 
 // Build timestamps relative to the real clock so freshness checks are stable
 // without fake timers.
@@ -579,6 +580,32 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
+
+  it("opens automatically after verifying access with a device clock that is behind", async () => {
+    const rawUser = baseUser({
+      app_entitled: true,
+      subscription_plan: "standard",
+      entitlement: {
+        active: true,
+        plan: "standard",
+        source: "subscription",
+        status: "trialing",
+        checked_at: new Date(Date.now() + 321_000).toISOString(),
+        current_period_end: daysAhead(7),
+        features: { app: true },
+      },
+    });
+    mocks.state.user = rawUser;
+    mocks.loadUser.mockImplementationOnce(async (token) => {
+      mocks.state.user = normalizeAppUser(rawUser, token, Date.now());
+    });
+    const gate = () => <AppEntitlementGate>{protectedApp}</AppEntitlementGate>;
+    const { rerender } = render(gate());
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledWith("tok", true));
+    rerender(gate());
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
   });
 
   it("gates and stops when paid freshness expires without an API response", async () => {

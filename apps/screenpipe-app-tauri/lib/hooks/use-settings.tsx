@@ -2084,6 +2084,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			}
 		};
 		try {
+			const requestStartedAt = Date.now();
 			const response = await fetch(
 				screenpipeWebUrl("/api/user", "https://screenpipe.com"),
 				{
@@ -2135,7 +2136,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				throw new Error("account session was rejected by the server");
 			}
 
-			const userData = normalizeAppUser(data.user, token) as User;
+			const userData = normalizeAppUser(data.user, token, requestStartedAt) as User;
 			const localPlanPolicy = getLocalPlanPolicy(userData as any);
 			if (localPlanPolicy === "unknown") {
 				// Preserve the authenticated identity so the user can retry, but
