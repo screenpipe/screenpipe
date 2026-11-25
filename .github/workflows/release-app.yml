@@ -2083,11 +2083,13 @@ jobs:
           # objects compiled under LTCG / the old global /arch:AVX2 flags
           # (cc/cmake outputs aren't keyed on those env vars).
           shared-key: "rust-cache-v2-x86_64-pc-windows-msvc"
-          save-if: true
+          save-if: false
 
-      - name: Cache Pre Build
+      # Packaging can restore the old runner caches. Linked executables move
+      # only through the pinned run's artifact, with no cache writeback.
+      - name: Restore packaging dependencies
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -2531,11 +2533,13 @@ jobs:
             target/x86_64-unknown-linux-gnu
             apps/screenpipe-app-tauri/src-tauri/target
           shared-key: "rust-cache-x86_64-unknown-linux-gnu-enterprise"
-          save-if: true
+          save-if: false
 
-      - name: Cache Pre Build
+      # Packaging can restore the old runner caches. Linked executables move
+      # only through the pinned run's artifact, with no cache writeback.
+      - name: Restore packaging dependencies
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -2871,11 +2875,13 @@ jobs:
             ~/.cargo/git/db/
             apps/screenpipe-app-tauri/src-tauri/target
           shared-key: "rust-cache-${{ matrix.target }}-enterprise"
-          save-if: true
+          save-if: false
 
-      - name: Cache Pre Build
+      # Packaging can restore the old runner caches. Linked executables move
+      # only through the pinned run's artifact, with no cache writeback.
+      - name: Restore packaging dependencies
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             apps/screenpipe-app-tauri/node_modules
