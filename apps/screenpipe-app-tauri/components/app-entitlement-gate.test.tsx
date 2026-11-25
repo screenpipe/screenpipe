@@ -581,6 +581,46 @@ describe("AppEntitlementGate", () => {
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
 
+  it("guides Windows users to sync their clock when a Standard trial check is ahead", async () => {
+    vi.useFakeTimers();
+    try {
+      const serverTime = new Date("2026-06-05T12:00:00.000Z");
+      vi.setSystemTime(serverTime.getTime() - 321_000);
+      mocks.state.user = baseUser({
+        app_entitled: true,
+        subscription_plan: "standard",
+        entitlement: {
+          active: true,
+          plan: "standard",
+          source: "subscription",
+          status: "trialing",
+          checked_at: serverTime.toISOString(),
+          current_period_end: daysAhead(7),
+          features: { app: true },
+        },
+      });
+      const gate = <AppEntitlementGate>{protectedApp}</AppEntitlementGate>;
+      const { rerender } = render(gate);
+
+      expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+      expect(screen.getByText(/Windows Settings.*Sync now/i)).toBeInTheDocument();
+      const refresh = screen.getByRole("button", { name: /refresh access/i });
+      mocks.loadUser.mockClear();
+      await act(async () => {
+        fireEvent.click(refresh);
+      });
+      expect(mocks.loadUser).toHaveBeenCalledWith("tok", true);
+
+      vi.setSystemTime(serverTime);
+      rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+      expect(screen.queryByText(/Sync now/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gates and stops when paid freshness expires without an API response", async () => {
     vi.useFakeTimers();
     try {

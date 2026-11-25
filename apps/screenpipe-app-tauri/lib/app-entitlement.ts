@@ -553,6 +553,11 @@ export function hasPersistedEntitlementEvidence(user: AppUser | null | undefined
   return entitlement?.features?.app === true || entitlement?.active === true;
 }
 
+export function isAppEntitlementAheadOfSystemClock(user: AppUser | null | undefined): boolean {
+  const checkedAt = parseEntitlementTime(asEntitlement(user?.entitlement)?.checked_at);
+  return checkedAt !== null && checkedAt > Date.now() + APP_ENTITLEMENT_CLOCK_SKEW_MS;
+}
+
 export function needsAppEntitlementRefresh(user: AppUser | null | undefined) {
   if (!user?.token) return false;
 
