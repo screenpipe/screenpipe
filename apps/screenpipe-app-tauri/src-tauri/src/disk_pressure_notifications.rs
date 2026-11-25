@@ -185,6 +185,7 @@ impl DiskPressureNotificationState {
 pub enum DiskPressureOutcome {
     GuardDisabled,
     CaptureAlreadyStopped,
+    RawCaptureContinues,
     CaptureStopped,
     CaptureStoppedNotificationSuppressed,
     CaptureStoppedNotificationFailed,
@@ -244,6 +245,15 @@ pub(crate) async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) -> DiskPre
     let capture_session_running = state.capture.lock().await.is_some();
     if !state.capture_intended() && !capture_session_running {
         return DiskPressureOutcome::CaptureAlreadyStopped;
+    }
+
+    match crate::recording::keep_raw_capture_on_low_disk(&state, app).await {
+        Ok(true) => return DiskPressureOutcome::RawCaptureContinues,
+        Ok(false) => {}
+        Err(error) => {
+            warn!(%error, "could not switch indexed capture to the raw spool");
+            return DiskPressureOutcome::StopFailed;
+        }
     }
 
     if let Err(error) = crate::recording::stop_capture_with_reason(state, app.clone(), "disk_pressure").await {
@@ -321,7 +331,7 @@ fn low_disk_body(
     }
 }
 
-fn guard_enabled(app: &AppHandle) -> bool {
+pub(crate) fn guard_enabled(app: &AppHandle) -> bool {
     SettingsStore::get(app)
         .ok()
         .flatten()

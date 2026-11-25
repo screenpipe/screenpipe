@@ -102,6 +102,8 @@ tracing-appender = "0.2.3"
 sha2 = "0.10"
 hex = "0.4"
 nitro_attest = "0.2"
+aws-lc-rs = { version = "1", optional = true }
+zeroize = { version = "1", optional = true }
 time = "0.3"
 sys-locale = "=0.3.2"
 # 0.2.189 sizes vm_statistics64 for macOS 27. sysinfo 0.29 forwards that
@@ -312,7 +314,7 @@ official-build = []
 
 # The standard app includes managed capabilities; account/config selects them
 # at runtime. Keep the legacy package feature for existing MDM installations.
-enterprise-support = ["dep:thiserror", "dep:screenpipe-sync", "screenpipe-core/enterprise-build"]
+enterprise-support = ["dep:thiserror", "dep:screenpipe-sync", "dep:aws-lc-rs", "dep:zeroize", "screenpipe-core/enterprise-build"]
 enterprise-build = [
     "enterprise-support",
     "screenpipe-config/enterprise-build",

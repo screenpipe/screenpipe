@@ -280,6 +280,38 @@ pub async fn process_audio_input(
     filter_music: bool,
     db: &screenpipe_db::DatabaseManager,
 ) -> Result<()> {
+    process_audio_input_with_optional_db(
+        audio,
+        vad_engine,
+        segmentation_model_path,
+        embedding_manager,
+        embedding_extractor,
+        output_path,
+        output_sender,
+        session,
+        metrics,
+        pre_written_path,
+        filter_music,
+        Some(db),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn process_audio_input_with_optional_db(
+    audio: AudioInput,
+    vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
+    segmentation_model_path: Option<PathBuf>,
+    embedding_manager: Arc<StdMutex<EmbeddingManager>>,
+    embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,
+    output_path: &PathBuf,
+    output_sender: &flume::Sender<TranscriptionResult>,
+    session: &mut TranscriptionSession,
+    metrics: Arc<AudioPipelineMetrics>,
+    pre_written_path: Option<String>,
+    filter_music: bool,
+    db: Option<&screenpipe_db::DatabaseManager>,
+) -> Result<()> {
     // capture_timestamp is set when audio enters the channel. Used for both
     // file naming and DB storage so audio appears at the correct timeline position,
     // even when smart mode defers processing by 20+ minutes.
@@ -318,9 +350,10 @@ pub async fn process_audio_input(
     if !speech_ratio_ok {
         // The caller already persisted this chunk as pending. Complete it even
         // though VAD intentionally skips STT, without counting a provider call.
-        if let Some(path) =
-            pre_written_path.filter(|_| !matches!(session, TranscriptionSession::Disabled))
-        {
+        if let (Some(db), Some(path)) = (
+            db,
+            pre_written_path.filter(|_| !matches!(session, TranscriptionSession::Disabled)),
+        ) {
             super::handle_new_transcript::finish_without_text(
                 db,
                 &path,
@@ -331,9 +364,11 @@ pub async fn process_audio_input(
         return Ok(());
     }
 
-    // Use the pre-written path if audio was already persisted before deferral,
-    // otherwise write now (fallback for callers that don't pre-persist)
-    let file_path = if let Some(path) = pre_written_path {
+    // Raw capture only needs the transcript, not a timeline media file.
+    // For the DB pipeline, write a file here if early persistence didn't.
+    let file_path = if db.is_none() {
+        String::new()
+    } else if let Some(path) = pre_written_path {
         path
     } else {
         let capture_dt = chrono::DateTime::from_timestamp(timestamp as i64, 0);
@@ -397,7 +432,7 @@ pub async fn run_stt(
     {
         Ok(output) => {
             let diarization_segments = offset_diarization_segments(output, segment.start);
-            Ok(TranscriptionResult {
+            let result = TranscriptionResult {
                 input: AudioInput {
                     data: Arc::new(audio),
                     sample_rate,
@@ -414,7 +449,9 @@ pub async fn run_stt(
                 end_time: segment.end,
                 diarization_provider: diarization_segments.diarization_provider,
                 diarization_segments: diarization_segments.diarization_segments,
-            })
+            };
+            super::handle_new_transcript::append_live_transcript(&result).await;
+            Ok(result)
         }
         Err(e) => {
             error!("STT error for input {}: {:?}", device, e);

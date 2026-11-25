@@ -10,7 +10,6 @@ use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 
 const ENDPOINT: &str = "https://screenpipe.com/api/enterprise/raw-uploads/attestation";
-static STARTUP_ATTESTATION: RawUploadAttestation = RawUploadAttestation(OnceCell::const_new());
 
 pub(crate) fn startup_allowed(
     enterprise_edition: bool,
@@ -19,47 +18,41 @@ pub(crate) fn startup_allowed(
     enterprise_edition && policy == Some(&serde_json::Value::Bool(true))
 }
 
-pub(crate) fn startup_verified() -> bool {
-    STARTUP_ATTESTATION.0.get().is_some()
-}
-
-pub(crate) async fn check_startup(http: reqwest::Client, bearer: String) {
-    match STARTUP_ATTESTATION
-        .verified_key_at(&http, &bearer, ENDPOINT)
-        .await
-    {
-        Ok(_key) => {
-            tracing::info!("raw uploads startup attestation verified; no upload attempted");
-            // TODO(raw uploads): use the verified key to encrypt and upload captures.
-        }
-        Err(error) => tracing::warn!(%error, "raw uploads startup attestation failed"),
-    }
-}
-
 #[derive(Debug)]
-#[allow(dead_code)] // The startup path verifies the key but does not use it for uploads yet.
 pub(crate) struct VerifiedUploadKey {
     pub key_arn: String,
     pub public_key_der: Vec<u8>,
 }
 
-/// Keep one instance in the raw uploader for the app run. This verifies the
-/// encryption key; it does not replace the uploader's authorization checks.
+/// One instance per active workspace/destination. Attesting the encryption key
+/// does not replace the uploader's authorization checks.
 #[derive(Default)]
-struct RawUploadAttestation(OnceCell<VerifiedUploadKey>);
+pub(crate) struct RawUploadAttestation(OnceCell<VerifiedUploadKey>);
 
 impl RawUploadAttestation {
+    pub(crate) async fn verified_key(
+        &self,
+        client: &reqwest::Client,
+        license: &str,
+        workspace: &str,
+    ) -> Result<&VerifiedUploadKey> {
+        self.verified_key_at(client, license, workspace, ENDPOINT)
+            .await
+    }
+
     async fn verified_key_at(
         &self,
         client: &reqwest::Client,
-        bearer: &str,
+        license: &str,
+        workspace: &str,
         endpoint: &str,
     ) -> Result<&VerifiedUploadKey> {
         self.0
             .get_or_try_init(|| async {
                 let evidence: Evidence = client
                     .get(endpoint)
-                    .bearer_auth(bearer)
+                    .header("X-License-Key", license)
+                    .header("X-Workspace-Id", workspace)
                     .timeout(std::time::Duration::from_secs(15))
                     .send()
                     .await?
@@ -184,7 +177,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/attestation"))
-            .and(header("authorization", "Bearer enterprise-session"))
+            .and(header("x-license-key", "enterprise-key"))
+            .and(header("x-workspace-id", "workspace"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "enclave_attestation": { "document_cose_sign1_b64": STANDARD.encode(b"unsigned") },
                 "encryption_identity": { "key_arn": "fixture-key", "public_key_der_b64": "AA==" },
@@ -197,7 +191,7 @@ mod tests {
         let url = format!("{}/attestation", server.uri());
         for _ in 0..2 {
             assert!(verifier
-                .verified_key_at(&reqwest::Client::new(), "enterprise-session", &url)
+                .verified_key_at(&reqwest::Client::new(), "enterprise-key", "workspace", &url)
                 .await
                 .is_err());
         }
@@ -213,7 +207,7 @@ mod tests {
         })));
         let client = reqwest::Client::new();
         let key = verifier
-            .verified_key_at(&client, "enterprise-session", &server.uri())
+            .verified_key_at(&client, "enterprise-key", "workspace", &server.uri())
             .await
             .unwrap();
         assert_eq!(key.key_arn, "verified-key");
