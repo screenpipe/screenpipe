@@ -376,61 +376,96 @@ where
             "paired_capture: screenshot skipped (screenshot_disabled, trigger={})",
             ctx.capture_trigger
         );
-        None
+        Ok(None)
     } else {
-        let path = ctx.snapshot_writer.write(
-            snapshot_image.unwrap_or(&ctx.image),
-            ctx.captured_at,
-            ctx.monitor_id,
-        )?;
-        debug!(
-            "paired_capture: snapshot written in {:?} (trigger={})",
-            start.elapsed(),
-            ctx.capture_trigger
-        );
-        Some(path)
+        ctx.snapshot_writer
+            .write(
+                snapshot_image.unwrap_or(&ctx.image),
+                ctx.captured_at,
+                ctx.monitor_id,
+            )
+            .map(|path| {
+                debug!(
+                    "paired_capture: snapshot written in {:?} (trigger={})",
+                    start.elapsed(),
+                    ctx.capture_trigger
+                );
+                Some(path)
+            })
     };
 
-    let mut persisted = snapshot_path.is_some();
-    let ledger_tree = if snapshot_path.is_some() {
-        pixel_tree_snapshot
-    } else {
-        stored_tree_snapshot
-    };
-    if raw_capture_ledger::is_enabled() && (snapshot_path.is_some() || ledger_tree.is_some()) {
+    let ledger_snapshot = snapshot_path.as_ref().ok().and_then(Option::as_ref);
+    let mut persisted = ledger_snapshot.is_some();
+    if raw_capture_ledger::is_enabled() && (persisted || stored_tree_snapshot.is_some()) {
         let captured_at = ctx.captured_at;
-        let (context, ax) = raw_screen_metadata(ctx, ledger_tree);
-        let ledger_snapshot = snapshot_path.clone();
-        let appended = tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut entries = Vec::new();
-            if let Some(path) = ledger_snapshot {
-                let jpeg = std::fs::read(path)?;
-                entries.push(serde_json::json!({
+        let ledger_snapshot = ledger_snapshot.cloned();
+        let paired = ctx.ax_screenshot_coherent;
+        let (mut context, ax) = raw_screen_metadata(ctx, stored_tree_snapshot);
+        let ax_capture = stored_tree_snapshot.map(|tree| {
+            let mut ax_context = context.clone();
+            ax_context["app_name"] = serde_json::json!(tree.app_name);
+            ax_context["window_name"] = serde_json::json!(tree.window_name);
+            ax_context["browser_url"] = serde_json::json!(tree.browser_url);
+            (tree.timestamp, ax_context)
+        });
+        let appended = tokio::task::spawn_blocking(move || {
+            let screenshot = ledger_snapshot.and_then(|path| match std::fs::read(path) {
+                Ok(jpeg) => Some(serde_json::json!({
                     "kind": "screenpipe.screenshot",
                     "schema_version": 1,
                     "media_type": "image/jpeg",
                     "encoding": "base64",
                     "payload": raw_capture_ledger::encode_base64(&jpeg),
-                }));
+                })),
+                Err(error) => {
+                    warn!(%error, "could not read raw capture JPEG for the ledger");
+                    None
+                }
+            });
+            let ax = ax.zip(ax_capture).map(|(ax, (timestamp, context))| {
+                (
+                    timestamp,
+                    context,
+                    serde_json::json!({
+                        "kind": "screenpipe.ax",
+                        "schema_version": 1,
+                        "media_type": "application/json",
+                        "encoding": "utf8",
+                        "payload": ax.to_string(),
+                    }),
+                )
+            });
+            let append = |timestamp, context, entries| match raw_capture_ledger::append(
+                timestamp, context, entries,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    warn!(%error, "raw screen capture could not be appended");
+                    false
+                }
+            };
+            match (screenshot, ax) {
+                (Some(screenshot), Some((_, _, ax))) if paired => {
+                    append(captured_at, context, vec![screenshot, ax])
+                }
+                (screenshot, ax) => {
+                    context["ax_captured_at"] = serde_json::Value::Null;
+                    let screenshot_saved =
+                        screenshot.is_some_and(|entry| append(captured_at, context, vec![entry]));
+                    let ax_saved = ax.is_some_and(|(timestamp, context, entry)| {
+                        append(timestamp, context, vec![entry])
+                    });
+                    screenshot_saved || ax_saved
+                }
             }
-            if let Some(ax) = ax {
-                entries.push(serde_json::json!({
-                    "kind": "screenpipe.ax",
-                    "schema_version": 1,
-                    "media_type": "application/json",
-                    "encoding": "utf8",
-                    "payload": serde_json::to_string(&ax)?,
-                }));
-            }
-            raw_capture_ledger::append(captured_at, context, entries)
         })
         .await;
-        if matches!(appended, Ok(Ok(()))) {
-            persisted = true;
-        } else {
-            warn!("raw screen capture could not be appended");
+        match appended {
+            Ok(saved) => persisted |= saved,
+            Err(error) => warn!(%error, "raw screen capture append task failed"),
         }
     }
+    let snapshot_path = snapshot_path?;
 
     let Some(db) = db else {
         return Ok(if persisted {
@@ -1409,11 +1444,12 @@ mod tests {
             ax_screenshot_coherent: true,
             focused_window_bounds: None,
         };
-        let tree = make_snap(vec![AccessibilityTreeNode {
+        let mut tree = make_snap(vec![AccessibilityTreeNode {
             text: "Contact me@example.com".into(),
             value: Some("me@example.com".into()),
             ..Default::default()
         }]);
+        tree.window_name = "Contact me@example.com".into();
         assert!(matches!(
             paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None).await?,
             PairedCaptureOutcome::Raw { .. }
@@ -1428,7 +1464,31 @@ mod tests {
             paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None).await?,
             PairedCaptureOutcome::Raw { .. }
         ));
-        let mut screenshots = 0;
+        ctx.screenshot_disabled = false;
+        ctx.captured_at += chrono::Duration::seconds(1);
+        assert!(matches!(
+            paired_capture_with_optional_db(&ctx, None, None, false, None).await?,
+            PairedCaptureOutcome::Raw { .. }
+        ));
+        ctx.captured_at += chrono::Duration::seconds(1);
+        ctx.ax_screenshot_coherent = false;
+        detach_tree_from_pixels(&mut tree);
+        assert!(matches!(
+            paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None).await?,
+            PairedCaptureOutcome::Raw { .. }
+        ));
+        let blocked_snapshot_dir = tmp.path().join("not-a-directory");
+        std::fs::write(&blocked_snapshot_dir, b"blocked")?;
+        let blocked_writer = SnapshotWriter::new(&blocked_snapshot_dir, 80, 1920);
+        ctx.snapshot_writer = &blocked_writer;
+        assert!(
+            paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None)
+                .await
+                .is_err()
+        );
+
+        let mut pairs = 0;
+        let mut screenshots_only = 0;
         let mut ax_only = 0;
         for item in raw_capture_ledger::pending()? {
             let body = String::from_utf8(raw_capture_ledger::read(&item)?)?;
@@ -1440,7 +1500,12 @@ mod tests {
                 continue;
             }
             let ax_record = if records[1]["kind"] == "screenpipe.screenshot" {
-                screenshots += 1;
+                if records.len() == 2 {
+                    screenshots_only += 1;
+                    assert!(records[0]["context"]["ax_captured_at"].is_null());
+                    continue;
+                }
+                pairs += 1;
                 assert_eq!(records[1]["payload"], jpeg);
                 &records[2]
             } else {
@@ -1458,7 +1523,7 @@ mod tests {
             assert_eq!(ax["text"], tree.text_content);
             assert_eq!(ax["nodes"][0]["value"], "me@example.com");
         }
-        assert_eq!((screenshots, ax_only), (1, 1));
+        assert_eq!((pairs, screenshots_only, ax_only), (1, 2, 3));
         Ok(())
     }
 
