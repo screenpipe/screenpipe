@@ -15,6 +15,10 @@ it("discloses zero-hit coverage, separates errors, and normalizes meeting ids ov
   execFileSync("bun", ["run", "build"], { cwd: root, stdio: "pipe", timeout: 120000 });
   const requests: URL[] = [];
   let searchStatus = 200;
+  const meeting = {
+    id: 268, title: "Fixture meeting", note: "ok", meeting_app: "Google Meet",
+    meeting_start: "2026-01-01T12:00:00Z", meeting_end: "2026-01-01T12:30:00Z",
+  };
   const api = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
     requests.push(url);
@@ -24,6 +28,17 @@ it("discloses zero-hit coverage, separates errors, and normalizes meeting ids ov
       return;
     }
     const pathname = url.pathname;
+    if (pathname === "/search" && url.searchParams.get("browser_url") === "meet.google.com") {
+      const data = [301, 302, 303, 304].map(frame_id => ({
+        type: "OCR",
+        content: {
+          frame_id, timestamp: "2026-01-01T12:15:00Z", browser_url: "https://meet.google.com/abc-defg-hij",
+          text_source: "accessibility",
+        },
+      }));
+      res.end(JSON.stringify({ data, pagination: { total: data.length } }));
+      return;
+    }
     if (pathname === "/search" || pathname === "/search/keyword") {
       res.writeHead(searchStatus);
       // Zero hits: /search uses {data, pagination}, /search/keyword a bare array.
@@ -32,8 +47,14 @@ it("discloses zero-hit coverage, separates errors, and normalizes meeting ids ov
         : "[]");
       return;
     }
+    if (pathname === "/meetings") {
+      res.end(JSON.stringify([meeting, ...Array.from({ length: 10 }, (_, i) => ({
+        ...meeting, id: 269 + i, meeting_app: "manual",
+      }))]));
+      return;
+    }
     if (pathname === "/meetings/268") {
-      res.end(JSON.stringify({ id: 268, title: "Fixture meeting", note: "ok" }));
+      res.end(JSON.stringify(meeting));
       return;
     }
     if (pathname === "/meetings/268/transcript") {
@@ -102,10 +123,30 @@ it("discloses zero-hit coverage, separates errors, and normalizes meeting ids ov
     expect(requests.some(r => r.pathname === "/meetings/268.0")).toBe(false);
     // transcript_offset "400.0" must be coerced to a whole number, not NaN.
     expect(JSON.stringify(gm.content)).toContain("showing 401-500");
+    expect(JSON.stringify(gm.content)).not.toContain("screen_refs");
+    expect(requests.some(r => r.searchParams.has("browser_url"))).toBe(false);
 
     // 5. A genuinely bad id returns a clear local error, not a 400 from the engine.
     const bad = await client.callTool({ name: "get-meeting", arguments: { id: "268.5" } });
     expect(JSON.stringify(bad.content)).toContain("id must be a positive integer");
+
+    // Screen evidence is opt-in, bounded, and uses the same screenshot and accessibility frame ID.
+    const list = await client.callTool({ name: "list-meetings", arguments: { include_screen_refs: true } });
+    const listText = (list.content as Array<{ text: string }>)[0].text;
+    expect(listText).toContain('"frame_id":301');
+    expect(listText).toContain('"screenshot_uri":"screenpipe://frame/301"');
+    expect(listText).not.toContain('"frame_id":302');
+    expect(listText).toContain('"screen_refs_status":"not_checked"');
+    expect(requests.find(r => r.pathname === "/meetings")?.searchParams.has("include_screen_refs")).toBe(false);
+
+    const withFrames = await client.callTool({ name: "get-meeting", arguments: {
+      id: 268, include_screen_refs: true, include_transcript: true, transcript_offset: 400,
+    } });
+    const detailText = (withFrames.content as Array<{ text: string }>)[0].text;
+    const detail = JSON.parse(detailText.split("\n\nTranscript")[0]);
+    expect(detail.screen_refs_status).toBe("matched");
+    expect(detail.screen_refs.map((ref: { frame_id: number }) => ref.frame_id)).toEqual([301, 302, 303]);
+    expect(detailText).toContain("showing 401-500");
   } finally {
     await client.close();
     await transport.close();

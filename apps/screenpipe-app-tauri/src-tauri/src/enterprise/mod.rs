@@ -7,6 +7,9 @@ pub mod install_metadata;
 pub mod policy;
 
 #[cfg(feature = "enterprise-support")]
+pub(crate) mod raw_upload_attestation;
+
+#[cfg(feature = "enterprise-support")]
 pub mod sync;
 
 #[cfg(feature = "enterprise-support")]

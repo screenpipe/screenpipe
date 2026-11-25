@@ -602,6 +602,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1-rs"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
+dependencies = [
+ "asn1-rs-derive",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "synstructure",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,7 +1046,7 @@ version = "0.2.0"
 source = "git+https://github.com/EzraEllette/audiopipe.git?rev=eb660d74867a6492ebf68ad4798bdc74d3902fd7#eb660d74867a6492ebf68ad4798bdc74d3902fd7"
 dependencies = [
  "antirez-asr-sys",
- "half",
+ "half 2.7.1",
  "hf-hub 0.4.3",
  "mlx-rs",
  "ndarray 0.17.2",
@@ -1111,6 +1150,19 @@ dependencies = [
  "cmake",
  "dunce",
  "fs_extra",
+]
+
+[[package]]
+name = "aws-nitro-enclaves-nsm-api"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92c1f4471b33f6a7af9ea421b249ed18a11c71156564baf6293148fa6ad1b09"
+dependencies = [
+ "libc",
+ "log",
+ "serde",
+ "serde_bytes",
+ "serde_cbor",
 ]
 
 [[package]]
@@ -1755,7 +1807,7 @@ dependencies = [
  "candle-ug",
  "float8",
  "gemm 0.19.0",
- "half",
+ "half 2.7.1",
  "libm",
  "memmap2",
  "num-traits",
@@ -1778,7 +1830,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b6b5a4cae6b4e1ab0efcee4dc05272d11b374a3d1ba121b3a961e36be54ab60"
 dependencies = [
- "half",
+ "half 2.7.1",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "objc2-metal",
@@ -1795,7 +1847,7 @@ checksum = "a9317a09d6530b758990ed7f625ac69ff43653bc9ee28b0464644ad1169ada87"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
- "half",
+ "half 2.7.1",
  "libc",
  "num-traits",
  "objc2-metal",
@@ -2048,7 +2100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
 dependencies = [
  "ciborium-io",
- "half",
+ "half 2.7.1",
 ]
 
 [[package]]
@@ -2058,7 +2110,7 @@ source = "git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424b
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
- "half",
+ "half 2.7.1",
  "parking_lot",
  "tokio",
 ]
@@ -2070,7 +2122,7 @@ source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4c
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
- "half",
+ "half 2.7.1",
  "parking_lot",
  "tokio",
 ]
@@ -2082,7 +2134,7 @@ source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
- "half",
+ "half 2.7.1",
  "parking_lot",
  "tokio",
 ]
@@ -2604,6 +2656,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ceec7a6067e62d6f931a2baf6f3a751f4a892595bcec1461a3c94ef9949864b6"
 dependencies = [
  "bindgen 0.72.1",
+]
+
+[[package]]
+name = "coset"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4c8cc80f631f8307b887faca24dcc3abc427cd0367f6eb6188f6e8f5b7ad8fb"
+dependencies = [
+ "ciborium",
+ "ciborium-io",
 ]
 
 [[package]]
@@ -3254,6 +3316,20 @@ dependencies = [
  "const-oid 0.10.2",
  "pem-rfc7468 1.0.0",
  "zeroize",
+]
+
+[[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-bigint 0.4.6",
+ "num-traits",
+ "rusticata-macros",
 ]
 
 [[package]]
@@ -4069,7 +4145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4300e043a56aa2cb633c01af81ca8f699a321879a7854d3896a0ba89056363be"
 dependencies = [
  "bit_field",
- "half",
+ "half 2.7.1",
  "lebe",
  "miniz_oxide",
  "rayon-core",
@@ -4288,7 +4364,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d1f04709a8ac06e8e8042875a3c466cc4832d3c1a18dbcb9dba3c6e83046bc"
 dependencies = [
- "half",
+ "half 2.7.1",
  "num-traits",
  "rand 0.9.2",
  "rand_distr",
@@ -4873,7 +4949,7 @@ checksum = "a352d4a69cbe938b9e2a9cb7a3a63b7e72f9349174a2752a558a8a563510d0f3"
 dependencies = [
  "bytemuck",
  "dyn-stack",
- "half",
+ "half 2.7.1",
  "libm",
  "num-complex",
  "num-traits",
@@ -4894,7 +4970,7 @@ checksum = "88027625910cc9b1085aaaa1c4bc46bb3a36aad323452b33c25b5e4e7c8e2a3e"
 dependencies = [
  "bytemuck",
  "dyn-stack",
- "half",
+ "half 2.7.1",
  "libm",
  "num-complex",
  "num-traits",
@@ -4916,7 +4992,7 @@ dependencies = [
  "dyn-stack",
  "gemm-common 0.18.2",
  "gemm-f32 0.18.2",
- "half",
+ "half 2.7.1",
  "num-complex",
  "num-traits",
  "paste",
@@ -4934,7 +5010,7 @@ dependencies = [
  "dyn-stack",
  "gemm-common 0.19.0",
  "gemm-f32 0.19.0",
- "half",
+ "half 2.7.1",
  "num-complex",
  "num-traits",
  "paste",
@@ -5461,6 +5537,12 @@ dependencies = [
  "tokio-util",
  "tracing",
 ]
+
+[[package]]
+name = "half"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b43ede17f21864e81be2fa654110bf1e793774238d86ef8555c37e6519c0403"
 
 [[package]]
 name = "half"
@@ -7491,7 +7573,7 @@ checksum = "f3a0f592c5839b0237b3072530b1d3c503923579a2009ee0761df3edd1b1f27b"
 dependencies = [
  "bytemuck",
  "dyn-clone",
- "half",
+ "half 2.7.1",
  "itertools 0.14.0",
  "libc",
  "mach-sys",
@@ -7755,6 +7837,25 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nitro_attest"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e20bcc68142b3690ee13e163ae3a131d8aefd84bed74ea63a303e736100c4c4"
+dependencies = [
+ "aws-nitro-enclaves-nsm-api",
+ "coset",
+ "hex",
+ "ring",
+ "serde_bytes",
+ "serde_cbor",
+ "thiserror 2.0.18",
+ "time",
+ "tracing",
+ "x509-parser",
+ "zip 2.6.1",
+]
 
 [[package]]
 name = "nix"
@@ -8661,6 +8762,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8821,7 +8931,7 @@ version = "2.0.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
 dependencies = [
- "half",
+ "half 2.7.1",
  "libloading 0.9.0",
  "ndarray 0.17.2",
  "ort-sys",
@@ -9028,7 +9138,7 @@ dependencies = [
  "ahash",
  "bytes",
  "chrono",
- "half",
+ "half 2.7.1",
  "hashbrown 0.17.1",
  "num-bigint 0.5.1",
  "num-integer",
@@ -10913,6 +11023,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusticata-macros"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+dependencies = [
+ "nom 7.1.3",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11293,6 +11412,7 @@ dependencies = [
  "futures",
  "futures-channel",
  "gtk",
+ "hex",
  "hmac 0.12.1",
  "hostname",
  "http 0.2.12",
@@ -11303,6 +11423,7 @@ dependencies = [
  "log",
  "minisign",
  "minisign-verify",
+ "nitro_attest",
  "nokhwa-bindings-macos",
  "notify",
  "objc",
@@ -11375,6 +11496,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tikv-jemallocator",
+ "time",
  "tokio",
  "tokio-tungstenite",
  "toml 0.8.2",
@@ -12408,6 +12530,26 @@ dependencies = [
  "serde",
  "serde_core",
  "typeid",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
+name = "serde_cbor"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bef2ebfde456fb76bbcf9f59315333decc4fda0b2b44b420243c11e0f5ec1f5"
+dependencies = [
+ "half 1.8.3",
+ "serde",
 ]
 
 [[package]]
@@ -14808,7 +14950,7 @@ checksum = "b63feaf3343d35b6ca4d50483f94843803b0f51634937cc2ec519fc32232bc52"
 dependencies = [
  "fax",
  "flate2",
- "half",
+ "half 2.7.1",
  "quick-error",
  "weezl",
  "zune-jpeg",
@@ -14857,6 +14999,7 @@ checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde_core",
@@ -15576,7 +15719,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76b761acf8af3494640d826a8609e2265e19778fb43306c7f15379c78c9b05b0"
 dependencies = [
  "gemm 0.18.2",
- "half",
+ "half 2.7.1",
  "libloading 0.8.9",
  "memmap2",
  "num",
@@ -15596,7 +15739,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7adf545a99a086d362efc739e7cf4317c18cbeda22706000fd434d70ea3d95"
 dependencies = [
- "half",
+ "half 2.7.1",
  "metal 0.29.0",
  "objc",
  "serde",
@@ -17524,6 +17667,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4569f339c0c402346d4a75a9e39cf8dad310e287eef1ff56d4c68e5067f53460"
+dependencies = [
+ "asn1-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom 7.1.3",
+ "oid-registry",
+ "ring",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "xattr"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17878,6 +18039,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "zip"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dcb24d0152526ae49b9b96c1dcf71850ca1e0b882e4e28ed898a93c41334744"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
+ "indexmap 2.13.0",
+ "memchr",
+ "zopfli",
 ]
 
 [[package]]
