@@ -1692,9 +1692,10 @@ async fn store_imap_account(
     });
     let instance = match existing_account {
         Some((instance, _)) => instance.clone(),
-        None if accounts.is_empty() => None,
         None => {
-            // Stable across retries, and two servers can use the same username.
+            // A previously disconnected account must keep its selector on
+            // reconnect, even if all accounts were removed in the meantime.
+            // The unqualified slot remains reserved for the existing default.
             let key = serde_json::to_vec(&identity)?;
             Some(format!("{:x}", Sha256::digest(key)))
         }
@@ -1709,12 +1710,12 @@ async fn imap_creds(
     state: &ConnectionsState,
     instance: Option<&str>,
 ) -> Result<Map<String, Value>, (StatusCode, Json<Value>)> {
-    let creds = {
+    let connection = {
         let cm = state.cm.lock().await;
-        cm.get_credentials_instance("imap", instance).await
+        cm.get_saved_instance("imap", instance).await
     };
-    match creds {
-        Ok(Some(c)) if !c.is_empty() => Ok(c),
+    match connection {
+        Ok(Some(c)) if c.enabled && !c.credentials.is_empty() => Ok(c.credentials),
         Ok(_) if instance.is_some() => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -4408,7 +4409,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let instance = saved["instance"].as_str().unwrap();
         assert_eq!(
-            request(&app, "POST", "/imap/accounts", work).await,
+            request(&app, "POST", "/imap/accounts", work.clone()).await,
             (StatusCode::OK, saved.clone())
         );
 
@@ -4468,6 +4469,29 @@ mod tests {
         );
         let (_, listed) = request(&app, "GET", "/imap/instances", Value::Null).await;
         assert_eq!(listed["instances"], json!([]));
+
+        assert_eq!(
+            request(&app, "POST", "/imap/accounts", work).await,
+            (StatusCode::OK, saved.clone())
+        );
+        assert_eq!(
+            request(&app, "GET", "/imap/mailboxes", Value::Null).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let mut stored = screenpipe_connect::connections::load_store(dir.path());
+        stored.get_mut(&format!("imap:{instance}")).unwrap().enabled = false;
+        screenpipe_connect::connections::save_store(dir.path(), &stored).unwrap();
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                &format!("/imap/mailboxes?instance={instance}"),
+                Value::Null,
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]

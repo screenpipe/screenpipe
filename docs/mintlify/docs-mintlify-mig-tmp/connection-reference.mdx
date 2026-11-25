@@ -92,7 +92,7 @@ curl "http://localhost:3030/connections/readwise/proxy/api/v2/auth/"
 curl "http://localhost:3030/connections/imap/messages?limit=5"
 ```
 
-Email Inbox (IMAP) uses dedicated read-only endpoints for listing messages, fetching a message, and listing folders. In **Settings → Connections → Email Inbox (IMAP)**, select **Add account** to connect another inbox. The original connection stays the default. Name the email address in chat, or select the account in a scheduled task's connections or email trigger.
+Email Inbox (IMAP) uses dedicated read-only endpoints for listing messages, fetching a message, and listing folders. In **Settings → Connections → Email Inbox (IMAP)**, select **Add account** to connect another inbox. An existing default stays connected when you add an account. New inboxes have their own account IDs and keep them when reconnected. Name the email address in chat, or select the account in a scheduled task's connections or email trigger.
 
 Get account IDs from `GET /connections/imap/instances`. On `/connections/imap/messages`, `/connections/imap/messages/{uid}`, and `/connections/imap/mailboxes`, pass the URL-encoded `instance` query parameter for a named account. Omit it to read the default account (listed with `"instance": null`). Use the same account and folder when looking up a message by UID. After disconnecting the default, choose a connected account for tasks and requests that used it.
 

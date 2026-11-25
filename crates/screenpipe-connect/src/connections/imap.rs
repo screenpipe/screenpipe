@@ -64,7 +64,7 @@ Endpoints: GET /connections/imap/messages?limit=20&mailbox=INBOX&query=<text> li
 GET /connections/imap/messages/{uid} returns one full message, GET /connections/imap/mailboxes lists folders. \
 When the user specifies an account, look up its username in the instance list. For named accounts pass the URL-encoded instance as the instance query parameter on all three read endpoints. \
 Omit instance only for the default account. Keep the same account and mailbox when following a message UID. \
-Ask which inbox to use if the request is ambiguous or if no default is connected and the user didn't specify an account.",
+For a general email request, use the default if connected or the sole connected account if there is no default. Ask which inbox to use when the request is ambiguous.",
     fields: &[
         FieldDef {
             key: "imap_host",

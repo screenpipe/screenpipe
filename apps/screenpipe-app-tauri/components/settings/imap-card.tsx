@@ -181,6 +181,11 @@ function ImapConnectForm({ onSaved, onCancel }: { onSaved: () => void; onCancel?
   // need to think about this — it lives behind the advanced disclosure.
   const effectiveHost = host || inferredHost || (domain ? `imap.${domain}` : "");
 
+  function cancelClipboardWatch() {
+    clipboardSession.current = null;
+    setWatching(false);
+  }
+
   const connect = useCallback(async (pass: string) => {
     if (connectingRef.current) return;
     connectingRef.current = true;
@@ -235,6 +240,7 @@ function ImapConnectForm({ onSaved, onCancel }: { onSaved: () => void; onCancel?
       const session = clipboardSession.current;
       if (!session || connectingRef.current) return;
       const baseline = await session.baseline;
+      if (clipboardSession.current !== session) return;
       const copied = await readClipboardAppPassword();
       if (clipboardSession.current !== session || !copied || copied === baseline) return;
       setWatching(false);
@@ -257,7 +263,11 @@ function ImapConnectForm({ onSaved, onCancel }: { onSaved: () => void; onCancel?
           type="email"
           placeholder="you@gmail.com"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            cancelClipboardWatch();
+            setEmail(e.target.value);
+          }}
+          disabled={status === "connecting"}
           className="h-8 text-xs"
         />
       </div>
@@ -269,11 +279,29 @@ function ImapConnectForm({ onSaved, onCancel }: { onSaved: () => void; onCancel?
           <div className="flex gap-2 pt-2">
             <div className="flex-1 space-y-1">
               <Label className="text-xs">IMAP Host</Label>
-              <Input placeholder={inferredHost || ui("Imap.{value1}", { value1: domain || "example.com" })} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
+              <Input
+                placeholder={inferredHost || ui("Imap.{value1}", { value1: domain || "example.com" })}
+                value={host}
+                onChange={(e) => {
+                  cancelClipboardWatch();
+                  setHost(e.target.value);
+                }}
+                disabled={status === "connecting"}
+                className="h-8 text-xs"
+              />
             </div>
             <div className="w-24 space-y-1">
               <Label className="text-xs">Port</Label>
-              <Input placeholder="993" value={port} onChange={(e) => setPort(e.target.value)} className="h-8 text-xs" />
+              <Input
+                placeholder="993"
+                value={port}
+                onChange={(e) => {
+                  cancelClipboardWatch();
+                  setPort(e.target.value);
+                }}
+                disabled={status === "connecting"}
+                className="h-8 text-xs"
+              />
             </div>
           </div>
         </details>
@@ -313,6 +341,7 @@ function ImapConnectForm({ onSaved, onCancel }: { onSaved: () => void; onCancel?
             placeholder={gmail ? ui("Abcd efgh ijkl mnop") : ui("App-specific password")}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            disabled={status === "connecting"}
             className="h-8 text-xs pr-8"
           />
           <button
