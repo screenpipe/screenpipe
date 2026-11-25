@@ -16,7 +16,6 @@ on:
       - ".github/scripts/linux/verify-pipewire-runtime-packages.sh"
       - ".github/workflows/linux-appimage-smoke.yml"
       - ".github/workflows/release-app.yml"
-      - ".github/workflows/release-enterprise.yml"
       - "apps/screenpipe-app-tauri/scripts/pre_build.js"
       - "apps/screenpipe-app-tauri/package.json"
       - "apps/screenpipe-app-tauri/bun.lock"

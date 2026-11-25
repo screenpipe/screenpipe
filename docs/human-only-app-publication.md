@@ -6,16 +6,16 @@ The app release pipeline deliberately separates artifact preparation from public
 
 ## AI and automation may release artifacts
 
-`Release App` and `Release Enterprise` may build, sign, notarize, and upload immutable versioned objects. Their only R2 capability is the `screenpipe-release-artifact-uploader` service. That service accepts these key shapes:
+`Release App` may build, sign, notarize, and upload immutable versioned objects. Its only R2 capability is the `screenpipe-release-artifact-uploader` service. That service accepts these key shapes:
 
 - `releases/<version>/<target>/<artifact>`
 - `enterprise/releases/<version>/<target>/<artifact>`
 
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
-`Release App` builds consumer artifacts first, then dispatches `Release Enterprise` with the same validated commit and version. Before dispatch, it adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise build cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is available for recovery.
+One `Release App` dispatch validates the commit and version, then builds the static frontend alongside the finalized translation snapshot. Consumer and enterprise targets package that same export. Historical source revisions use their original build hooks.
 
-The localization preparation job builds one static desktop frontend alongside the finalized translation snapshot. All native targets in both workflows consume the same export. A manual enterprise recovery can prepare its own export, and historical source revisions still use their original build hooks. Native packaging still produces both application identities. The enterprise package controls legacy updater routing and holds managed deployment behavior, including the persistence installers.
+Enterprise jobs start after the consumer matrix succeeds. The `Enterprise artifacts` commit status tracks enterprise readiness, with a separate status for dry runs. Retry enterprise alone by dispatching `release-app.yml` for the exact same commit and version with `enterprise_only=true`. Native packaging produces both application identities and retains the enterprise updater and managed installers.
 
 ## Only a human may publish
 
@@ -28,7 +28,7 @@ Public publication includes any of the following:
 
 The human gate is the click. The authenticated releases control in the website admin UI is the only publication path: it requires an internal `releases:write` permission plus Clerk reverification, and it is the single action that writes updater pointers, creates the GitHub release, and dispatches the changelog. Before clicking, the human verifies the exact bump commit, required CI, all signed platform artifacts, and the intended channel.
 
-Automation cannot reach that path because the release workflows hold no publication credentials at all: `076735b17` removed them, leaving `Release App` and `Release Enterprise` with only the artifact-uploader service described above. Credential scoping, not tag protection, is what keeps publication human-only.
+Automation cannot reach that path because `Release App` holds only the artifact-uploader capability described above. Credential scoping, not tag protection, is what keeps publication human-only.
 
 GitHub ruleset `Human-only app publication tags` protects `app-v*` and `app-beta-v*` against creation, update, and deletion, and bypasses the repository `admin` role so the dashboard's own publish can create its tag. It is a guard against stray write-scoped tokens, not the human gate. Do not remove the bypass: doing so blocks the dashboard itself, which is exactly what silently stopped every GitHub release between `app-v2.5.176` and `2.6.0` while `latest.json` kept shipping. Environment `app-publication` requires Louis as reviewer, prevents self-review, and does not allow administrator bypass.
 

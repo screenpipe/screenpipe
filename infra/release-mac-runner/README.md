@@ -7,7 +7,7 @@
 This stack uses the fastest non-Ultra Apple-silicon Dedicated Host that can actually
 be allocated in a US region: M4 Max, M4 Pro, M2 Pro, M4, then M2. It creates a
 termination-protected macOS Tahoe instance with a 2 TiB high-performance gp3 root
-volume. It is dedicated to the macOS jobs in `Release App` and `Release Enterprise`;
+volume. It is dedicated to the macOS jobs in `Release App`;
 Windows and Linux use their own release runners.
 
 The instance has no inbound security-group rules. Administration uses AWS Systems

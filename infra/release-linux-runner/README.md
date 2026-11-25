@@ -5,7 +5,7 @@
 # Persistent Azure Linux release runner
 
 This stack provisions one always-on Ubuntu 24.04 Azure VM for Linux jobs in
-`Release App` and `Release Enterprise`. The default `Standard_D16as_v7` has 16
+`Release App`. The default `Standard_D16as_v7` has 16
 vCPUs and 64 GiB RAM. A retained 1 TiB Premium SSD stores Cargo, Rust, Bun,
 native dependency, compiler, and Tauri caches.
 

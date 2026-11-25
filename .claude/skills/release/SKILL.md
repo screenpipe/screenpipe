@@ -117,7 +117,7 @@ gh workflow run release-app.yml \
 
 Before dispatching, verify the remote `main` SHA still matches `BUMP_SHA`. After dispatching, read the run back and require its `headSha` to match. Never dispatch a second app run for the same version unless the first run failed and the retry is intentional.
 
-Enterprise is separate and manual. After the bump commit is on `main`, dispatch `release-enterprise.yml` once and verify that its run is pinned to the bump commit before treating Enterprise artifacts as prepared.
+The same dispatch starts Enterprise packaging after the consumer matrix succeeds. For Enterprise-only recovery, dispatch `release-app.yml` with the original commit, version, and `-f enterprise_only=true`. Verify the Enterprise jobs and the `Enterprise artifacts` status on the pinned commit.
 
 ### 5. Monitor Build Status
 ```bash
@@ -202,10 +202,8 @@ The CI copies `tauri.prod.conf.json` to `tauri.conf.json` before building. If ar
 CI automatically uses prod config for releases by copying it before build.
 
 ### Trigger & Publication Behavior
-- `release-app.yml` is `workflow_dispatch` only → consumer artifact build/upload from the explicit commit/version inputs
-- `release-enterprise.yml` is `workflow_dispatch` only → Enterprise artifact build/upload
-- Public consumer and Enterprise publication remains a human-only admin-dashboard action after artifact verification
-- A bump push alone starts neither release workflow; dispatch each exactly once and verify both run SHAs
+- Dispatch `release-app.yml` once for consumer and Enterprise artifacts. A version-bump push by itself does not start the build.
+- Public consumer and Enterprise publication remains a human-only admin-dashboard action after artifact verification.
 
 ## Notes
 
