@@ -26,6 +26,9 @@ async function main() {
   const job = z.object({
     task: z.string(),
     model: z.string().min(1),
+    provider: z.enum(["screenpipe", "ollama"]).default("ollama"),
+    providerUrl: z.string().nullish(),
+    cloudToken: z.string().min(1).nullish(),
     thinkingLevel: z.enum(["low", "medium", "high"]),
     instructions: z.string(),
     prompt: z.string(),
@@ -149,11 +152,17 @@ async function main() {
     }),
   });
 
-  const modelUrl = loopback(process.env.SCREENPIPE_MASTRA_MODEL_URL ?? "http://127.0.0.1:11434/v1");
+  const hosted = job.provider === "screenpipe";
+  if (hosted && !job.cloudToken) throw new Error("Sign in to Screenpipe to run workflow updates");
+  const modelUrl = hosted
+    ? new URL("https://api.screenpipe.com/v1")
+    : loopback(job.providerUrl ?? process.env.SCREENPIPE_MASTRA_MODEL_URL ?? "http://127.0.0.1:11434/v1");
   if (modelUrl.origin === recorder.origin) throw new Error("Model and recorder endpoints must be distinct");
   const provider = createOpenAICompatible({
-    name: "local-workflows",
+    name: job.provider,
     baseURL: modelUrl.toString().replace(/\/$/, ""),
+    apiKey: hosted ? job.cloudToken ?? undefined : undefined,
+    headers: hosted ? { "x-screenpipe-latency": "background", "x-screenpipe-workload": "pipe" } : undefined,
     fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
   });
   const reviewInstructions = job.task === "workflow-review"
@@ -184,16 +193,16 @@ ${reviewInstructions}`,
     if (event.type === "text-delta") {
       emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: event.payload.text } });
     } else if (event.type === "error") {
-      throw new Error("Local Mastra model stream failed");
+      throw new Error("Mastra model stream failed");
     }
   }
   const reason = await result.finishReason;
-  if (reason !== "stop") throw new Error(`Local Mastra run ended with ${reason}`);
+  if (reason !== "stop") throw new Error(`Mastra run ended with ${reason}`);
   emit({ type: "agent_end", messages: [{ role: "assistant", stopReason: reason, content: [{ type: "text", text: await result.text }] }] });
 }
 
 await main().catch((error) => {
   // Do not put provider payloads, tool arguments or credentials into pipe logs.
-  console.error(error instanceof Error && !("cause" in error) ? error.message : "Local Mastra run failed");
+  console.error(error instanceof Error && !("cause" in error) ? error.message : "Mastra run failed");
   process.exitCode = 1;
 });

@@ -9,7 +9,7 @@ import { join } from "node:path";
 const runner = join(import.meta.dir, "runner.ts");
 const task = "workflow-review";
 
-test("streams a review, rereads evidence, recovers from a revision conflict, and finishes", async () => {
+test.each(["ollama", "screenpipe"] as const)("%s streams a review, rereads evidence, recovers from a revision conflict, and finishes", async (provider) => {
   const root = await mkdtemp(join(tmpdir(), "workflow-mastra-test-"));
   const cwd = join(root, task);
   await mkdir(cwd);
@@ -76,9 +76,10 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
     port: 0,
     async fetch(request) {
       expect(new URL(request.url).pathname).toBe("/v1/chat/completions");
-      expect(request.headers.get("authorization")).toBeNull();
+      expect(request.headers.get("authorization")).toBe(provider === "screenpipe" ? "Bearer fixture-cloud" : null);
+      expect(request.headers.get("x-screenpipe-workload")).toBe(provider === "screenpipe" ? "pipe" : null);
       const body = await request.json();
-      expect(body.model).toBe("fixture-model");
+      expect(body.model).toBe(provider === "screenpipe" ? "auto" : "fixture-model");
       expect(body.reasoning_effort).toBe("low");
       expect(body.tools.map((tool: any) => tool.function.name).sort()).toEqual([
         "read_snapshot", "recorder_read", "workflow_workspace",
@@ -113,10 +114,30 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
     await Bun.write(join(cwd, ".screenpipe-permissions.json"), JSON.stringify({
       api_base: recorder.url.origin, pipe_name: task, pipe_token: "fixture-workspace",
     }));
-    const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", runner], {
+    const preload = join(cwd, "gateway-mock.ts");
+    await Bun.write(preload, `
+const originalFetch = fetch;
+globalThis.fetch = (input, init) => {
+  const url = new URL(input);
+  if (url.origin === "https://api.screenpipe.com") {
+    return originalFetch(${JSON.stringify(model.url.origin)} + url.pathname, init);
+  }
+  return originalFetch(input, init);
+};
+`);
+    const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", "--preload", preload, runner], {
       cwd,
-      env: { SCREENPIPE_MASTRA_MODEL_URL: `${model.url.origin}/v1` },
-      stdin: new Blob([JSON.stringify({ task, model: "fixture-model", thinkingLevel: "low", instructions: "Review the invoice", prompt: "Review now" })]),
+      env: {},
+      stdin: new Blob([JSON.stringify({
+        task,
+        model: provider === "screenpipe" ? "auto" : "fixture-model",
+        provider,
+        providerUrl: `${model.url.origin}/v1`,
+        cloudToken: provider === "screenpipe" ? "fixture-cloud" : undefined,
+        thinkingLevel: "low",
+        instructions: "Review the invoice",
+        prompt: "Review now",
+      })]),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -127,6 +148,7 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
     expect(stdout).toContain('"type":"agent_end"');
     expect(stdout).toContain('"isError":true');
     expect(stdout).not.toContain("fixture-workspace");
+    expect(stdout).not.toContain("fixture-cloud");
     expect(stdout).not.toContain("The user verified the invoice total.");
     expect(requests.indexOf("GET /search")).toBeLessThan(requests.indexOf("POST /workflows/workspace"));
     expect(writes.map(write => [write.action, write.expected_revision])).toEqual([

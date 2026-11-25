@@ -2996,11 +2996,21 @@ async fn setup_pipe_permissions(
     }
 }
 
-fn mastra_workflow_model(config: &PipeConfig) -> Option<String> {
-    if config.agent != "pi" || config.run_in.is_some() || is_enterprise_managed(config) {
+fn mastra_workflow_preset(
+    config: &PipeConfig,
+    executors: &HashMap<String, Arc<dyn AgentExecutor>>,
+) -> Option<ResolvedPreset> {
+    if config.agent != "pi"
+        || config.run_in.is_some()
+        || is_enterprise_managed(config)
+        || !crate::workflows::workspace::is_task(&config.name)
+        || !executors.contains_key(workflow_mastra::AGENT)
+    {
         return None;
     }
-    WorkflowMastraExecutor::configured_model(&config.name)
+    // Pi handles other preset transports and reports any invalid saved choice.
+    let preset = crate::workflows::model_choice::selected_provider().ok()?;
+    matches!(preset.provider.as_deref(), Some("screenpipe" | "ollama")).then_some(preset)
 }
 
 fn event_runs_are_read_only(config: &PipeConfig) -> bool {
@@ -3113,7 +3123,11 @@ impl PipeManager {
         store: Option<Arc<dyn PipeStore>>,
         api_port: u16,
     ) -> Self {
-        if let Some(executor) = WorkflowMastraExecutor::from_env() {
+        if let Some(executor) = executors
+            .get("pi")
+            .cloned()
+            .and_then(WorkflowMastraExecutor::from_env)
+        {
             executors.insert(workflow_mastra::AGENT.to_string(), Arc::new(executor));
         }
         // Initialize fallback registry from the screenpipe data dir
@@ -4183,13 +4197,13 @@ impl PipeManager {
             preset_prompt,
             run_agent,
             run_executor_config,
-        ) = if let Some(model) = mastra_workflow_model(&config) {
+        ) = if let Some(preset) = mastra_workflow_preset(&config, &self.executors) {
             (
-                model,
-                Some(workflow_mastra::PROVIDER.to_string()),
+                preset.model,
+                preset.provider,
+                preset.url,
                 None,
-                None,
-                None,
+                preset.prompt,
                 workflow_mastra::AGENT.to_string(),
                 None,
             )
@@ -4828,13 +4842,13 @@ impl PipeManager {
                 active_preset_idx,
                 run_agent,
                 run_executor_config,
-            ) = if let Some(model) = mastra_workflow_model(&config) {
+            ) = if let Some(preset) = mastra_workflow_preset(&config, &self.executors) {
                 (
-                    model,
-                    Some(workflow_mastra::PROVIDER.to_string()),
+                    preset.model,
+                    preset.provider,
+                    preset.url,
                     None,
-                    None,
-                    None,
+                    preset.prompt,
                     None,
                     None,
                     workflow_mastra::AGENT.to_string(),
@@ -6678,13 +6692,13 @@ impl PipeManager {
                         executor_config,
                         active_preset_id,
                         active_preset_idx,
-                    ) = if let Some(model) = mastra_workflow_model(config) {
+                    ) = if let Some(preset) = mastra_workflow_preset(config, &executors) {
                         (
-                            model,
-                            Some(workflow_mastra::PROVIDER.to_string()),
+                            preset.model,
+                            preset.provider,
+                            preset.url,
                             None,
-                            None,
-                            None,
+                            preset.prompt,
                             workflow_mastra::AGENT.to_string(),
                             None,
                             None,

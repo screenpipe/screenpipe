@@ -1,8 +1,7 @@
-# Local Mastra workflow generation
+# Mastra workflow generation
 
 This is an opt-in development runner for the desktop and standalone recorder.
-It runs Discover, Deepen, Review and Maintain with Mastra and a local
-OpenAI-compatible model. The existing Screenpipe scheduler owns run status,
+It runs Discover, Deepen, Review and Maintain with Mastra using the Workflows AI selection. The existing Screenpipe scheduler owns run status,
 cancellation, retries and handoffs. The workspace API owns catalog writes,
 evidence verification, revisions and receipts.
 
@@ -13,23 +12,18 @@ variables in the environment of your Screenpipe development process.
 (cd packages/workflow-mastra && bun install --frozen-lockfile)
 
 export SCREENPIPE_MASTRA_RUNNER="$PWD/packages/workflow-mastra/runner.ts"
-export SCREENPIPE_MASTRA_MODEL="your-local-tool-capable-model"
-# Optional. The default is Ollama on loopback.
-export SCREENPIPE_MASTRA_MODEL_URL="http://127.0.0.1:11434/v1"
 ```
 
-Start the app from that shell and use **Update workflows** with **Automatic
-updates** enabled. Existing background workflow cycles also use Mastra while
-the variables are set. Use a model served on-device. A loopback proxy can
-forward requests outside this machine. To switch back, unset `SCREENPIPE_MASTRA_RUNNER` and
-restart the app. The opt-in supplies the model for those tasks. Chat and
-enterprise-managed tasks continue using their own configured executors.
+Start the app from that shell and select **Update workflows**. Automatic
+updates use the same runner and model selection. **Intelligent** routes to
+Screenpipe Cloud with model `auto`. Screenpipe Cloud presets use their named
+model, and explicitly selected Ollama presets use their loopback endpoint.
+Other providers use their existing executor.
 
-The local runner uses the per-task recorder token and exposes Screenpipe
-evidence reads plus the existing workflow workspace tool. It can investigate
-chat activity present in Screenpipe captures. Direct chat-log files, shell
-tools, hosted providers and app-bundled installation are outside this runner's
-scope.
+Unset `SCREENPIPE_MASTRA_RUNNER` and restart to return these tasks to Pi.
+The Mastra runner uses the per-task recorder token for evidence and workspace
+tools. It can investigate chat activity present in Screenpipe captures.
+Direct chat-log files and shell tools are outside its scope.
 
 ## Verify locally
 
@@ -46,6 +40,7 @@ fictional captures and an isolated catalog.
 
 ```sh
 cd apps/screenpipe-app-tauri
+export SCREENPIPE_MASTRA_MODEL='your-local-tool-capable-model'
 WORKFLOW_EVAL_TIMEOUT_MS=300000 bun scripts/eval-workflow-workspace.ts --mastra
 WORKFLOW_EVAL_TIMEOUT_MS=300000 bun scripts/eval-workflow-workspace.ts --mastra --conflict
 ```

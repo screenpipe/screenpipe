@@ -5,50 +5,81 @@ use super::{install_spawned_pid, pi, AgentExecutor, AgentOutput, ExecutionHandle
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub(crate) const AGENT: &str = "workflow-mastra";
-pub(crate) const PROVIDER: &str = "local-openai-compatible";
 const RUNNER_ENV: &str = "SCREENPIPE_MASTRA_RUNNER";
-const MODEL_ENV: &str = "SCREENPIPE_MASTRA_MODEL";
-const MODEL_URL_ENV: &str = "SCREENPIPE_MASTRA_MODEL_URL";
 
 pub(crate) struct WorkflowMastraExecutor {
     runner: PathBuf,
-    model_url: Option<String>,
+    pi: Arc<dyn AgentExecutor>,
 }
 
 struct WorkflowPrompt<'a> {
     prompt: &'a str,
     model: &'a str,
     instructions: &'a str,
+    provider: &'a str,
+    provider_url: Option<&'a str>,
     thinking_level: Option<&'a str>,
 }
 
 impl WorkflowMastraExecutor {
-    pub(crate) fn from_env() -> Option<Self> {
+    pub(crate) fn from_env(pi: Arc<dyn AgentExecutor>) -> Option<Self> {
         Some(Self {
             runner: std::env::var_os(RUNNER_ENV)
                 .filter(|path| !path.is_empty())?
                 .into(),
-            model_url: std::env::var(MODEL_URL_ENV).ok(),
+            pi,
         })
     }
 
-    pub(crate) fn configured_model(task: &str) -> Option<String> {
-        if !crate::workflows::workspace::is_task(task) || Self::from_env().is_none() {
-            return None;
+    async fn execute_workflow(
+        &self,
+        job: WorkflowPrompt<'_>,
+        working_dir: &Path,
+        shared_pid: Option<SharedPid>,
+        output: Option<UnboundedSender<String>>,
+    ) -> Result<AgentOutput> {
+        use crate::workflows::pipeline;
+
+        if !pipeline::has_pending_input(working_dir).await? {
+            return Ok(AgentOutput {
+                stdout: "No new workflow input; saved results kept.".into(),
+                stderr: String::new(),
+                success: true,
+                pid: None,
+            });
         }
-        // Preserve the opt-in even if its model is missing. The runner will
-        // report a tracked configuration failure instead of using another AI.
-        Some(std::env::var(MODEL_ENV).unwrap_or_default())
+        let cloud_token = self.pi.user_token();
+        pipeline::check_admission_for_provider(
+            self.pi.screenpipe_api_url(),
+            cloud_token.as_deref(),
+            job.model,
+            job.provider,
+        )
+        .await?;
+
+        let before = pipeline::save_state(working_dir).await?;
+        let token = cloud_token
+            .as_deref()
+            .filter(|_| job.provider == "screenpipe");
+        let result = self
+            .execute(job, token, working_dir, shared_pid, output)
+            .await?;
+        if result.success {
+            pipeline::verify_saved(working_dir, before).await?;
+        }
+        Ok(result)
     }
 
     async fn execute(
         &self,
         job: WorkflowPrompt<'_>,
+        cloud_token: Option<&str>,
         working_dir: &Path,
         shared_pid: Option<SharedPid>,
         output: Option<UnboundedSender<String>>,
@@ -61,10 +92,7 @@ impl WorkflowMastraExecutor {
             crate::workflows::workspace::is_task(task),
             "Mastra is scoped to workflow tasks"
         );
-        anyhow::ensure!(
-            !job.model.trim().is_empty(),
-            "Set {MODEL_ENV} to a local tool-capable model"
-        );
+        anyhow::ensure!(!job.model.trim().is_empty(), "Choose a Workflows AI model");
         anyhow::ensure!(
             self.runner.is_absolute() && self.runner.is_file(),
             "Set {RUNNER_ENV} to the absolute path of the Mastra runner"
@@ -74,6 +102,9 @@ impl WorkflowMastraExecutor {
         let request = serde_json::to_vec(&serde_json::json!({
             "task": task,
             "model": job.model,
+            "provider": job.provider,
+            "providerUrl": job.provider_url,
+            "cloudToken": cloud_token,
             "instructions": job.instructions,
             "thinkingLevel": job.thinking_level.unwrap_or("low"),
             "prompt": job.prompt,
@@ -88,9 +119,6 @@ impl WorkflowMastraExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        if let Some(url) = &self.model_url {
-            command.env(MODEL_URL_ENV, url);
-        }
         #[cfg(unix)]
         command.process_group(0);
 
@@ -144,16 +172,18 @@ impl AgentExecutor for WorkflowMastraExecutor {
         prompt: &str,
         model: &str,
         working_dir: &Path,
-        _provider: Option<&str>,
-        _provider_url: Option<&str>,
+        provider: Option<&str>,
+        provider_url: Option<&str>,
         _provider_api_key: Option<&str>,
         shared_pid: Option<SharedPid>,
         _continue_session: bool,
     ) -> Result<AgentOutput> {
-        self.execute(
+        self.execute_workflow(
             WorkflowPrompt {
                 prompt,
                 model,
+                provider: provider.unwrap_or("screenpipe"),
+                provider_url,
                 instructions: "",
                 thinking_level: None,
             },
@@ -169,8 +199,8 @@ impl AgentExecutor for WorkflowMastraExecutor {
         prompt: &str,
         model: &str,
         working_dir: &Path,
-        _provider: Option<&str>,
-        _provider_url: Option<&str>,
+        provider: Option<&str>,
+        provider_url: Option<&str>,
         _provider_api_key: Option<&str>,
         shared_pid: Option<SharedPid>,
         line_tx: UnboundedSender<String>,
@@ -181,10 +211,12 @@ impl AgentExecutor for WorkflowMastraExecutor {
         _session_owner: Option<&str>,
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
-        self.execute(
+        self.execute_workflow(
             WorkflowPrompt {
                 prompt,
                 model,
+                provider: provider.unwrap_or("screenpipe"),
+                provider_url,
                 instructions: pipe_system_prompt.unwrap_or_default(),
                 thinking_level,
             },
@@ -235,7 +267,7 @@ mod tests {
             &runner,
             r#"
 const request = JSON.parse(await Bun.stdin.text());
-if (request.task !== "workflow-review" || request.instructions !== "review instructions" || request.thinkingLevel !== "medium") {
+if (request.task !== "workflow-review" || request.instructions !== "review instructions" || request.thinkingLevel !== "medium" || request.provider !== "screenpipe" || request.cloudToken !== "fixture-cloud") {
   throw new Error("unexpected task configuration");
 }
 console.log(JSON.stringify({ type: "test_ready", model: request.model }));
@@ -245,7 +277,7 @@ if (request.prompt === "wait") await Bun.sleep(30_000);
         .unwrap();
         let executor = WorkflowMastraExecutor {
             runner,
-            model_url: None,
+            pi: Arc::new(pi::PiExecutor::new(None)),
         };
 
         for prompt in ["finish", "wait"] {
@@ -256,9 +288,12 @@ if (request.prompt === "wait") await Bun.sleep(30_000);
                 WorkflowPrompt {
                     prompt,
                     model: "fixture-model",
+                    provider: "screenpipe",
+                    provider_url: None,
                     instructions: "review instructions",
                     thinking_level: Some("medium"),
                 },
+                Some("fixture-cloud"),
                 &cwd,
                 Some(pid),
                 Some(send),
