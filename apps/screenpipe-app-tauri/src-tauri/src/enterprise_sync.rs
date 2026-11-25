@@ -2001,6 +2001,44 @@ mod imp {
         NativeAuthorizationResult::Unavailable("enterprise policy could not be verified".into())
     }
 
+    fn raw_capture_scope(
+        policy: &NativeEnterprisePolicy,
+        policy_url: &str,
+        device_id: &str,
+    ) -> Option<crate::enterprise::raw_upload::Scope> {
+        use crate::enterprise::{raw_upload, raw_upload_attestation};
+        if !raw_upload_attestation::startup_allowed(
+            cfg!(feature = "enterprise-build"),
+            policy.locked_settings.get("cloudProcessing"),
+        ) {
+            return None;
+        }
+        let workspace = policy.license_id.clone()?;
+        let device = if screenpipe_telemetry_wire::identity::is_stable_device_id(device_id) {
+            Ok(device_id.to_owned())
+        } else {
+            crate::enterprise::host_identity::new_install_device_id().map_err(anyhow::Error::msg)
+        };
+        match device.and_then(|device| raw_upload::Scope::new(policy_url, workspace, device)) {
+            Ok(scope) => Some(scope),
+            Err(error) => {
+                warn!(%error, "raw capture scope unavailable");
+                None
+            }
+        }
+    }
+
+    fn configure_raw_spool(scope: &crate::enterprise::raw_upload::Scope) -> bool {
+        let root = crate::config::app_data_dir().join("raw-capture-ledger");
+        match scope.configure(&root) {
+            Ok(()) => true,
+            Err(error) => {
+                warn!(%error, "raw capture spool unavailable");
+                false
+            }
+        }
+    }
+
     fn grant_current_policy(
         app: &tauri::AppHandle,
         request: u64,
@@ -2020,6 +2058,13 @@ mod imp {
                         &policy.locked_settings,
                         true,
                     )?;
+                }
+                let (policy_url, _) = authorization_endpoint_urls();
+                let device_id = settings_device_id(app).unwrap_or_else(|| "unknown".to_string());
+                if let Some(scope) = raw_capture_scope(policy, &policy_url, &device_id) {
+                    configure_raw_spool(&scope);
+                } else {
+                    screenpipe_core::raw_capture_ledger::disable();
                 }
                 if crate::enterprise_policy::update_recording_authorized(true) {
                     app.state::<crate::recording::RecordingState>()
@@ -2272,7 +2317,7 @@ mod imp {
             if !startup_delay.is_zero() {
                 tokio::time::sleep(startup_delay).await;
             }
-            use crate::enterprise::{raw_upload, raw_upload_attestation};
+            use crate::enterprise::raw_upload_attestation;
             use screenpipe_core::raw_capture_ledger;
             let mut raw_upload_check: Option<tokio::task::JoinHandle<()>> = None;
             let mut raw_upload_scope = None;
@@ -2328,47 +2373,22 @@ mod imp {
                         if !settings_prepared {
                             next_poll = NATIVE_POLICY_RETRY_INTERVAL;
                         }
-                        let scope = if settings_prepared && raw_upload_attestation::startup_allowed(
-                            cfg!(feature = "enterprise-build"),
-                            policy.locked_settings.get("cloudProcessing"),
-                        ) {
-                            policy.license_id.and_then(|workspace| {
-                                let stable_device = if screenpipe_telemetry_wire::identity::is_stable_device_id(&device_id) {
-                                    Ok(device_id.clone())
-                                } else {
-                                    crate::enterprise::host_identity::new_install_device_id()
-                                        .map_err(anyhow::Error::msg)
-                                };
-                                match stable_device.and_then(|device| raw_upload::Scope::new(&policy_url, workspace, device)) {
-                                    Ok(scope) => Some(Arc::new(scope)),
-                                    Err(error) => {
-                                        warn!(%error, "raw capture scope unavailable");
-                                        None
-                                    }
-                                }
-                            })
-                        } else {
-                            None
-                        };
+                        let scope = settings_prepared
+                            .then(|| raw_capture_scope(&policy, &policy_url, &device_id))
+                            .flatten()
+                            .map(Arc::new);
                         if scope != raw_upload_scope {
-                        if let Some(worker) = raw_upload_check.take() {
-                            worker.abort();
-                            let _ = worker.await;
-                        }
-                            raw_capture_ledger::disable();
+                            if let Some(worker) = raw_upload_check.take() {
+                                worker.abort();
+                                let _ = worker.await;
+                            }
+                            if scope.is_none() {
+                                raw_capture_ledger::disable();
+                            }
                             attestation = Arc::new(raw_upload_attestation::RawUploadAttestation::default());
                             raw_upload_scope = scope;
                         }
-                        let spool_ready = raw_upload_scope.as_ref().is_some_and(|scope| {
-                            let root = crate::config::app_data_dir().join("raw-capture-ledger");
-                            match scope.configure(&root) {
-                                Ok(()) => true,
-                                Err(error) => {
-                                    warn!(%error, "raw capture spool unavailable");
-                                    false
-                                }
-                            }
-                        });
+                        let spool_ready = raw_upload_scope.as_deref().is_some_and(configure_raw_spool);
                         // Start capture without waiting for enclave verification.
                         if settings_prepared {
                             crate::recording::resume_enterprise_recording(&app).await;
@@ -2379,10 +2399,7 @@ mod imp {
                             let http = http.clone();
                             let attestation = attestation.clone();
                             raw_upload_check = Some(tokio::spawn(async move {
-                                scope.run(&http, &attestation, || (
-                                    crate::commands::get_cloud_token(),
-                                    license_key_from_env_or_config(),
-                                )).await;
+                                scope.run(&http, &attestation, license_key_from_env_or_config).await;
                             }));
                         }
                         // Hidden installs may never create the migration UI.

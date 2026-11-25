@@ -11,7 +11,7 @@ use aws_lc_rs::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, StatusCode, Url};
-use screenpipe_core::raw_capture_ledger as ledger;
+use screenpipe_core::{raw_capture_ledger as ledger, raw_capture_metrics as metrics};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -68,14 +68,20 @@ impl Scope {
         &self,
         http: &Client,
         attestation: &RawUploadAttestation,
-        credentials: impl Fn() -> (Option<String>, Option<String>),
+        license_key: impl Fn() -> Option<String>,
     ) {
         let retry_delay = std::time::Duration::from_secs(2);
         let (key, license) = loop {
-            if let (Some(bearer), Some(license)) = credentials() {
-                match attestation.verified_key(http, &bearer).await {
+            if let Some(license) = license_key() {
+                match attestation
+                    .verified_key(http, &license, &self.workspace)
+                    .await
+                {
                     Ok(key) => break (key, license),
-                    Err(error) => tracing::warn!(%error, "raw upload startup verification failed"),
+                    Err(error) => {
+                        metrics::add(&metrics::ATTESTATION_FAILURES, 1);
+                        tracing::warn!(%error, "raw upload startup verification failed");
+                    }
                 }
             }
             tokio::time::sleep(retry_delay).await;
@@ -101,30 +107,58 @@ impl Scope {
         if pending.is_empty() {
             return Ok(());
         }
-        let source = ledger::source_id().context("raw capture ledger is not configured")?;
-        let batch_id = Uuid::new_v4();
-        let mut plaintext = serde_json::to_vec(&json!({
-            "format": "screenpipe.raw-capture-batch", "version": 1, "batch_id": batch_id,
-        }))?;
-        plaintext.push(b'\n');
-        for item in &pending {
-            ensure!(
-                item.matches_scope(&self.workspace, &self.device, source),
-                "raw upload package scope mismatch"
-            );
-            plaintext.extend(ledger::read(item)?);
-        }
-        let body = encrypt(
-            key,
-            &self.workspace,
-            &self.device,
-            source,
-            batch_id,
-            plaintext,
-        )?;
+        metrics::add(&metrics::UPLOAD_ATTEMPTS, 1);
+        let prepare_started = std::time::Instant::now();
+        let prepared = (|| -> Result<_> {
+            let source = ledger::source_id().context("raw capture ledger is not configured")?;
+            let batch_id = Uuid::new_v4();
+            let mut plaintext = serde_json::to_vec(&json!({
+                "format": "screenpipe.raw-capture-batch", "version": 1, "batch_id": batch_id,
+            }))?;
+            plaintext.push(b'\n');
+            for item in &pending {
+                ensure!(
+                    item.matches_scope(&self.workspace, &self.device, source),
+                    "raw upload package scope mismatch"
+                );
+                plaintext.extend(ledger::read(item)?);
+            }
+            let body = encrypt(
+                key,
+                &self.workspace,
+                &self.device,
+                source,
+                batch_id,
+                plaintext,
+            )?;
+            Ok((batch_id, body))
+        })();
+        let (batch_id, body) =
+            prepared.inspect_err(|_| metrics::add(&metrics::UPLOAD_PREPARATION_FAILURES, 1))?;
+        metrics::add(
+            &metrics::UPLOAD_PREPARE_MS,
+            prepare_started.elapsed().as_millis() as u64,
+        );
+        let wire_bytes = body.len() as u64;
+        let transfer_started = std::time::Instant::now();
         self.upload_snapshot(http, license, batch_id, body.into())
-            .await?;
+            .await
+            .inspect_err(|_| metrics::add(&metrics::UPLOAD_TRANSFER_FAILURES, 1))?;
+        metrics::add(
+            &metrics::UPLOAD_TRANSFER_MS,
+            transfer_started.elapsed().as_millis() as u64,
+        );
+        metrics::add(&metrics::UPLOAD_ACKNOWLEDGED, 1);
+        metrics::add(&metrics::UPLOAD_ACKNOWLEDGED_BYTES, wire_bytes);
+        metrics::add(&metrics::UPLOAD_ACKNOWLEDGED_PACKAGES, pending.len() as u64);
+        let flush_started = std::time::Instant::now();
         ledger::flush(&pending)
+            .inspect_err(|_| metrics::add(&metrics::UPLOAD_FLUSH_FAILURES, 1))?;
+        metrics::add(
+            &metrics::UPLOAD_FLUSH_MS,
+            flush_started.elapsed().as_millis() as u64,
+        );
+        Ok(())
     }
 
     fn request(

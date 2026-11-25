@@ -46,6 +46,7 @@ pub mod paths;
 pub mod permissions;
 pub mod pipes;
 pub mod raw_capture_ledger;
+pub mod raw_capture_metrics;
 pub mod starter_skills;
 pub mod strings;
 pub mod thread_priority;

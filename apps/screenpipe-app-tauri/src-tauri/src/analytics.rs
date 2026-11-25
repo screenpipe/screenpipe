@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{System, SystemExt};
+use sysinfo::{ProcessExt, System, SystemExt};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::interval;
 use tracing::instrument::WithSubscriber;
@@ -507,13 +507,76 @@ impl AnalyticsManager {
                     }
                 }
 
-                // Send periodic event with health data + feature config
                 if let Err(e) = self.send_event("app_still_running", Some(props)).await {
                     // Analytics transport is best-effort. Offline machines and
                     // transient PostHog outages must not become app errors.
                     warn!("failed to send periodic posthog event: {}", e);
                 }
             }
+        }
+    }
+
+    async fn report_recording_reliability(&self) {
+        use screenpipe_core::{raw_capture_ledger as ledger, raw_capture_metrics as metrics};
+        let mut previous = metrics::snapshot();
+        let mut since = std::time::Instant::now();
+        let mut process_info = System::new();
+        let mut process_sampled = false;
+        let period = Duration::from_secs(10 * 60);
+        let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            timer.tick().await;
+            if !consent_enabled() || !self.enabled.load(Ordering::SeqCst) {
+                previous = metrics::snapshot();
+                since = std::time::Instant::now();
+                process_sampled = false;
+                continue;
+            }
+
+            let current = metrics::snapshot();
+            let measured_at = std::time::Instant::now();
+            let deltas: std::collections::BTreeMap<_, _> = current
+                .iter()
+                .map(|(&key, &value)| (key, value.saturating_sub(previous[key])))
+                .collect();
+            let ledger_active = ledger::is_enabled();
+            if ledger_active || deltas.values().any(|&value| value != 0) {
+                let backlog = tokio::task::spawn_blocking(ledger::backlog_sample)
+                    .await
+                    .ok()
+                    .flatten();
+                let process = sysinfo::get_current_pid().ok().and_then(|pid| {
+                    let refreshed = process_info.refresh_process(pid);
+                    refreshed
+                        .then(|| process_info.process(pid))
+                        .flatten()
+                        .map(|process| (process.memory(), process.cpu_usage()))
+                });
+                let props = json!({
+                    "window_ms": measured_at.duration_since(since).as_millis() as u64,
+                    "ledger_active": ledger_active,
+                    "counts_and_totals": deltas,
+                    "pending_packages": backlog.map(|(count, _, _)| count),
+                    "pending_bytes": backlog.map(|(_, bytes, _)| bytes),
+                    "oldest_pending_ms": backlog.and_then(|(_, _, age)| age),
+                    "process_rss_bytes": process.map(|(rss, _)| rss),
+                    "process_cpu_percent": process.filter(|_| process_sampled).map(|(_, cpu)| cpu),
+                });
+                process_sampled = process.is_some();
+                if !consent_enabled() || !self.enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if let Err(error) = self
+                    .send_event("raw_capture_reliability_v1", Some(props))
+                    .await
+                {
+                    warn!("failed to send raw capture reliability metrics: {error}");
+                    continue;
+                }
+            }
+            previous = current;
+            since = measured_at;
         }
     }
 
@@ -767,6 +830,13 @@ pub fn start_analytics(
         let analytics_manager = analytics_manager.clone();
         async move {
             analytics_manager.start_periodic_event().await;
+        }
+    });
+
+    tokio::spawn({
+        let analytics_manager = analytics_manager.clone();
+        async move {
+            analytics_manager.report_recording_reliability().await;
         }
     });
 

@@ -4,6 +4,7 @@
 
 //! Database-independent spool for raw Enterprise capture packages.
 
+use crate::raw_capture_metrics as metrics;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
@@ -107,7 +108,12 @@ pub fn append(captured_at: DateTime<Utc>, context: Value, entries: Vec<Value>) -
         serde_json::to_writer(&mut plaintext, &entry)?;
         plaintext.push(b'\n');
     }
-    persist(&spool.root.join(format!("{id}.jsonl")), &plaintext)?;
+    if let Err(error) = persist(&spool.root.join(format!("{id}.jsonl")), &plaintext) {
+        metrics::add(&metrics::LEDGER_APPEND_FAILURES, 1);
+        return Err(error.into());
+    }
+    metrics::add(&metrics::LEDGER_APPENDED_PACKAGES, 1);
+    metrics::add(&metrics::LEDGER_APPENDED_BYTES, plaintext.len() as u64);
     APPENDED.notify_one();
     Ok(())
 }
@@ -148,6 +154,34 @@ pub fn pending() -> Result<Vec<Pending>> {
         });
     }
     Ok(items)
+}
+
+/// Count pending files without opening capture content. A concurrently flushed
+/// package is no longer pending; other I/O errors make the sample unavailable.
+pub fn backlog_sample() -> Option<(u64, u64, Option<u64>)> {
+    if !is_enabled() {
+        return None;
+    }
+    let mut count = 0;
+    let mut bytes = 0;
+    let mut oldest = None;
+    for item in pending().ok()? {
+        let metadata = match fs::metadata(item.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        };
+        count += 1;
+        bytes += metadata.len();
+        if let Some(age) = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.elapsed().ok())
+        {
+            oldest = std::cmp::max(oldest, Some(age.as_millis() as u64));
+        }
+    }
+    Some((count, bytes, oldest))
 }
 
 pub fn read(item: &Pending) -> Result<Vec<u8>> {
@@ -201,6 +235,9 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), wait_for_append()).await?;
         let item = pending()?.pop().unwrap();
         let plain = read(&item)?;
+        let (count, bytes, oldest) = backlog_sample().unwrap();
+        assert_eq!((count, bytes), (1, plain.len() as u64));
+        assert!(oldest.is_some());
         assert_eq!(plain, fs::read(&item.path)?);
         let lines = std::str::from_utf8(&plain)?;
         let entry: Value = serde_json::from_str(lines.lines().nth(1).unwrap())?;

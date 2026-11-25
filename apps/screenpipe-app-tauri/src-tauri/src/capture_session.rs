@@ -43,6 +43,7 @@ use crate::server_core::ServerCore;
 pub struct CaptureSession {
     shutdown_tx: broadcast::Sender<()>,
     runtime_lifetime: Option<tokio::sync::oneshot::Sender<()>>,
+    without_database: bool,
     disk_pressure_data_dir: PathBuf,
     vision_task: Option<tokio::task::JoinHandle<()>>,
     schedule_task: Option<tokio::task::JoinHandle<()>>,
@@ -84,7 +85,7 @@ impl CaptureSession {
     }
 
     pub(crate) fn runs_without_database(&self) -> bool {
-        self.runtime_lifetime.is_some()
+        self.without_database
     }
 
     pub(crate) fn hold_runtime_until_stopped(&mut self) -> tokio::sync::oneshot::Receiver<()> {
@@ -406,6 +407,7 @@ impl CaptureSession {
         Ok(Self {
             shutdown_tx,
             runtime_lifetime: None,
+            without_database: server.is_none(),
             disk_pressure_data_dir: data_path,
             vision_task,
             schedule_task,

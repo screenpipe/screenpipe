@@ -19,7 +19,9 @@ use regex::Regex;
 use screenpipe_a11y::tree::{
     create_tree_walker, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
 };
-use screenpipe_core::{pii_removal::remove_pii, raw_capture_ledger};
+use screenpipe_core::{
+    pii_removal::remove_pii, raw_capture_ledger, raw_capture_metrics as metrics,
+};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::text_regions::{
@@ -368,106 +370,161 @@ where
         (None, None, None, None)
     };
 
-    // Write JPEG snapshot to disk — skipped when screenshot_disabled (AudioPaused / FullPause).
-    // On the focused monitor the accessibility tree can still supply text;
-    // other monitors remain screenshot-only by the boundary above.
-    let snapshot_path = if ctx.screenshot_disabled {
-        debug!(
-            "paired_capture: screenshot skipped (screenshot_disabled, trigger={})",
-            ctx.capture_trigger
-        );
+    let ledger_enabled = raw_capture_ledger::is_enabled();
+    let admitted_image = snapshot_image.unwrap_or(&ctx.image);
+    let jpeg = if ledger_enabled && !ctx.screenshot_disabled {
+        ctx.snapshot_writer
+            .encode_jpeg(admitted_image)
+            .map(|bytes| Some(Arc::new(bytes)))
+    } else {
+        Ok(None)
+    };
+    let ledger_jpeg = jpeg.as_ref().ok().and_then(|bytes| bytes.clone());
+    // Start the ledger write from the admitted bytes, without depending on
+    // creation or read-back of the local snapshot file.
+    let ledger_append =
+        if ledger_enabled && (ledger_jpeg.is_some() || stored_tree_snapshot.is_some()) {
+            let captured_at = ctx.captured_at;
+            let paired = ctx.ax_screenshot_coherent;
+            let (mut context, ax) = raw_screen_metadata(ctx, stored_tree_snapshot);
+            let ax_capture = stored_tree_snapshot.map(|tree| {
+                let mut ax_context = context.clone();
+                ax_context["app_name"] = serde_json::json!(tree.app_name);
+                ax_context["window_name"] = serde_json::json!(tree.window_name);
+                ax_context["browser_url"] = serde_json::json!(tree.browser_url);
+                (tree.timestamp, ax_context)
+            });
+            Some(tokio::task::spawn_blocking(move || {
+                let screenshot = ledger_jpeg.map(|bytes| {
+                    serde_json::json!({
+                        "kind": "screenpipe.screenshot",
+                        "schema_version": 1,
+                        "media_type": "image/jpeg",
+                        "encoding": "base64",
+                        "payload": raw_capture_ledger::encode_base64(&bytes),
+                    })
+                });
+                let ax = ax.zip(ax_capture).map(|(ax, (timestamp, context))| {
+                    (
+                        timestamp,
+                        context,
+                        serde_json::json!({
+                            "kind": "screenpipe.ax",
+                            "schema_version": 1,
+                            "media_type": "application/json",
+                            "encoding": "utf8",
+                            "payload": ax.to_string(),
+                        }),
+                    )
+                });
+                let append = |timestamp, context, entries| match raw_capture_ledger::append(
+                    timestamp, context, entries,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        warn!(%error, "raw screen capture could not be appended");
+                        false
+                    }
+                };
+                match (screenshot, ax) {
+                    (Some(screenshot), Some((_, _, ax))) if paired => {
+                        append(captured_at, context, vec![screenshot, ax])
+                    }
+                    (screenshot, ax) => {
+                        context["ax_captured_at"] = serde_json::Value::Null;
+                        let screenshot_saved = screenshot
+                            .is_some_and(|entry| append(captured_at, context, vec![entry]));
+                        let ax_saved = ax.is_some_and(|(timestamp, context, entry)| {
+                            append(timestamp, context, vec![entry])
+                        });
+                        screenshot_saved || ax_saved
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+    let snapshot_path = if ctx.screenshot_disabled || (db.is_none() && ledger_enabled) {
         Ok(None)
     } else {
-        ctx.snapshot_writer
-            .write(
-                snapshot_image.unwrap_or(&ctx.image),
-                ctx.captured_at,
-                ctx.monitor_id,
-            )
-            .map(|path| {
-                debug!(
-                    "paired_capture: snapshot written in {:?} (trigger={})",
-                    start.elapsed(),
-                    ctx.capture_trigger
-                );
-                Some(path)
-            })
+        jpeg.and_then(|jpeg| {
+            match jpeg {
+                Some(bytes) => {
+                    ctx.snapshot_writer
+                        .write_encoded(&bytes, ctx.captured_at, ctx.monitor_id)
+                }
+                None => ctx
+                    .snapshot_writer
+                    .write(admitted_image, ctx.captured_at, ctx.monitor_id),
+            }
+            .map(Some)
+        })
+    };
+    let ledger_saved = if let Some(appended) = ledger_append {
+        match appended.await {
+            Ok(saved) => saved,
+            Err(error) => {
+                warn!(%error, "raw screen capture append task failed");
+                false
+            }
+        }
+    } else {
+        false
     };
 
-    let ledger_snapshot = snapshot_path.as_ref().ok().and_then(Option::as_ref);
-    let mut persisted = ledger_snapshot.is_some();
-    if raw_capture_ledger::is_enabled() && (persisted || stored_tree_snapshot.is_some()) {
-        let captured_at = ctx.captured_at;
-        let ledger_snapshot = ledger_snapshot.cloned();
-        let paired = ctx.ax_screenshot_coherent;
-        let (mut context, ax) = raw_screen_metadata(ctx, stored_tree_snapshot);
-        let ax_capture = stored_tree_snapshot.map(|tree| {
-            let mut ax_context = context.clone();
-            ax_context["app_name"] = serde_json::json!(tree.app_name);
-            ax_context["window_name"] = serde_json::json!(tree.window_name);
-            ax_context["browser_url"] = serde_json::json!(tree.browser_url);
-            (tree.timestamp, ax_context)
-        });
-        let appended = tokio::task::spawn_blocking(move || {
-            let screenshot = ledger_snapshot.and_then(|path| match std::fs::read(path) {
-                Ok(jpeg) => Some(serde_json::json!({
-                    "kind": "screenpipe.screenshot",
-                    "schema_version": 1,
-                    "media_type": "image/jpeg",
-                    "encoding": "base64",
-                    "payload": raw_capture_ledger::encode_base64(&jpeg),
-                })),
-                Err(error) => {
-                    warn!(%error, "could not read raw capture JPEG for the ledger");
-                    None
-                }
-            });
-            let ax = ax.zip(ax_capture).map(|(ax, (timestamp, context))| {
-                (
-                    timestamp,
-                    context,
-                    serde_json::json!({
-                        "kind": "screenpipe.ax",
-                        "schema_version": 1,
-                        "media_type": "application/json",
-                        "encoding": "utf8",
-                        "payload": ax.to_string(),
-                    }),
-                )
-            });
-            let append = |timestamp, context, entries| match raw_capture_ledger::append(
-                timestamp, context, entries,
-            ) {
-                Ok(()) => true,
-                Err(error) => {
-                    warn!(%error, "raw screen capture could not be appended");
-                    false
-                }
-            };
-            match (screenshot, ax) {
-                (Some(screenshot), Some((_, _, ax))) if paired => {
-                    append(captured_at, context, vec![screenshot, ax])
-                }
-                (screenshot, ax) => {
-                    context["ax_captured_at"] = serde_json::Value::Null;
-                    let screenshot_saved =
-                        screenshot.is_some_and(|entry| append(captured_at, context, vec![entry]));
-                    let ax_saved = ax.is_some_and(|(timestamp, context, entry)| {
-                        append(timestamp, context, vec![entry])
-                    });
-                    screenshot_saved || ax_saved
-                }
-            }
-        })
-        .await;
-        match appended {
-            Ok(saved) => persisted |= saved,
-            Err(error) => warn!(%error, "raw screen capture append task failed"),
-        }
+    let measure = ledger_enabled && (!ctx.screenshot_disabled || stored_tree_snapshot.is_some());
+    if measure {
+        metrics::add(&metrics::VISUAL_CAPTURE_ATTEMPTS, 1);
+        metrics::add(
+            if ledger_saved {
+                &metrics::VISUAL_LEDGER_SAVED
+            } else {
+                &metrics::VISUAL_LEDGER_NOT_SAVED
+            },
+            1,
+        );
     }
-    let snapshot_path = snapshot_path?;
-
+    let record_history = |saved: Option<bool>| {
+        if measure {
+            let (counter, ledger_only_counter) = match saved {
+                Some(true) => (&metrics::VISUAL_DB_SAVED, None),
+                Some(false) => (
+                    &metrics::VISUAL_DB_FAILED,
+                    Some(&metrics::VISUAL_LEDGER_SAVED_DB_FAILED),
+                ),
+                None => (
+                    &metrics::VISUAL_DB_UNAVAILABLE,
+                    Some(&metrics::VISUAL_LEDGER_SAVED_DB_UNAVAILABLE),
+                ),
+            };
+            metrics::add(counter, 1);
+            if let Some(counter) = ledger_only_counter.filter(|_| ledger_saved) {
+                metrics::add(counter, 1);
+            }
+        } else if !ledger_enabled {
+            if let Some(saved) = saved {
+                metrics::add(
+                    if saved {
+                        &metrics::VISUAL_LOCAL_ONLY_DB_SAVED
+                    } else {
+                        &metrics::VISUAL_LOCAL_ONLY_DB_FAILED
+                    },
+                    1,
+                );
+            }
+        }
+    };
     let Some(db) = db else {
+        record_history(None);
+        let persisted = if ledger_saved {
+            if let Err(error) = snapshot_path {
+                warn!(%error, "local snapshot failed after admitting raw capture");
+            }
+            true
+        } else {
+            snapshot_path?.is_some()
+        };
         return Ok(if persisted {
             PairedCaptureOutcome::Raw {
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -477,6 +534,9 @@ where
         });
     };
     let snapshot_path_str = snapshot_path
+        .inspect_err(|_| {
+            record_history(Some(false));
+        })?
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
 
@@ -911,7 +971,11 @@ where
                 .then_some(ctx.elements_ref_frame_id)
                 .flatten(),
         )
-        .await?;
+        .await
+        .inspect_err(|_| {
+            record_history(Some(false));
+        })?;
+    record_history(Some(true));
 
     // Commit the gate's pending signature (and cache the OCR result for
     // reuse on pixel-identical captures) only now that the frame is durably
@@ -1454,10 +1518,11 @@ mod tests {
             paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None).await?,
             PairedCaptureOutcome::Raw { .. }
         ));
-        let path = jpeg_dir
-            .join(ctx.captured_at.format("%Y-%m-%d").to_string())
-            .join(format!("{}_m7.jpg", ctx.captured_at.timestamp_millis()));
-        let jpeg = raw_capture_ledger::encode_base64(&std::fs::read(path)?);
+        let jpeg = raw_capture_ledger::encode_base64(&writer.encode_jpeg(&ctx.image)?);
+        assert!(
+            !jpeg_dir.exists(),
+            "raw-only capture must not write a local history JPEG"
+        );
 
         ctx.screenshot_disabled = true;
         assert!(matches!(
@@ -1481,11 +1546,10 @@ mod tests {
         std::fs::write(&blocked_snapshot_dir, b"blocked")?;
         let blocked_writer = SnapshotWriter::new(&blocked_snapshot_dir, 80, 1920);
         ctx.snapshot_writer = &blocked_writer;
-        assert!(
-            paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None)
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            paired_capture_with_optional_db(&ctx, Some(&tree), None, false, None).await?,
+            PairedCaptureOutcome::Raw { .. }
+        ));
 
         let mut pairs = 0;
         let mut screenshots_only = 0;
@@ -1523,7 +1587,7 @@ mod tests {
             assert_eq!(ax["text"], tree.text_content);
             assert_eq!(ax["nodes"][0]["value"], "me@example.com");
         }
-        assert_eq!((pairs, screenshots_only, ax_only), (1, 2, 3));
+        assert_eq!((pairs, screenshots_only, ax_only), (1, 3, 3));
         Ok(())
     }
 
