@@ -229,9 +229,8 @@ impl RfdetrConfig {
     pub const ROLE_HF_DOWNLOAD_URL: Option<&'static str> = Some(
         "https://raw.githubusercontent.com/screenpipe/privacy-filter/6e3d5f7ea20ad43fab39a292c0f273ee13701c62/pii_role_fusion_v4.onnx",
     );
-    pub const ROLE_EXPECTED_SHA256: Option<&'static str> = Some(
-        "5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789",
-    );
+    pub const ROLE_EXPECTED_SHA256: Option<&'static str> =
+        Some("5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789");
 
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
@@ -1112,7 +1111,13 @@ mod tests {
     #[test]
     fn v4_768_keeps_tiling_on_laptop_and_1080p_desktops() {
         assert!(!imp::should_tile_frame(960, 720, 768));
-        for (w, h) in [(1024, 768), (1440, 900), (1512, 982), (1920, 1080), (2560, 1440)] {
+        for (w, h) in [
+            (1024, 768),
+            (1440, 900),
+            (1512, 982),
+            (1920, 1080),
+            (2560, 1440),
+        ] {
             assert!(
                 imp::should_tile_frame(w, h, 768),
                 "{w}x{h} must tile at input_size=768 to match gen_preds.py"
