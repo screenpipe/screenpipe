@@ -46,7 +46,7 @@ export const procedureMarkdownSchema = new Schema({
       { "data-image-reference": "true", title: "Image reference" },
       node.attrs.alt || "Image reference",
     ],
-  }),
+  }).toObject(),
   marks: schema.spec.marks.update("link", {
     ...schema.marks.link.spec,
     parseDOM: [
@@ -76,7 +76,7 @@ export const procedureMarkdownSchema = new Schema({
           ]
         : ["span", 0];
     },
-  }),
+  }).toObject(),
 });
 
 export const procedureMarkdownParser = new MarkdownParser(
