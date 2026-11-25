@@ -78,3 +78,96 @@ it("advertises screen text and preserves legacy search behavior over the built M
     await new Promise<void>(resolve => api.close(() => resolve()));
   }
 }, 15000);
+
+it("serves frame-image screenshots and attaches JPEG frames for UI/Parsed search results", async () => {
+  const root = path.resolve(__dirname, "..");
+  execFileSync("bun", ["run", "build"], { cwd: root, stdio: "pipe", timeout: 120000 });
+  const jpegBuf = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]);
+  const jpegB64 = jpegBuf.toString("base64");
+  const seenUrls: string[] = [];
+  const api = createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    seenUrls.push(`${url.pathname}${url.search}`);
+    if (req.headers.authorization !== "Bearer fixture-key") {
+      res.writeHead(403).end("{}");
+      return;
+    }
+    if (url.pathname === "/frames/42/thumbnail") {
+      res.writeHead(200, { "Content-Type": "image/jpeg" });
+      res.end(jpegBuf);
+      return;
+    }
+    if (url.pathname === "/frames/99/thumbnail") {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ code: "privacy_pending", error: "Image privacy processing is pending" }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      data: [
+        {
+          type: "UI",
+          content: {
+            id: 42,
+            frame_id: 42,
+            app_name: "Linear",
+            window_name: "Issues",
+            timestamp: "2026-01-01T12:00:00Z",
+            text: "SCR-1183",
+            frame: jpegB64,
+          },
+        },
+      ],
+      pagination: { total: 1, limit: 5, offset: 0 },
+    }));
+  });
+  await new Promise<void>(resolve => api.listen(0, "127.0.0.1", resolve));
+  const address = api.address();
+  if (!address || typeof address === "string") throw new Error("No fixture API address");
+  const client = new Client({ name: "frame-image-contract", version: "1.0" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [path.join(root, "dist/cli.js")],
+    env: {
+      PATH: process.env.PATH || "",
+      SCREENPIPE_LOCAL_API_URL: `http://127.0.0.1:${address.port}`,
+      SCREENPIPE_LOCAL_API_KEY: "fixture-key",
+      SCREENPIPE_DISABLE_TELEMETRY: "1",
+    },
+    stderr: "pipe",
+  });
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    const frameImageTool = tools.find(tool => tool.name === "frame-image");
+    expect(frameImageTool).toBeDefined();
+    expect(frameImageTool?.annotations?.readOnlyHint).toBe(true);
+
+    const imgRes = await client.callTool({ name: "frame-image", arguments: { frame_id: 42 } });
+    expect(imgRes.isError).not.toBe(true);
+    expect(imgRes.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", data: jpegB64, mimeType: "image/jpeg" }),
+      ]),
+    );
+    expect(seenUrls).toContain("/frames/42/thumbnail?width=1280&quality=75&fallback=false");
+
+    const pendingRes = await client.callTool({ name: "frame-image", arguments: { frame_id: 99 } });
+    expect(pendingRes.isError).toBe(true);
+    expect(JSON.stringify(pendingRes.content)).toContain("privacy_pending");
+
+    const searchRes = await client.callTool({
+      name: "search-content",
+      arguments: { content_type: "accessibility", include_frames: true, limit: 5 },
+    });
+    expect(searchRes.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", data: jpegB64, mimeType: "image/jpeg" }),
+      ]),
+    );
+  } finally {
+    await client.close();
+    await transport.close();
+    await new Promise<void>(resolve => api.close(() => resolve()));
+  }
+}, 15000);

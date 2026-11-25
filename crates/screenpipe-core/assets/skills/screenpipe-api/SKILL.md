@@ -371,13 +371,19 @@ OCR-only roles (accessibility-unavailable fallback): `line`, `word`, `block`, `p
 
 ---
 
-## 4. Frames (Screenshots) — `GET /frames/{frame_id}`
+## 4. Frames (Screenshots) — `frame_image` / `GET /frames/{frame_id}/thumbnail`
+
+When `frame_image` (or MCP `frame-image`) is available in your tool list, call it directly (`{"frame_id": 12345}`) to inspect visual layout, charts/diagrams/media, canvas or video content, or moments where text capture is incomplete.
+
+REST fallback (bounded, cached JPEG derivative that respects history-access and image-privacy release gates):
 
 ```bash
-curl -o /tmp/frame.png "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/frames/12345"
+curl --fail-with-body -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -o ./frame-12345.jpg \
+  "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/frames/12345/thumbnail?width=1280&quality=75&fallback=false"
 ```
 
-Raw PNG. **Never fetch more than 2-3 frames per query** (~1000-2000 tokens each).
+Then inspect `./frame-12345.jpg` with the `read` tool (`GET /frames/{frame_id}` returns the full-resolution source frame when lossless pixels are required). **Never fetch more than 2-3 frames per query** (~1000-2000 tokens each).
 
 ---
 

@@ -307,6 +307,12 @@ export default function (pi: ExtensionAPI) {
               text: `[previous tool result — ${item.text.length} chars, processed in earlier turn]`,
             };
             modified = true;
+          } else if (item.type === "image") {
+            msg.content[j] = {
+              type: "text",
+              text: `[previous tool image — ${item.mimeType || "image"}, processed in earlier turn]`,
+            };
+            modified = true;
           }
         }
       }

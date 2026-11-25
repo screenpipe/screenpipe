@@ -1371,6 +1371,16 @@ impl PiExecutor {
         Ok(())
     }
 
+    pub fn ensure_frame_image_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/frame-image.ts");
+        let ext_path = ext_dir.join("frame-image.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!("frame-image extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
     /// Install the MCP bridge extension. Registers two proxy tools
     /// (`sp_mcp_list_tools`, `sp_mcp_call`) that the model uses to talk to
     /// user-registered MCP servers via the local `/mcp-servers/*` API.
@@ -2362,6 +2372,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_frame_image_extension(working_dir)?;
         Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
@@ -2544,6 +2555,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_frame_image_extension(working_dir)?;
         Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
@@ -5444,6 +5456,22 @@ mod tests {
         .expect("read screenpipe-chats skill");
         assert!(skill.contains("Call `search_chats`"));
         assert!(skill.contains("explicit user authorization"));
+    }
+
+    #[test]
+    fn frame_image_extension_installs_bounded_thumbnail_tool() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        PiExecutor::ensure_frame_image_extension(dir.path())
+            .expect("install frame-image extension");
+        let content = std::fs::read_to_string(
+            dir.path()
+                .join(".pi")
+                .join("extensions")
+                .join("frame-image.ts"),
+        )
+        .expect("read frame-image extension");
+        assert!(content.contains("name: \"frame_image\""));
+        assert!(content.contains("/thumbnail?width="));
     }
 
     #[cfg(windows)]

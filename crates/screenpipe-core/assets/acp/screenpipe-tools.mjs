@@ -44,6 +44,106 @@ function authHeaders() {
   return headers;
 }
 
+const MAX_FRAME_IMAGE_BYTES = 1_000_000;
+
+function clampInt(raw, fallback, min, max) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+async function readBoundedBytes(res, maxBytes) {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try {
+      await res.body?.cancel();
+    } catch {}
+    return { tooLarge: true, bytes: declared };
+  }
+  if (!res.body || typeof res.body.getReader !== "function") {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > maxBytes ? { tooLarge: true, bytes: buf.length } : { tooLarge: false, buffer: buf };
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {}
+      return { tooLarge: true, bytes: total };
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return { tooLarge: false, buffer: Buffer.concat(chunks, total) };
+}
+
+async function fetchFrameImage(args) {
+  const id = Number(args?.frame_id);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return {
+      content: [{ type: "text", text: JSON.stringify({ error: "frame_id must be a positive integer" }) }],
+      isError: true,
+    };
+  }
+  const width = clampInt(args?.width, 1280, 64, 1920);
+  const quality = clampInt(args?.quality, 75, 20, 95);
+  const headers = {};
+  const key = process.env.SCREENPIPE_LOCAL_API_KEY || "";
+  if (key) headers["Authorization"] = `Bearer ${key}`;
+  if (process.env.SCREENPIPE_SESSION_ID) {
+    headers["x-screenpipe-session"] = process.env.SCREENPIPE_SESSION_ID;
+  }
+  const path = `/frames/${id}/thumbnail?width=${width}&quality=${quality}&fallback=false`;
+  const res = await fetch(`${apiBase()}${path}`, { method: "GET", headers });
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 1000);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: `${path} returned ${res.status}`, status: res.status, detail }),
+        },
+      ],
+      isError: true,
+    };
+  }
+  const rawType = (res.headers.get("content-type") || "image/jpeg").split(";")[0].trim().toLowerCase();
+  const mimeType = rawType.startsWith("image/") ? rawType : "image/jpeg";
+  const bounded = await readBoundedBytes(res, MAX_FRAME_IMAGE_BYTES);
+  if (bounded.tooLarge) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error: `frame_image payload (${bounded.bytes} bytes) exceeds ${MAX_FRAME_IMAGE_BYTES} byte limit; lower width or quality`,
+            frame_id: id,
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ frame_id: id, mime_type: mimeType, bytes: bounded.buffer.length, width, quality }),
+      },
+      {
+        type: "image",
+        data: bounded.buffer.toString("base64"),
+        mimeType,
+      },
+    ],
+  };
+}
+
 // The local engine (apiBase) serves /mcp-servers, /search, /raw_sql — it is
 // never itself an MCP endpoint. A bridge server pointing back at it (a stale
 // "screenpipe -> http://localhost:3030/mcp" is the classic case) only 404s and
@@ -597,6 +697,38 @@ const WORKTREE_ROUTE_TOOL = {
 
 const TOOLS = [
   ...(chatSessionId().startsWith("__worktree-route:") ? [WORKTREE_ROUTE_TOOL] : []),
+  {
+    name: "frame_image",
+    description:
+      "Fetch the captured screenshot image for a specific frame_id (from search-content, activity-summary, search-elements, frame-context, or query_recordings). Use selectively (at most 2-3 frames per turn) when visual layout, charts/diagrams/images, canvas or video content, or sparse UI text matters. Respects local history-access and image-privacy release gates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame_id: {
+          type: "integer",
+          minimum: 1,
+          description: "Frame ID from search results or frames.id",
+        },
+        width: {
+          type: "integer",
+          minimum: 64,
+          maximum: 1920,
+          description: "Max output width in pixels (default 1280; aspect ratio preserved)",
+        },
+        quality: {
+          type: "integer",
+          minimum: 20,
+          maximum: 95,
+          description: "JPEG quality 20-95 (default 75)",
+        },
+      },
+      required: ["frame_id"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      return fetchFrameImage(args);
+    },
+  },
   {
     name: "query_recordings",
     description:
@@ -1583,8 +1715,15 @@ async function handle(msg, send) {
         return;
       }
       try {
-        const text = await tool.run(params?.arguments ?? {});
-        reply(send, id, { content: [{ type: "text", text }] });
+        const out = await tool.run(params?.arguments ?? {});
+        if (out && typeof out === "object" && Array.isArray(out.content)) {
+          reply(send, id, {
+            content: out.content,
+            ...(out.isError ? { isError: true } : {}),
+          });
+        } else {
+          reply(send, id, { content: [{ type: "text", text: String(out ?? "") }] });
+        }
       } catch (error) {
         // MCP convention: tool failures come back as isError content, not a
         // JSON-RPC error, so the agent can read and react to the message.

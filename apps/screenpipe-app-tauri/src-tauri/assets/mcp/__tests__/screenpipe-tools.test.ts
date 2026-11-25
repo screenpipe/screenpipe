@@ -121,6 +121,7 @@ describe("screenpipe-tools MCP server", () => {
       ?.tools ?? []);
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
+        "frame_image",
         "query_recordings",
         "list_connections",
         "live_view",
@@ -335,6 +336,93 @@ describe("screenpipe-tools MCP server", () => {
         proc.kill();
         await exited;
       }
+      await closeServer(engine);
+    }
+  });
+
+  it("fetches frame screenshots as MCP image blocks and preserves engine privacy/history errors", async () => {
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xd9]);
+    const seenAuth: Array<string | undefined> = [];
+    const seenPaths: string[] = [];
+    const engine = createServer((req, res) => {
+      seenAuth.push(req.headers.authorization);
+      seenPaths.push(req.url ?? "");
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/frames/42/thumbnail") {
+        res.writeHead(200, { "Content-Type": "image/jpeg" });
+        res.end(jpegBytes);
+        return;
+      }
+      if (url.pathname === "/frames/99/thumbnail") {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Image privacy processing is pending", code: "privacy_pending" }));
+        return;
+      }
+      if (url.pathname === "/frames/77/thumbnail") {
+        res.writeHead(200, { "Content-Type": "image/jpeg" });
+        res.end(Buffer.alloc(1_100_000, 0xab));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Frame not found" }));
+    });
+    const enginePort = await listenOnLoopback(engine);
+
+    try {
+      server = new Server({
+        SCREENPIPE_API_URL: `http://127.0.0.1:${enginePort}`,
+        SCREENPIPE_LOCAL_API_URL: `http://127.0.0.1:${enginePort}`,
+        SCREENPIPE_LOCAL_API_KEY: "sp-frame-secret",
+      });
+      await server.request(1, "initialize", { protocolVersion: "2025-06-18" });
+
+      const ok = await server.request(2, "tools/call", {
+        name: "frame_image",
+        arguments: { frame_id: 42 },
+      });
+      const okResult = ok.result as {
+        isError?: boolean;
+        content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+      };
+      expect(okResult.isError).toBeUndefined();
+      expect(okResult.content).toHaveLength(2);
+      expect(okResult.content?.[0]).toMatchObject({ type: "text" });
+      expect(JSON.parse(okResult.content?.[0]?.text ?? "{}")).toMatchObject({
+        frame_id: 42,
+        mime_type: "image/jpeg",
+        bytes: jpegBytes.length,
+      });
+      expect(okResult.content?.[1]).toEqual({
+        type: "image",
+        data: jpegBytes.toString("base64"),
+        mimeType: "image/jpeg",
+      });
+      expect(seenAuth[0]).toBe("Bearer sp-frame-secret");
+      expect(seenPaths[0]).toBe("/frames/42/thumbnail?width=1280&quality=75&fallback=false");
+
+      const pending = await server.request(3, "tools/call", {
+        name: "frame_image",
+        arguments: { frame_id: 99, width: 800, quality: 60 },
+      });
+      const pendingResult = pending.result as {
+        isError?: boolean;
+        content?: Array<{ type: string; text?: string }>;
+      };
+      expect(pendingResult.isError).toBe(true);
+      expect(pendingResult.content?.[0]?.text).toContain("privacy_pending");
+      expect(seenPaths[1]).toBe("/frames/99/thumbnail?width=800&quality=60&fallback=false");
+
+      const oversized = await server.request(4, "tools/call", {
+        name: "frame_image",
+        arguments: { frame_id: 77 },
+      });
+      const oversizedResult = oversized.result as {
+        isError?: boolean;
+        content?: Array<{ type: string; text?: string }>;
+      };
+      expect(oversizedResult.isError).toBe(true);
+      expect(oversizedResult.content?.[0]?.text).toContain("exceeds");
+    } finally {
       await closeServer(engine);
     }
   });

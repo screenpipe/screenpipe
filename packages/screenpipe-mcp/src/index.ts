@@ -543,6 +543,40 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "frame-image",
+    description:
+      "Fetch the captured screenshot image for a specific frame_id (from search-content, activity-summary, search-elements, or frame-context). " +
+      "USE WHEN: visual layout, charts/diagrams/media, canvas or video content, or moments with incomplete text capture matter. " +
+      "Fetch at most 2-3 frames per turn. Respects local history-access and image-privacy release gates.",
+    annotations: { title: "Frame Image", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame_id: {
+          type: "integer",
+          minimum: 1,
+          description: "Frame ID from search-content results (content.frame_id field)",
+        },
+        width: {
+          type: "integer",
+          minimum: 64,
+          maximum: 1920,
+          default: 1280,
+          description: "Max output width in pixels (default 1280; aspect ratio preserved)",
+        },
+        quality: {
+          type: "integer",
+          minimum: 20,
+          maximum: 95,
+          default: 75,
+          description: "JPEG quality 20-95 (default 75)",
+        },
+      },
+      required: ["frame_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "export-video",
     description:
       "Export an MP4 of screen recordings for a time range, with synced microphone audio. " +
@@ -1173,6 +1207,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 | 2 | search-content | Need specific text, transcriptions, memories, or compact app data (use content_type=parsed) |
 | 3 | search-elements | Need UI structure: buttons, links, form fields |
 | 4 | frame-context | Need full detail for a specific moment (use frame_id from step 2) |
+| 5 | frame-image | Need visual screenshot for layout, charts/media, or sparse UI text (max 2-3 per turn) |
 
 For another/named device or an across-device question, use synced-devices to
 resolve the device name, then search-synced-content. Keep search-content for the
@@ -1407,6 +1442,54 @@ function truncateMiddle(text: string | null | undefined, max: number): string {
 // specify one. Tuned to keep limit=10 responses well under tool-output limits
 // while still giving the model enough text to reason over.
 const DEFAULT_SEARCH_CONTENT_TRUNCATE = 1000;
+const LOCAL_FRAME_IMAGE_MAX_BYTES = 1_000_000;
+
+function clampFrameInt(raw: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function inferBase64ImageMime(b64: string): string {
+  if (b64.startsWith("/9j/")) return "image/jpeg";
+  if (b64.startsWith("iVBORw0KGgo")) return "image/png";
+  if (b64.startsWith("UklGR")) return "image/webp";
+  if (b64.startsWith("R0lGOD")) return "image/gif";
+  return "image/png";
+}
+
+async function readBoundedImageBytes(
+  res: Response,
+  maxBytes: number,
+): Promise<{ tooLarge: true; bytes: number } | { tooLarge: false; buffer: Buffer }> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try {
+      await res.body?.cancel();
+    } catch {}
+    return { tooLarge: true, bytes: declared };
+  }
+  if (!res.body || typeof res.body.getReader !== "function") {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > maxBytes ? { tooLarge: true, bytes: buf.length } : { tooLarge: false, buffer: buf };
+  }
+  const reader = res.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {}
+      return { tooLarge: true, bytes: total };
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return { tooLarge: false, buffer: Buffer.concat(chunks, total) };
+}
 
 // Format the screen-text tag for a result. The server's `text_source` is
 // "accessibility" (OS-native tree, primary path) or "ocr" (fallback for
@@ -1687,7 +1770,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           if (!content) continue;
           const hit = formatSearchHit(result, effectiveCap);
           if (hit) { formattedResults.push(hit.text); truncated ||= hit.truncated; }
-          if (includeFrames && result.type === "OCR" && content.frame) {
+          if (
+            includeFrames &&
+            (result.type === "OCR" || result.type === "UI" || result.type === "Parsed") &&
+            typeof content.frame === "string" &&
+            content.frame.length > 0
+          ) {
             images.push({ data: content.frame, context: `${content.app_name} at ${content.timestamp}` });
           }
         }
@@ -1713,7 +1801,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
 
         for (const img of images) {
           contentItems.push({ type: "text", text: `\n📷 ${img.context}` });
-          contentItems.push({ type: "image", data: img.data, mimeType: "image/png" });
+          contentItems.push({ type: "image", data: img.data, mimeType: inferBase64ImageMime(img.data) });
         }
 
         return { content: contentItems };
@@ -1848,6 +1936,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         }
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      case "frame-image": {
+        const frameId = normalizePositiveInt(args.frame_id);
+        if (frameId === null) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error: frame_id must be a positive integer (received ${JSON.stringify(args.frame_id)}).`,
+              },
+            ],
+          };
+        }
+        const width = clampFrameInt(args.width, 1280, 64, 1920);
+        const quality = clampFrameInt(args.quality, 75, 20, 95);
+        const endpoint = `/frames/${frameId}/thumbnail?width=${width}&quality=${quality}&fallback=false`;
+        const response = await callAPI(endpoint, { headers: { Accept: "image/jpeg" } });
+        const bounded = await readBoundedImageBytes(response, LOCAL_FRAME_IMAGE_MAX_BYTES);
+        if (bounded.tooLarge) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `frame-image payload (${bounded.bytes} bytes) exceeds ${LOCAL_FRAME_IMAGE_MAX_BYTES} byte limit; lower width or quality`,
+                  frame_id: frameId,
+                }),
+              },
+            ],
+          };
+        }
+        const rawType = (response.headers.get("content-type") || "image/jpeg").split(";")[0]?.trim().toLowerCase() || "image/jpeg";
+        const mimeType = rawType.startsWith("image/") ? rawType : "image/jpeg";
+        qualifiedValue.searchResult();
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ frame_id: frameId, mime_type: mimeType, bytes: bounded.buffer.length, width, quality }),
+            },
+            {
+              type: "image",
+              data: bounded.buffer.toString("base64"),
+              mimeType,
+            },
+          ],
+        };
       }
 
       case "export-video": {
