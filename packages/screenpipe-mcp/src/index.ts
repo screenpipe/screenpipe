@@ -32,6 +32,7 @@ import {
 } from "./qualified-value";
 import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
+import { jpegImageContent } from "./frame-image";
 import { CHAT_SEARCH_TOOL, searchChats } from "./chat-search";
 import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent } from "./workflow-tools";
 import { PKG_VERSION } from "./version";
@@ -386,7 +387,7 @@ const TOOLS: Tool[] = [
         max_length: { type: "integer", description: "Max content length in characters" },
         include_frames: {
           type: "boolean",
-          description: "Include base64 screenshots for screen-text results, including accessibility-derived captures. Warning: large response.",
+          description: "Return screenshots as image content for screen results. For visual evidence, use content_type=screen, a narrow time/app/window filter, and limit=1 or 2. If you already have the exact frame_id, use get-screenshot.",
           default: false,
         },
         speaker_ids: { type: "string", description: "Comma-separated speaker IDs to filter audio" },
@@ -528,10 +529,24 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "get-screenshot",
+    description:
+      "Inspect one exact recorded screen frame as a compact image. Use when the answer depends on visible UI, layout, charts, slides, or a before/after state. " +
+      "Pass the frame_id from search-content, get-meeting, or get-workflow. Use frame-context for captured accessibility text and nodes.",
+    annotations: { title: "Get Screenshot", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame_id: { type: "integer", minimum: 1, description: "Exact recorded frame ID" },
+      },
+      required: ["frame_id"],
+    },
+  },
+  {
     name: "frame-context",
     description:
       "Get full accessibility text, parsed tree nodes, and URLs for a specific frame ID. " +
-      "Use after search-content or get-workflow for a specific moment. Set purpose=automation for paginated nodes preserving exact captured bounds and automation properties; these are historical, not live targets.",
+      "Use after search-content or get-workflow for a specific moment. Use get-screenshot for the image. Set purpose=automation for paginated nodes preserving exact captured bounds and automation properties; these are historical, not live targets.",
     annotations: { title: "Frame Context", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -784,13 +799,13 @@ const TOOLS: Tool[] = [
       "Get a meeting by ID: title, attendees, times, and the full note. " +
       "Pass include_transcript=true to also get the speaker-attributed transcript segments — do this when the note is " +
       "empty and you need to reconstruct what was said (much better than searching raw audio by time range). " +
-      "Set include_screen_refs=true for related screenshot/accessibility frame IDs.",
+      "Set include_screen_refs=true to find candidate frames for a shared slide or demo, then call get-screenshot on the relevant ID.",
     annotations: { title: "Get Meeting", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "integer", description: "Meeting ID (from list-meetings results)" },
-        include_screen_refs: { type: "boolean", description: "Look up up to three matching screen frame IDs and screenshot links. Use each frame_id with frame-context or get-frame-elements." },
+        include_screen_refs: { type: "boolean", description: "Look up up to three matching screen frame IDs and screenshot links. Use get-screenshot for the image and frame-context for accessibility." },
         include_transcript: {
           type: "boolean",
           description: "Also return the meeting's transcript segments with speaker names and timestamps.",
@@ -1176,7 +1191,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 | 1 | activity-summary | Broad questions: "what was I doing?", "which apps?", "how long on X?" |
 | 2 | search-content | Need specific text, transcriptions, memories, or compact app data (use content_type=parsed) |
 | 3 | search-elements | Need UI structure: buttons, links, form fields |
-| 4 | frame-context | Need full detail for a specific moment (use frame_id from step 2) |
+| 4 | frame-context | Need full accessibility text and nodes for a specific frame |
+| 5 | get-screenshot | Need to inspect the pixels of a known frame |
 
 For another/named device or an across-device question, use synced-devices to
 resolve the device name, then search-synced-content. Keep search-content for the
@@ -1193,6 +1209,8 @@ current machine. Synced results must be attributed with their device and timesta
 
 ## Common Patterns
 
+- "What was visible?" → if you have a frame_id, call get-screenshot. Otherwise use search-content with content_type=screen, include_frames=true, and limit=1 or 2 over the relevant time and app/window. For before/after, inspect one frame on each side.
+- "What did they show in the demo?" → get-meeting with include_screen_refs=true, then get-screenshot on the relevant frame. Use the transcript to locate the part of the demo when needed.
 - "What was I doing for the last 2 hours?" → activity-summary with start_time='2h ago'
 - "What did I discuss in my meeting?" → list-meetings to find it, then get-meeting with include_transcript=true
 - "When did I last talk to <person>?" → list-meetings with q=<name or email>, NO start_time (q searches all history)
@@ -1685,14 +1703,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         const formattedResults: string[] = [];
         const images: Array<{ data: string; context: string }> = [];
         let truncated = false;
+        let hasScreenFrame = false;
 
         for (const result of results) {
           const content = result.content;
           if (!content) continue;
           const hit = formatSearchHit(result, effectiveCap);
           if (hit) { formattedResults.push(hit.text); truncated ||= hit.truncated; }
+          const frameId = normalizePositiveInt(content.frame_id);
+          if (hit && (result.type === "OCR" || result.type === "Parsed") && frameId !== null) {
+            hasScreenFrame = true;
+          }
           if (includeFrames && result.type === "OCR" && content.frame) {
-            images.push({ data: content.frame, context: `${content.app_name} at ${content.timestamp}` });
+            const frameLabel = frameId === null ? "" : ` (frame_id=${frameId})`;
+            images.push({ data: content.frame, context: `${content.app_name} at ${content.timestamp}${frameLabel}` });
           }
         }
 
@@ -1710,9 +1734,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
                 .join(" | ")
             : "";
 
+        const screenshotHint = hasScreenFrame && images.length === 0
+          ? "\nFor visual evidence, inspect a returned frame with get-screenshot(frame_id)."
+          : "";
         contentItems.push({
           type: "text",
-          text: header + "\n\n" + formattedResults.join("\n---\n") + relatedStr,
+          text: header + screenshotHint + "\n\n" + formattedResults.join("\n---\n") + relatedStr,
         });
 
         for (const img of images) {
@@ -1825,6 +1852,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
                 ? text
                 : "No elements found. Try: broader search, different role/source, or wider time range.",
             },
+          ],
+        };
+      }
+
+      case "get-screenshot": {
+        const frameId = normalizePositiveInt(args.frame_id);
+        if (frameId === null) {
+          return { isError: true, content: [{ type: "text", text: "frame_id must be a positive integer." }] };
+        }
+        const [thumbnail, metadata] = await Promise.all([
+          callAPI(`/frames/${frameId}/thumbnail?width=768&fallback=false`),
+          callAPI(`/frames/${frameId}/metadata`),
+        ]);
+        const [image, frame] = await Promise.all([
+          jpegImageContent(thumbnail, name, 300_000),
+          metadata.json(),
+        ]);
+        if (frame?.frame_id !== frameId || typeof frame.timestamp !== "string" || !Number.isFinite(Date.parse(frame.timestamp))) {
+          throw new Error("Screenshot metadata did not identify the requested frame and timestamp.");
+        }
+        qualifiedValue.searchResult();
+        return {
+          content: [
+            { type: "text", text: `Frame ${frameId} at ${frame.timestamp}. Source: screenpipe://frame/${frameId}` },
+            image,
           ],
         };
       }
