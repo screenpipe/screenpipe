@@ -81,14 +81,50 @@ fn raw_transcript(
         "channels": result.input.channels,
         "diarization_provider": result.diarization_provider,
     });
-    let entry = serde_json::json!({
+    let entry = raw_transcript_entry(text);
+    Some((captured_at, context, entry))
+}
+
+fn raw_transcript_entry(text: &str) -> serde_json::Value {
+    serde_json::json!({
         "kind": "screenpipe.transcript",
         "schema_version": 1,
         "media_type": "text/plain",
         "encoding": "utf8",
         "payload": text,
-    });
-    Some((captured_at, context, entry))
+    })
+}
+
+pub(super) async fn append_live_transcript(result: &TranscriptionResult) {
+    if raw_capture_ledger::is_enabled() {
+        if let Some((captured_at, context, entry)) = raw_transcript(result) {
+            append_transcript_entry(captured_at, context, entry).await;
+        }
+    }
+}
+
+pub(crate) async fn append_raw_transcript(
+    captured_at: chrono::DateTime<chrono::Utc>,
+    context: serde_json::Value,
+    text: &str,
+) {
+    if raw_capture_ledger::is_enabled() && !text.trim().is_empty() {
+        append_transcript_entry(captured_at, context, raw_transcript_entry(text)).await;
+    }
+}
+
+async fn append_transcript_entry(
+    captured_at: chrono::DateTime<chrono::Utc>,
+    context: serde_json::Value,
+    entry: serde_json::Value,
+) {
+    let appended = tokio::task::spawn_blocking(move || {
+        raw_capture_ledger::append(captured_at, context, vec![entry])
+    })
+    .await;
+    if !matches!(appended, Ok(Ok(()))) {
+        warn!("raw transcript could not be appended");
+    }
 }
 
 pub async fn handle_new_transcript(
@@ -167,20 +203,6 @@ pub(crate) async fn handle_new_transcript_with_optional_db(
             continue;
         }
         metrics.record_transcription_completed();
-
-        // The encrypted upload carries the original STT output. Local indexing
-        // still applies its own redaction and overlap cleanup below.
-        if raw_capture_ledger::is_enabled() {
-            if let Some((captured_at, context, entry)) = raw_transcript(&transcription) {
-                let appended = tokio::task::spawn_blocking(move || {
-                    raw_capture_ledger::append(captured_at, context, vec![entry])
-                })
-                .await;
-                if !matches!(appended, Ok(Ok(()))) {
-                    warn!("raw transcript could not be appended");
-                }
-            }
-        }
 
         let Some(db) = db.as_deref() else {
             continue;

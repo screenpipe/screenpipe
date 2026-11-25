@@ -432,7 +432,7 @@ pub async fn run_stt(
     {
         Ok(output) => {
             let diarization_segments = offset_diarization_segments(output, segment.start);
-            Ok(TranscriptionResult {
+            let result = TranscriptionResult {
                 input: AudioInput {
                     data: Arc::new(audio),
                     sample_rate,
@@ -449,7 +449,9 @@ pub async fn run_stt(
                 end_time: segment.end,
                 diarization_provider: diarization_segments.diarization_provider,
                 diarization_segments: diarization_segments.diarization_segments,
-            })
+            };
+            super::handle_new_transcript::append_live_transcript(&result).await;
+            Ok(result)
         }
         Err(e) => {
             error!("STT error for input {}: {:?}", device, e);

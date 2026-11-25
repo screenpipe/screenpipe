@@ -3137,6 +3137,9 @@ mod tests {
 
     #[tokio::test]
     async fn ledger_only_meeting_audio_runs_live_stt_without_derived_writes() {
+        let _ledger = crate::transcription::RAW_TRANSCRIPT_LEDGER_TEST_LOCK
+            .lock()
+            .await;
         use crate::transcription::deepgram::DeepgramTranscriptionConfig;
         use screenpipe_core::raw_capture_ledger;
         use vad_rs::VadStatus;
