@@ -219,19 +219,24 @@ try{
   const template=await Bun.file((pass===0&&process.env.WORKFLOW_EVAL_PROMPT_FILE)||(process.env.WORKFLOW_EVAL_PIPE_DIR ? join(process.env.WORKFLOW_EVAL_PIPE_DIR,task,"pipe.md") : join(assets,`pipes/${task}/pipe.md`))).text();
   const skillFile=process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md");
   const hash=(text:string)=>createHash("sha256").update(text).digest("hex");
-  promptVersions.push({task,promptHash:hash(template),skillHash:hash(await Bun.file(skillFile).text()),workspaceExtensionHash:hash(await Bun.file(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")).text())});
+  const extensionFile = (mastra ? undefined : process.env.WORKFLOW_EVAL_EXTENSION_FILE) || join(assets,"extensions/workflow-workspace.ts");
+  promptVersions.push({
+    task, promptHash: hash(template),
+    ...(!mastra && { skillHash: hash(await Bun.file(skillFile).text()) }),
+    workspaceExtensionHash: hash(await Bun.file(extensionFile).text()),
+  });
   const allow_rules=[...template.matchAll(/Api\((GET|POST) ([^)]+)\)/g)].map(m=>({type:"api",method:m[1],path:m[2]}));
   await writeFile(join(cwd,".screenpipe-permissions.json"),JSON.stringify({pipe_token:"fixture-workspace",api_base:base,pipe_name:task,pipe_dir:cwd,allow_rules,deny_rules:[],use_default_allowlist:false}));
   const instructions=template.replace(/^---[\s\S]*?---\s*/,"");
   const prompt = `${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`;
   const isolatedInstructions = `Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`;
-  const child = mastra ? Bun.spawn([process.execPath, mastraRunner], {
+  const child = mastra ? Bun.spawn([process.execPath, "--no-install", "--no-env-file", mastraRunner], {
     cwd,
     env: { SCREENPIPE_MASTRA_MODEL_URL: process.env.SCREENPIPE_MASTRA_MODEL_URL },
     stdin: new Blob([JSON.stringify({ task, model, prompt, instructions: isolatedInstructions })]),
     stdout: "pipe",
     stderr: "pipe",
-  }) : Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",isolatedInstructions,"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
+  }) : Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",extensionFile,"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",isolatedInstructions,"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
   const timer=setTimeout(()=>child.kill(),Math.max(1,deadline-Date.now()));
   const [out,err,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timer);
   stdout+=out;stderr+=err;exit=code;
@@ -254,9 +259,11 @@ try{
   }
   await writeFile(join(root,"trajectory.jsonl"),stdout,{mode:0o600});await writeFile(join(root,"stderr.txt"),stderr,{mode:0o600});
   const events=stdout.split("\n").flatMap(s=>{try{return[JSON.parse(s)]}catch{return[]}});
-  const verified=mastra||!model.includes("glm")||events.some(e=>e.type==="extension_ui_request"&&e.key==="screenpipe-confidential"&&e.text?.includes("response_verified"));
+  const privateTransportCheck: Record<string, boolean> = mastra ? {} : {
+    privateVerified: !model.includes("glm") || events.some(e=>e.type==="extension_ui_request"&&e.key==="screenpipe-confidential"&&e.text?.includes("response_verified")),
+  };
   const discovered=Object.values(ws.drafts).filter((d:any)=>d.status==="open"&&d.assignee!==task) as any[];
-  let checks: Record<string, boolean>={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad?.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
+  let checks: Record<string, boolean>={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad?.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),...privateTransportCheck};
   if(discovery)Object.assign(checks,{distinctJobs:discovered.some(d=>JSON.stringify(d.payload).includes(rows[0].timestamp)&&!JSON.stringify(d.payload).includes(rows[2].timestamp))&&discovered.some(d=>JSON.stringify(d.payload).includes(rows[2].timestamp)&&!JSON.stringify(d.payload).includes(rows[0].timestamp)),separateJobs:discovered.length>=2});
   if(publicationFailure){
     Object.assign(checks,{
@@ -281,7 +288,7 @@ try{
     preservesVerificationRequest:published.length===1&&published[0].stages.some((s:any)=>s.procedure.some((p:any)=>p.timestamp===rows[1].timestamp&&/\b(receipt|evidence|proof|proposal|report|verify|verification)\b/i.test(p.text))),
   });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
-  if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, privateVerified:verified, ...gradeTiming(published,existing,timing.expected)};
+  if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, ...privateTransportCheck, ...gradeTiming(published,existing,timing.expected)};
   if(sparseProcedure)Object.assign(checks,{
     enrichedExisting:published.length>0 && published.at(-1).id===existing.id,
     supportedProcedure:published.length>0 && published.at(-1).stages.every((s:any)=>s.procedure?.length>0 && s.procedure.every((p:any)=>rows.some(r=>r.timestamp===p.timestamp && r.app===p.app && typeof p.quote==="string" && p.quote.length>=12 && r.quote.includes(p.quote)))),
@@ -297,7 +304,7 @@ try{
     const secondSources=new Set(second?.stages.flatMap((s:any)=>s.procedure.map((p:any)=>p.timestamp))||[]);
     // Timing is already graded on the individual fixtures. For two cycles,
     // judge accumulated supported knowledge, stable identity and new evidence.
-    checks={exited:exit===0,completed:cycleResults.length===2,sourceRead:reads>0,privateVerified:verified,
+    checks={exited:exit===0,completed:cycleResults.length===2,sourceRead:reads>0,...privateTransportCheck,
       sameWorkflow:!!first && !!second && published.every(w=>w.id==="wf-receipts"),
       retainedPriorEvidence:firstSources.size>0 && [...firstSources].every(at=>secondSources.has(at)),
       learnedNewAction:!!second && second.stages.some((s:any)=>s.procedure?.some((p:any)=>p.timestamp===laterEvidence.timestamp && /confirmation|reconciliation/i.test(p.text) && laterEvidence.quote.includes(p.quote))),
@@ -306,7 +313,7 @@ try{
     };
   }
   const passed=Object.values(checks).every(Boolean);
-  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,cycleResults,requestLog,promptVersions,model,case:timingCase||publicationFailure||null,publicationAttempts,publicationFailures,now,timeoutMs}),{mode:0o600});
+  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,cycleResults,requestLog,promptVersions,model,runner:mastra?"mastra":"pi",case:timingCase||publicationFailure||null,publicationAttempts,publicationFailures,now,timeoutMs}),{mode:0o600});
   if(timing && timing.expected.length && published.length) await writeFile(join(root,"native-timing-input.json"),JSON.stringify({payload:published.at(-1),rows:timing.rows,expectedAverageMinutes:7,expectedSamples:2}),{mode:0o600});
-  console.log(JSON.stringify({passed,checks,artifact:root,model}));if(!passed)process.exitCode=1;
+  console.log(JSON.stringify({passed,checks,artifact:root,model,runner:mastra?"mastra":"pi"}));if(!passed)process.exitCode=1;
 }finally{server.stop(true);}

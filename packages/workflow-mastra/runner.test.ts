@@ -112,7 +112,7 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
     await Bun.write(join(cwd, ".screenpipe-permissions.json"), JSON.stringify({
       api_base: recorder.url.origin, pipe_name: task, pipe_token: "fixture-workspace",
     }));
-    const child = Bun.spawn([process.execPath, runner], {
+    const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", runner], {
       cwd,
       env: { SCREENPIPE_MASTRA_MODEL_URL: `${model.url.origin}/v1` },
       stdin: new Blob([JSON.stringify({ task, model: "fixture-model", instructions: "Review the invoice", prompt: "Review now" })]),
@@ -145,7 +145,7 @@ test("rejects a hosted model endpoint before sending a prompt", async () => {
     await Bun.write(join(cwd, ".screenpipe-permissions.json"), JSON.stringify({
       api_base: "http://127.0.0.1:3030", pipe_name: task, pipe_token: "fixture-workspace",
     }));
-    const child = Bun.spawn([process.execPath, runner], {
+    const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", runner], {
       cwd,
       env: { SCREENPIPE_MASTRA_MODEL_URL: "https://example.com/v1" },
       stdin: new Blob([JSON.stringify({ task, model: "fixture-model", instructions: "Review", prompt: "private capture" })]),
