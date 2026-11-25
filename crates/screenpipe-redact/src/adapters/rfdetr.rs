@@ -224,6 +224,13 @@ impl RfdetrConfig {
     pub const EXPECTED_SHA256: &'static str =
         "0e968657aafcfb2c5d61ece264d5959ddeeec53091171fae226b45ecd3a8a880";
 
+    /// Optional pinned download URL + SHA-256 for `pii_role_fusion_v4.onnx` (~2.1 MB).
+    /// Kept `None` until the V4 champion pair is published to HF; once set,
+    /// [`Self::ensure_model_present`] atomically fetches and SHA-256-verifies
+    /// [`Self::default_role_model_path`] alongside the vision backbone.
+    pub const ROLE_HF_DOWNLOAD_URL: Option<&'static str> = None;
+    pub const ROLE_EXPECTED_SHA256: Option<&'static str> = None;
+
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
     /// expected SHA-256. Otherwise downloads from
@@ -234,61 +241,95 @@ impl RfdetrConfig {
     /// `<model_path>`. A killed process leaves at most a `.partial`
     /// that the next call cleans up.
     pub async fn ensure_model_present(&self) -> Result<(), RedactError> {
-        if self.model_path.exists() && Self::sha256_matches(&self.model_path)? {
+        Self::ensure_file_present(
+            &self.model_path,
+            Self::HF_DOWNLOAD_URL,
+            Self::EXPECTED_SHA256,
+            "rfdetr",
+        )
+        .await?;
+
+        if let (Some(rp), Some(role_url), Some(role_sha)) = (
+            self.role_model_path.as_deref(),
+            Self::ROLE_HF_DOWNLOAD_URL,
+            Self::ROLE_EXPECTED_SHA256,
+        ) {
+            if rp == Self::default_role_model_path() {
+                if let Err(e) =
+                    Self::ensure_file_present(rp, role_url, role_sha, "rfdetr-role").await
+                {
+                    tracing::warn!(
+                        target = %rp.display(),
+                        error = %e,
+                        "optional V4 role-fusion download failed; continuing with pure vision"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_file_present(
+        target: &Path,
+        url: &'static str,
+        expected_sha256: &'static str,
+        label: &'static str,
+    ) -> Result<(), RedactError> {
+        if target.exists() && Self::sha256_matches_expected(target, expected_sha256)? {
             return Ok(());
         }
 
-        if let Some(parent) = self.model_path.parent() {
+        if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| RedactError::Runtime(format!("mkdir {}: {e}", parent.display())))?;
         }
 
-        let tmp = self.model_path.with_extension("onnx.partial");
+        let tmp = target.with_extension("onnx.partial");
         // Best-effort cleanup of a stale partial.
         let _ = tokio::fs::remove_file(&tmp).await;
 
         tracing::info!(
-            url = Self::HF_DOWNLOAD_URL,
-            target = %self.model_path.display(),
-            "downloading rfdetr_v38.onnx (~60 MB) — first-run only"
+            url = url,
+            target = %target.display(),
+            label = label,
+            "downloading PII model — first-run only"
         );
         let resp = reqwest::Client::new()
-            .get(Self::HF_DOWNLOAD_URL)
+            .get(url)
             .send()
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr download GET: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} download GET: {e}")))?;
         if !resp.status().is_success() {
             return Err(RedactError::Runtime(format!(
-                "rfdetr download returned {}",
+                "{label} download returned {}",
                 resp.status()
             )));
         }
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr download body: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} download body: {e}")))?;
 
         // Verify SHA-256 BEFORE landing the file at the final path.
         let actual = Self::hex_sha256(&bytes);
-        if actual != Self::EXPECTED_SHA256 {
+        if actual != expected_sha256 {
             return Err(RedactError::Runtime(format!(
-                "rfdetr download checksum mismatch: got {}, want {}",
-                actual,
-                Self::EXPECTED_SHA256
+                "{label} download checksum mismatch: got {actual}, want {expected_sha256}"
             )));
         }
 
         tokio::fs::write(&tmp, &bytes)
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr write tmp: {e}")))?;
-        tokio::fs::rename(&tmp, &self.model_path)
+            .map_err(|e| RedactError::Runtime(format!("{label} write tmp: {e}")))?;
+        tokio::fs::rename(&tmp, target)
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr rename: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} rename: {e}")))?;
         tracing::info!(
-            target = %self.model_path.display(),
+            target = %target.display(),
             bytes = bytes.len(),
-            "rfdetr_v38.onnx ready"
+            label = label,
+            "PII model ready"
         );
         Ok(())
     }
@@ -306,10 +347,10 @@ impl RfdetrConfig {
         s
     }
 
-    fn sha256_matches(path: &Path) -> Result<bool, RedactError> {
+    fn sha256_matches_expected(path: &Path, expected_sha256: &str) -> Result<bool, RedactError> {
         let bytes = std::fs::read(path)
             .map_err(|e| RedactError::Runtime(format!("read {}: {e}", path.display())))?;
-        Ok(Self::hex_sha256(&bytes) == Self::EXPECTED_SHA256)
+        Ok(Self::hex_sha256(&bytes) == expected_sha256)
     }
 }
 
@@ -353,17 +394,17 @@ mod imp {
                     // (With CoreML the CPU pool only runs CoreML-rejected
                     // fallback ops, where 2 was already the right number.)
                     .with_intra_threads(2)?;
-                // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
-                // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
-                // faster than the legacy default and keeps the work off the CPU/GPU.
-                // Shadowed again by the directml rebind when both features are
-                // enabled (Windows app build), which leaves this `mut` unused there.
+                // Offload to Apple Metal GPU (`ComputeUnits::CPUAndGPU`) instead of
+                // `ComputeUnits::All` (ANE). Exported FP16 / W16A32 ONNX ops underflow
+                // on the ANE compiler (measured on v38: detections collapsed 164 -> 13
+                // over 400 real frames). `MLProgram` + `ComputeUnits::CPUAndGPU`
+                // preserves full CPU parity at ~114-201 ms p50 vs ~926 ms CPU fallback.
                 #[cfg(feature = "onnx-coreml")]
                 #[allow(unused_mut)]
                 let mut builder = builder.with_execution_providers([
                     ort::ep::CoreML::default()
                         .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                        .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+                        .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndGPU)
                         .with_subgraphs(true)
                         .build(),
                     ort::ep::CPU::default().with_arena_allocator(false).build(),
@@ -488,7 +529,7 @@ mod imp {
                 .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
                 .to_rgb8();
             let (orig_w, orig_h) = (img.width(), img.height());
-            let big = orig_w >= self.input_size * 2 && orig_h >= self.input_size * 3 / 2;
+            let big = should_tile_frame(orig_w, orig_h, self.input_size);
 
             let non_empty_ax = ax_nodes.filter(|nodes| !nodes.is_empty());
             if let (Some(nodes), Some(role_mutex)) = (non_empty_ax, self.role_session.as_ref()) {
@@ -798,6 +839,15 @@ mod imp {
     ///
     /// Tiles are 2×2 with ~20 % overlap so a PII string on a seam is still
     /// wholly inside at least one tile.
+    /// Tiling pays whenever the frame is desktop-sized (`>= 1024×768`, the
+    /// original 512px 2× / 1.5× threshold), even when `input_size` increases
+    /// to 640 or 768 so `1440×900`, `1512×982`, and `1920×1080` captures still
+    /// receive 2×2 quadrant magnification (matching `gen_preds.py`).
+    pub(super) fn should_tile_frame(orig_w: u32, orig_h: u32, input_size: u32) -> bool {
+        let tile_base = input_size.min(512);
+        orig_w >= tile_base * 2 && orig_h >= tile_base * 3 / 2
+    }
+
     pub(super) fn inference_windows(w: u32, h: u32) -> Vec<(u32, u32, u32, u32)> {
         let mut out = vec![(0, 0, w, h)];
         let (tw, th) = (w / 2, h / 2);
@@ -870,9 +920,9 @@ mod imp {
 
     pub(super) fn parse_input_size_from_dtype_debug(s: &str) -> Option<u32> {
         // Keep in sync with every shipped model: v8=320, v9=384,
-        // v11..v38=512, v54/v87a/V4=768. Omitting a shipped size falls back
-        // to 384 and feeds a wrong-sized tensor → ort dimension error.
-        [320u32, 384, 512, 768]
+        // v11..v38=512, v39..v45=640, v46+/v54/V4=768. Omitting a shipped size
+        // falls back to 384 and feeds a wrong-sized tensor → ort dimension error.
+        [768u32, 640, 512, 384, 320]
             .into_iter()
             .find(|cand| s.contains(&cand.to_string()))
     }
@@ -1035,7 +1085,7 @@ mod tests {
 
     #[cfg(feature = "onnx-cpu")]
     #[test]
-    fn detect_input_size_recognizes_768_and_512_models() {
+    fn detect_input_size_recognizes_768_640_and_512_models() {
         assert_eq!(
             imp::parse_input_size_from_dtype_debug(
                 "Tensor { ty: Float32, dimensions: [1, 3, 768, 768] }"
@@ -1044,10 +1094,28 @@ mod tests {
         );
         assert_eq!(
             imp::parse_input_size_from_dtype_debug(
+                "Tensor { ty: Float32, dimensions: [1, 3, 640, 640] }"
+            ),
+            Some(640)
+        );
+        assert_eq!(
+            imp::parse_input_size_from_dtype_debug(
                 "Tensor { ty: Float32, dimensions: [1, 3, 512, 512] }"
             ),
             Some(512)
         );
+    }
+
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn v4_768_keeps_tiling_on_laptop_and_1080p_desktops() {
+        assert!(!imp::should_tile_frame(960, 720, 768));
+        for (w, h) in [(1024, 768), (1440, 900), (1512, 982), (1920, 1080), (2560, 1440)] {
+            assert!(
+                imp::should_tile_frame(w, h, 768),
+                "{w}x{h} must tile at input_size=768 to match gen_preds.py"
+            );
+        }
     }
 
     #[test]
