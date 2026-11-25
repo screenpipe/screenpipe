@@ -5,7 +5,7 @@ description: "Turn a recorded software failure into a reproducible bug report wi
 
 # bug report
 
-Resolve the affected app, failure, and approximate time. Use screenpipe-api to inspect the relevant activity and frames; use transcripts only for additional context. Recover the actual sequence before, during, and after the failure.
+Resolve the affected app, failure, and approximate time. Use screenpipe-api to recover the sequence before, during, and after the failure. For a visible symptom, inspect a screenshot of the failure before describing it. Inspect the preceding frame when the report depends on what changed.
 
 Write reproduction steps, expected behavior from the user's intent or documented contract, actual behavior, environment/version when verified, and the smallest useful evidence links. Separate visible symptoms from hypotheses about the cause. Mark steps that could not be reproduced.
 

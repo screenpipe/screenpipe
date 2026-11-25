@@ -371,13 +371,15 @@ OCR-only roles (accessibility-unavailable fallback): `line`, `word`, `block`, `p
 
 ---
 
-## 4. Frames (Screenshots) — `GET /frames/{frame_id}`
+## 4. Frames (Screenshots)
 
-```bash
-curl -o /tmp/frame.png "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/frames/12345"
-```
+When the answer depends on what was visible, inspect one relevant screenshot before answering. For a visual comparison, inspect one frame on each side of the change. Use `frame-context` for exact captured labels and nodes, and the transcript for spoken claims.
 
-Raw PNG. **Never fetch more than 2-3 frames per query** (~1000-2000 tokens each).
+- With a `frame_id`, call MCP `get-screenshot` to inspect that exact recorded frame. For a meeting demo or shared slide, use `get-meeting` with `include_screen_refs: true` to find candidate frames.
+- With a time and app or window, use MCP `search-content` with `content_type: "screen"`, `include_frames: true`, and `limit: 1` or `2`. This returns image content together with the search hits.
+- When the client lacks an image-capable MCP tool, use the authorized REST endpoint `GET /frames/{frame_id}?fallback=false` and open the returned PNG with an image viewer. If pixels are unavailable, cite the evidence you could verify and flag the visual gap.
+
+Start with one or two images and expand only for a specific visual gap. Cite the frame ID or timeline link for visual claims.
 
 ---
 
