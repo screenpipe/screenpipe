@@ -161,6 +161,13 @@ impl MeetingStartedEvent {
     }
 }
 
+fn join_reminder_dismiss_ms(seconds_until_start: i64) -> u64 {
+    // The preceding meeting can run right up to this one. Keep the join
+    // action available for 30 seconds after the scheduled handoff.
+    const HANDOFF_GRACE_MS: u64 = 30_000;
+    (seconds_until_start.max(0) as u64) * 1_000 + HANDOFF_GRACE_MS
+}
+
 pub fn start(app: AppHandle) {
     forward_screenpipe_event(
         app.clone(),
@@ -280,7 +287,19 @@ pub fn start(app: AppHandle) {
                 let minutes = (data.seconds_until_start + 59) / 60;
                 crate::localization::ui_format("meeting starting in {minutes} min", &[("minutes", minutes.to_string())])
             };
-            if let Err(cause) = client::send_typed_with_actions_and_priority_confirmed(&header, crate::localization::ui_format("screenpipe is ready to transcribe: {value1}", &[("value1", (title).to_string())]), "meeting", Some(30_000), actions, NotificationPriority::High).await {
+            if let Err(cause) = client::send_typed_with_actions_and_priority_confirmed(
+                &header,
+                crate::localization::ui_format(
+                    "screenpipe is ready to transcribe: {value1}",
+                    &[("value1", title)],
+                ),
+                "meeting",
+                Some(join_reminder_dismiss_ms(data.seconds_until_start)),
+                actions,
+                NotificationPriority::High,
+            )
+            .await
+            {
                 reminders::report_failure("notification_delivery", &cause);
                 prewarm_suppressed.write().await.remove(&prewarm_key(&data.title, &data.start));
             }
@@ -699,6 +718,15 @@ fn extract_meeting_url(text: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn join_reminder_stays_visible_at_the_back_to_back_handoff() {
+        let seconds_until_start = 30;
+        assert_eq!(join_reminder_dismiss_ms(seconds_until_start), 60_000);
+        assert_eq!(join_reminder_dismiss_ms(1), 31_000);
+        assert_eq!(join_reminder_dismiss_ms(0), 30_000);
+        assert_eq!(join_reminder_dismiss_ms(300), 330_000);
+    }
 
     #[test]
     fn room_change_prompt_actions_are_bound_to_the_offer() {

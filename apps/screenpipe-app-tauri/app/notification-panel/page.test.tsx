@@ -169,6 +169,25 @@ describe("meeting join notification delivery", () => {
     expect(bridge.execute).toHaveBeenCalledWith(expect.objectContaining({ type: "meeting_join", url: meeting.actions[0].url, screen_detail: { boundTo: "prewarm_pending" } }), expect.anything());
     expect(screen.queryByRole("button", { name: "Notification options" })).toBeNull();
   });
+  it("keeps the join action available after the scheduled handoff", async () => {
+    vi.useFakeTimers();
+    render(<NotificationPanelPage />);
+    await deliver({
+      ...meeting,
+      title: "meeting starting in 30 sec",
+      autoDismissMs: 60_000,
+    });
+
+    act(() => vi.advanceTimersByTime(31_000));
+    expect(
+      screen.getByRole("button", { name: /^join and take notes$/i }),
+    ).toBeInTheDocument();
+    expect(bridge.hide).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(bridge.hide).toHaveBeenCalledTimes(1);
+  });
+
   it("dismisses immediately while the join action is still running", async () => {
     let finish!: () => void;
     bridge.execute.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
