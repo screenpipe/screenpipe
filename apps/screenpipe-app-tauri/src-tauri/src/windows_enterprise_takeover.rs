@@ -26,7 +26,6 @@ static ENTERPRISE_PRESENCE: OnceLock<OwnedHandle> = OnceLock::new();
 
 /// Hand a legacy ordinary Enterprise launch to the registered current-user
 /// installation before either process can publish presence or open app state.
-#[cfg(feature = "enterprise-build")]
 pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result<bool, String> {
     let result = handoff_to_registered_user_install_inner(arguments);
     if let Err(cause) = &result {
@@ -39,7 +38,6 @@ pub(crate) fn handoff_to_registered_user_install(arguments: &[String]) -> Result
     result
 }
 
-#[cfg(feature = "enterprise-build")]
 fn handoff_to_registered_user_install_inner(arguments: &[String]) -> Result<bool, String> {
     // Persistent Enterprise is owned by its protected supervisor and managed
     // updater. Its marker identifies this exact executable; an unrelated HKCU
@@ -217,7 +215,6 @@ fn presence_name(control_port: u16, api_port: u16) -> String {
 /// The kernel releases the marker when the process truly exits, including on a
 /// crash, so Consumer cannot mistake a stale file or unhealthy HTTP endpoint
 /// for a live Enterprise instance.
-#[cfg(feature = "enterprise-build")]
 pub(crate) fn publish_enterprise_presence(control_port: u16, api_port: u16) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::System::Threading::CreateMutexW;
@@ -242,7 +239,6 @@ pub(crate) fn publish_enterprise_presence(control_port: u16, api_port: u16) -> R
 }
 
 /// Consumer must stop while the Enterprise build owns its session marker.
-#[cfg(not(feature = "enterprise-build"))]
 pub(crate) async fn enterprise_is_present(
     control_port: u16,
     api_port: u16,
@@ -461,7 +457,7 @@ fn process_executable(pid: u32) -> Result<PathBuf, String> {
     )?))
 }
 
-fn executable_product_name(path: &Path) -> Result<Option<String>, String> {
+pub(crate) fn executable_product_name(path: &Path) -> Result<Option<String>, String> {
     use std::ffi::c_void;
 
     #[link(name = "version")]
@@ -600,7 +596,6 @@ impl EarlyControlListener {
     pub(crate) fn into_inner(self) -> std::net::TcpListener { self.0 }
 }
 
-#[cfg(feature = "enterprise-build")]
 pub(crate) async fn reserve_registered_user_control_listener(
     port: u16,
     api_port: u16,
@@ -612,7 +607,6 @@ pub(crate) async fn reserve_registered_user_control_listener(
     result
 }
 
-#[cfg(feature = "enterprise-build")]
 async fn reserve_registered_user_control_listener_inner(
     port: u16,
     api_port: u16,
@@ -666,7 +660,6 @@ async fn reserve_registered_user_control_listener_inner(
     Ok(Some(EarlyControlListener(listener)))
 }
 
-#[cfg(feature = "enterprise-build")]
 async fn quiesce_pre_ready_legacy_processes(registered_exe: &Path) -> Result<(), String> {
     let allowed_dirs = legacy_install_directories(registered_exe)?;
     let mut system = System::new_all();
@@ -738,7 +731,6 @@ async fn quiesce_pre_ready_legacy_processes(registered_exe: &Path) -> Result<(),
     Ok(())
 }
 
-#[cfg(feature = "enterprise-build")]
 fn legacy_install_directories(registered_exe: &Path) -> Result<Vec<PathBuf>, String> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;

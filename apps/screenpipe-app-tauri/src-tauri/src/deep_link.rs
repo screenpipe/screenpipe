@@ -15,7 +15,7 @@ pub(crate) enum HandoffWindow {
 }
 
 pub(crate) fn scheme() -> &'static str {
-    if cfg!(feature = "enterprise-build") {
+    if crate::app_mode::is_enterprise_package() {
         ENTERPRISE_SCHEME
     } else {
         CONSUMER_SCHEME

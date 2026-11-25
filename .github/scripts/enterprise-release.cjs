@@ -11,26 +11,8 @@ async function status({ github, context, sha, dryRun, state, description }) {
   });
 }
 
-async function dispatchEnterprise({ github, context, sha, version, forceGithubRunners, dryRun, localizationRunId = "" }) {
-  const common = { github, context, sha, dryRun };
-  await status({ ...common, state: "pending", description: "Consumer ready; waiting for enterprise artifacts" });
-  try {
-    await github.rest.actions.createWorkflowDispatch({
-      ...context.repo,
-      workflow_id: "release-enterprise.yml",
-      ref: context.ref.replace(/^refs\/(heads|tags)\//, ""),
-      inputs: {
-        commit_hash: sha,
-        version,
-        force_github_runners: String(forceGithubRunners),
-        dry_run: String(dryRun),
-        ...(localizationRunId ? { localization_run_id: String(localizationRunId) } : {}),
-      },
-    });
-  } catch (error) {
-    await status({ ...common, state: "failure", description: "Enterprise build could not be started" });
-    throw error;
-  }
+async function markEnterprisePending({ github, context, sha, dryRun }) {
+  await status({ github, context, sha, dryRun, state: "pending", description: "Building enterprise artifacts" });
 }
 
 async function reportEnterprise({ github, context, sha, dryRun, results }) {
@@ -46,4 +28,4 @@ async function reportEnterprise({ github, context, sha, dryRun, results }) {
   }
 }
 
-module.exports = { dispatchEnterprise, reportEnterprise };
+module.exports = { markEnterprisePending, reportEnterprise };

@@ -2008,7 +2008,7 @@ mod imp {
     ) -> Option<crate::enterprise::raw_upload::Scope> {
         use crate::enterprise::{raw_upload, raw_upload_attestation};
         if !raw_upload_attestation::startup_allowed(
-            cfg!(feature = "enterprise-build"),
+            crate::app_mode::is_enterprise_package(),
             policy.locked_settings.get("cloudProcessing"),
         ) {
             return None;

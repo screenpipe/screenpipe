@@ -68,9 +68,6 @@ static ENFORCE_AUTO_START: Lazy<AtomicBool> =
     Lazy::new(|| AtomicBool::new(read_persisted_enforce_auto_start()));
 // Missing policy preserves automatic setup, including managed hidden installs.
 static AUTO_CONNECT_AI_TOOLS: Lazy<AiToolPolicy> = Lazy::new(|| {
-    #[cfg(feature = "enterprise-build")]
-    let initial_refresh_complete = false;
-    #[cfg(not(feature = "enterprise-build"))]
     let initial_refresh_complete = !crate::app_mode::deployment_or_session_is_managed();
     AiToolPolicy::new(
         read_auto_connect_ai_tools_at(&user_enterprise_config_path()),

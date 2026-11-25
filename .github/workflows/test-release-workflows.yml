@@ -9,12 +9,12 @@ on:
   pull_request:
     paths:
       - .github/workflows/release-app.yml
-      - .github/workflows/release-enterprise.yml
       - .github/workflows/test-release-workflows.yml
       - .github/actions/install-windows-frontend-dependencies/**
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/stamp-linux-release-edition.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts
@@ -35,12 +35,12 @@ on:
     branches: [main]
     paths:
       - .github/workflows/release-app.yml
-      - .github/workflows/release-enterprise.yml
       - .github/workflows/test-release-workflows.yml
       - .github/actions/install-windows-frontend-dependencies/**
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/stamp-linux-release-edition.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts

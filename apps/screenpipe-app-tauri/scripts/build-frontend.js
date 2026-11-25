@@ -191,6 +191,15 @@ async function pruneCache() {
 async function main() {
 	// Finalize the generated bundle before inspecting any frontend artifact cache.
 	const localization = await prepareLocalization()
+	const prebuilt = process.env.SCREENPIPE_PREBUILT_FRONTEND
+	if (prebuilt) {
+		// The pinned release artifact is authoritative. Fail closed if it is
+		// incomplete or contains translations from a different snapshot.
+		await verifyPrebuiltFrontend(prebuilt, localization)
+		await swapInOut((tmp) => fs.cp(prebuilt, tmp, { recursive: true }))
+		console.log('[build-frontend] installed shared release frontend')
+		return
+	}
 	const forced = ['1', 'true'].includes(String(process.env.SCREENPIPE_FORCE_FRONTEND_BUILD).toLowerCase())
 	const key = await computeInputHash()
 	const entry = cacheRoot ? path.join(cacheRoot, key) : null
@@ -246,6 +255,12 @@ async function main() {
 	} else {
 		console.log('[build-frontend] built (artifact cache disabled)')
 	}
+}
+
+export async function verifyPrebuiltFrontend(directory, snapshot) {
+	if (snapshot.mode === 'off') throw new Error('[build-frontend] shared release frontend requires localization')
+	if (!(await hasIndex(directory))) throw new Error('[build-frontend] shared release frontend is missing index.html')
+	await verifyLocalizationArtifact(directory, snapshot)
 }
 
 export async function verifyLocalizationArtifact(directory, snapshot) {

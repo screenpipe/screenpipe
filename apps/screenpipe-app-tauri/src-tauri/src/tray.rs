@@ -173,7 +173,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
 /// Business-equivalent features here — is shown as "Business" rather than
 /// "Enterprise". Only the enterprise build surfaces the real org label.
 fn plan_display_name(plan: Option<&str>) -> &'static str {
-    let enterprise_build = cfg!(feature = "enterprise-build");
+    let enterprise_build = crate::app_mode::is_enterprise_package();
     match plan.unwrap_or("none").to_ascii_lowercase().as_str() {
         "standard" | "basic" => "Basic",
         "pro" | "business" => "Business",
@@ -1496,7 +1496,7 @@ fn create_dynamic_menu(
             .item(
                 &MenuItemBuilder::with_id(
                     "version",
-                    if cfg!(feature = "enterprise-build") {
+                    if crate::app_mode::is_enterprise_package() {
                         format!("version {} (Enterprise)", app.package_info().version)
                     } else {
                         format!("version {}", app.package_info().version)
@@ -1702,7 +1702,7 @@ fn create_dynamic_menu(
 
     // --- Version (below update item) ---
     let is_beta = app.config().identifier.contains("beta");
-    let is_enterprise = cfg!(feature = "enterprise-build");
+    let is_enterprise = crate::app_mode::is_enterprise_package();
     let version_text = match (is_beta, is_enterprise) {
         (_, true) => format!("screenpipe v{} (Enterprise)", app.package_info().version),
         (true, false) => format!("screenpipe v{} (Beta)", app.package_info().version),

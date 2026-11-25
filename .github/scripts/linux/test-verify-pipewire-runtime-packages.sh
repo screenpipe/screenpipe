@@ -8,10 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 VERIFIER="${SCRIPT_DIR}/verify-pipewire-runtime-packages.sh"
-RELEASE_WORKFLOWS=(
-  "${REPO_ROOT}/.github/workflows/release-app.yml"
-  "${REPO_ROOT}/.github/workflows/release-enterprise.yml"
-)
+RELEASE_WORKFLOW="${REPO_ROOT}/.github/workflows/release-app.yml"
 RUNTIME_PACKAGES=(
   libpipewire-0.3-dev
   libpipewire-0.3-modules
@@ -19,15 +16,20 @@ RUNTIME_PACKAGES=(
   pipewire-bin
 )
 
-for workflow in "${RELEASE_WORKFLOWS[@]}"; do
+for job in publish-tauri release-enterprise-linux; do
+  steps="$(awk -v header="  ${job}:" '
+    $0 == header { found=1; next }
+    found && /^  [^ ]/ { exit }
+    found { print }
+  ' "${RELEASE_WORKFLOW}")"
   for package in "${RUNTIME_PACKAGES[@]}"; do
-    if ! grep -Eq "^[[:space:]]+${package}([[:space:]]+\\\\)?$" "${workflow}"; then
-      printf '%s does not explicitly install %s\n' "${workflow}" "${package}" >&2
+    if ! grep -Eq "^[[:space:]]+${package}([[:space:]]+\\\\)?$" <<< "${steps}"; then
+      printf '%s does not explicitly install %s\n' "${job}" "${package}" >&2
       exit 1
     fi
   done
-  if ! grep -Fq 'bash .github/scripts/linux/verify-pipewire-runtime-packages.sh' "${workflow}"; then
-    printf '%s does not verify the PipeWire runtime package source versions\n' "${workflow}" >&2
+  if ! grep -Fq 'bash .github/scripts/linux/verify-pipewire-runtime-packages.sh' <<< "${steps}"; then
+    printf '%s does not verify the PipeWire runtime package source versions\n' "${job}" >&2
     exit 1
   fi
 done

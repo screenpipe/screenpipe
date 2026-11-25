@@ -2015,6 +2015,18 @@ impl Default for EmbeddedLLM {
     }
 }
 
+fn apply_legacy_recording_defaults(fields: &mut serde_json::Map<String, Value>) {
+    for (key, default) in [
+        ("disableClipboardCapture", Value::Bool(false)),
+        ("disableKeyboardCapture", Value::Bool(false)),
+        ("asyncPiiRedaction", Value::Bool(true)),
+        ("asyncImagePiiRedaction", Value::Bool(true)),
+        ("piiBackend", Value::String("tinfoil".into())),
+    ] {
+        fields.entry(key).or_insert(default);
+    }
+}
+
 impl Default for SettingsStore {
     fn default() -> Self {
         // Default ignored windows for all OS
@@ -2142,18 +2154,26 @@ Rules:
             ),
         ]);
 
+        // App-specific defaults override RecordingSettings::default() where needed.
+        let mut recording = screenpipe_config::RecordingSettings {
+            enable_semantic_context: true,
+            audio_transcription_engine: "whisper-large-v3-turbo-quantized".to_string(),
+            monitor_ids: vec!["default".to_string()],
+            audio_devices: vec!["default".to_string()],
+            use_pii_removal: true,
+            analytics_id: uuid::Uuid::new_v4().to_string(),
+            ignored_windows,
+            ..screenpipe_config::RecordingSettings::default()
+        };
+        if crate::app_mode::is_enterprise_package() {
+            recording.disable_clipboard_capture = false;
+            recording.disable_keyboard_capture = false;
+            recording.async_pii_redaction = true;
+            recording.async_image_pii_redaction = true;
+            recording.pii_backend = "tinfoil".into();
+        }
         Self {
-            // App-specific defaults override RecordingSettings::default() where needed
-            recording: screenpipe_config::RecordingSettings {
-                enable_semantic_context: true,
-                audio_transcription_engine: "whisper-large-v3-turbo-quantized".to_string(),
-                monitor_ids: vec!["default".to_string()],
-                audio_devices: vec!["default".to_string()],
-                use_pii_removal: true,
-                analytics_id: uuid::Uuid::new_v4().to_string(),
-                ignored_windows,
-                ..screenpipe_config::RecordingSettings::default()
-            },
+            recording,
             ai_presets: vec![default_free_preset],
             is_loading: false,
             ui_locale: "system".to_string(),
@@ -2380,12 +2400,17 @@ impl SettingsStore {
             true => Ok(None),
             false => {
                 let raw = store.get("settings").unwrap_or(Value::Null);
-                let sanitized = Self::sanitize_legacy_fields(raw.clone());
+                let mut sanitized = Self::sanitize_legacy_fields(raw.clone());
                 // Persist sanitized fields back to store so the migration only warns once
                 if sanitized != raw {
                     store.set("settings", sanitized.clone());
                     let _ = save_store_to_disk(store.as_ref());
                     reencrypt_store_file(app);
+                }
+                if crate::app_mode::is_enterprise_package() {
+                    if let Some(fields) = sanitized.as_object_mut() {
+                        apply_legacy_recording_defaults(fields);
+                    }
                 }
                 let settings = serde_json::from_value(sanitized);
                 match settings {
@@ -3613,6 +3638,22 @@ mod tests {
         }))
         .unwrap();
         assert!(!opted_out.stop_recording_on_low_disk);
+    }
+
+    #[test]
+    fn legacy_package_defaults_preserve_explicit_recording_settings() {
+        let mut raw = json!({
+            "disableKeyboardCapture": true,
+            "asyncPiiRedaction": false,
+            "piiBackend": "local",
+        });
+        super::apply_legacy_recording_defaults(raw.as_object_mut().unwrap());
+        let settings: SettingsStore = serde_json::from_value(raw).unwrap();
+        assert!(settings.recording.disable_keyboard_capture);
+        assert!(!settings.recording.disable_clipboard_capture);
+        assert!(!settings.recording.async_pii_redaction);
+        assert!(settings.recording.async_image_pii_redaction);
+        assert_eq!(settings.recording.pii_backend, "local");
     }
 
     #[test]

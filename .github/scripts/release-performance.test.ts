@@ -32,13 +32,13 @@ function fixture() {
   return { root, env, write, stub, run, calls: () => readFileSync(env.CALLS, "utf8") };
 }
 
-for (const workflow of ["release-app.yml", "release-enterprise.yml"]) {
+for (const edition of ["consumer", "enterprise"]) {
   for (const failure of ["none", "repack", "sign"]) {
-    test(`${workflow}: Linux repack repairs private extraction modes and propagates ${failure} failure`, () => {
+    test(`${edition}: Linux repack repairs private extraction modes and propagates ${failure} failure`, () => {
       const f = fixture();
-      const config = Bun.YAML.parse(readFileSync(join(scripts, "../workflows", workflow), "utf8")) as any;
-      const job = config.jobs[workflow === "release-app.yml" ? "publish-tauri" : "release-enterprise-linux"];
-      const step = job.steps.find((item: any) => item.name === (workflow === "release-app.yml" ? "Build (Linux)" : "Build (enterprise, Linux x64)"));
+      const config = Bun.YAML.parse(readFileSync(join(scripts, "../workflows/release-app.yml"), "utf8")) as any;
+      const job = config.jobs[edition === "consumer" ? "publish-tauri" : "release-enterprise-linux"];
+      const step = job.steps.find((item: any) => item.name === (edition === "consumer" ? "Build (Linux)" : "Build (enterprise, Linux x64)"));
       expect(step.run.startsWith("set -euo pipefail\n")).toBe(true);
       const block = step.run.slice(step.run.indexOf("for APPIMAGE in "))
         .replaceAll("${{ matrix.target }}", "x86_64-unknown-linux-gnu")
@@ -161,8 +161,7 @@ test("MLX retains a successfully built matching cache and invalidates changed to
 test("release workflows retain the router gate and use helpers from the workflow revision", () => {
   const read = (name: string): any => Bun.YAML.parse(readFileSync(join(scripts, "../workflows", name), "utf8"));
   const app = read("release-app.yml");
-  const enterprise = read("release-enterprise.yml");
-  for (const job of [app.jobs["publish-tauri"], enterprise.jobs["release-enterprise-macos"]]) {
+  for (const job of [app.jobs["publish-tauri"], app.jobs["release-enterprise-macos"]]) {
     const checkout = job.steps.find((s: any) => s.name === "Checkout macOS release helpers");
     expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
     expect(checkout.with["sparse-checkout"]).toContain(".github/scripts");
@@ -227,16 +226,15 @@ test("an invalid extracted bundle fails the gate even when the original app vali
 });
 
 test("consumer and enterprise DMGs open the regular app without a separate launcher", () => {
-  for (const name of ["release-app.yml", "release-enterprise.yml"]) {
-    const source = readFileSync(join(scripts, "../workflows", name), "utf8");
-    const workflow = Bun.YAML.parse(source) as any;
-    const steps = (Object.values(workflow.jobs) as any[]).flatMap(job => job.steps ?? []);
-    const dmg = steps.find(step => step.name?.startsWith("Create headless DMG"));
+  const source = readFileSync(join(scripts, "../workflows/release-app.yml"), "utf8");
+  const workflow = Bun.YAML.parse(source) as any;
+  for (const name of ["publish-tauri", "release-enterprise-macos"]) {
+    const dmg = workflow.jobs[name].steps.find((step: any) => step.name?.startsWith("Create headless DMG"));
     expect(dmg.if ?? "").not.toContain("self-hosted");
     expect(dmg.run).toContain('create-headless-dmg.sh "$APP_PATH" "$DMG_PATH"');
-    expect(source).not.toContain("build-macos-update-recovery");
-    expect(source).not.toContain("RECOVERY_ARGS");
   }
+  expect(source).not.toContain("build-macos-update-recovery");
+  expect(source).not.toContain("RECOVERY_ARGS");
 });
 
 // Use real tar/xattr with the fixture signing services to match the updater's

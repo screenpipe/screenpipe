@@ -5,7 +5,7 @@
 # Persistent Azure Windows release runner
 
 This stack provisions two always-on native Azure release runners: Windows Server
-2022 x64 for the x64 jobs in `Release App` and `Release Enterprise`, and Windows
+2022 x64 for the x64 jobs in `Release App`, and Windows
 11 ARM64 Preview for the ARM64 job in `Release App`. Each default size has 16
 vCPUs and 64 GiB RAM. Each runner has a retained 2 TiB Premium SSD for Cargo,
 Rust, Bun, native dependency, compiler, and Tauri target caches. GitHub checkouts
@@ -23,7 +23,7 @@ online/busy state.
 The repository runners have only the `screenpipe-release-windows` and
 `screenpipe-release-windows-arm64` custom labels.
 A pre-job hook rejects every event except `workflow_dispatch`. ARM64 accepts only
-the `main` `release-app.yml`; x64 also accepts `release-enterprise.yml`. SSL.com
+the `main` `release-app.yml`; x64 also accepts historical `release-enterprise.yml` runs. SSL.com
 signing credentials remain per-job GitHub secrets and the completion hook removes
 temporary signing files. The workflows validate an exact commit SHA and expected
 version from `main`; public publication remains a separate human-only action.
