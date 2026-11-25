@@ -171,7 +171,10 @@ mod tests {
             patched_source_with_marker(EVIDENCE_MARKER, CONTRACT_PATCH, CONTRACT_MARKER).is_err()
         );
         assert!(patched_source_with_marker(MARKER, FAILURE_PATCH, FAILURE_MARKER).is_err());
-        assert!(patched_source_with_marker(BUDGET_MARKER, LENGTH_LOOP_PATCH, LENGTH_LOOP_MARKER).is_err());
+        assert!(
+            patched_source_with_marker(BUDGET_MARKER, LENGTH_LOOP_PATCH, LENGTH_LOOP_MARKER)
+                .is_err()
+        );
         assert!(
             patched_source_with_marker(CONTRACT_MARKER, CONTRACT_PATCH, CONTRACT_MARKER)
                 .unwrap()
@@ -182,11 +185,13 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(
-            patched_source_with_marker(LENGTH_LOOP_MARKER, LENGTH_LOOP_PATCH, LENGTH_LOOP_MARKER)
-                .unwrap()
-                .is_none()
-        );
+        assert!(patched_source_with_marker(
+            LENGTH_LOOP_MARKER,
+            LENGTH_LOOP_PATCH,
+            LENGTH_LOOP_MARKER
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
