@@ -67,13 +67,21 @@ async function restartRunningCapture(): Promise<boolean> {
 export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const enterpriseBuild = useEnterpriseBuildStatus();
-  const allowRemoteAutoUpdate =
+  const forceConsumerAutoUpdate =
     enterpriseBuild.resolved && !enterpriseBuild.isEnterprise;
   const settingsRef = useRef(settings);
   const updateSettingsRef = useRef(updateSettings);
   const reconcileRef = useRef<Promise<void>>(Promise.resolve());
   settingsRef.current = settings;
   updateSettingsRef.current = updateSettings;
+
+  useEffect(() => {
+    if (!isSettingsLoaded || !forceConsumerAutoUpdate || !isPrimaryWindow()) return;
+    if (settingsRef.current.autoUpdate === true) return;
+    void updateSettingsRef.current({ autoUpdate: true }).catch((error) => {
+      console.error("failed to enable consumer auto-update:", error);
+    });
+  }, [forceConsumerAutoUpdate, isSettingsLoaded]);
 
   useEffect(() => {
     if (!enabled || !isSettingsLoaded || !isPrimaryWindow()) return;
@@ -117,9 +125,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
             changedControls,
             recorderRestartRequired,
             preferences,
-          } = buildDesktopRemoteControlPatch(current, policy, {
-            allowRemoteAutoUpdate,
-          });
+          } = buildDesktopRemoteControlPatch(current, policy);
           if (Object.keys(patch).length === 0) return;
 
           await updateSettingsRef.current(patch as Partial<Settings>);
@@ -140,9 +146,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
                   .map(([key]) => key),
                 ...(policy.aecMode.forceDisabled ? ["aecMode"] : []),
               ],
-              forced_on_controls: policy.autoUpdate.forceEnabled
-                ? ["autoUpdate"]
-                : [],
+              forced_on_controls: [],
               effective_semantic_context: Boolean(
                 effective.enableSemanticContext,
               ),
@@ -218,7 +222,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
       unsubscribe?.();
       stopRefreshing();
     };
-  }, [allowRemoteAutoUpdate, enabled, isSettingsLoaded]);
+  }, [enabled, isSettingsLoaded]);
 
   return null;
 }

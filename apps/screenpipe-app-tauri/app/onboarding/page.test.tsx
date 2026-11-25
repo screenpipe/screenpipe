@@ -1788,4 +1788,4 @@ describe("timeline slide sequencing", () => {
   );
 });
 
-vi.mock("@/lib/workflows/rollout", () => ({ useWorkflowsRolloutEnabled: () => true, requireWorkflowsRollout: vi.fn() }));
+vi.mock("@/lib/workflows/rollout", () => ({ useWorkflowsRolloutEnabled: () => true }));

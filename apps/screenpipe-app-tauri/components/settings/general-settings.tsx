@@ -56,7 +56,6 @@ import {
   describeEnterpriseUpdateMode,
   normalizeEnterpriseAppUpdatePolicy,
 } from "@/lib/enterprise/app-update-policy";
-import { getRemoteAutoUpdatePolicy } from "@/lib/desktop-remote-control";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
 import { msg } from "gt-react";
@@ -79,11 +78,9 @@ export default function GeneralSettings() {
   const userGoal =
     normalizeUserGoalCategory(settings.userGoalCategory) ??
     DEFAULT_USER_GOAL_CATEGORY;
-  const autoUpdateRemotePolicy = getRemoteAutoUpdatePolicy(settings);
-  const autoUpdateForcedByRemote =
+  const autoUpdateForcedOn =
     enterpriseBuild.resolved &&
-    !enterpriseBuild.isEnterprise &&
-    autoUpdateRemotePolicy.forceEnabled;
+    !enterpriseBuild.isEnterprise;
 
   const handleUserGoalChange = async (category: UserGoalCategory) => {
     try {
@@ -315,16 +312,16 @@ export default function GeneralSettings() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
                     <p className="text-xs text-muted-foreground">
-                      {autoUpdateForcedByRemote
-                        ? gt("Required temporarily so this installation receives reliability fixes.")
+                      {autoUpdateForcedOn
+                        ? gt("Required so this installation receives updates automatically.")
                         : gt("Restart automatically when an update is downloaded. Off: a \"restart to update\" banner appears instead.")}
                     </p>
                   </div>
                 </div>
                 <Switch
                   id="auto-update-toggle"
-                  checked={settings?.autoUpdate ?? true}
-                  disabled={autoUpdateForcedByRemote}
+                  checked={autoUpdateForcedOn || (settings?.autoUpdate ?? true)}
+                  disabled={autoUpdateForcedOn}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }
