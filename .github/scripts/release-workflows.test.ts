@@ -63,6 +63,7 @@ test("Windows builds prepare and upload legacy plus certificate attribution carr
   expect(upload.run).toContain('"${BUNDLE_DIR}"/attribution/*');
 });
 
+// Leave time for PowerShell to start cold on hosted runners.
 test.each(["missing", "legacy", "failing"] as const)("Windows carrier orchestration handles %s app source", (revision) => {
   const step = app.jobs["publish-tauri"].steps.find((item: any) => item.name === "Prepare Windows certificate download carrier");
   const script = step.run.replaceAll("${{ matrix.target }}", "x86_64-pc-windows-msvc");
@@ -84,7 +85,7 @@ test.each(["missing", "legacy", "failing"] as const)("Windows carrier orchestrat
     expect(readFileSync(join(bundle, "nsis/screenpipe_1.2.3_x64-setup.exe"))).toEqual(installer);
     expect(existsSync(join(bundle, "attribution"))).toBe(false);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
-});
+}, 15_000);
 
 function api() {
   const calls: { args: any }[] = [];
