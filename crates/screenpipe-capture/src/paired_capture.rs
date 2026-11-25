@@ -942,7 +942,7 @@ fn raw_screen_metadata<Db>(
         context["window_name"] = serde_json::json!(ctx.window_name);
         context["browser_url"] = serde_json::json!(ctx.browser_url);
     }
-    let mut ax = tree.map(|snapshot| {
+    let ax = tree.map(|snapshot| {
         serde_json::json!({
             "app_name": snapshot.app_name,
             "window_name": snapshot.window_name,
@@ -951,23 +951,7 @@ fn raw_screen_metadata<Db>(
             "truncated": snapshot.truncated,
         })
     });
-    if ctx.use_pii_removal {
-        redact_raw_ax_strings(&mut context);
-        if let Some(ax) = ax.as_mut() {
-            redact_raw_ax_strings(ax);
-        }
-    }
     (context, ax)
-}
-
-fn redact_raw_ax_strings(value: &mut serde_json::Value) {
-    use serde_json::Value;
-    match value {
-        Value::String(text) => *text = remove_pii(text),
-        Value::Array(values) => values.iter_mut().for_each(redact_raw_ax_strings),
-        Value::Object(map) => map.values_mut().for_each(redact_raw_ax_strings),
-        _ => {}
-    }
 }
 
 /// Walk the accessibility tree for the currently focused window.
@@ -1386,25 +1370,6 @@ mod tests {
         db.close().await;
     }
 
-    #[test]
-    fn raw_ax_redacts_node_values_without_removing_structure() {
-        let mut ax = serde_json::json!({
-            "text": "Contact me@example.com",
-            "nodes": [{
-                "role": "AXTextField",
-                "text": "Contact me@example.com",
-                "value": "me@example.com",
-                "bounds": {"x": 0.25},
-                "on_screen": true,
-            }],
-        });
-        redact_raw_ax_strings(&mut ax);
-        assert!(!ax.to_string().contains("me@example.com"));
-        assert_eq!(ax["nodes"][0]["role"], "AXTextField");
-        assert_eq!(ax["nodes"][0]["bounds"]["x"], 0.25);
-        assert_eq!(ax["nodes"][0]["on_screen"], true);
-    }
-
     #[tokio::test]
     async fn raw_capture_persists_screenshot_and_ax_without_database() -> Result<()> {
         let tmp = TempDir::new()?;
@@ -1430,12 +1395,12 @@ mod tests {
             monitor_id: 7,
             device_name: "raw_only_test_monitor",
             app_name: Some("Test"),
-            window_name: Some("Test Window"),
+            window_name: Some("Contact me@example.com"),
             browser_url: None,
             document_path: None,
             focused: true,
             capture_trigger: "manual",
-            use_pii_removal: false,
+            use_pii_removal: true,
             languages: vec![],
             elements_ref_frame_id: None,
             screenshot_disabled: false,
@@ -1445,7 +1410,8 @@ mod tests {
             focused_window_bounds: None,
         };
         let tree = make_snap(vec![AccessibilityTreeNode {
-            text: "AX from the focused monitor".into(),
+            text: "Contact me@example.com".into(),
+            value: Some("me@example.com".into()),
             ..Default::default()
         }]);
         assert!(matches!(
@@ -1485,7 +1451,12 @@ mod tests {
             assert_eq!(ax_record["kind"], "screenpipe.ax");
             let ax: serde_json::Value =
                 serde_json::from_str(ax_record["payload"].as_str().unwrap())?;
+            assert_eq!(
+                records[0]["context"]["window_name"],
+                "Contact me@example.com"
+            );
             assert_eq!(ax["text"], tree.text_content);
+            assert_eq!(ax["nodes"][0]["value"], "me@example.com");
         }
         assert_eq!((screenshots, ax_only), (1, 1));
         Ok(())

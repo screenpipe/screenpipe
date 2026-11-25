@@ -3169,7 +3169,7 @@ mod tests {
         )
         .unwrap();
         let _disable_ledger = DisableLedgerOnDrop;
-        let text = "live ledger-only transcription";
+        let text = "live ledger-only transcription for me@example.com";
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -3193,6 +3193,7 @@ mod tests {
                 }),
                 output_path: Some(media.path().into()),
                 meeting_detector: Some(detector.clone()),
+                use_pii_removal: true,
                 ..Default::default()
             },
             None,

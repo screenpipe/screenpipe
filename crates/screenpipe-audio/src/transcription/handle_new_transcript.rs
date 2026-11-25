@@ -8,7 +8,7 @@ use crate::{
     core::engine::AudioTranscriptionEngine, metrics::AudioPipelineMetrics,
     transcription::process_transcription_result,
 };
-use screenpipe_core::{pii_removal::remove_pii, raw_capture_ledger};
+use screenpipe_core::raw_capture_ledger;
 use screenpipe_db::{ChunkOutcome, DatabaseManager};
 use tracing::{debug, error, warn};
 
@@ -61,7 +61,6 @@ pub(super) async fn finish_without_text(db: &DatabaseManager, path: &str, outcom
 
 fn raw_transcript(
     result: &TranscriptionResult,
-    use_pii_removal: bool,
 ) -> Option<(
     chrono::DateTime<chrono::Utc>,
     serde_json::Value,
@@ -72,11 +71,6 @@ fn raw_transcript(
         .as_deref()
         .filter(|text| !text.trim().is_empty())?;
     let captured_at = chrono::DateTime::from_timestamp(result.timestamp.try_into().ok()?, 0)?;
-    let text = if use_pii_removal {
-        remove_pii(text)
-    } else {
-        text.to_owned()
-    };
     let context = serde_json::json!({
         "device_name": result.input.device.name,
         "device_type": result.input.device.device_type,
@@ -174,11 +168,10 @@ pub(crate) async fn handle_new_transcript_with_optional_db(
         }
         metrics.record_transcription_completed();
 
-        // Preserve the STT result before overlap cleanup mutates its text.
+        // The encrypted upload carries the original STT output. Local indexing
+        // still applies its own redaction and overlap cleanup below.
         if raw_capture_ledger::is_enabled() {
-            if let Some((captured_at, context, entry)) =
-                raw_transcript(&transcription, use_pii_removal)
-            {
+            if let Some((captured_at, context, entry)) = raw_transcript(&transcription) {
                 let appended = tokio::task::spawn_blocking(move || {
                     raw_capture_ledger::append(captured_at, context, vec![entry])
                 })
@@ -350,21 +343,16 @@ mod tests {
         let text = "  repeated phrase repeated phrase — contact me@example.com  ";
         let mut transcript = result(String::new(), 1_700_000_000, Some(text));
         transcript.start_time = 0.25;
-        let (captured_at, context, entry) = raw_transcript(&transcript, false).unwrap();
+        let (captured_at, context, entry) = raw_transcript(&transcript).unwrap();
         assert_eq!(captured_at.timestamp(), 1_700_000_000);
         assert_eq!(context["device_name"], "test mic");
         assert_eq!(context["start_time"], 0.25);
         assert_eq!(context["end_time"], 1.0);
         assert_eq!(entry["payload"], text);
 
-        let (_, _, redacted) = raw_transcript(&transcript, true).unwrap();
-        assert!(!redacted["payload"]
-            .as_str()
-            .unwrap()
-            .contains("me@example.com"));
         assert_eq!(transcript.transcription.as_deref(), Some(text));
         transcript.transcription = Some("  ".into());
-        assert!(raw_transcript(&transcript, false).is_none());
+        assert!(raw_transcript(&transcript).is_none());
     }
 
     #[tokio::test]
