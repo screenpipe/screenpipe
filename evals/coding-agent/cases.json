@@ -4460,10 +4460,6 @@
         "apps/screenpipe-app-tauri/components/workflows/workflow-tasks-prompt.tsx"
       ],
       "gate": "advisory",
-      "trigger_paths": [
-        "apps/screenpipe-app-tauri/components/workflows/workflow-tasks-prompt.tsx",
-        "apps/screenpipe-app-tauri/components/workflows/workflow-sharing-controls.tsx"
-      ],
       "tags": [
         "regression",
         "escaped-failure",

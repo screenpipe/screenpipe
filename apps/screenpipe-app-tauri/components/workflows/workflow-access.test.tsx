@@ -9,7 +9,7 @@ import { WorkflowAccess } from "./workflow-access";
 
 const state = vi.hoisted(() => ({ enabled: false, enable: vi.fn() }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({
-  settings: { aiPresets: [], user: { id: "fixture-user" }, workflowSharingPromptSeen: { "fixture-user": "2026-09-23" } },
+  settings: { aiPresets: [], user: { id: "fixture-user" }, workflowSharingPromptSeen: { "fixture-user": "2026-11-25" } },
   updateSettings: vi.fn(),
 }) }));
 vi.mock("@/lib/hooks/use-usage-status", () => ({ useUsageStatusQuery: () => ({

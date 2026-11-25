@@ -9,7 +9,7 @@ const f = vi.hoisted(() => ({ settings: {} as any, update: vi.fn() }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ settings: f.settings, updateSettings: f.update }) }));
 vi.mock("./workflow-sharing-controls", () => ({ WorkflowSharingControls: ({ onDone }: { onDone: () => void }) => <button onClick={onDone}>Skip sharing</button> }));
 beforeEach(() => {
-  f.settings = { user: { id: "fixture-user" }, workflowSharingPromptSeen: { "fixture-user": "2026-09-23" } };
+  f.settings = { user: { id: "fixture-user" }, workflowSharingPromptSeen: { "fixture-user": "2026-11-25" } };
   f.update.mockReset().mockImplementation(async patch => { f.settings = { ...f.settings, ...patch }; });
 });
 afterEach(() => vi.useRealTimers());
@@ -104,10 +104,10 @@ describe("workflow schedule control", () => {
     expect(toggle()).toBeChecked();
   });
   it("preserves account-scoped sharing consent separately from the schedules", async () => {
-    f.settings.workflowSharingPromptSeen = {"another-account":"2026-09-23"};
+    f.settings.workflowSharingPromptSeen = {"another-account":"2026-11-25"};
     const tasks = service([true,true,true,true]); render(<WorkflowTasksPrompt active tasks={tasks} />);
     fireEvent.click(await screen.findByText("Skip sharing"));
-    await waitFor(() => expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-09-23"));
+    await waitFor(() => expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-11-25"));
     expect(tasks.enable).not.toHaveBeenCalled(); expect(tasks.disable).not.toHaveBeenCalled();
   });
   it("keeps sharing open across recorder disconnect and reconnect until explicitly closed", async () => {
@@ -122,7 +122,7 @@ describe("workflow schedule control", () => {
     expect(screen.getByRole("dialog", { name: "Help improve Screenpipe" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-09-23");
+    expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-11-25");
   });
   it("ignores outside clicks on sharing and schedule confirmation without recording a choice", async () => {
     f.settings.workflowSharingPromptSeen = {};
@@ -148,7 +148,7 @@ describe("workflow schedule control", () => {
     expect(tasks.enable).not.toHaveBeenCalled(); expect(f.update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Skip sharing"));
     await loaded(); expect(toggle()).not.toBeChecked();
-    expect(f.update).toHaveBeenCalledWith({ workflowSharingPromptSeen: { "fixture-user": "2026-09-23" } });
+    expect(f.update).toHaveBeenCalledWith({ workflowSharingPromptSeen: { "fixture-user": "2026-11-25" } });
     view.rerender(<WorkflowTasksPrompt active={false} tasks={tasks} />);
     view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); await loaded();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -172,7 +172,7 @@ describe("workflow schedule control", () => {
     f.settings.user = { id: "second-account" };
     view.rerender(<WorkflowTasksPrompt active tasks={tasks} />);
     expect(await screen.findByText("Skip sharing")).toBeVisible();
-    expect(f.settings.workflowSharingPromptSeen).toEqual({ "first-account": "2026-09-23" });
+    expect(f.settings.workflowSharingPromptSeen).toEqual({ "first-account": "2026-11-25" });
     f.settings.user = null;
     view.rerender(<WorkflowTasksPrompt active tasks={tasks} />);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

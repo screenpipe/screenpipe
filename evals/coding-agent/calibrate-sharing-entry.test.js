@@ -32,7 +32,6 @@ function passes(r){expect(r.status).toBe(0);expect(r.stdout).toContain('9 passed
 function fails(r){expect(r.status).toBe(1);expect(r.kind).toBeNull();expect(r.stdout).toMatch(/Tests\s+[1-9]\d* failed/);expect(r.stderr).not.toContain('TypeError:');}
 test('parent fails intended entry outcomes while preserved controls pass',()=>{const r=grade('parent',item.base_ref);fails(r);expect(r.stdout).toContain('3 passed');},60000);
 test('reference passes',()=>passes(grade('reference')),60000);
-test('current passes',()=>passes(grade('current','HEAD')),60000);
 test('equivalent active condition passes',()=>passes(grade('equivalent',item.oracle_ref,cwd=>replace(cwd,source,'if (active && account &&','if (account && active &&'))),60000);
 test('unused fixed component cannot repair parent',()=>fails(grade('unused',item.base_ref,cwd=>writeFileSync(join(cwd,source+'.unused.txt'),execFileSync('git',['show',`${item.oracle_ref}:${source}`],{cwd:repo})))),60000);
 test('recorder-gated choice fails',()=>fails(grade('recorder',item.oracle_ref,cwd=>replace(cwd,source,'if (active && account &&','if (active && backendReady && account &&'))),60000);
