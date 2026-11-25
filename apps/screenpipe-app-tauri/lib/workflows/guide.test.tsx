@@ -7,6 +7,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  within,
   cleanup,
 } from "@testing-library/react";
 import {
@@ -306,16 +307,39 @@ describe("guide editor", () => {
     expect(screen.queryByRole("button", { name: "Hide screenshot" })).toBeNull();
     expect(guideVideoScenes(oldGuide, w)[0].imageFrameId).toBe(1);
     expect(platform.save).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Remove screenshot" }));
+    fireEvent.click(screen.getByLabelText("Screenshot actions for Collect sources"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove from SOP" }));
     await waitFor(() => expect(platform.save).toHaveBeenCalled());
     const saved = parseGuide(JSON.parse(JSON.stringify(platform.save.mock.calls.at(-1)![0])));
     expect(saved.steps[0].imageExcluded).toBe(true);
     expect(guideVideoScenes(saved, w)[0].imageFrameId).toBeUndefined();
     view.unmount();
     render(<WorkflowGuide workflow={w} platform={{ ...platform, load: async () => saved }} close={() => {}} />);
-    await screen.findByRole("button", { name: "Restore screenshot" });
+    const undo = await screen.findByRole("button", { name: "Undo" });
     expect(screen.queryByRole("img")).toBeNull();
+    fireEvent.click(undo);
+    await screen.findByRole("img", { name: "Source for Collect sources" });
+    expect(platform.save.mock.calls.at(-1)?.[0].steps[0].imageExcluded).toBe(false);
     expect(platform.generate).not.toHaveBeenCalled();
+  });
+  it("removes and restores a screenshot loaded from the original recording", async () => {
+    const w = structuredClone(workflow);
+    const capture = w.stages[0].screenshot!;
+    w.stages[0].screenshot = undefined;
+    w.stages[0].screenshots = [];
+    const platform = { ...host(), loadSourceScreenshot: vi.fn(async () => capture) };
+    render(<WorkflowGuide workflow={w} platform={platform} close={() => {}} />);
+
+    await screen.findByRole("img", { name: "Source for Collect sources" });
+    const actions = screen.getByLabelText("Screenshot actions for Collect sources");
+    fireEvent.click(actions);
+    const menu = within(actions.parentElement!);
+    expect(menu.queryByRole("button", { name: "Replace screenshot" })).toBeNull();
+    fireEvent.click(menu.getByRole("button", { name: "Remove from SOP" }));
+    expect(screen.queryByRole("img", { name: "Source for Collect sources" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("img", { name: "Source for Collect sources" })).toHaveAttribute("src", capture.dataUrl);
+    expect(platform.save.mock.calls.at(-1)?.[0].steps[0].imageExcluded).toBe(false);
   });
   it("selects another capture, persists it, and uses it in the SOP, export and video", async () => {
     const w = structuredClone(workflow);
@@ -324,7 +348,9 @@ describe("guide editor", () => {
     w.stages[0].screenshots = [first, second];
     const platform = host();
     const view = render(<WorkflowGuide workflow={w} platform={platform} close={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Change screenshot" }));
+    fireEvent.click(await screen.findByLabelText("Screenshot actions for Collect sources"));
+    fireEvent.click(screen.getByRole("button", { name: "Replace screenshot" }));
+    expect(screen.queryByRole("img", { name: "Source for Collect sources" })).toBeNull();
     const preview = () => screen.getByRole("img", { name: "Review source for Collect sources" });
     fireEvent.load(preview());
     expect(screen.getByRole("button", { name: "Use screenshot" })).toBeEnabled();

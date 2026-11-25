@@ -214,21 +214,6 @@
 .stepBody {
   margin: 6px 32px 0;
 }
-.step figure {
-  margin: 16px 5px;
-  position: relative;
-}
-.step img {
-  display: block;
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.step figure button {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-}
 .guide .grip {
   -webkit-user-drag: element;
   position: absolute;
@@ -254,7 +239,7 @@
 }
 .grip,
 .controls,
-.step figure button {
+.screenshotActions {
   opacity: 0;
   pointer-events: none;
   transition: opacity 150ms ease;
@@ -264,8 +249,9 @@
 .step:focus-within .grip,
 .step:focus-within .controls,
 .controls[open],
-.step figure:hover button,
-.step figure:focus-within button {
+.screenshotFigure:hover .screenshotActions,
+.screenshotFigure:focus-within .screenshotActions,
+.screenshotActions[open] {
   opacity: 1;
   pointer-events: auto;
 }
@@ -273,7 +259,7 @@
   position: relative;
   margin-top: 4px;
 }
-.controls > summary {
+:is(.controls, .screenshotActions) > summary {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -283,13 +269,13 @@
   color: var(--muted);
   cursor: pointer;
 }
-.controls > summary::-webkit-details-marker {
+:is(.controls, .screenshotActions) > summary::-webkit-details-marker {
   display: none;
 }
-.controls > summary:hover {
+:is(.controls, .screenshotActions) > summary:hover {
   background: var(--soft);
 }
-.controls > summary:focus-visible {
+:is(.controls, .screenshotActions) > summary:focus-visible {
   outline: 2px solid var(--muted);
   outline-offset: 2px;
 }
@@ -358,11 +344,59 @@
 .guide textarea::placeholder {
   color: var(--muted);
 }
+.screenshotFigure {
+  position: relative;
+}
+.screenshotFigure figure,
+figure.screenshotFigure,
+.imageReview figure {
+  margin: 0;
+}
+.screenshotFigure img,
+.imageReview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.screenshotActions {
+  position: absolute;
+  inset: 8px 8px auto auto;
+  z-index: 2;
+}
+.screenshotActions > summary {
+  width: 36px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.screenshotActions .stepTools {
+  top: calc(100% + 4px);
+  width: 180px;
+  max-width: calc(100vw - 32px);
+}
+.screenshotStatus {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.guide .screenshotStatus button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+}
+.guide .screenshotStatus button:hover {
+  background: var(--soft);
+}
 .imageReview {
   border: 1px solid var(--line, #dfe1d9);
   border-radius: 8px;
   overflow: hidden;
-  margin: 20px 0;
+  margin: 0;
 }
 .imageReviewHeader {
   display: flex;
@@ -552,15 +586,19 @@
 @media (hover: none) {
   .grip,
   .controls,
-  .step figure button {
+  .screenshotActions {
     opacity: 1;
     pointer-events: auto;
+  }
+  .screenshotActions > summary {
+    width: 44px;
+    min-height: 44px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .grip,
   .controls,
-  .step figure button {
+  .screenshotActions {
     transition: none;
   }
 }

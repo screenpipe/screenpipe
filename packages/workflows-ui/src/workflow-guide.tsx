@@ -12,6 +12,7 @@ import {
   Download,
   ExternalLink,
   ImageOff,
+  ImagePlus,
   Loader2,
   List,
   MoreHorizontal,
@@ -153,7 +154,7 @@ export function WorkflowGuide({
       .getElementById(event.currentTarget.hash.slice(1))
       ?.scrollIntoView({ block: "start" });
   }
-  const stale = draft && (sourceMissing || guideNeedsSourceReview(draft, workflow));
+  const stale = draft !== null && (sourceMissing || guideNeedsSourceReview(draft, workflow));
   async function reconnectSources(next: Guide) {
     const before = latest.current;
     await persist(next);
@@ -165,7 +166,7 @@ export function WorkflowGuide({
     const current = latest.current;
     if (!current || from === to || to < 0 || to >= current.steps.length) return;
     root.current
-      ?.querySelectorAll<HTMLDetailsElement>("details[data-step-actions][open]")
+      ?.querySelectorAll<HTMLDetailsElement>("details[data-step-actions][open], details[data-screenshot-actions][open]")
       .forEach((menu) => {
         menu.open = false;
         menu.querySelector("summary")?.focus();
@@ -201,7 +202,7 @@ export function WorkflowGuide({
     const dismiss = (event: PointerEvent) => {
       root.current
         ?.querySelectorAll<HTMLDetailsElement>(
-          "details[data-step-actions][open]",
+          "details[data-step-actions][open], details[data-screenshot-actions][open]",
         )
         .forEach((menu) => {
           if (event.target instanceof Node && !menu.contains(event.target))
@@ -440,13 +441,6 @@ export function WorkflowGuide({
               {id: "prerequisites", label: "Before you start", content: lines("Before you start", "prerequisites", "Add prerequisites…")},
               ...draft.steps.flatMap((step, i): DocumentBlock[] => {
                 const sourceStage = guideSourceStage(draft, step, workflow) ?? null;
-                const image =
-                  !stale && guideStepIncludesImage(step)
-                    ? guideScreenshot(workflow, sourceStage, step.imageReview)
-                    : null;
-                const sources = !stale
-                  ? guideSourceImages(workflow, sourceStage)
-                  : [];
                 const id = `step/${step.blockId ?? `step-${i}`}`;
                 return [
                   {id: `${id}/title`, label: `Step ${i + 1} heading`, content: <section id={`guide-step-${i}`} className={styles.step}>
@@ -534,75 +528,18 @@ export function WorkflowGuide({
                         }
                       />
                   </>},
-                  {id: `${id}/image`, label: `Step ${i + 1} image`, content: <>
-                      {image ? (
-                        <figure>
-                          <SopScreenshot
-                            load={platform.loadScreenshot}
-                            frameId={guideScreenshot(workflow, sourceStage, step.imageReview)!.frameId}
-                            src={image.dataUrl}
-                            source={image}
-                            loadSource={loadScreenshot ?? platform.loadSourceScreenshot}
-                            alt={ui("Source for {value1}", {
-                              value1: step.title,
-                            })}
-                            draggable={false}
-                          />
-                          <button
-                            onClick={() =>
-                              update({
-                                ...draft,
-                                steps: draft.steps.map((s, j) =>
-                                  j === i ? { ...s, includeImage: false, imageExcluded: true } : s,
-                                ),
-                              })
-                            }
-                          >
-                            <ImageOff size={14} />
-                            Remove screenshot
-                          </button>
-                        </figure>
-                      ) : null}
-                      {sources.length > 0 && (!image || sources.length > 1) ? (
-                        <ScreenshotReview
-                          key={`${step.sourceStage}:${step.imageReview?.frameId}:${step.imageReview?.timestamp}:${sources.map(source => `${source.frameId}:${source.timestamp}`).join(",")}`}
-                          sources={sources}
-                          selected={step.imageReview}
-                          replacing={!!image}
-                          title={step.title}
-                          load={platform.loadScreenshot}
-                          loadSource={loadScreenshot ?? platform.loadSourceScreenshot}
-                          include={(source) => {
-                            update({
-                              ...draft,
-                              steps: draft.steps.map((s, j) =>
-                                j === i
-                                  ? {
-                                      ...s,
-                                      includeImage: true,
-                                      imageExcluded: false,
-                                      imageReview: {
-                                        frameId: source.frameId,
-                                        timestamp: source.timestamp,
-                                      },
-                                    }
-                                  : s,
-                              ),
-                            });
-                          }}
-                        />
-                      ) : !image && !stale && guideStepIncludesImage(step) && !step.imageReview && sourceStage !== null && workflow.stages[sourceStage] ? (
-                        <SourceSopScreenshot onRemove={() => changeStep(i, { includeImage: false, imageExcluded: true })} stage={workflow.stages[sourceStage!]} load={platform.loadSourceScreenshot} title={step.title} />
-                      ) : !image ? (
-                        <p className={styles.muted}>
-                          {stale
-                            ? ui(
-                                "Reconnect this step’s screenshot source above.",
-                              )
-                            : ui("No captured screenshot for this step.")}
-                        </p>
-                      ) : null}
-                  </>},
+                  {id: `${id}/image`, label: `Step ${i + 1} image`, content: (
+                    <GuideStepScreenshot
+                      step={step}
+                      workflow={workflow}
+                      sourceStage={sourceStage}
+                      stale={stale}
+                      load={platform.loadScreenshot}
+                      loadSource={loadScreenshot ?? platform.loadSourceScreenshot}
+                      loadStageSource={platform.loadSourceScreenshot}
+                      onChange={(patch) => changeStep(i, patch)}
+                    />
+                  )},
                   {id: `${id}/result`, label: `Step ${i + 1} result`, content:
                       <div className={styles.result}>
                         <span>Expected result</span>
@@ -718,10 +655,123 @@ export function WorkflowGuide({
   );
 }
 
+function GuideStepScreenshot({ step, workflow, sourceStage, stale, load, loadSource, loadStageSource, onChange }: {
+  step: Guide["steps"][number];
+  workflow: WorkflowMap;
+  sourceStage: number | null;
+  stale: boolean;
+  load?: NonNullable<WorkflowsPlatform["guides"]>["loadScreenshot"];
+  loadSource?: WorkflowsPlatform["loadWorkflowScreenshot"];
+  loadStageSource?: NonNullable<WorkflowsPlatform["guides"]>["loadSourceScreenshot"];
+  onChange: (patch: Partial<Guide["steps"][number]>) => void;
+}) {
+  const ui = useGT();
+  const [picking, setPicking] = useState(false);
+  const action = useRef<HTMLElement>(null);
+  const choose = useRef<HTMLButtonElement>(null);
+  const undo = useRef<HTMLButtonElement>(null);
+  const sources = stale ? [] : guideSourceImages(workflow, sourceStage);
+  const stage = !stale && sourceStage !== null ? workflow.stages[sourceStage] : undefined;
+  const image = stage && guideStepIncludesImage(step)
+    ? guideScreenshot(workflow, sourceStage, step.imageReview)
+    : null;
+  const focusActions = () => requestAnimationFrame(() => (action.current ?? choose.current ?? undo.current)?.focus());
+  const closePicker = () => {
+    setPicking(false);
+    focusActions();
+  };
+  const actions = (
+    <details
+      className={styles.screenshotActions}
+      data-screenshot-actions
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !event.currentTarget.open) return;
+        event.stopPropagation();
+        event.currentTarget.open = false;
+        action.current?.focus();
+      }}
+    >
+      <summary ref={action} aria-label={ui("Screenshot actions for {value1}", { value1: step.title })} title={ui("Screenshot actions")}>
+        <MoreHorizontal size={18} aria-hidden="true" />
+      </summary>
+      <div className={styles.stepTools}>
+        {sources.length > 1 && <button type="button" onClick={() => setPicking(true)}>
+          <ImagePlus size={14} aria-hidden="true" />
+          {ui("Replace screenshot")}
+        </button>}
+        <button type="button" onClick={() => {
+          onChange({ includeImage: false, imageExcluded: true });
+          requestAnimationFrame(() => undo.current?.focus());
+        }}>
+          <ImageOff size={14} aria-hidden="true" />
+          {ui("Remove from SOP")}
+        </button>
+      </div>
+    </details>
+  );
+
+  if (picking && sources.length) return (
+    <ScreenshotReview
+      key={sources.map(source => `${source.frameId}:${source.timestamp}`).join(",")}
+      sources={sources}
+      selected={step.imageReview}
+      title={step.title}
+      load={load}
+      loadSource={loadSource}
+      close={closePicker}
+      include={(source) => {
+        onChange({
+          includeImage: true,
+          imageExcluded: false,
+          imageReview: { frameId: source.frameId, timestamp: source.timestamp },
+        });
+        closePicker();
+      }}
+    />
+  );
+  if (step.imageExcluded && stage) return (
+    <div className={styles.screenshotStatus}>
+      <span role="status">{ui("Screenshot removed")}</span>
+      <button type="button" ref={undo} onClick={() => {
+        onChange({ includeImage: true, imageExcluded: false });
+        focusActions();
+      }}>{ui("Undo")}</button>
+    </div>
+  );
+  if (image) return (
+    <div className={styles.screenshotFigure}>
+      <SopScreenshot
+        load={load}
+        frameId={image.frameId}
+        src={image.dataUrl}
+        source={image}
+        loadSource={loadSource}
+        alt={ui("Source for {value1}", { value1: step.title })}
+        draggable={false}
+      />
+      {actions}
+    </div>
+  );
+  if (sources.length) return (
+    <div className={styles.screenshotStatus}>
+      <button type="button" ref={choose} onClick={() => setPicking(true)}>
+        <ImagePlus size={14} aria-hidden="true" />
+        {ui("Choose screenshot")}
+      </button>
+    </div>
+  );
+  if (stage && !step.imageReview) return (
+    <SourceSopScreenshot stage={stage} load={loadStageSource} title={step.title} actions={actions} />
+  );
+  return <p className={styles.muted}>{stale
+    ? ui("Reconnect this step’s screenshot source above.")
+    : ui("No captured screenshot for this step.")}</p>;
+}
+
 function ScreenshotReview({
   sources,
   selected,
-  replacing,
+  close,
   title,
   include,
   load,
@@ -731,12 +781,13 @@ function ScreenshotReview({
   loadSource?: WorkflowsPlatform["loadWorkflowScreenshot"];
   sources: ReturnType<typeof guideSourceImages>;
   selected?: Guide["steps"][number]["imageReview"];
-  replacing: boolean;
+  close: () => void;
   title: string;
   include: (source: ReturnType<typeof guideSourceImages>[number]) => void;
 }) {
   const ui = useGT();
-  const [open, setOpen] = useState(false);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => closeButton.current?.focus(), []);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [index, setIndex] = useState(() => Math.max(0, sources.findIndex(source => selected
@@ -749,49 +800,50 @@ function ScreenshotReview({
     setIndex(next);
   }
   return (
-    <div className={styles.imageReview}>
+    <div className={styles.imageReview} onKeyDown={(event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      close();
+    }}>
       <div className={styles.imageReviewHeader}>
-        <button aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? ui("Close screenshot picker") : replacing ? ui("Change screenshot") : ui("Restore screenshot")}
+        <span>{ui("Choose screenshot")}</span>
+        <button type="button" ref={closeButton} aria-label={ui("Close screenshot picker")} onClick={close}>
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
-      {open && (
-        <>
-          {sources.length > 1 && <div className={styles.imageReviewHeader}>
-            <button aria-label={ui("Previous screenshot")} disabled={index === 0} onClick={() => choose(index - 1)}>Previous</button>
-            <span>{ui("Screenshot {value1} of {value2}", { value1: index + 1, value2: sources.length })}</span>
-            <button aria-label={ui("Next screenshot")} disabled={index === sources.length - 1} onClick={() => choose(index + 1)}>Next</button>
-          </div>}
-          <SopScreenshot
-            load={load}
-            frameId={source.frameId}
-            key={`${source.frameId}:${source.timestamp}`}
-            src={source.dataUrl}
-            source={source}
-            loadSource={loadSource}
-            alt={ui("Review source for {value1}", { value1: title })}
-            draggable={false}
-            onLoad={() => {
-              setLoaded(true);
-              setFailed(false);
-            }}
-            onError={() => {
-              setFailed(true);
-              setLoaded(false);
-            }}
-          />
-          <div className={styles.imageReviewHeader}>
-            <span>
-              {failed
-                ? ui("This screenshot could not be loaded.")
-                : ""}
-            </span>
-            <button disabled={!loaded || failed} onClick={() => { include(source); setOpen(false); }}>
-              Use screenshot
-            </button>
-          </div>
-        </>
-      )}
+      {sources.length > 1 && <div className={styles.imageReviewHeader}>
+        <button aria-label={ui("Previous screenshot")} disabled={index === 0} onClick={() => choose(index - 1)}>Previous</button>
+        <span>{ui("Screenshot {value1} of {value2}", { value1: index + 1, value2: sources.length })}</span>
+        <button aria-label={ui("Next screenshot")} disabled={index === sources.length - 1} onClick={() => choose(index + 1)}>Next</button>
+      </div>}
+      <SopScreenshot
+        load={load}
+        frameId={source.frameId}
+        key={`${source.frameId}:${source.timestamp}`}
+        src={source.dataUrl}
+        source={source}
+        loadSource={loadSource}
+        alt={ui("Review source for {value1}", { value1: title })}
+        draggable={false}
+        onLoad={() => {
+          setLoaded(true);
+          setFailed(false);
+        }}
+        onError={() => {
+          setFailed(true);
+          setLoaded(false);
+        }}
+      />
+      <div className={styles.imageReviewHeader}>
+        <span>
+          {failed
+            ? ui("This screenshot could not be loaded.")
+            : ""}
+        </span>
+        <button disabled={!loaded || failed} onClick={() => include(source)}>
+          Use screenshot
+        </button>
+      </div>
     </div>
   );
 }
