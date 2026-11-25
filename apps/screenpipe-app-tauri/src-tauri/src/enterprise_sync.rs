@@ -1499,6 +1499,7 @@ mod imp {
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeEnterprisePolicy {
+        license_id: Option<String>,
         app_update_policy: serde_json::Value,
         extra: serde_json::Map<String, serde_json::Value>,
         settings_saved: bool,
@@ -1530,6 +1531,7 @@ mod imp {
                 self.locked_settings.get("autoConnectAiTools"),
             );
             NativeEnterprisePolicy {
+                license_id: self.license_id,
                 app_update_policy: self
                     .app_update_policy
                     .or_else(|| self.locked_settings.get("app_update_policy").cloned())
@@ -2270,10 +2272,19 @@ mod imp {
             if !startup_delay.is_zero() {
                 tokio::time::sleep(startup_delay).await;
             }
-            use crate::enterprise::raw_upload_attestation;
+            use crate::enterprise::{raw_upload, raw_upload_attestation};
+            use screenpipe_core::raw_capture_ledger;
             let mut raw_upload_check: Option<tokio::task::JoinHandle<()>> = None;
+            let mut raw_upload_scope = None;
+            let mut attestation = Arc::new(raw_upload_attestation::RawUploadAttestation::default());
             loop {
                 if !crate::app_mode::is_managed(&app) {
+                    if let Some(worker) = raw_upload_check.take() {
+                        worker.abort();
+                        let _ = worker.await;
+                    }
+                    raw_capture_ledger::disable();
+                    raw_upload_scope = None;
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     continue;
                 }
@@ -2299,6 +2310,17 @@ mod imp {
                 // while a cached disable remains disabled.
                 crate::enterprise_policy::finish_initial_ai_tool_policy_refresh();
                 let mut next_poll = native_policy_poll_interval(&authorization);
+                if !matches!(
+                    &authorization,
+                    NativeAuthorizationResult::Authorized(_) | NativeAuthorizationResult::Unavailable(_)
+                ) {
+                    if let Some(worker) = raw_upload_check.take() {
+                        worker.abort();
+                        let _ = worker.await;
+                    }
+                    raw_capture_ledger::disable();
+                    raw_upload_scope = None;
+                }
                 match authorization {
                     NativeAuthorizationResult::Authorized(policy) => {
                         let settings_prepared =
@@ -2306,22 +2328,62 @@ mod imp {
                         if !settings_prepared {
                             next_poll = NATIVE_POLICY_RETRY_INTERVAL;
                         }
-                        // Autostart and hidden-UI launches can have no webview,
-                        // so AppEntitlementGate cannot perform the usual resume.
-                        if settings_prepared {
-                            crate::recording::resume_enterprise_recording(&app).await;
-                            if raw_upload_attestation::startup_allowed(
-                                cfg!(feature = "enterprise-build"),
-                                policy.locked_settings.get("cloudProcessing"),
-                            ) && !raw_upload_attestation::startup_verified()
-                                && raw_upload_check.as_ref().is_none_or(|check| check.is_finished())
-                            {
-                                if let Some(token) = crate::commands::get_cloud_token() {
-                                    raw_upload_check = Some(tokio::spawn(
-                                        raw_upload_attestation::check_startup(http.clone(), token),
-                                    ));
+                        let scope = if settings_prepared && raw_upload_attestation::startup_allowed(
+                            cfg!(feature = "enterprise-build"),
+                            policy.locked_settings.get("cloudProcessing"),
+                        ) {
+                            policy.license_id.and_then(|workspace| {
+                                let stable_device = if screenpipe_telemetry_wire::identity::is_stable_device_id(&device_id) {
+                                    Ok(device_id.clone())
+                                } else {
+                                    crate::enterprise::host_identity::new_install_device_id()
+                                        .map_err(anyhow::Error::msg)
+                                };
+                                match stable_device.and_then(|device| raw_upload::Scope::new(&policy_url, workspace, device)) {
+                                    Ok(scope) => Some(Arc::new(scope)),
+                                    Err(error) => {
+                                        warn!(%error, "raw capture scope unavailable");
+                                        None
+                                    }
+                                }
+                            })
+                        } else {
+                            None
+                        };
+                        if scope != raw_upload_scope {
+                        if let Some(worker) = raw_upload_check.take() {
+                            worker.abort();
+                            let _ = worker.await;
+                        }
+                            raw_capture_ledger::disable();
+                            attestation = Arc::new(raw_upload_attestation::RawUploadAttestation::default());
+                            raw_upload_scope = scope;
+                        }
+                        let spool_ready = raw_upload_scope.as_ref().is_some_and(|scope| {
+                            let root = crate::config::app_data_dir().join("raw-capture-ledger");
+                            match scope.configure(&root) {
+                                Ok(()) => true,
+                                Err(error) => {
+                                    warn!(%error, "raw capture spool unavailable");
+                                    false
                                 }
                             }
+                        });
+                        // Start capture without waiting for enclave verification.
+                        if settings_prepared {
+                            crate::recording::resume_enterprise_recording(&app).await;
+                        }
+                        if let Some(scope) = raw_upload_scope.clone().filter(|_| {
+                            spool_ready && raw_upload_check.as_ref().is_none_or(|task| task.is_finished())
+                        }) {
+                            let http = http.clone();
+                            let attestation = attestation.clone();
+                            raw_upload_check = Some(tokio::spawn(async move {
+                                scope.run(&http, &attestation, || (
+                                    crate::commands::get_cloud_token(),
+                                    license_key_from_env_or_config(),
+                                )).await;
+                            }));
                         }
                         // Hidden installs may never create the migration UI.
                         // This returns after scheduling native maintenance so
