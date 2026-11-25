@@ -2270,6 +2270,8 @@ mod imp {
             if !startup_delay.is_zero() {
                 tokio::time::sleep(startup_delay).await;
             }
+            use crate::enterprise::raw_upload_attestation;
+            let mut raw_upload_check: Option<tokio::task::JoinHandle<()>> = None;
             loop {
                 if !crate::app_mode::is_managed(&app) {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -2308,6 +2310,18 @@ mod imp {
                         // so AppEntitlementGate cannot perform the usual resume.
                         if settings_prepared {
                             crate::recording::resume_enterprise_recording(&app).await;
+                            if raw_upload_attestation::startup_allowed(
+                                cfg!(feature = "enterprise-build"),
+                                policy.locked_settings.get("cloudProcessing"),
+                            ) && !raw_upload_attestation::startup_verified()
+                                && raw_upload_check.as_ref().is_none_or(|check| check.is_finished())
+                            {
+                                if let Some(token) = crate::commands::get_cloud_token() {
+                                    raw_upload_check = Some(tokio::spawn(
+                                        raw_upload_attestation::check_startup(http.clone(), token),
+                                    ));
+                                }
+                            }
                         }
                         // Hidden installs may never create the migration UI.
                         // This returns after scheduling native maintenance so
