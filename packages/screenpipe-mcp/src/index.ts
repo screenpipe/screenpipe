@@ -40,6 +40,10 @@ import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { formatForElementPurpose } from "./element-format";
 import { buildActivitySummaryResult } from "./activity-summary-tool";
 import {
+  handleSearchSyncedContent,
+  handleSyncedDevices,
+} from "./data-sync-tool";
+import {
   localContextDayStarts,
   normalizeTime,
   normalizeTimeFields,
@@ -476,7 +480,7 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
-        end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Defaults to 'now'." },
         include_starred: { type: "boolean", description: "Include bounded starred-session context (default true; omitted for app/data-restricted reads)." },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
         include_parsed_context: {
@@ -493,7 +497,7 @@ const TOOLS: Tool[] = [
           default: 10,
         },
       },
-      required: ["start_time", "end_time"],
+      required: ["start_time"],
     },
   },
   {
@@ -1586,66 +1590,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
       }
 
       case "synced-devices": {
-        const response = await callAPI("/data-sync/devices");
-        const data = await response.json();
-        const devices = Array.isArray(data.devices) ? data.devices : [];
-        if (devices.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: data.enabled === false
-                ? "Data Sync is off and no synced devices are available. Enable Data Sync in Screenpipe settings on the devices you want to query."
-                : "No synced devices are available yet. Enable Data Sync and let a device complete its first upload.",
-            }],
-          };
-        }
-        return {
-          content: [{
-            type: "text",
-            text: devices
-              .map((device: any) =>
-                `${device.device_name} (${device.device_id}) — last synced ${device.last_synced_at}` +
-                `${device.platform ? ` — ${device.platform}` : ""}`
-              )
-              .join("\n"),
-          }],
-        };
+        return await handleSyncedDevices(callAPI);
       }
 
       case "search-synced-content": {
-        const params = new URLSearchParams();
-        for (const key of ["q", "device_name", "device_id", "app_name", "since", "until", "since_hours_ago", "limit"]) {
-          const value = args[key];
-          if (value !== null && value !== undefined && value !== "") {
-            params.set(key, String(value));
-          }
-        }
-        const response = await callAPI(`/data-sync/search?${params.toString()}`);
-        const data = await response.json();
-        const results = Array.isArray(data.results) ? data.results : [];
-        if (results.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: data.enabled === false
-                ? "No matching synced records. Data Sync is currently off, so no new records are uploading."
-                : "No matching synced records. Try a wider time range, confirm the device with synced-devices, or use a broader query.",
-            }],
-          };
-        }
-        const prefix = data.truncated
-          ? "Results are truncated; narrow the device, time range, or query.\n\n"
-          : "";
-        return {
-          content: [{
-            type: "text",
-            text: prefix + results.map((record: any) => {
-              const content = record.text || record.transcription || record.content || "";
-              return `[${record.device || record.device_id || "unknown device"}] ${record.t || "unknown time"}` +
-                `${record.app ? ` — ${record.app}` : ""}\n${truncateMiddle(String(content), DEFAULT_SEARCH_CONTENT_TRUNCATE)}`;
-            }).join("\n\n"),
-          }],
-        };
+        return await handleSearchSyncedContent(args, callAPI);
       }
 
       case "search-content": {

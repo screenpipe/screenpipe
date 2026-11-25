@@ -24,7 +24,13 @@ export async function buildActivitySummaryResult(
   args: Record<string, unknown>,
   callApi: CallApi,
 ): Promise<{ text: string; hasArtifact: boolean }> {
-  const normalized = normalizeTimeFields(args);
+  const withDefaultEnd =
+    args.end_time === undefined ||
+    args.end_time === null ||
+    (typeof args.end_time === "string" && args.end_time.trim() === "")
+      ? { ...args, end_time: "now" }
+      : args;
+  const normalized = normalizeTimeFields(withDefaultEnd);
   const includeParsedContext = normalized.include_parsed_context === true;
   const contextLimit = parsedContextLimit(normalized.parsed_context_limit);
   delete normalized.include_parsed_context;

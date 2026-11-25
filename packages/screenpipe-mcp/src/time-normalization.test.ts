@@ -91,4 +91,71 @@ describe("local calendar time normalization", () => {
       yesterday_start: "2026-08-13T07:00:00Z",
     });
   });
+
+  it("expands same-day local calendar bounds to the next local midnight", () => {
+    const now = new Date("2026-08-15T00:07:01Z");
+
+    expect(
+      normalizeTimeFields({ start_time: "today", end_time: "today" }, now),
+    ).toEqual({
+      start_time: "2026-08-14T07:00:00Z",
+      end_time: "2026-08-15T07:00:00Z",
+    });
+
+    expect(
+      normalizeTimeFields(
+        { start_time: "yesterday", end_time: "yesterday" },
+        now,
+      ),
+    ).toEqual({
+      start_time: "2026-08-13T07:00:00Z",
+      end_time: "2026-08-14T07:00:00Z",
+    });
+
+    expect(
+      normalizeTimeFields(
+        { start_time: "2026-08-14", end_time: "2026-08-14" },
+        now,
+      ),
+    ).toEqual({
+      start_time: "2026-08-14T07:00:00Z",
+      end_time: "2026-08-15T07:00:00Z",
+    });
+
+    // DST fall-back day spans 25 local hours.
+    const fallBack = new Date("2026-11-01T12:00:00Z");
+    expect(
+      normalizeTimeFields(
+        { start_time: "2026-11-01", end_time: "2026-11-01" },
+        fallBack,
+      ),
+    ).toEqual({
+      start_time: "2026-11-01T07:00:00Z",
+      end_time: "2026-11-02T08:00:00Z",
+    });
+  });
+
+  it("preserves distinct half-open calendar ranges and explicit ISO bounds", () => {
+    const now = new Date("2026-08-15T00:07:01Z");
+
+    expect(
+      normalizeTimeFields({ start_time: "yesterday", end_time: "today" }, now),
+    ).toEqual({
+      start_time: "2026-08-13T07:00:00Z",
+      end_time: "2026-08-14T07:00:00Z",
+    });
+
+    expect(
+      normalizeTimeFields(
+        {
+          start_time: "2026-08-14T10:00:00Z",
+          end_time: "2026-08-14T10:00:00Z",
+        },
+        now,
+      ),
+    ).toEqual({
+      start_time: "2026-08-14T10:00:00Z",
+      end_time: "2026-08-14T10:00:00Z",
+    });
+  });
 });
