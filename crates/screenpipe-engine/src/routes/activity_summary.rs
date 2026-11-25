@@ -618,29 +618,61 @@ fn resolved_frames_cte(start: &str, end: &str) -> String {
     )
 }
 
+const MAX_KEY_TEXT_FRAMES_PER_CONTEXT: usize = 3;
+const MAX_KEY_TEXT_SAMPLED_FRAMES: usize = 300;
+
 fn key_texts_query(resolved_frames_cte: &str, app_filter_f: &str) -> String {
     // One representative text per app+window context. Prefer user input
     // (AXTextArea/AXTextField) over static text, cap at 300 chars to skip
     // marketing copy walls.
-    // CROSS JOIN keeps the time-bounded frames outermost even without planner
+    // Sample a bounded number of recent frames per (day, app, window) before
+    // joining `elements` so multi-day ranges do not probe millions of
+    // accessibility elements just to return 20 rows.
+    // CROSS JOIN keeps the bounded frame set outermost even without planner
     // statistics; an ordinary JOIN can scan all historical accessibility text.
     format!(
-        "{resolved_frames_cte}, ranked_contexts AS ( \
-           SELECT e.text, f.app_name, \
-             COALESCE(f.window_name, '') as window_name, \
-             f.timestamp, \
+        "{resolved_frames_cte}, context_frames AS ( \
+           SELECT f.id, f.timestamp, f.app_name, f.window_name, \
              DATE(f.timestamp) AS bucket, \
              ROW_NUMBER() OVER ( \
                PARTITION BY DATE(f.timestamp), f.app_name, f.window_name \
+               ORDER BY f.timestamp DESC, f.id DESC \
+             ) AS frame_rn \
+           FROM resolved_frames f \
+           WHERE 1 = 1{app_filter_f} \
+         ), recent_contexts AS ( \
+           SELECT bucket, app_name, window_name, \
+             ROW_NUMBER() OVER ( \
+               PARTITION BY bucket \
+               ORDER BY timestamp DESC, id DESC \
+             ) AS ctx_rn \
+           FROM context_frames \
+           WHERE frame_rn = 1 \
+         ), sampled_frames AS MATERIALIZED ( \
+           SELECT cf.id, cf.timestamp, cf.app_name, cf.window_name, cf.bucket \
+           FROM context_frames cf \
+           JOIN recent_contexts rc \
+             ON rc.bucket = cf.bucket \
+            AND rc.app_name IS cf.app_name \
+            AND rc.window_name IS cf.window_name \
+           WHERE cf.frame_rn <= {MAX_KEY_TEXT_FRAMES_PER_CONTEXT} \
+           ORDER BY rc.ctx_rn ASC, cf.frame_rn ASC, cf.timestamp DESC \
+           LIMIT {MAX_KEY_TEXT_SAMPLED_FRAMES} \
+         ), ranked_contexts AS ( \
+           SELECT e.text, f.app_name, \
+             COALESCE(f.window_name, '') as window_name, \
+             f.timestamp, \
+             f.bucket, \
+             ROW_NUMBER() OVER ( \
+               PARTITION BY f.bucket, f.app_name, f.window_name \
                ORDER BY \
                  CASE WHEN e.role IN ('AXTextArea', 'AXTextField') THEN 0 ELSE 1 END, \
                  LENGTH(e.text) DESC, \
                  f.timestamp DESC \
              ) as rn \
-           FROM resolved_frames f \
+           FROM sampled_frames f \
            CROSS JOIN elements e ON e.frame_id = f.id \
-           WHERE 1 = 1{app_filter_f} \
-           AND e.text IS NOT NULL \
+           WHERE e.text IS NOT NULL \
            AND e.source = 'accessibility' \
            AND LENGTH(e.text) BETWEEN 30 AND 300 \
            AND e.text NOT LIKE 'http%' \

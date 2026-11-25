@@ -20,7 +20,7 @@ export function localCalendarDayStartIso(
   return isoWithoutMilliseconds(midnight);
 }
 
-function bareLocalDateStartIso(input: string): string | undefined {
+function bareLocalDateStartIso(input: string, dayOffset = 0): string | undefined {
   const match = BARE_DATE.exec(input);
   if (!match) return undefined;
 
@@ -36,10 +36,30 @@ function bareLocalDateStartIso(input: string): string | undefined {
     midnight.getMonth() !== month ||
     midnight.getDate() !== day
   ) {
-    return `${input}T00:00:00Z`;
+    return dayOffset === 0 ? `${input}T00:00:00Z` : undefined;
   }
 
-  return isoWithoutMilliseconds(midnight);
+  return isoWithoutMilliseconds(new Date(year, month, day + dayOffset));
+}
+
+function nextLocalCalendarDayStartIso(
+  input: string | undefined,
+  now: Date = new Date(),
+): string | undefined {
+  if (!input) return undefined;
+  const value = input.trim();
+  if (!value) return undefined;
+
+  switch (value.toLowerCase()) {
+    case "yesterday":
+      return localCalendarDayStartIso(now, 0);
+    case "today":
+      return localCalendarDayStartIso(now, 1);
+    case "tomorrow":
+      return localCalendarDayStartIso(now, 2);
+    default:
+      return bareLocalDateStartIso(value, 1);
+  }
 }
 
 // Older screenpipe APIs accept ISO 8601 + "Nh/Nd/Nw ago" + "now", but not
@@ -71,9 +91,25 @@ export function normalizeTimeFields(
   now: Date = new Date(),
 ): Record<string, unknown> {
   const normalized = { ...args };
+  const rawEnd = typeof normalized.end_time === "string" ? normalized.end_time : undefined;
   for (const key of ["start_time", "end_time"] as const) {
     if (typeof normalized[key] === "string") {
       normalized[key] = normalizeTime(normalized[key], now);
+    }
+  }
+  // When both bounds resolve to the same local calendar day (e.g.
+  // start_time="today", end_time="today" or start_time="2026-11-24",
+  // end_time="2026-11-24"), expand end_time to the next local midnight so
+  // callers get that full calendar day instead of a zero-width HTTP 400 range.
+  // Half-open ranges like yesterday..today already differ and stay untouched.
+  if (
+    typeof normalized.start_time === "string" &&
+    typeof normalized.end_time === "string" &&
+    normalized.start_time === normalized.end_time
+  ) {
+    const nextDay = nextLocalCalendarDayStartIso(rawEnd, now);
+    if (nextDay) {
+      normalized.end_time = nextDay;
     }
   }
   return normalized;

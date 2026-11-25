@@ -149,4 +149,27 @@ describe("activity-summary tool orchestration", () => {
     expect(endpoints).toHaveLength(1);
     expect(result.text).toContain("Optional parsed context: not requested");
   });
+
+  it("defaults omitted or blank end_time to now", async () => {
+    const endpoints: string[] = [];
+    await buildActivitySummaryResult(
+      { start_time: "today" },
+      async (endpoint) => {
+        endpoints.push(endpoint);
+        return jsonResponse(summaryPayload());
+      },
+    );
+    await buildActivitySummaryResult(
+      { start_time: "today", end_time: "   " },
+      async (endpoint) => {
+        endpoints.push(endpoint);
+        return jsonResponse(summaryPayload());
+      },
+    );
+
+    for (const endpoint of endpoints) {
+      const url = new URL(endpoint, "http://screenpipe.local");
+      expect(url.searchParams.get("end_time")).toBe("now");
+    }
+  });
 });

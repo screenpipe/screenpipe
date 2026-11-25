@@ -44,17 +44,48 @@ async fn fixture(history_frames: usize, recent_frames: usize) -> (Connection, te
     (conn, dir)
 }
 
+fn unoptimized_key_texts_query(resolved_frames_cte: &str, app_filter_f: &str) -> String {
+    format!(
+        "{resolved_frames_cte}, ranked_contexts AS ( \
+           SELECT e.text, f.app_name, \
+             COALESCE(f.window_name, '') as window_name, \
+             f.timestamp, \
+             DATE(f.timestamp) AS bucket, \
+             ROW_NUMBER() OVER ( \
+               PARTITION BY DATE(f.timestamp), f.app_name, f.window_name \
+               ORDER BY \
+                 CASE WHEN e.role IN ('AXTextArea', 'AXTextField') THEN 0 ELSE 1 END, \
+                 LENGTH(e.text) DESC, \
+                 f.timestamp DESC \
+             ) as rn \
+           FROM resolved_frames f \
+           CROSS JOIN elements e ON e.frame_id = f.id \
+           WHERE 1 = 1{app_filter_f} \
+           AND e.text IS NOT NULL \
+           AND e.source = 'accessibility' \
+           AND LENGTH(e.text) BETWEEN 30 AND 300 \
+           AND e.text NOT LIKE 'http%' \
+           AND e.text NOT LIKE 'cdn.%' \
+         ), balanced AS ( \
+           SELECT text, app_name, window_name, timestamp, bucket, \
+             ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY timestamp DESC) AS bucket_rank \
+           FROM ranked_contexts \
+           WHERE rn = 1 \
+         ) \
+         SELECT text, app_name, window_name, timestamp \
+         FROM balanced \
+         ORDER BY bucket_rank ASC, timestamp ASC \
+         LIMIT 20"
+    )
+}
+
 fn queries(start: &str, end: &str, app: Option<&str>) -> [String; 2] {
     let filter = app
         .map(|app| format!(" AND f.app_name = '{}'", super::sql_escape(app)))
         .unwrap_or_default();
-    let after = key_texts_query(&resolved_frames_cte(start, end), &filter);
-    // The complete production statement, changing only the two original join
-    // lines from pre-fix main. Ranking, attribution and filters stay identical.
-    let before = after.replace(
-        "FROM resolved_frames f CROSS JOIN elements e ON e.frame_id = f.id",
-        "FROM elements e JOIN resolved_frames f ON f.id = e.frame_id",
-    );
+    let cte = resolved_frames_cte(start, end);
+    let after = key_texts_query(&cte, &filter);
+    let before = unoptimized_key_texts_query(&cte, &filter);
     [before, after]
 }
 
@@ -158,6 +189,30 @@ async fn key_text_join_preserves_selection_filters_and_recovered_attribution() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn key_text_work_is_bounded_on_dense_multi_day_windows() {
+    let (conn, _dir) = fixture(0, 3_000).await;
+    // Spread 3,000 frames across a 7-day range with heavy repetition per
+    // (day, app, window) so an unsampled join probes 30,000 elements while
+    // sampled_frames caps element probes to at most 300 frames.
+    conn.execute_batch(
+        "UPDATE frames
+         SET timestamp = datetime('2026-06-01', '+' || ((id - 1) * 200) || ' seconds'),
+             app_name = 'Editor',
+             window_name = 'Workspace-' || (id % 6);",
+    )
+    .unwrap();
+    let [before, after] = queries("2026-06-01 00:00:00", "2026-06-08 00:00:00", None);
+    let (expected, before_steps, _) = run(&conn, &before);
+    let (actual, after_steps, _) = run(&conn, &after);
+    assert_eq!(actual.len(), 20);
+    assert_eq!(actual, expected);
+    assert!(
+        after_steps * 4 < before_steps,
+        "expected >=4x fewer VM steps on dense multi-day range: before={before_steps}, after={after_steps}"
+    );
 }
 
 /// cargo test -p screenpipe-engine --lib benchmark_activity_summary_key_texts -- --ignored --nocapture
