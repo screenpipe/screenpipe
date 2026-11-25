@@ -14,7 +14,7 @@
 mod imp {
     use chrono::{DateTime, Utc};
     use screenpipe_telemetry_wire::{
-        build_jsonl_with_parsed, AudioRow, FrameRow, MemoryRow, ParsedRow, UiEventRow,
+        build_jsonl_with_parsed, AudioRow, FrameRow, MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
     };
     use serde::{Deserialize, Serialize};
     use std::path::PathBuf;
@@ -418,6 +418,135 @@ mod imp {
                         .collect()
                 })
         }
+
+        /// Fetch one downsized screenshot thumbnail for this sync tick,
+        /// bounded to frames recorded at or after `enabled_at`. Best-effort:
+        /// the caller logs and continues on `Err`.
+        async fn fetch_latest_snapshot(
+            &self,
+            enabled_at: DateTime<Utc>,
+        ) -> Result<Option<SnapshotRow>, String> {
+            // `disableScreenshots` is a hard privacy boundary, not only a
+            // capture hint. Fail closed when settings are unavailable and do
+            // not export old pixels that may still exist in local retention.
+            let settings = crate::store::SettingsStore::get(&self.app).ok().flatten();
+            if !image_uploads_allowed(settings.as_ref()) {
+                return Ok(None);
+            }
+
+            // Step 1: ask /search for the most recent OCR frames at or after
+            // `enabled_at`. We request a small page rather than just limit=1
+            // because the single newest frame is usually still in the
+            // in-progress (unfinalized) video segment, so `/frames/{id}` 404s
+            // for it. Note the omitted `order` param — unlike the page fetches
+            // above (which pin `order=ascending` so bounded backfill cannot
+            // skip backlog), the engine's newest-first default is exactly what
+            // a snapshot wants, while `start_time` keeps pre-consent frames
+            // out of scope.
+            let context = crate::recording::local_api_context_from_app(&self.app);
+            let search_url = snapshot_search_url(&context.url(""), enabled_at);
+            let response = context
+                .apply_auth(self.http.get(&search_url))
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut candidates = decode_local_search_response(response, "ocr")
+                .await?
+                .into_iter()
+                .filter_map(|item| match item {
+                    LocalSearchItem::OCR(row) if row.timestamp >= enabled_at => {
+                        Some((row.frame_id, row.timestamp))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            // Newest first, so we snapshot the freshest frame that decodes.
+            candidates.sort_by(|left, right| right.1.cmp(&left.1));
+
+            for (frame_id, timestamp) in candidates {
+                // Step 2: fetch the frame's image bytes. A non-success status
+                // is expected here — a 404 means the frame is still in the
+                // unfinalized video segment (too fresh) or has expired from
+                // local retention. Skip to the next (older) candidate instead
+                // of failing the tick.
+                // Exact-only is load-bearing: `/frames/{id}` normally falls
+                // back to nearby historical pixels when this frame has no
+                // image. Accessibility-only frames must never inherit those
+                // pixels for upload.
+                let frame_url = snapshot_frame_url(&context.url(""), frame_id);
+                let response = context
+                    .apply_auth(self.http.get(&frame_url))
+                    .send()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if !response.status().is_success() {
+                    continue;
+                }
+                let bytes = match response.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(_) => continue,
+                };
+
+                // Resize + encode off the async runtime so a large frame does
+                // not stall the sync worker.
+                let snapshot = tokio::task::spawn_blocking(move || {
+                    thumbnail_snapshot(frame_id, timestamp.to_rfc3339(), &bytes)
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some(snapshot) = snapshot {
+                    return Ok(Some(snapshot));
+                }
+            }
+
+            // No recent frame was decodable (all still too fresh or expired).
+            // Skip this tick quietly — a later tick will catch a flushed frame.
+            Ok(None)
+        }
+    }
+
+    const SNAPSHOT_CANDIDATES: u32 = 12;
+
+    fn image_uploads_allowed(settings: Option<&crate::store::SettingsStore>) -> bool {
+        settings.is_some_and(|settings| !settings.recording.disable_screenshots)
+    }
+
+    fn snapshot_search_url(api_url_base: &str, enabled_at: DateTime<Utc>) -> String {
+        format!(
+            "{api_url_base}/search?content_type=ocr&limit={SNAPSHOT_CANDIDATES}&start_time={}",
+            urlencoding::encode(&enabled_at.to_rfc3339())
+        )
+    }
+
+    fn snapshot_frame_url(api_url_base: &str, frame_id: i64) -> String {
+        format!("{api_url_base}/frames/{frame_id}?fallback=false")
+    }
+
+    /// Downsize an exact local JPEG into the wire thumbnail: 320×180 JPEG
+    /// Q60 (~30KB after base64). Unlike the enterprise archive
+    /// (`ee_sync::snapshot_from_jpeg`, which preserves full resolution for
+    /// write-only customer storage), the consumer stream embeds images
+    /// inline in the JSONL request body, so the API payload limit dictates
+    /// the image budget.
+    fn thumbnail_snapshot(frame_id: i64, timestamp: String, jpeg: &[u8]) -> Option<SnapshotRow> {
+        use base64::Engine as _;
+        use image::codecs::jpeg::JpegEncoder;
+
+        let image = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?;
+        let thumbnail = image.resize(320, 180, image::imageops::FilterType::Triangle);
+        let mut encoded = Vec::new();
+        JpegEncoder::new_with_quality(&mut encoded, 60)
+            .encode_image(&thumbnail)
+            .ok()?;
+        Some(SnapshotRow {
+            frame_id,
+            timestamp,
+            mime: "image/jpeg".into(),
+            image_b64: base64::engine::general_purpose::STANDARD.encode(&encoded),
+            width: thumbnail.width(),
+            height: thumbnail.height(),
+        })
     }
 
     fn nonempty(value: String) -> Option<String> {
@@ -591,6 +720,7 @@ mod imp {
         cursor: &mut Cursor,
         local: &LocalClient,
         http: &reqwest::Client,
+        include_snapshot: bool,
     ) -> Result<bool, String> {
         let Some(server_enabled_at) = server_enabled_at(config, http).await? else {
             cursor.nullify(&config.cursor_path)?;
@@ -671,6 +801,22 @@ mod imp {
                 )
                 .await,
         );
+        // Snapshots ride the first page of each sync tick and are best-effort:
+        // a failed or gated fetch must never fail the page. They are also
+        // deliberately excluded from `may_have_more`, `advance` and the cursor
+        // — a thumbnail has no position in the ordered backlog.
+        let snapshots = if include_snapshot {
+            match local.fetch_latest_snapshot(enabled_at).await {
+                Ok(Some(snapshot)) => vec![snapshot],
+                Ok(None) => Vec::new(),
+                Err(error) => {
+                    warn!("data sync snapshot fetch failed (skipping): {error}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         let may_have_more = [
             frames.len(),
@@ -688,7 +834,7 @@ mod imp {
             &parsed,
             &audio,
             &ui,
-            &[],
+            &snapshots,
             &memories,
         );
         if body.is_empty() {
@@ -757,12 +903,13 @@ mod imp {
         .map_err(|error| error.to_string())?;
         cursor.save(&config.cursor_path)?;
         debug!(
-            "data sync uploaded frames={} audio={} ui={} memories={} parsed={}",
+            "data sync uploaded frames={} audio={} ui={} memories={} parsed={} snapshots={}",
             frames.len(),
             audio.len(),
             ui.len(),
             memories.len(),
-            parsed.len()
+            parsed.len(),
+            snapshots.len()
         );
 
         // Re-read consent between pages so disabling the toggle stops a large
@@ -839,12 +986,18 @@ mod imp {
             return;
         };
         let mut cursor = Cursor::load(&config.cursor_path);
+        // One snapshot per sync tick, attached to the first page — a long
+        // catch-up burst must not spam a screenshot per page.
+        let mut include_snapshot = true;
         loop {
             if crate::search_only::is_active() {
                 return;
             }
-            match run_page(app, &config, &mut cursor, local, http).await {
-                Ok(true) => continue,
+            match run_page(app, &config, &mut cursor, local, http, include_snapshot).await {
+                Ok(true) => {
+                    include_snapshot = false;
+                    continue;
+                }
                 Ok(false) => {
                     info!("data sync completed");
                     return;
@@ -974,6 +1127,69 @@ mod imp {
             assert_eq!(
                 effective_enabled_at(server_enabled_at, Some(device_enabled_at)),
                 device_enabled_at
+            );
+        }
+
+        #[test]
+        fn snapshots_require_screenshots_and_exact_frames() {
+            // Fail closed: no settings readable means no pixels leave the device.
+            assert!(!image_uploads_allowed(None));
+
+            let mut settings = crate::store::SettingsStore::default();
+            assert!(image_uploads_allowed(Some(&settings)));
+            settings.recording.disable_screenshots = true;
+            assert!(!image_uploads_allowed(Some(&settings)));
+
+            // Consent floor + newest-first default: pre-consent frames must
+            // stay out of scope, and `order` stays omitted so the freshest
+            // candidates come back first.
+            let floor = DateTime::parse_from_rfc3339("2026-11-24T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            let search = snapshot_search_url("http://localhost:3030", floor);
+            assert_eq!(
+                search,
+                "http://localhost:3030/search?content_type=ocr&limit=12&start_time=2026-11-24T00%3A00%3A00%2B00%3A00"
+            );
+            assert!(!search.contains("order="));
+
+            // Exact-only fetch: accessibility-only frames must never inherit
+            // nearby historical pixels.
+            assert_eq!(
+                snapshot_frame_url("http://localhost:3030", 42),
+                "http://localhost:3030/frames/42?fallback=false"
+            );
+        }
+
+        #[test]
+        fn thumbnail_snapshot_downsizes_to_the_wire_budget() {
+            use base64::Engine as _;
+
+            let source = image::DynamicImage::new_rgb8(1920, 1080);
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&source)
+                .unwrap();
+
+            let snapshot =
+                thumbnail_snapshot(7, "2026-11-24T00:00:00+00:00".to_string(), &jpeg).unwrap();
+            assert_eq!(snapshot.frame_id, 7);
+            assert_eq!(snapshot.timestamp, "2026-11-24T00:00:00+00:00");
+            assert_eq!(snapshot.mime, "image/jpeg");
+            // 16:9 downsizes to exactly the documented 320×180 wire budget.
+            assert_eq!((snapshot.width, snapshot.height), (320, 180));
+            // STANDARD base64, no data: prefix.
+            assert!(!snapshot.image_b64.starts_with("data:"));
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&snapshot.image_b64)
+                .unwrap();
+            let reparsed =
+                image::load_from_memory_with_format(&decoded, image::ImageFormat::Jpeg).unwrap();
+            assert_eq!((reparsed.width(), reparsed.height()), (320, 180));
+
+            // A payload that is not a JPEG must yield None, never a garbage row.
+            assert!(
+                thumbnail_snapshot(7, "2026-11-24T00:00:00+00:00".into(), b"not jpeg").is_none()
             );
         }
 

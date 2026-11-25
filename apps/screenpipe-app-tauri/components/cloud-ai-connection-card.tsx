@@ -258,8 +258,8 @@ export function CloudAiConnectionCard({
               {enabled
                 ? "Finish setup in your AI app, then try your first question."
                 : device
-                  ? "Upload this device’s Screenpipe history so your AI can search it. You can turn syncing off here anytime."
-                  : "Allow your Screenpipe devices to upload history so your AI can search it. Each device also needs syncing enabled in the desktop app."}
+                  ? "Upload this device’s Screenpipe history so your AI can search it, including periodic screenshot thumbnails. You can turn syncing off here anytime."
+                  : "Allow your Screenpipe devices to upload history so your AI can search it, including periodic screenshot thumbnails. Each device also needs syncing enabled in the desktop app."}
             </DialogDescription>
           </DialogHeader>
           {!enabled ? (

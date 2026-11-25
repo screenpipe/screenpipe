@@ -59,7 +59,8 @@ export function AccountDataSyncCard(props: Props) {
             <Label htmlFor="data-sync-toggle">Sync this device</Label>
             <p id="data-sync-description" className="text-xs text-muted-foreground">
               Upload this device’s history to your Screenpipe account to search
-              it across devices and connected AI apps.
+              it across devices and connected AI apps. Includes periodic
+              screenshot thumbnails.
             </p>
           </div>
           <Switch
