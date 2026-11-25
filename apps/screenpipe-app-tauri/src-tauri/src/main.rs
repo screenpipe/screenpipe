@@ -685,9 +685,8 @@ async fn main() {
     if use_http_handoff {
         let args: Vec<String> = std::env::args().collect();
         let deep_link_url = deep_link::url_from_args(&args);
-        let launch_exe = std::env::current_exe()
-            .ok()
-            .map(|path| path.to_string_lossy().to_string());
+        let launch_exe =
+            crate::server::launch_identity().map(|path| path.to_string_lossy().to_string());
         #[cfg(target_os = "macos")]
         // A LaunchAgent receives its plist Label here. LaunchServices starts
         // deliberate Dock/Finder opens under an `application.<bundle-id>...`

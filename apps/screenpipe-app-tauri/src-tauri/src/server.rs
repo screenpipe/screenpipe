@@ -116,6 +116,30 @@ fn same_exe_path(left: &Path, right: &Path) -> bool {
     normalize_exe_path(left) == normalize_exe_path(right)
 }
 
+/// Path that identifies this install for the `/focus` handoff.
+///
+/// An AppImage mounts itself at a new random `/tmp/.mount_*` folder on every
+/// launch, so `current_exe()` differs between two launches of the same file.
+/// The AppImage runtime sets `APPIMAGE` to the `.AppImage` file itself, which
+/// is stable, so prefer it on Linux.
+pub(crate) fn launch_identity() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let appimage = std::env::var_os("APPIMAGE");
+    #[cfg(not(target_os = "linux"))]
+    let appimage: Option<std::ffi::OsString> = None;
+    launch_identity_from(appimage, std::env::current_exe().ok())
+}
+
+fn launch_identity_from(
+    appimage: Option<std::ffi::OsString>,
+    current_exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    appimage
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or(current_exe)
+}
+
 fn focus_handoff_matches_current_exe(launch_exe: Option<&str>, current_exe: &Path) -> bool {
     let Some(launch_exe) = launch_exe.map(str::trim).filter(|path| !path.is_empty()) else {
         return true;
@@ -140,8 +164,8 @@ async fn handle_focus(
     );
 
     if let Some(launch_exe) = payload.launch_exe.as_deref() {
-        match std::env::current_exe() {
-            Ok(current_exe)
+        match launch_identity() {
+            Some(current_exe)
                 if !focus_handoff_matches_current_exe(Some(launch_exe), &current_exe) =>
             {
                 tracing::warn!(
@@ -154,8 +178,8 @@ async fn handle_focus(
                     "focus handoff belongs to another screenpipe install".to_string(),
                 ));
             }
-            Ok(_) => {}
-            Err(error) => tracing::warn!("could not verify focus handoff executable: {error}"),
+            Some(_) => {}
+            None => tracing::warn!("could not verify focus handoff executable"),
         }
     }
 
@@ -933,8 +957,8 @@ mod tests {
     use super::{
         focus_handoff_matches_current_exe, is_allowed_browser_extension_origin,
         is_allowed_local_host, is_allowed_local_origin, is_valid_app_icon_name,
-        remember_app_icon_miss, with_control_server_boundary, APP_ICON_MISS_CAP,
-        MAX_APP_ICON_NAME_CHARS,
+        launch_identity_from, remember_app_icon_miss, with_control_server_boundary,
+        APP_ICON_MISS_CAP, MAX_APP_ICON_NAME_CHARS,
     };
     use axum::{
         body::Body,
@@ -948,6 +972,49 @@ mod tests {
 
     fn origin(v: &str) -> HeaderValue {
         HeaderValue::from_str(v).unwrap()
+    }
+
+    #[test]
+    fn appimage_launches_share_identity_across_mount_points() {
+        let appimage = Some(std::ffi::OsString::from("/home/u/Apps/screenpipe.AppImage"));
+        let first = launch_identity_from(
+            appimage.clone(),
+            Some("/tmp/.mount_screenAAAAAA/usr/bin/screenpipe-app".into()),
+        )
+        .unwrap();
+        let second = launch_identity_from(
+            appimage,
+            Some("/tmp/.mount_screenBBBBBB/usr/bin/screenpipe-app".into()),
+        )
+        .unwrap();
+        assert_eq!(first, second);
+        assert!(focus_handoff_matches_current_exe(
+            Some(&second.to_string_lossy()),
+            &first
+        ));
+    }
+
+    #[test]
+    fn different_appimage_files_stay_distinct_installs() {
+        let first = launch_identity_from(Some("/a/screenpipe.AppImage".into()), None).unwrap();
+        let second = launch_identity_from(Some("/b/screenpipe.AppImage".into()), None).unwrap();
+        assert!(!focus_handoff_matches_current_exe(
+            Some(&second.to_string_lossy()),
+            &first
+        ));
+    }
+
+    #[test]
+    fn launch_identity_falls_back_to_current_exe() {
+        let exe = std::path::PathBuf::from("/usr/bin/screenpipe-app");
+        assert_eq!(
+            launch_identity_from(None, Some(exe.clone())),
+            Some(exe.clone())
+        );
+        assert_eq!(
+            launch_identity_from(Some("".into()), Some(exe.clone())),
+            Some(exe)
+        );
     }
 
     #[test]
