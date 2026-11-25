@@ -12,6 +12,17 @@ export type BusinessOfferPrice = {
   checkoutAvailable: boolean;
 };
 
+export type BusinessAnnualSale = {
+  id: string;
+  campaignName: string;
+  discountPercent: number;
+  deadlineLabel: string;
+  endsAt: string;
+  listAmount: number;
+  firstYearAmount: number;
+  renewalAmount: number;
+};
+
 export type BusinessUpgradeOffer = {
   plan: "pro";
   source: "stripe" | "fallback";
@@ -35,6 +46,8 @@ export type BusinessUpgradeOffer = {
     annualSavingsAmount: number;
     currency: string;
   };
+  /** Time-boxed first-year annual campaign. Null when no sale is running. */
+  annualSale: BusinessAnnualSale | null;
 };
 
 // Mirrors the current Business column on screenpipe.com/onboarding. Keep the
@@ -88,6 +101,7 @@ export const DEFAULT_BUSINESS_UPGRADE_OFFER: BusinessUpgradeOffer = {
     annualSavingsAmount: 10_000,
     currency: "usd",
   },
+  annualSale: null,
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -140,6 +154,39 @@ function parsePrice(
   };
 }
 
+function parseAnnualSale(raw: unknown): BusinessAnnualSale | null {
+  const input = objectValue(raw);
+  if (!input || Object.keys(input).length === 0) return null;
+  const discountPercent = safeAmount(input.discountPercent, 0);
+  const listAmount = safeAmount(input.listAmount, 0);
+  const firstYearAmount = safeAmount(input.firstYearAmount, 0);
+  const renewalAmount = safeAmount(input.renewalAmount, 0);
+  const endsAt = safeString(input.endsAt, "", 40);
+  const endsAtMs = Date.parse(endsAt);
+  if (
+    !discountPercent ||
+    discountPercent > 90 ||
+    !listAmount ||
+    !firstYearAmount ||
+    !renewalAmount ||
+    firstYearAmount >= listAmount ||
+    !Number.isFinite(endsAtMs) ||
+    endsAtMs <= Date.now()
+  ) {
+    return null;
+  }
+  return {
+    id: safeString(input.id, "", 80),
+    campaignName: safeString(input.campaignName, "sale", 80),
+    discountPercent,
+    deadlineLabel: safeString(input.deadlineLabel, "", 80),
+    endsAt,
+    listAmount,
+    firstYearAmount,
+    renewalAmount,
+  };
+}
+
 /** Validate the public backend response before using it as payment copy. */
 export function parseBusinessUpgradeOffer(raw: unknown): BusinessUpgradeOffer {
   const fallback = DEFAULT_BUSINESS_UPGRADE_OFFER;
@@ -184,6 +231,7 @@ export function parseBusinessUpgradeOffer(raw: unknown): BusinessUpgradeOffer {
       ),
       currency: safeString(prices.currency, month.currency, 8).toLowerCase(),
     },
+    annualSale: parseAnnualSale(input.annualSale),
   };
 }
 

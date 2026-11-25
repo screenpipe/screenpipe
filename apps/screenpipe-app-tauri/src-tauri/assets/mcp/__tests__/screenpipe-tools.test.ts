@@ -121,7 +121,7 @@ describe("screenpipe-tools MCP server", () => {
       ?.tools ?? []);
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
-        "frame_image",
+        "get_screenshot",
         "query_recordings",
         "list_connections",
         "live_view",
@@ -377,7 +377,7 @@ describe("screenpipe-tools MCP server", () => {
       await server.request(1, "initialize", { protocolVersion: "2025-06-18" });
 
       const ok = await server.request(2, "tools/call", {
-        name: "frame_image",
+        name: "get_screenshot",
         arguments: { frame_id: 42 },
       });
       const okResult = ok.result as {
@@ -401,7 +401,7 @@ describe("screenpipe-tools MCP server", () => {
       expect(seenPaths[0]).toBe("/frames/42/thumbnail?width=1280&quality=75&fallback=false");
 
       const pending = await server.request(3, "tools/call", {
-        name: "frame_image",
+        name: "get_screenshot",
         arguments: { frame_id: 99, width: 800, quality: 60 },
       });
       const pendingResult = pending.result as {
@@ -413,7 +413,7 @@ describe("screenpipe-tools MCP server", () => {
       expect(seenPaths[1]).toBe("/frames/99/thumbnail?width=800&quality=60&fallback=false");
 
       const oversized = await server.request(4, "tools/call", {
-        name: "frame_image",
+        name: "get_screenshot",
         arguments: { frame_id: 77 },
       });
       const oversizedResult = oversized.result as {

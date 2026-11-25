@@ -405,7 +405,7 @@ Never access Screenpipe's live db.sqlite, db.sqlite-wal, or db.sqlite-shm direct
 - the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
   - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\"); \"today\" is the user's local calendar day starting at local midnight, not UTC midnight or a rolling 24 hours. Never sum minutes yourself.
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
-  - `frame-image` (`frame_image`) to fetch the screenshot for a specific `frame_id` (at most 2-3 per turn) when visual layout, charts, media, or sparse UI text matters.
+  - `get-screenshot` (`get_screenshot`) to inspect the screenshot for a specific `frame_id` (at most 2-3 per turn) when visible UI, layout, charts, slides, or sparse UI text matters.
   - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
 - `user_profile` and `skill_manage` provide self-improvement capabilities; follow their tool descriptions and the shared session guidance.
 - `search_chats` finds exact existing screenpipe, Codex, Claude, and Cursor chat targets. `send_to_chat` delivers to one returned source + id only after the user explicitly authorizes that exact send. Read `.pi/skills/screenpipe-chats/SKILL.md` for the search, disambiguation, and delivery workflow.
@@ -3638,7 +3638,7 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
     // auto-approved. `search_chats` is local and read-only.
     matches!(
         tool_title,
-        "mcp__screenpipe-tools__frame_image"
+        "mcp__screenpipe-tools__get_screenshot"
             | "mcp__screenpipe-tools__query_recordings"
             | "mcp__screenpipe-tools__list_connections"
             | "mcp__screenpipe-tools__search_chats"
@@ -6274,9 +6274,9 @@ mod tests {
         assert!(source.contains("__worktree-route:"));
         assert!(source.contains("name: \"user_profile\""));
         assert!(source.contains("name: \"skill_manage\""));
-        assert!(source.contains("name: \"frame_image\""));
+        assert!(source.contains("name: \"get_screenshot\""));
         assert!(is_screenpipe_read_tool(
-            "mcp__screenpipe-tools__frame_image"
+            "mcp__screenpipe-tools__get_screenshot"
         ));
         assert!(source.contains("/agent/profile/manage"));
         assert!(source.contains("/agent/skills/manage"));

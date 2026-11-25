@@ -456,6 +456,10 @@ Search structured UI elements (accessibility tree nodes and OCR text blocks):
 The whole element tree for one frame, as the same compact outline. Pass
 `purpose: "automation"` for the automation targeting view.
 
+### get-screenshot
+
+Inspect the exact recorded frame with `get-screenshot(frame_id)` over stdio. Returns one compact JPEG as native MCP image content, plus the timestamp and timeline link. For a visual search with a known time and window, use `search-content` with `content_type: "screen"`, `include_frames: true`, and a limit of one or two.
+
 ### frame-context
 Get accessibility text, parsed tree nodes, and extracted URLs for a specific frame.
 
@@ -465,7 +469,7 @@ Fast FTS5 keyword search across OCR + audio combined. Returns matches with `fram
 ### list-meetings / get-meeting / update-meeting / start-meeting / stop-meeting
 Manage the meeting store. `list-meetings` filters by substring; `get-meeting` returns title/attendees/times/full note (add `include_transcript: true` for the speaker-attributed transcript). `update-meeting` writes only the fields you pass. `start-meeting` and `stop-meeting` drive manual meeting recording sessions.
 
-Set `include_screen_refs: true` to look up related captures. `list-meetings` returns one reference per meeting for the first 10 results in the page. `get-meeting` returns up to three. Each reference includes a timestamp, a desktop screenshot link (`screenpipe://frame/<id>`), and the captured text source when known. Pass the same `frame_id` to `frame-context` or `get-frame-elements` for accessibility details, or use the local API's `GET /frames/<id>` for the PNG.
+Set `include_screen_refs: true` to look up related captures. `list-meetings` returns one reference per meeting for the first 10 results in the page. `get-meeting` returns up to three. Each reference includes a timestamp, a desktop screenshot link (`screenpipe://frame/<id>`), and the captured text source when known. Pass the same `frame_id` to `get-screenshot` for the image or `frame-context` for accessibility details.
 
 The lookup uses the meeting's time bounds and a matching browser room or app/window. `screen_refs_status` distinguishes a match, no match, ambiguous or incomplete room evidence, an unavailable lookup, and list rows beyond the lookup limit. Frame references follow local capture retention.
 

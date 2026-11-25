@@ -116,4 +116,63 @@ describe("business upgrade offer", () => {
     expect(formatOfferAmount(5_000, "usd")).toBe("$50");
     expect(formatOfferAmount(4_167, "usd")).toBe("$41.67");
   });
+
+  it("keeps a live annual sale with consistent first-year pricing", () => {
+    const offer = parseBusinessUpgradeOffer({
+      prices: { year: { totalAmount: 50_000 } },
+      annualSale: {
+        id: "bf2026",
+        campaignName: "Black Friday / Cyber Monday",
+        discountPercent: 20,
+        deadlineLabel: "Monday, November 30 at 11:59pm PT",
+        endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        listAmount: 50_000,
+        firstYearAmount: 40_000,
+        renewalAmount: 50_000,
+      },
+    });
+
+    expect(offer.annualSale).toMatchObject({
+      id: "bf2026",
+      discountPercent: 20,
+      firstYearAmount: 40_000,
+      renewalAmount: 50_000,
+    });
+  });
+
+  it("drops a sale whose price would not beat the list price", () => {
+    const offer = parseBusinessUpgradeOffer({
+      prices: { year: { totalAmount: 50_000 } },
+      annualSale: {
+        id: "bf2026",
+        campaignName: "Black Friday / Cyber Monday",
+        discountPercent: 20,
+        deadlineLabel: "Monday, November 30 at 11:59pm PT",
+        endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        listAmount: 50_000,
+        firstYearAmount: 50_000,
+        renewalAmount: 50_000,
+      },
+    });
+
+    expect(offer.annualSale).toBeNull();
+  });
+
+  it("drops an expired sale instead of advertising a dead deadline", () => {
+    const offer = parseBusinessUpgradeOffer({
+      prices: { year: { totalAmount: 50_000 } },
+      annualSale: {
+        id: "bf2026",
+        campaignName: "Black Friday / Cyber Monday",
+        discountPercent: 20,
+        deadlineLabel: "Monday, November 30 at 11:59pm PT",
+        endsAt: new Date(Date.now() - 86_400_000).toISOString(),
+        listAmount: 50_000,
+        firstYearAmount: 40_000,
+        renewalAmount: 50_000,
+      },
+    });
+
+    expect(offer.annualSale).toBeNull();
+  });
 });

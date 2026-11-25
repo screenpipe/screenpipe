@@ -55,6 +55,8 @@ const TOOLS: &[&str] = &[
     "activity-summary",
     "search-elements",
     "frame-context",
+    "get-screenshot",
+    "get_screenshot",
     "export-video",
     "update-memory",
     "get-feedback",
@@ -132,6 +134,17 @@ mod tests {
         assert_eq!(properties["status"], "empty");
         assert_eq!(properties["result_count"], 0);
         assert!(properties.get("success").is_none());
+        for tool in ["get-screenshot", "get_screenshot"] {
+            let mut screenshot = valid();
+            screenshot["tool"] = json!(tool);
+            assert_eq!(
+                serde_json::from_value::<McpCall>(screenshot)
+                    .unwrap()
+                    .into_properties()
+                    .unwrap()["tool"],
+                tool
+            );
+        }
         let mut v = valid();
         v.as_object_mut().unwrap().remove("result_count");
         assert!(serde_json::from_value::<McpCall>(v)

@@ -139,18 +139,25 @@ export function BusinessUpgradeCard({
 
   const month = offer.prices.month;
   const year = offer.prices.year;
+  // The sale is annual-only, comes from the same server response as the
+  // prices, and repeats exactly what Stripe checkout will charge today.
+  const sale = interval === "year" ? offer.annualSale : null;
+  const saleAnnualAmount = sale?.firstYearAmount ?? year.totalAmount;
+  const saleSavingsAmount = sale
+    ? sale.listAmount - sale.firstYearAmount
+    : offer.prices.annualSavingsAmount;
   const selected = interval === "year" ? year : month;
   const selectedAvailable = selected.checkoutAvailable;
   const selectedCharge = formatOfferAmount(
-    selected.totalAmount,
+    sale ? saleAnnualAmount : selected.totalAmount,
     selected.currency,
   );
   const annualEquivalent = formatOfferAmount(
-    year.monthlyEquivalentAmount,
+    sale ? Math.round(saleAnnualAmount / 12) : year.monthlyEquivalentAmount,
     year.currency,
   );
   const savings = formatOfferAmount(
-    offer.prices.annualSavingsAmount,
+    saleSavingsAmount,
     offer.prices.currency,
   );
   const ctaLabel = existingSubscription
@@ -226,20 +233,29 @@ export function BusinessUpgradeCard({
               Annual
             </span>
             <span className="border border-foreground px-2 py-0.5 font-mono text-[10px] normal-case tracking-wide">
-              {offer.copy.annualBadge}
+              {sale
+                ? `${sale.discountPercent}% off`
+                : offer.copy.annualBadge}
             </span>
           </div>
           <div className="mt-4 flex items-baseline gap-1">
+            {sale && (
+              <span className="text-sm text-muted-foreground line-through">
+                {formatOfferAmount(sale.listAmount, year.currency)}
+              </span>
+            )}
             <span className="text-3xl font-semibold">
-              {formatOfferAmount(year.totalAmount, year.currency)}
+              {formatOfferAmount(saleAnnualAmount, year.currency)}
             </span>
             <span className="text-sm text-muted-foreground">/ year</span>
           </div>
           <p className="mt-3 text-xs font-medium">
-            Charged today: {formatOfferAmount(year.totalAmount, year.currency)}
+            Charged today: {formatOfferAmount(saleAnnualAmount, year.currency)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {annualEquivalent}/month effective · save {savings}/year
+            {sale
+              ? `${sale.campaignName} first year · renews at ${formatOfferAmount(sale.renewalAmount, year.currency)} · ends ${sale.deadlineLabel}`
+              : `${annualEquivalent}/month effective · save ${savings}/year`}
           </p>
         </button>
       </div>
@@ -258,7 +274,7 @@ export function BusinessUpgradeCard({
           <div className="mb-3 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
             {existingSubscription
               ? ui("Your current subscription stays in place until you review and confirm the prorated upgrade")
-              : ui("{value1} is charged today in Stripe checkout, then renews {value2}", { value1: selectedCharge, value2: interval === "year" ? "yearly" : "monthly" })}
+              : ui("{value1} is charged today in Stripe checkout, then renews {value2}", { value1: selectedCharge, value2: interval === "year" ? (sale ? `yearly at ${formatOfferAmount(sale.renewalAmount, year.currency)} after the first year` : "yearly") : "monthly" })}
           </div>
           <Button
             className="h-11 w-full rounded-md bg-foreground font-mono text-xs normal-case tracking-wide text-background hover:bg-background hover:text-foreground"

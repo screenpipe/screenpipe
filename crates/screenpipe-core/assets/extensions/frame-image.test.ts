@@ -6,7 +6,7 @@ import registerFrameImage from "./frame-image";
 import registerContextPruning from "./context-pruning";
 import registerPermissions, { __testing as permTesting } from "./screenpipe-permissions";
 
-describe("frame_image Pi extension", () => {
+describe("get_screenshot Pi extension", () => {
   const originalKey = process.env.SCREENPIPE_LOCAL_API_KEY;
   const originalUrl = process.env.SCREENPIPE_LOCAL_API_URL;
   const originalSession = process.env.SCREENPIPE_SESSION_ID;
@@ -61,7 +61,7 @@ describe("frame_image Pi extension", () => {
 
       let tool: any;
       registerFrameImage({ registerTool: (t: any) => (tool = t) } as any);
-      expect(tool?.name).toBe("frame_image");
+      expect(tool?.name).toBe("get_screenshot");
 
       const signal = new AbortController().signal;
       const ok = await tool.execute("call-1", { frame_id: 12 }, signal);
@@ -138,7 +138,7 @@ describe("frame_image Pi extension", () => {
     expect(out?.messages[out.messages.length - 1].content[1].type).toBe("image");
   });
 
-  it("enforces pipe API permissions on frame_image tool calls", async () => {
+  it("enforces pipe API permissions on get_screenshot tool calls", async () => {
     permTesting.setPermissions({
       pipe_name: "restricted-pipe",
       allow_rules: [{ type: "api", method: "GET", path: "/search" }],
@@ -155,7 +155,7 @@ describe("frame_image Pi extension", () => {
     } as any);
 
     const blocked = await handlers.get("tool_call")({
-      tool: "frame_image",
+      tool: "get_screenshot",
       input: { frame_id: 42 },
     });
     expect(blocked?.block).toBe(true);
@@ -172,7 +172,7 @@ describe("frame_image Pi extension", () => {
       pipe_dir: null,
     });
     const allowed = await handlers.get("tool_call")({
-      tool: "frame_image",
+      tool: "get_screenshot",
       input: { frame_id: 42 },
     });
     expect(allowed).toBeUndefined();

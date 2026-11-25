@@ -5,7 +5,7 @@ description: "Convert a recorded or starred procedure into a reusable guide with
 
 # process guide
 
-Identify the procedure and intended audience. Use screenpipe-api to recover a complete demonstration or several relevant occurrences. Follow the actual sequence and inspect the necessary frames or artifact references.
+Identify the procedure and intended audience. Use screenpipe-api to recover a complete demonstration or several relevant occurrences. Follow the actual sequence. Inspect screenshots where a UI transition or visual confirmation determines a step, and cite the frame that shows the outcome.
 
 Write prerequisites, the trigger, steps with observable results, meaningful branches, and a final verification. Use exact UI labels only when visible in the source or verified in the current app. Keep unexplained gaps explicit; do not fill them with invented clicks, commands, or permissions.
 

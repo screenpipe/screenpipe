@@ -121,7 +121,7 @@ async function fetchFrameImage(args) {
         {
           type: "text",
           text: JSON.stringify({
-            error: `frame_image payload (${bounded.bytes} bytes) exceeds ${MAX_FRAME_IMAGE_BYTES} byte limit; lower width or quality`,
+            error: `get_screenshot payload (${bounded.bytes} bytes) exceeds ${MAX_FRAME_IMAGE_BYTES} byte limit; lower width or quality`,
             frame_id: id,
           }),
         },
@@ -698,9 +698,9 @@ const WORKTREE_ROUTE_TOOL = {
 const TOOLS = [
   ...(chatSessionId().startsWith("__worktree-route:") ? [WORKTREE_ROUTE_TOOL] : []),
   {
-    name: "frame_image",
+    name: "get_screenshot",
     description:
-      "Fetch the captured screenshot image for a specific frame_id (from search-content, activity-summary, search-elements, frame-context, or query_recordings). Use selectively (at most 2-3 frames per turn) when visual layout, charts/diagrams/images, canvas or video content, or sparse UI text matters. Respects local history-access and image-privacy release gates.",
+      "Inspect one exact recorded screen frame as a compact JPEG image (matching screenpipe MCP get-screenshot). Pass frame_id from search-content, get-meeting, get-workflow, frame-context, or query_recordings. Use selectively (at most 2-3 frames per turn) when visible UI, layout, charts, slides, or a before/after state matters. Respects local history-access and image-privacy release gates.",
     inputSchema: {
       type: "object",
       properties: {

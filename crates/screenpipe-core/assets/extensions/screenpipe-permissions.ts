@@ -847,7 +847,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (tool === "frame_image") {
+    if (tool === "get_screenshot" || tool === "get-screenshot") {
       const id = Number(event.input?.frame_id);
       const pathname = Number.isSafeInteger(id) && id > 0 ? `/frames/${id}/thumbnail` : "/frames/0/thumbnail";
       if (!isEndpointAllowed("GET", pathname)) {

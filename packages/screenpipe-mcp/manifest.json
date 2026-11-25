@@ -54,6 +54,10 @@
       "description": "Search structured UI elements (accessibility tree nodes and OCR text blocks)"
     },
     {
+      "name": "get-screenshot",
+      "description": "Inspect the exact screenshot for a recorded frame ID"
+    },
+    {
       "name": "frame-context",
       "description": "Get accessibility text, parsed tree nodes, and extracted URLs for a specific frame"
     }

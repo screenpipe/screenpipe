@@ -208,4 +208,62 @@ describe("BusinessUpgradeCard", () => {
     fireEvent.click(cta);
     expect(mocks.onContinue).not.toHaveBeenCalled();
   });
+
+  it("shows the annual sale price as the charged-today amount", async () => {
+    const offer = {
+      ...DEFAULT_BUSINESS_UPGRADE_OFFER,
+      annualSale: {
+        id: "bf2026",
+        campaignName: "Black Friday",
+        discountPercent: 20,
+        deadlineLabel: "Monday, November 30 at 11:59pm PT",
+        endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        listAmount: 50_000,
+        firstYearAmount: 40_000,
+        renewalAmount: 50_000,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(offer), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(
+      <BusinessUpgradeCard
+        signedIn
+        existingSubscription={false}
+        source="account"
+        busy={false}
+        onContinue={mocks.onContinue}
+      />,
+    );
+
+    await screen.findByTestId("business-annual-option");
+    fireEvent.click(screen.getByTestId("business-annual-option"));
+
+    const annual = screen.getByTestId("business-annual-option");
+    expect(
+      within(annual).getByText("20% off"),
+    ).toBeInTheDocument();
+    expect(within(annual).getByText("$500")).toBeInTheDocument(); // list price, struck through
+    expect(within(annual).getByText("$400")).toBeInTheDocument();
+    expect(
+      within(annual).getByText(
+        /black friday first year · renews at \$500 · ends monday, november 30/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(annual).getByText(/charged today:.*400$/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /\$400 is charged today in Stripe checkout, then renews yearly at \$500 after the first year/i,
+      ),
+    ).toBeInTheDocument();
+  });
 });

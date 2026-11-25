@@ -90,10 +90,10 @@ const frameImageParams = {
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "frame_image",
-    label: "Frame screenshot",
+    name: "get_screenshot",
+    label: "Get screenshot",
     description:
-      "Fetch the captured screenshot image for a specific frame_id (from /search or frames.id) so you can inspect visual layout, charts, diagrams, media, canvas/video UI, or moments where text capture is incomplete. Fetch at most 2-3 frames per turn. Respects local history-access and image-privacy release gates.",
+      "Inspect one exact recorded screen frame as a compact JPEG image (for frame_id from /search, /meetings, /workflows, or frames.id) when visible UI, layout, charts, slides, or a before/after state matters. Fetch at most 2-3 frames per turn. Respects local history-access and image-privacy release gates.",
     parameters: frameImageParams,
 
     async execute(
@@ -139,7 +139,7 @@ export default function (pi: ExtensionAPI) {
               {
                 type: "text" as const,
                 text: JSON.stringify({
-                  error: `frame_image payload (${bounded.bytes} bytes) exceeds ${MAX_FRAME_IMAGE_BYTES} byte limit; lower width or quality`,
+                  error: `get_screenshot payload (${bounded.bytes} bytes) exceeds ${MAX_FRAME_IMAGE_BYTES} byte limit; lower width or quality`,
                   frame_id: id,
                 }),
               },
@@ -165,7 +165,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify({ error: `frame_image failed: ${e?.message ?? String(e)}`, frame_id: id }),
+              text: JSON.stringify({ error: `get_screenshot failed: ${e?.message ?? String(e)}`, frame_id: id }),
             },
           ],
           isError: true,
