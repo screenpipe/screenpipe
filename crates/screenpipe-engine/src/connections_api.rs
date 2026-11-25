@@ -1657,6 +1657,15 @@ struct ImapMessagesQuery {
 struct ImapMailboxQuery {
     mailbox: Option<String>,
     instance: Option<String>,
+    uid_validity: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ImapChangesQuery {
+    mailbox: Option<String>,
+    instance: Option<String>,
+    after_uid: Option<u32>,
+    uid_validity: Option<u32>,
 }
 
 /// POST /connections/imap/accounts — save a tested account without replacing
@@ -1770,12 +1779,69 @@ async fn imap_message(
         Err(e) => return e,
     };
     let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
-    match imap::get_message(&creds, mailbox, uid).await {
+    match imap::get_message(&creds, mailbox, uid, q.uid_validity).await {
         Ok(message) => (StatusCode::OK, Json(message)),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("{e:#}") })),
-        ),
+        Err(e) => match e.downcast_ref::<imap::UidValidityChanged>() {
+            Some(reset) => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": reset.to_string(),
+                    "reason": "imap_uid_validity_changed",
+                    "expected_uid_validity": reset.expected,
+                    "uid_validity": reset.actual,
+                })),
+            ),
+            None => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("{e:#}") })),
+            ),
+        },
+    }
+}
+
+/// GET /connections/imap/changes — initialize a pipe cursor or read its next batch.
+async fn imap_changes(
+    State(state): State<ConnectionsState>,
+    Query(q): Query<ImapChangesQuery>,
+) -> (StatusCode, Json<Value>) {
+    if q.uid_validity.is_some() && q.after_uid.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "IMAP uid_validity requires after_uid" })),
+        );
+    }
+    let creds = match imap_creds(&state, q.instance.as_deref()).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
+    match imap::trigger_page(
+        &creds,
+        mailbox,
+        q.after_uid,
+        q.uid_validity,
+        screenpipe_core::pipes::connection_triggers::MAX_ITEMS_PER_FIRE as u32,
+    )
+    .await
+    {
+        Ok(page) => (StatusCode::OK, Json(json!(page))),
+        Err(error) => {
+            // Record the originating cause in the engine log collected by the
+            // normal feedback report. The cursor stays pending on every error.
+            tracing::warn!(
+                after_uid = ?q.after_uid,
+                uid_validity = ?q.uid_validity,
+                error = %format_args!("{error:#}"),
+                "IMAP pipe could not read a mailbox page; cursor unchanged"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": format!("{error:#}"),
+                    "reason": "imap_trigger_read_failed",
+                })),
+            )
+        }
     }
 }
 
@@ -3759,6 +3825,7 @@ where
         .route("/imap/messages", get(imap_messages))
         .route("/imap/messages/:uid", get(imap_message))
         .route("/imap/mailboxes", get(imap_mailboxes))
+        .route("/imap/changes", get(imap_changes))
         // Slack-specific send route (must be before /:id to avoid conflict)
         .route("/slack/send", post(slack_send))
         .route("/slack/search", get(slack_search))
@@ -4434,7 +4501,12 @@ mod tests {
         assert!(!context.contains("legacy-secret"));
         assert!(!context.contains("work-secret"));
 
-        for route in ["/imap/mailboxes", "/imap/messages", "/imap/messages/42"] {
+        for route in [
+            "/imap/mailboxes",
+            "/imap/messages",
+            "/imap/messages/42",
+            "/imap/changes",
+        ] {
             let (status, error) = request(
                 &app,
                 "GET",

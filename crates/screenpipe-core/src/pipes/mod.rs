@@ -7673,7 +7673,7 @@ impl PipeManager {
             // can't stall the poll loop. API-poll sources (Slack/Notion) hit the
             // local proxy on api_base; the file source (Obsidian) ignores it.
             let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+                .timeout(connection_triggers::LOCAL_REQUEST_TIMEOUT)
                 .build()
                 .unwrap_or_default();
             // Learn when fired pipe runs finish so we can commit (or retry) the
@@ -8075,7 +8075,7 @@ Pipe name: {}
     });
     if triggered_by_imap {
         prompt.push_str(
-            "\nThis run was triggered by IMAP. Read instance and filter.mailbox from `./.trigger-context.json`. Use that account and mailbox when reading the messages that triggered this run. A null instance means the default inbox.\n",
+            "\nThis run was triggered by IMAP. Read instance, filter.mailbox, and uid_validity from `./.trigger-context.json`. Use that account and mailbox. When uid_validity is present, pass it as a query parameter when fetching messages by UID. A null instance means the default inbox. If the API reports that UIDVALIDITY changed, these UIDs are stale and must not be fetched in the new generation.\n",
         );
     } else {
         let imap_accounts: Vec<_> = config

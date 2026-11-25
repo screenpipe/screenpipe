@@ -12,9 +12,11 @@
 //! just the preset. Read-only: sending stays on the `email` (SMTP) connector.
 
 use super::{require_str, Category, FieldDef, Integration, IntegrationDef};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
+use async_imap::error::Error as ImapError;
 use async_trait::async_trait;
 use futures::TryStreamExt;
+use screenpipe_core::pipes::connection_triggers::{IMAP_COMMAND_TIMEOUT, IMAP_CONNECT_TIMEOUT};
 use screenpipe_secrets::SecretStore;
 use serde_json::{json, Map, Value};
 use std::fmt;
@@ -30,12 +32,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 const CONNECT_TIMEOUT: Duration = if cfg!(test) {
     Duration::from_secs(2)
 } else {
-    Duration::from_secs(10)
+    IMAP_CONNECT_TIMEOUT
 };
 const OP_TIMEOUT: Duration = if cfg!(test) {
     Duration::from_secs(2)
 } else {
-    Duration::from_secs(30)
+    IMAP_COMMAND_TIMEOUT
 };
 
 async fn bounded<T>(
@@ -50,6 +52,20 @@ async fn bounded<T>(
             what,
             deadline.as_secs()
         )),
+    }
+}
+
+// Server replies may quote arbitrary data. Keep the protocol cause without
+// copying response text into local errors or support logs.
+fn safe_protocol_error(error: ImapError) -> anyhow::Error {
+    match error {
+        ImapError::Io(error) => error.into(),
+        ImapError::Bad(_) => anyhow!("IMAP server returned BAD"),
+        ImapError::No(_) => anyhow!("IMAP server returned NO"),
+        ImapError::ConnectionLost => anyhow!("IMAP connection lost"),
+        ImapError::Parse(_) => anyhow!("could not parse IMAP server response"),
+        ImapError::Validate(_) => anyhow!("invalid IMAP command argument"),
+        _ => anyhow!("IMAP command failed"),
     }
 }
 
@@ -127,6 +143,14 @@ impl Integration for Imap {
 }
 
 type ImapSession = async_imap::Session<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+const HEADER_ITEMS: &str = "(UID INTERNALDATE RFC822.HEADER)";
+
+#[derive(Debug, thiserror::Error)]
+#[error("IMAP folder UIDVALIDITY changed (expected {expected}, current {actual})")]
+pub struct UidValidityChanged {
+    pub expected: u32,
+    pub actual: u32,
+}
 
 /// Open a mailbox with EXAMINE — the protocol-enforced read-only variant of
 /// SELECT (RFC 3501 §6.3.2). This connector promises read-only access, so it
@@ -143,6 +167,7 @@ where
         session
             .examine(mailbox)
             .await
+            .map_err(safe_protocol_error)
             .with_context(|| format!("mailbox '{}' not found", mailbox))
     })
     .await
@@ -174,7 +199,10 @@ where
         client
             .login(username, password)
             .await
-            .map_err(|(e, _)| friendly_login_error(&e.to_string(), host))
+            .map_err(|(error, _)| match error {
+                ImapError::Bad(text) | ImapError::No(text) => friendly_login_error(&text, host),
+                other => safe_protocol_error(other).context("IMAP login failed"),
+            })
     })
     .await
 }
@@ -251,7 +279,7 @@ fn friendly_login_error(raw: &str, host: &str) -> anyhow::Error {
         }
         return anyhow!("login failed — check the username and password/app password.");
     }
-    anyhow!("IMAP login failed: {}", raw)
+    anyhow!("IMAP server refused login")
 }
 
 /// Render a caller-supplied phrase as an RFC 3501 quoted string (§4.3).
@@ -343,11 +371,10 @@ where
     };
 
     // RFC822.HEADER is a PEEK — it never marks messages as read.
-    let items = "(UID INTERNALDATE RFC822.HEADER)";
     let fetches: Vec<_> = bounded("fetch", OP_TIMEOUT, async {
         if set.1 {
             session
-                .uid_fetch(&set.0, items)
+                .uid_fetch(&set.0, HEADER_ITEMS)
                 .await
                 .context("IMAP fetch failed")?
                 .try_collect()
@@ -355,7 +382,7 @@ where
                 .map_err(anyhow::Error::from)
         } else {
             session
-                .fetch(&set.0, items)
+                .fetch(&set.0, HEADER_ITEMS)
                 .await
                 .context("IMAP fetch failed")?
                 .try_collect()
@@ -365,29 +392,194 @@ where
     })
     .await?;
 
-    let mut out: Vec<Value> = fetches
-        .iter()
-        .map(|f| {
-            let mut v = headers_to_json(f.header().unwrap_or_default());
-            v["id"] = json!(f.uid);
-            if v["date"].is_null() {
-                if let Some(d) = f.internal_date() {
-                    v["date"] = json!(d.to_rfc3339());
-                }
-            }
-            v
-        })
-        .collect();
     // newest first
-    out.reverse();
-    Ok(out)
+    Ok(fetches.iter().rev().map(fetched_header).collect())
+}
+
+fn fetched_header(fetch: &async_imap::types::Fetch) -> Value {
+    let mut message = headers_to_json(fetch.header().unwrap_or_default());
+    message["id"] = json!(fetch.uid);
+    if let Some(date) = fetch.internal_date().filter(|_| message["date"].is_null()) {
+        message["date"] = json!(date.to_rfc3339());
+    }
+    message
+}
+
+#[derive(serde::Serialize)]
+pub struct TriggerPage {
+    pub uid_validity: u32,
+    pub after_uid: u32,
+    pub messages: Vec<Value>,
+}
+
+/// Return the oldest batch after the committed UID. A missing cursor baselines
+/// a new trigger. A changed UIDVALIDITY restarts it at the start of the folder.
+pub async fn trigger_page(
+    creds: &Map<String, Value>,
+    mailbox: &str,
+    after_uid: Option<u32>,
+    uid_validity: Option<u32>,
+    batch_size: u32,
+) -> Result<TriggerPage> {
+    ensure!(batch_size != 0, "IMAP trigger page size must be positive");
+    let mut session = open_session(creds).await?;
+    let result = bounded(
+        "read trigger page",
+        OP_TIMEOUT,
+        trigger_page_in(&mut session, mailbox, after_uid, uid_validity, batch_size),
+    )
+    .await;
+    quiet_logout(&mut session).await;
+    result
+}
+
+async fn trigger_page_in<S>(
+    session: &mut async_imap::Session<S>,
+    mailbox: &str,
+    after_uid: Option<u32>,
+    expected_validity: Option<u32>,
+    batch_size: u32,
+) -> Result<TriggerPage>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    let selected = examine_mailbox(session, mailbox).await?;
+    let uid_validity = mailbox_uid_validity(&selected)?;
+    let high_water = selected.uid_next.and_then(|next| next.checked_sub(1));
+    let Some(after_uid) = after_uid else {
+        let baseline = match (high_water, selected.exists) {
+            (Some(uid), _) => uid,
+            (None, 0) => 0,
+            (None, last) => sequence_uid(session, last).await?,
+        };
+        return Ok(TriggerPage {
+            uid_validity,
+            after_uid: baseline,
+            messages: vec![],
+        });
+    };
+    let reset = match expected_validity {
+        Some(expected) => expected != uid_validity,
+        // Older cursors have no generation. UIDNEXT cannot move backwards
+        // within a generation, even if the highest messages were expunged.
+        None => high_water.is_some_and(|highest| highest < after_uid),
+    };
+    let after_uid = if reset { 0 } else { after_uid };
+    let mut page = TriggerPage {
+        uid_validity,
+        after_uid,
+        messages: vec![],
+    };
+    if selected.exists == 0 || high_water.is_some_and(|highest| highest <= after_uid) {
+        return Ok(page);
+    }
+
+    // Sequence numbers are ordered by UID. Use only non-UID FETCH commands in
+    // this selected session so EXPUNGE cannot shift sequence numbers between
+    // probes (RFC 9051 sections 2.3.1.2 and 7.4.1). Appends extend the end.
+    // Binary search handles sparse UIDs without searching or allocating the
+    // entire unread range. Then fetch one page by sequence, oldest first.
+    let mut low = high_water
+        .map(|highest| {
+            selected
+                .exists
+                .saturating_sub(highest.saturating_sub(after_uid))
+        })
+        .unwrap_or(0);
+    let mut high = selected.exists;
+    if after_uid != 0 {
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if sequence_uid(session, mid + 1).await? <= after_uid {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+    }
+    if low == selected.exists {
+        return Ok(page);
+    }
+    let first = low + 1;
+    let last = low.saturating_add(batch_size).min(selected.exists);
+    let sequence_set = format!("{first}:{last}");
+    let mut headers = session
+        .fetch(sequence_set, HEADER_ITEMS)
+        .await
+        .map_err(safe_protocol_error)
+        .context("IMAP trigger header fetch failed")?;
+    let mut fetched: Vec<_> = (first..=last).map(|_| None).collect();
+    while let Some(fetch) = headers
+        .try_next()
+        .await
+        .map_err(safe_protocol_error)
+        .context("IMAP trigger headers interrupted")?
+    {
+        if (first..=last).contains(&fetch.message) && fetch.header().is_some() {
+            let index = (fetch.message - first) as usize;
+            fetched[index] = Some(fetch);
+        }
+    }
+    let received = fetched.iter().flatten().count();
+    ensure!(
+        received == fetched.len(),
+        "IMAP trigger page incomplete: expected {} headers, received {}",
+        fetched.len(),
+        received
+    );
+    let mut previous = after_uid;
+    for fetch in fetched.iter().flatten() {
+        let uid = fetch
+            .uid
+            .context("IMAP trigger header is missing its UID")?;
+        ensure!(uid > previous, "IMAP trigger page changed during FETCH");
+        previous = uid;
+        page.messages.push(fetched_header(fetch));
+    }
+    Ok(page)
+}
+
+async fn sequence_uid<S>(session: &mut async_imap::Session<S>, sequence: u32) -> Result<u32>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    let mut results = session
+        .fetch(sequence.to_string(), "(UID)")
+        .await
+        .map_err(safe_protocol_error)
+        .with_context(|| format!("IMAP UID probe failed at sequence {sequence}"))?;
+    let mut uid = None;
+    while let Some(fetch) = results
+        .try_next()
+        .await
+        .map_err(safe_protocol_error)
+        .context("IMAP UID probe interrupted")?
+    {
+        if fetch.message == sequence {
+            uid = uid.or(fetch.uid);
+        }
+    }
+    uid.filter(|uid| *uid != 0)
+        .with_context(|| format!("IMAP UID probe returned no UID for sequence {sequence}"))
+}
+
+fn mailbox_uid_validity(mailbox: &async_imap::types::Mailbox) -> Result<u32> {
+    mailbox
+        .uid_validity
+        .filter(|validity| *validity != 0)
+        .context("IMAP server did not report a valid folder UIDVALIDITY")
 }
 
 /// Fetch one full message by UID and return it parsed (flat shape, matching
 /// the old Gmail connector: from/to/subject/date/snippet/body/id).
-pub async fn get_message(creds: &Map<String, Value>, mailbox: &str, uid: u32) -> Result<Value> {
+pub async fn get_message(
+    creds: &Map<String, Value>,
+    mailbox: &str,
+    uid: u32,
+    uid_validity: Option<u32>,
+) -> Result<Value> {
     let mut session = open_session(creds).await?;
-    let result = get_message_in(&mut session, mailbox, uid).await;
+    let result = get_message_in(&mut session, mailbox, uid, uid_validity).await;
     quiet_logout(&mut session).await;
     result
 }
@@ -396,11 +588,18 @@ async fn get_message_in<S>(
     session: &mut async_imap::Session<S>,
     mailbox: &str,
     uid: u32,
+    uid_validity: Option<u32>,
 ) -> Result<Value>
 where
     S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
 {
-    examine_mailbox(session, mailbox).await?;
+    let selected = examine_mailbox(session, mailbox).await?;
+    if let Some(expected) = uid_validity {
+        let actual = mailbox_uid_validity(&selected)?;
+        if expected != actual {
+            return Err(UidValidityChanged { expected, actual }.into());
+        }
+    }
     let fetches: Vec<_> = bounded("fetch", OP_TIMEOUT, async {
         session
             .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
@@ -664,6 +863,161 @@ mod net_tests {
         login_session(client, "user@example.com", "secret", "127.0.0.1")
             .await
             .expect("fake login must succeed")
+    }
+
+    async fn trigger_fixture(
+        uids: Vec<u32>,
+        uid_next: Option<u32>,
+        incomplete: bool,
+    ) -> (async_imap::Session<TcpStream>, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let seen = commands.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            w.write_all(b"* OK fake trigger IMAP ready\r\n")
+                .await
+                .unwrap();
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let (tag, command) = line.split_once(' ').unwrap();
+                seen.lock().unwrap().push(command.to_owned());
+                if command.starts_with("EXAMINE ") {
+                    w.write_all(
+                        format!(
+                            "* {} EXISTS\r\n* OK [UIDVALIDITY 7] fixture\r\n",
+                            uids.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                    if let Some(next) = uid_next {
+                        w.write_all(format!("* OK [UIDNEXT {next}] fixture\r\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                } else if let Some(fetch) = command.strip_prefix("FETCH ") {
+                    let (range, attributes) = fetch.split_once(' ').unwrap();
+                    if attributes == "(UID)" {
+                        let sequence = range.parse::<usize>().unwrap();
+                        let uid = uids[sequence - 1];
+                        w.write_all(format!("* {sequence} FETCH (UID {uid})\r\n").as_bytes())
+                            .await
+                            .unwrap();
+                    } else {
+                        assert_eq!(attributes, HEADER_ITEMS);
+                        let (first, last) = range.split_once(':').unwrap();
+                        let first = first.parse::<usize>().unwrap();
+                        let last = last.parse::<usize>().unwrap();
+                        // Reverse response order. An interrupted page is
+                        // represented by a missing FETCH for the first UID.
+                        for sequence in (first..=last).rev() {
+                            if incomplete && sequence == first {
+                                continue;
+                            }
+                            let uid = uids[sequence - 1];
+                            let header = format!("Subject: message {uid}\r\n\r\n");
+                            w.write_all(format!("* {sequence} FETCH (UID {uid} RFC822.HEADER {{{}}}\r\n{header})\r\n", header.len()).as_bytes()).await.unwrap();
+                        }
+                    }
+                } else {
+                    assert!(
+                        command.starts_with("LOGIN "),
+                        "unexpected fixture command {command}"
+                    );
+                }
+                w.write_all(format!("{tag} OK fixture\r\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        (fake_session(port).await, commands)
+    }
+
+    #[tokio::test]
+    async fn imap_trigger_pages_find_oldest_sparse_uids_and_keep_recent_reads_separate() {
+        let (mut session, commands) =
+            trigger_fixture(vec![3, 400, 9000, 990_000, 4_000_000], None, false).await;
+        let baseline = trigger_page_in(&mut session, "INBOX", None, None, 2)
+            .await
+            .unwrap();
+        assert_eq!(baseline.after_uid, 4_000_000);
+        assert_eq!(baseline.uid_validity, 7);
+        assert!(baseline.messages.is_empty());
+
+        let page = trigger_page_in(&mut session, "INBOX", Some(3), Some(7), 2)
+            .await
+            .unwrap();
+        assert_eq!(page.after_uid, 3);
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [400, 9000]
+        );
+        let page = trigger_page_in(&mut session, "INBOX", Some(9000), Some(7), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [990_000, 4_000_000]
+        );
+        let none = trigger_page_in(&mut session, "INBOX", Some(4_000_000), Some(7), 2)
+            .await
+            .unwrap();
+        assert!(none.messages.is_empty());
+        let recent = list_messages_in(&mut session, "INBOX", 2, None)
+            .await
+            .unwrap();
+        let recent_ids: std::collections::HashSet<_> = recent
+            .iter()
+            .map(|message| message["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(recent_ids, [990_000, 4_000_000].into_iter().collect());
+        let commands = commands.lock().unwrap();
+        assert!(!commands
+            .iter()
+            .any(|command| command.starts_with("SELECT ") || command.starts_with("UID ")));
+    }
+
+    #[tokio::test]
+    async fn imap_trigger_detects_legacy_reset_and_rejects_incomplete_pages_and_stale_uids() {
+        let (mut session, commands) = trigger_fixture(vec![1, 2, 3], Some(4), true).await;
+        for expected in [None, Some(6)] {
+            let err = trigger_page_in(&mut session, "INBOX", Some(99), expected, 2)
+                .await
+                .err()
+                .unwrap();
+            assert!(
+                err.to_string().contains("expected 2 headers, received 1"),
+                "{err:#}"
+            );
+        }
+        let err = get_message_in(&mut session, "INBOX", 1, Some(6))
+            .await
+            .unwrap_err();
+        let reset = err.downcast::<UidValidityChanged>().unwrap();
+        assert_eq!((reset.expected, reset.actual), (6, 7));
+        assert!(!commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command.starts_with("UID FETCH")));
+
+        let (mut session, _) = trigger_fixture(vec![1, 2, 3], Some(4), false).await;
+        let recovered = trigger_page_in(&mut session, "INBOX", Some(99), None, 2)
+            .await
+            .unwrap();
+        assert_eq!(recovered.after_uid, 0);
+        assert_eq!(recovered.messages[0]["id"], 1);
+        assert_eq!(recovered.messages[1]["id"], 2);
     }
 
     #[tokio::test]

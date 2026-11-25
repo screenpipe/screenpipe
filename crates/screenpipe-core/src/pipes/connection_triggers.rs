@@ -25,10 +25,12 @@
 //!   retried (bounded by [`RETRY_CAP`]) and then given up so it can't loop.
 //! - **Init-to-now**: enabling a trigger never replays the backlog.
 //! - **Bounded fires**: at most [`MAX_ITEMS_PER_FIRE`] per fire; a backlog drains
-//!   over ticks. Paginated sources are capped by [`MAX_PAGES`] per tick. IMAP and
-//!   Outlook currently inherit their list endpoints' 100-message recent window.
+//!   over ticks. Paginated sources are capped by [`MAX_PAGES`] per tick. IMAP
+//!   reads one oldest-first page after its committed UID per tick. Outlook
+//!   still inherits its list endpoint's recent window.
 //! - **Dedup**: one fetch per (app, account, channel/folder) per tick, fanned out
-//!   to every subscribing pipe (each with its own cursor).
+//!   to every subscribing pipe (each with its own cursor). IMAP shares a
+//!   fetch only among subscribers at the same committed cursor.
 //! - **Startup**: the watcher waits a few seconds before its first poll so the
 //!   scheduler is subscribed and can't miss a fire-on-startup.
 //!
@@ -46,6 +48,17 @@ use tracing::{debug, info, warn};
 
 /// How often sources are polled.
 pub const POLL_INTERVAL_SECS: u64 = 30;
+
+pub(super) const LOCAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub const IMAP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const IMAP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+// Allow the connector's TCP and TLS stages, login, page read, and logout to
+// reach their own deadlines, plus the ordinary local request allowance.
+const IMAP_TRIGGER_REQUEST_TIMEOUT: Duration = Duration::from_secs(
+    2 * IMAP_CONNECT_TIMEOUT.as_secs()
+        + 3 * IMAP_COMMAND_TIMEOUT.as_secs()
+        + LOCAL_REQUEST_TIMEOUT.as_secs(),
+);
 
 /// Max items delivered in a single fire; a larger backlog drains over ticks.
 pub const MAX_ITEMS_PER_FIRE: usize = 50;
@@ -184,9 +197,21 @@ pub struct SourceCtx<'a> {
 
 impl SourceCtx<'_> {
     async fn get_json_q(&self, url: &str, query: &[(&str, &str)]) -> Option<Value> {
+        self.get_json_with_timeout(url, query, None).await
+    }
+
+    async fn get_json_with_timeout(
+        &self,
+        url: &str,
+        query: &[(&str, &str)],
+        timeout: Option<Duration>,
+    ) -> Option<Value> {
         let mut req = self.http.get(url).query(query);
         if let Some(key) = self.api_key {
             req = req.bearer_auth(key);
+        }
+        if let Some(timeout) = timeout {
+            req = req.timeout(timeout);
         }
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
@@ -226,6 +251,11 @@ fn token_cmp(app: &str, a: &str, b: &str) -> Ordering {
             .unwrap_or(-1)
             .cmp(&b.parse::<i64>().unwrap_or(-1));
     }
+    if app == "imap" {
+        // The IMAP poll establishes a common UIDVALIDITY before comparing
+        // these tokens. Item timestamps remain plain UIDs in trigger context.
+        return imap_uid(a).cmp(&imap_uid(b));
+    }
     if app == "notion" {
         match (
             chrono::DateTime::parse_from_rfc3339(a),
@@ -261,11 +291,6 @@ fn now_token(app: &str) -> String {
         "notion" => chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string(),
-        // IMAP UIDs are mailbox-local monotonic counters, not wall-clock
-        // timestamps. An empty baseline lets the first successful fetch set the
-        // high-water mark without replaying it; a previously empty mailbox then
-        // fires on its first message.
-        "imap" => String::new(),
         "google-calendar" | "outlook-email" | "github" | "todoist" => {
             system_time_ms(SystemTime::now()).unwrap_or(0).to_string()
         }
@@ -424,7 +449,6 @@ async fn fetch_items(
         "obsidian" => fetch_obsidian(src, since).await,
         "slack" => fetch_slack(ctx, src, since).await,
         "notion" => fetch_notion(ctx, src, since).await,
-        "imap" => fetch_imap(ctx, src).await,
         "google-calendar" => fetch_google_calendar(ctx, src, since).await,
         "outlook-email" => fetch_outlook_email(ctx, src).await,
         "github" => fetch_github(ctx, src, since).await,
@@ -576,21 +600,88 @@ async fn fetch_notion(
     Some(all)
 }
 
-async fn fetch_imap(ctx: &SourceCtx<'_>, src: &SourceTrigger) -> Option<Vec<DetectedItem>> {
+fn imap_uid(token: &str) -> Option<u32> {
+    token.rsplit(':').next()?.parse().ok()
+}
+
+fn imap_cursor_parts(token: &str) -> Option<(Option<&str>, u32)> {
+    if let Some((validity, uid)) = token.split_once(':') {
+        validity.parse::<std::num::NonZeroU32>().ok()?;
+        return Some((Some(validity), uid.parse().ok()?));
+    }
+    // A pre-upgrade empty token means the folder had never had a message.
+    Some((
+        None,
+        if token.is_empty() {
+            0
+        } else {
+            token.parse().ok()?
+        },
+    ))
+}
+
+struct ImapPage {
+    baseline: String,
+    items: Vec<DetectedItem>,
+}
+
+async fn fetch_imap(
+    ctx: &SourceCtx<'_>,
+    src: &SourceTrigger,
+    cursor: Option<&str>,
+) -> Option<ImapPage> {
     let mailbox = src
         .filter
         .get("mailbox")
         .map(String::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or("INBOX");
-    let url = format!("{}/connections/imap/messages", ctx.api_base);
-    let limit = API_PAGE_SIZE.to_string();
-    let mut query = vec![("mailbox", mailbox), ("limit", limit.as_str())];
+    let url = format!("{}/connections/imap/changes", ctx.api_base);
+    let mut query = vec![("mailbox", mailbox)];
     if let Some(instance) = src.instance.as_deref().filter(|s| !s.is_empty()) {
         query.push(("instance", instance));
     }
-    let value = ctx.get_json_q(&url, &query).await?;
-    Some(parse_imap_messages(&value))
+    let after_uid;
+    if let Some(cursor) = cursor {
+        let Some((validity, uid)) = imap_cursor_parts(cursor) else {
+            warn!("IMAP pipe cursor is invalid; leaving its stored position untouched");
+            return None;
+        };
+        after_uid = uid.to_string();
+        query.push(("after_uid", &after_uid));
+        if let Some(validity) = validity {
+            query.push(("uid_validity", validity));
+        }
+    }
+    let value = ctx
+        .get_json_with_timeout(&url, &query, Some(IMAP_TRIGGER_REQUEST_TIMEOUT))
+        .await?;
+    let Some(page) = parse_imap_page(&value) else {
+        warn!("IMAP pipe received an invalid mailbox page; leaving its stored position untouched");
+        return None;
+    };
+    Some(page)
+}
+
+fn parse_imap_page(value: &Value) -> Option<ImapPage> {
+    let validity = u32::try_from(value["uid_validity"].as_u64()?).ok()?;
+    let uid = u32::try_from(value["after_uid"].as_u64()?).ok()?;
+    let items = parse_imap_messages(value);
+    let mut previous = uid;
+    if validity == 0 || items.len() != value["messages"].as_array()?.len() {
+        return None;
+    }
+    for item in &items {
+        let current = imap_uid(&item.ts)?;
+        if current <= previous {
+            return None;
+        }
+        previous = current;
+    }
+    Some(ImapPage {
+        baseline: format!("{validity}:{uid}"),
+        items,
+    })
 }
 
 async fn fetch_google_calendar(
@@ -1025,7 +1116,7 @@ pub fn parse_imap_messages(value: &Value) -> Vec<DetectedItem> {
                 .as_u64()
                 .map(|n| n.to_string())
                 .or_else(|| id.as_str().map(String::from))?;
-            if uid.parse::<u64>().is_err() {
+            if uid.parse::<std::num::NonZeroU32>().is_err() {
                 return None;
             }
             let subject = message
@@ -1521,7 +1612,8 @@ pub async fn poll_once(
 
     // 2. gather subscriptions, grouped by source identity (dedup the fetch).
     let mut active: HashSet<String> = HashSet::new();
-    let mut groups: HashMap<String, Vec<(String, SourceTrigger, String)>> = HashMap::new();
+    let mut groups: HashMap<(String, Option<String>), Vec<(String, SourceTrigger, String)>> =
+        HashMap::new();
     for (pipe, config) in pipes {
         if !config.enabled {
             continue;
@@ -1544,20 +1636,44 @@ pub async fn poll_once(
             if retry_or_wait(state, pipe, src, &key) {
                 continue;
             }
+            let group = match src.app.as_str() {
+                "audio" => ("audio".into(), None),
+                "imap" => (
+                    source_identity(src),
+                    state
+                        .committed
+                        .get(&key)
+                        .filter(|c| c.initialized)
+                        .map(|c| c.token.clone()),
+                ),
+                _ => (source_identity(src), None),
+            };
             groups
-                .entry(if src.app == "audio" {
-                    "audio".into()
-                } else {
-                    source_identity(src)
-                })
+                .entry(group)
                 .or_default()
                 .push((pipe.clone(), src.clone(), key));
         }
     }
 
     // 3. one fetch per source, fanned out to each subscribing pipe.
-    for subs in groups.values() {
+    for ((_, cursor), subs) in &groups {
         let app = subs[0].1.app.clone();
+        if app == "imap" {
+            if let Some(page) = fetch_imap(ctx, &subs[0].1, cursor.as_deref()).await {
+                for (pipe, src, key) in subs {
+                    if cursor.as_deref() != Some(&page.baseline) {
+                        // An upgrade preserves the old UID. A generation change
+                        // records UID 0 before delivering any new-generation mail.
+                        commit(state, key, &page.baseline);
+                        state.dirty = true;
+                    }
+                    if cursor.is_some() {
+                        process_subscriber(state, pipe, src, key, &page.items);
+                    }
+                }
+            }
+            continue;
+        }
         // Fetch from the most-behind subscriber so one call covers them all.
         let min_since = subs
             .iter()
@@ -1690,7 +1806,21 @@ fn process_subscriber(
                 .as_ref()
                 .map(|p| p.delivery_id.clone())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let context = trigger_context(src, &items);
+            let mut context = trigger_context(src, &items);
+            let token = if app == "imap" {
+                let validity = committed
+                    .as_ref()
+                    .and_then(|c| c.token.split_once(':'))
+                    .and_then(|(validity, _)| validity.parse::<u32>().ok());
+                if let Some(validity) = validity {
+                    context["uid_validity"] = serde_json::json!(validity);
+                    format!("{validity}:{token}")
+                } else {
+                    token
+                }
+            } else {
+                token
+            };
             emit_event(pipe, src, count, key, &delivery_id, context.clone());
             state.pending.insert(
                 key.to_string(),
@@ -2229,18 +2359,30 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/connections/imap/messages"))
+            .and(path("/connections/imap/changes"))
             .and(query_param("instance", "work@example.com"))
             .and(query_param("mailbox", "[Gmail]/Sent Mail"))
-            .and(query_param("limit", API_PAGE_SIZE.to_string()))
+            .and(query_param("after_uid", "43"))
+            .and(query_param("uid_validity", "7"))
             .and(header("authorization", "Bearer local-key"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "messages": [{ "id": 44, "subject": "shipped", "to": "team@example.com" }]
-            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(60))
+                    .set_body_json(serde_json::json!({
+                        "uid_validity": 7,
+                        "after_uid": 43,
+                        "messages": [{ "id": 44, "subject": "shipped", "to": "team@example.com" }]
+                    })),
+            )
             .mount(&server)
             .await;
 
-        let client = reqwest::Client::new();
+        // Use a shorter client default than the fixture response to prove
+        // IMAP's deadline overrides the generic connection polling deadline.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(20))
+            .build()
+            .unwrap();
         let ctx = SourceCtx {
             http: &client,
             api_base: &server.uri(),
@@ -2253,7 +2395,9 @@ mod tests {
         src.instance = Some("work@example.com".into());
         let named_key = subscription_key("follow-up", &src);
         assert_ne!(named_key, default_key);
-        let items = fetch_items(&ctx, &src, "").await.unwrap();
+        let page = fetch_imap(&ctx, &src, Some("7:43")).await.unwrap();
+        assert_eq!(page.baseline, "7:43");
+        let items = page.items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "44");
         assert_eq!(
@@ -2262,6 +2406,121 @@ mod tests {
         );
         src.filter.insert("mailbox".into(), "INBOX".into());
         assert_ne!(subscription_key("follow-up", &src), named_key);
+    }
+
+    #[tokio::test]
+    async fn imap_watcher_drains_a_burst_across_restart_and_recovers_a_reset() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let mailbox = std::sync::Arc::new(std::sync::Mutex::new((9u32, 1u32, false)));
+        let fixture = mailbox.clone();
+        Mock::given(method("GET"))
+            .and(path("/connections/imap/changes"))
+            .respond_with(move |request: &Request| {
+                let (validity, highest, unavailable) = *fixture.lock().unwrap();
+                if unavailable {
+                    return ResponseTemplate::new(502);
+                }
+                let query: HashMap<_, _> = request.url.query_pairs().collect();
+                let uid = query
+                    .get("after_uid")
+                    .map(|uid| uid.parse::<u32>().unwrap());
+                let expected = query
+                    .get("uid_validity")
+                    .map(|value| value.parse::<u32>().unwrap());
+                let after_uid = match uid {
+                    None => highest,
+                    Some(uid) if expected.unwrap_or(validity) == validity => uid,
+                    Some(_) => 0,
+                };
+                let messages: Vec<_> = (after_uid + 1..=highest)
+                    .take(MAX_ITEMS_PER_FIRE)
+                    .map(|id| serde_json::json!({ "id": id }))
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "uid_validity": validity,
+                    "after_uid": after_uid,
+                    "messages": messages,
+                }))
+            })
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let client = reqwest::Client::new();
+        let ctx = SourceCtx {
+            http: &client,
+            api_base: &server.uri(),
+            api_key: None,
+        };
+        let src = source("imap", "message");
+        let pipe = "inbox".to_string();
+        let key = subscription_key(&pipe, &src);
+        let config: PipeConfig = serde_json::from_value(serde_json::json!({
+            "trigger": { "sources": [src] }
+        }))
+        .unwrap();
+        let pipes = [(pipe.clone(), config)];
+        let mut watcher = WatcherState::default();
+
+        // A new subscription baselines existing mail without triggering.
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        assert_eq!(watcher.committed[&key].token, "9:1");
+        assert!(watcher.pending.is_empty());
+
+        // Upgrade a persisted pre-UIDVALIDITY cursor without replaying UID 1.
+        commit(&mut watcher, &key, "1");
+        watcher.dirty = true;
+        watcher.save(dir.path());
+        let mut watcher = WatcherState::load(dir.path());
+        let burst = (3 * MAX_ITEMS_PER_FIRE + 1) as u32;
+        *mailbox.lock().unwrap() = (9, burst + 1, true);
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        assert_eq!(watcher.committed[&key].token, "1");
+        assert!(watcher.pending.is_empty());
+        *mailbox.lock().unwrap() = (9, burst + 1, false);
+
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        let first = watcher.pending[&key].context["items"].clone();
+        assert_eq!(watcher.committed[&key].token, "9:1");
+        let mut watcher = WatcherState::load(dir.path());
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        assert_eq!(watcher.pending[&key].context["items"], first);
+
+        let mut delivered = Vec::new();
+        for _ in 0..(burst as usize).div_ceil(MAX_ITEMS_PER_FIRE) {
+            let delivery = &watcher.pending[&key];
+            assert_eq!(delivery.context["uid_validity"], 9);
+            let items = delivery.context["items"].as_array().unwrap();
+            assert!(items.len() <= MAX_ITEMS_PER_FIRE);
+            delivered.extend(
+                items
+                    .iter()
+                    .map(|item| item["id"].as_str().unwrap().parse::<u32>().unwrap()),
+            );
+            let ack = [(pipe.clone(), true, Some(delivery.delivery_id.clone()))];
+            poll_once(dir.path(), &pipes, &mut watcher, &ctx, &ack).await;
+        }
+        assert!(watcher.pending.is_empty());
+        assert_eq!(delivered, (2..=burst + 1).collect::<Vec<_>>());
+        assert_eq!(watcher.committed[&key].token, format!("9:{}", burst + 1));
+
+        // A reset can reuse low UIDs. It can also leave the folder empty, so
+        // persist the new generation even if there are no messages to deliver.
+        *mailbox.lock().unwrap() = (10, 0, false);
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        assert!(watcher.pending.is_empty());
+        let mut watcher = WatcherState::load(dir.path());
+        assert_eq!(watcher.committed[&key].token, "10:0");
+        *mailbox.lock().unwrap() = (10, 2, false);
+        poll_once(dir.path(), &pipes, &mut watcher, &ctx, &[]).await;
+        assert_eq!(watcher.pending[&key].context["uid_validity"], 10);
+        let items = &watcher.pending[&key].context["items"];
+        assert_eq!(items[0]["id"], "1");
+        assert_eq!(items[1]["id"], "2");
+        assert_eq!(watcher.pending[&key].token, "10:2");
     }
 
     #[tokio::test]
