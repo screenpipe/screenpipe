@@ -233,7 +233,7 @@ try{
   const child = mastra ? Bun.spawn([process.execPath, "--no-install", "--no-env-file", mastraRunner], {
     cwd,
     env: { SCREENPIPE_MASTRA_MODEL_URL: process.env.SCREENPIPE_MASTRA_MODEL_URL },
-    stdin: new Blob([JSON.stringify({ task, model, prompt, instructions: isolatedInstructions })]),
+    stdin: new Blob([JSON.stringify({ task, model, thinkingLevel: "low", prompt, instructions: isolatedInstructions })]),
     stdout: "pipe",
     stderr: "pipe",
   }) : Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",extensionFile,"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",isolatedInstructions,"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});

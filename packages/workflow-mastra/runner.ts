@@ -26,6 +26,7 @@ async function main() {
   const job = z.object({
     task: z.string(),
     model: z.string().min(1),
+    thinkingLevel: z.enum(["low", "medium", "high"]),
     instructions: z.string(),
     prompt: z.string(),
   }).parse(JSON.parse(await Bun.stdin.text()));
@@ -177,6 +178,7 @@ ${reviewInstructions}`,
     maxSteps: 40,
     maxRetries: 0,
     modelSettings: { maxOutputTokens: 20_000, temperature: 0.2 },
+    providerOptions: { openaiCompatible: { reasoningEffort: job.thinkingLevel } },
   });
   for await (const event of result.fullStream) {
     if (event.type === "text-delta") {

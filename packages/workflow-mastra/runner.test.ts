@@ -79,6 +79,7 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
       expect(request.headers.get("authorization")).toBeNull();
       const body = await request.json();
       expect(body.model).toBe("fixture-model");
+      expect(body.reasoning_effort).toBe("low");
       expect(body.tools.map((tool: any) => tool.function.name).sort()).toEqual([
         "read_snapshot", "recorder_read", "workflow_workspace",
       ]);
@@ -115,7 +116,7 @@ test("streams a review, rereads evidence, recovers from a revision conflict, and
     const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", runner], {
       cwd,
       env: { SCREENPIPE_MASTRA_MODEL_URL: `${model.url.origin}/v1` },
-      stdin: new Blob([JSON.stringify({ task, model: "fixture-model", instructions: "Review the invoice", prompt: "Review now" })]),
+      stdin: new Blob([JSON.stringify({ task, model: "fixture-model", thinkingLevel: "low", instructions: "Review the invoice", prompt: "Review now" })]),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -148,7 +149,7 @@ test("rejects a hosted model endpoint before sending a prompt", async () => {
     const child = Bun.spawn([process.execPath, "--no-install", "--no-env-file", runner], {
       cwd,
       env: { SCREENPIPE_MASTRA_MODEL_URL: "https://example.com/v1" },
-      stdin: new Blob([JSON.stringify({ task, model: "fixture-model", instructions: "Review", prompt: "private capture" })]),
+      stdin: new Blob([JSON.stringify({ task, model: "fixture-model", thinkingLevel: "low", instructions: "Review", prompt: "private capture" })]),
       stderr: "pipe",
     });
     expect(await child.exited).toBe(1);

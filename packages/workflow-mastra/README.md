@@ -20,7 +20,8 @@ export SCREENPIPE_MASTRA_MODEL_URL="http://127.0.0.1:11434/v1"
 
 Start the app from that shell and use **Update workflows** with **Automatic
 updates** enabled. Existing background workflow cycles also use Mastra while
-the variables are set. To switch back, unset `SCREENPIPE_MASTRA_RUNNER` and
+the variables are set. Use a model served on-device. A loopback proxy can
+forward requests outside this machine. To switch back, unset `SCREENPIPE_MASTRA_RUNNER` and
 restart the app. The opt-in supplies the model for those tasks. Chat and
 enterprise-managed tasks continue using their own configured executors.
 

@@ -20,6 +20,13 @@ pub(crate) struct WorkflowMastraExecutor {
     model_url: Option<String>,
 }
 
+struct WorkflowPrompt<'a> {
+    prompt: &'a str,
+    model: &'a str,
+    instructions: &'a str,
+    thinking_level: Option<&'a str>,
+}
+
 impl WorkflowMastraExecutor {
     pub(crate) fn from_env() -> Option<Self> {
         Some(Self {
@@ -41,9 +48,7 @@ impl WorkflowMastraExecutor {
 
     async fn execute(
         &self,
-        prompt: &str,
-        model: &str,
-        instructions: &str,
+        job: WorkflowPrompt<'_>,
         working_dir: &Path,
         shared_pid: Option<SharedPid>,
         output: Option<UnboundedSender<String>>,
@@ -57,7 +62,7 @@ impl WorkflowMastraExecutor {
             "Mastra is scoped to workflow tasks"
         );
         anyhow::ensure!(
-            !model.trim().is_empty(),
+            !job.model.trim().is_empty(),
             "Set {MODEL_ENV} to a local tool-capable model"
         );
         anyhow::ensure!(
@@ -68,9 +73,10 @@ impl WorkflowMastraExecutor {
             pi::find_bun_executable().context("Bun is required for the Mastra workflow runner")?;
         let request = serde_json::to_vec(&serde_json::json!({
             "task": task,
-            "model": model,
-            "instructions": instructions,
-            "prompt": prompt,
+            "model": job.model,
+            "instructions": job.instructions,
+            "thinkingLevel": job.thinking_level.unwrap_or("low"),
+            "prompt": job.prompt,
         }))?;
         let mut command = Command::new(bun);
         command
@@ -144,8 +150,18 @@ impl AgentExecutor for WorkflowMastraExecutor {
         shared_pid: Option<SharedPid>,
         _continue_session: bool,
     ) -> Result<AgentOutput> {
-        self.execute(prompt, model, "", working_dir, shared_pid, None)
-            .await
+        self.execute(
+            WorkflowPrompt {
+                prompt,
+                model,
+                instructions: "",
+                thinking_level: None,
+            },
+            working_dir,
+            shared_pid,
+            None,
+        )
+        .await
     }
 
     async fn run_streaming(
@@ -159,16 +175,19 @@ impl AgentExecutor for WorkflowMastraExecutor {
         shared_pid: Option<SharedPid>,
         line_tx: UnboundedSender<String>,
         _continue_session: bool,
-        _thinking_level: Option<&str>,
+        thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         _mcp_server_allowlist: Option<&[String]>,
         _session_owner: Option<&str>,
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
         self.execute(
-            prompt,
-            model,
-            pipe_system_prompt.unwrap_or_default(),
+            WorkflowPrompt {
+                prompt,
+                model,
+                instructions: pipe_system_prompt.unwrap_or_default(),
+                thinking_level,
+            },
             working_dir,
             shared_pid,
             Some(line_tx),
@@ -216,7 +235,7 @@ mod tests {
             &runner,
             r#"
 const request = JSON.parse(await Bun.stdin.text());
-if (request.task !== "workflow-review" || request.instructions !== "review instructions") {
+if (request.task !== "workflow-review" || request.instructions !== "review instructions" || request.thinkingLevel !== "medium") {
   throw new Error("unexpected task configuration");
 }
 console.log(JSON.stringify({ type: "test_ready", model: request.model }));
@@ -234,9 +253,12 @@ if (request.prompt === "wait") await Bun.sleep(30_000);
             let handle = ExecutionHandle::new(pid.clone());
             let (send, mut receive) = unbounded_channel();
             let run = executor.execute(
-                prompt,
-                "fixture-model",
-                "review instructions",
+                WorkflowPrompt {
+                    prompt,
+                    model: "fixture-model",
+                    instructions: "review instructions",
+                    thinking_level: Some("medium"),
+                },
                 &cwd,
                 Some(pid),
                 Some(send),
