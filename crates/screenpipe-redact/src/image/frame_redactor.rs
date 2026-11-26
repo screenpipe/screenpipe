@@ -37,6 +37,10 @@ pub struct FrameRedactionOutcome {
     /// Total redacted pixel count — useful for telemetry to detect
     /// pathological "redacts the whole screen" cases.
     pub redacted_pixels: u64,
+    /// Number of borderline proposals rescued via `strict_uncertainty` on this frame.
+    pub uncertain_proposals_rescued: usize,
+    /// Frame-level maximum `epistemic_std` observed across role-fusion proposals.
+    pub max_epistemic_std: f32,
     /// Where the redacted image landed on disk. Same as the input
     /// `image_path`, since redaction is destructive — kept on the
     /// outcome struct for callers that still want the path back
@@ -68,7 +72,9 @@ pub fn redact_frame(
     let mut dropped = 0usize;
     let mut redacted_px: u64 = 0;
     for r in regions {
-        if !policy.allow.contains(&r.label) || r.score < policy.min_score {
+        let allowed = policy.allow.contains(&r.label)
+            || (policy.redact_qr_codes && r.label == crate::SpanLabel::QrCode);
+        if !allowed || r.score < policy.min_score {
             dropped += 1;
             continue;
         }
@@ -145,6 +151,8 @@ pub fn redact_frame(
         regions_redacted: redacted,
         regions_dropped: dropped,
         redacted_pixels: redacted_px,
+        uncertain_proposals_rescued: 0,
+        max_epistemic_std: 0.0,
         output_path,
     })
 }
@@ -205,6 +213,7 @@ mod tests {
         let policy = ImageRedactionPolicy {
             allow: vec![SpanLabel::Email, SpanLabel::Person],
             min_score: 0.9,
+            ..Default::default()
         };
         let out = redact_frame(&p, &regions, &policy).unwrap();
         assert_eq!(out.regions_redacted, 1);

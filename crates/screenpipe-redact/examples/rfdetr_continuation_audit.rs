@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         tiled_inference: true,
         extend_wrapped_secrets: extend,
         role_model_path: None,
+        ..Default::default()
     };
     let plain = RfdetrRedactor::load(cfg(false))?;
     let extended = RfdetrRedactor::load(cfg(true))?;

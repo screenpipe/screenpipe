@@ -39,6 +39,7 @@
 
 pub mod frame_redactor;
 pub mod secret_continuation;
+pub mod visual_pii;
 pub mod worker;
 
 use std::path::Path;
@@ -46,6 +47,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::role_fusion::RoleFusionUncertaintyStats;
 use crate::{RedactError, SpanLabel};
 
 /// One detection from an image PII model.
@@ -62,6 +64,14 @@ pub struct ImageRegion {
     /// Model confidence in `[0, 1]`. Compared against
     /// [`ImageRedactionPolicy::min_score`].
     pub score: f32,
+}
+
+/// Structured output from [`ImageRedactor::detect_detailed`], combining
+/// pixel-space detections with V5 role-fusion epistemic uncertainty telemetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImageDetectionReport {
+    pub regions: Vec<ImageRegion>,
+    pub uncertainty: RoleFusionUncertaintyStats,
 }
 
 /// Anything that takes an image and returns PII bounding boxes.
@@ -101,6 +111,37 @@ pub trait ImageRedactor: Send + Sync {
     ) -> Result<Vec<ImageRegion>, RedactError> {
         let _ = ax_nodes;
         self.detect(image_path).await
+    }
+
+    /// Run inference with explicit Enterprise Strict uncertainty rescue and
+    /// opt-in QR code detection flags, returning both regions and structured
+    /// `RoleFusionUncertaintyStats`.
+    ///
+    /// Default implementation delegates to [`Self::detect_with_a11y`] and only
+    /// scans for QR finder patterns when `detect_qr` is `true` (`0 ms` overhead
+    /// when disabled).
+    async fn detect_detailed(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        strict_uncertainty: bool,
+        detect_qr: bool,
+    ) -> Result<ImageDetectionReport, RedactError> {
+        let _ = strict_uncertainty;
+        let mut regions = self.detect_with_a11y(image_path, ax_nodes).await?;
+        if detect_qr {
+            let rgb = image::open(image_path)
+                .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
+                .to_rgb8();
+            crate::a11y_context::merge_image_regions(
+                &mut regions,
+                visual_pii::detect_qr_regions(&rgb),
+            );
+        }
+        Ok(ImageDetectionReport {
+            regions,
+            uncertainty: RoleFusionUncertaintyStats::default(),
+        })
     }
 }
 
@@ -146,6 +187,17 @@ pub struct ImageRedactionPolicy {
     pub allow: Vec<SpanLabel>,
     /// Score floor — detections below this are ignored.
     pub min_score: f32,
+    /// Enterprise Strict epistemic-uncertainty rescue: promotes borderline
+    /// (`keep_prob in [0.16, 0.30)`) high-disagreement (`epistemic_std >= 0.065`)
+    /// role-fusion proposals inside non-chrome content leaves and snaps them to
+    /// compact leaf `AxNode` bounds. Default `false` leaves Consumer Mode 100%
+    /// unchanged.
+    #[serde(default)]
+    pub strict_uncertainty: bool,
+    /// Opt-in visual QR-code finder-pattern detector (`"qr"` / `"qrcode"` /
+    /// `"visual"` / `"all"`). Default `false` incurs zero pixel-scan overhead.
+    #[serde(default)]
+    pub redact_qr_codes: bool,
 }
 
 impl Default for ImageRedactionPolicy {
@@ -155,6 +207,8 @@ impl Default for ImageRedactionPolicy {
         Self {
             allow: vec![SpanLabel::Secret],
             min_score: 0.50,
+            strict_uncertainty: false,
+            redact_qr_codes: false,
         }
     }
 }
@@ -167,17 +221,100 @@ impl ImageRedactionPolicy {
         Self {
             allow: vec![SpanLabel::Secret],
             min_score: 0.50,
+            strict_uncertainty: false,
+            redact_qr_codes: false,
         }
     }
 
     /// Build a policy from user-configured label names (the
     /// `piiRedactionLabels` setting), keeping the default `min_score`.
     /// See [`crate::span::parse_allow_list`] — Secret is always
-    /// included.
+    /// included. Opts into `redact_qr_codes` only when `"qr"`,
+    /// `"qrcode"`, `"qr_code"`, `"visual"`, or `"all"` is present.
     pub fn from_labels(labels: &[String]) -> Self {
+        let mut allow = crate::span::parse_allow_list(labels);
+        let mut redact_qr_codes = false;
+        for raw in labels {
+            let norm = raw.trim().to_ascii_lowercase();
+            if matches!(
+                norm.as_str(),
+                "qr" | "qrcode" | "qr_code" | "visual" | "all"
+            ) {
+                redact_qr_codes = true;
+                if !allow.contains(&SpanLabel::QrCode) {
+                    allow.push(SpanLabel::QrCode);
+                }
+            }
+            if norm == "all" {
+                for label in [
+                    SpanLabel::Person,
+                    SpanLabel::Email,
+                    SpanLabel::Phone,
+                    SpanLabel::Address,
+                    SpanLabel::Url,
+                    SpanLabel::Company,
+                    SpanLabel::Repo,
+                    SpanLabel::Handle,
+                    SpanLabel::Channel,
+                    SpanLabel::Id,
+                    SpanLabel::Date,
+                    SpanLabel::Secret,
+                    SpanLabel::QrCode,
+                ] {
+                    if !allow.contains(&label) {
+                        allow.push(label);
+                    }
+                }
+            }
+        }
         Self {
-            allow: crate::span::parse_allow_list(labels),
+            allow,
+            redact_qr_codes,
             ..Default::default()
+        }
+    }
+
+    /// Toggle Enterprise Strict epistemic-uncertainty rescue (`strict_uncertainty`).
+    pub fn with_strict_uncertainty(mut self, strict_uncertainty: bool) -> Self {
+        self.strict_uncertainty = strict_uncertainty;
+        self
+    }
+
+    /// Toggle opt-in QR code detection and ensure [`SpanLabel::QrCode`] is allowed.
+    pub fn with_qr_codes(mut self, redact_qr_codes: bool) -> Self {
+        self.redact_qr_codes = redact_qr_codes;
+        if redact_qr_codes && !self.allow.contains(&SpanLabel::QrCode) {
+            self.allow.push(SpanLabel::QrCode);
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn from_labels_defaults_keep_qr_and_strict_off() {
+        let empty = ImageRedactionPolicy::from_labels(&[]);
+        assert_eq!(empty.allow, vec![SpanLabel::Secret]);
+        assert!(!empty.strict_uncertainty);
+        assert!(!empty.redact_qr_codes);
+
+        let email = ImageRedactionPolicy::from_labels(&["email".into()]);
+        assert_eq!(email.allow, vec![SpanLabel::Secret, SpanLabel::Email]);
+        assert!(!email.redact_qr_codes);
+    }
+
+    #[test]
+    fn from_labels_enables_qr_for_qr_qrcode_visual_and_all() {
+        for tok in ["qr", "qrcode", "qr_code", "visual", "all"] {
+            let p = ImageRedactionPolicy::from_labels(&[tok.to_string()]);
+            assert!(p.redact_qr_codes, "expected redact_qr_codes for {tok}");
+            assert!(
+                p.allow.contains(&SpanLabel::QrCode),
+                "expected QrCode in allow for {tok}"
+            );
         }
     }
 }

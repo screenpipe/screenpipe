@@ -71,6 +71,8 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
+#[cfg(feature = "onnx-cpu")]
+use crate::image::ImageDetectionReport;
 use crate::image::{ImageRedactor, ImageRegion};
 use crate::RedactError;
 #[cfg(feature = "onnx-cpu")]
@@ -167,6 +169,10 @@ pub struct RfdetrConfig {
     /// `ax_nodes` are passed via [`ImageRedactor::detect_with_a11y`], fuses
     /// zero-text OS accessibility structure with vision proposals (~1.4 ms CPU).
     pub role_model_path: Option<PathBuf>,
+    /// Enterprise Strict epistemic-uncertainty rescue (`default = false`).
+    pub strict_uncertainty: bool,
+    /// Opt-in visual QR-code finder-pattern detector (`default = false`).
+    pub detect_qr: bool,
 }
 
 impl Default for RfdetrConfig {
@@ -187,6 +193,8 @@ impl Default for RfdetrConfig {
                 Some(v) => Some(PathBuf::from(v)),
                 None => Some(Self::default_role_model_path()),
             },
+            strict_uncertainty: false,
+            detect_qr: false,
         }
     }
 }
@@ -526,14 +534,34 @@ mod imp {
             image_path: &Path,
             ax_nodes: Option<&[crate::a11y_context::AxNode]>,
         ) -> Result<Vec<ImageRegion>, RedactError> {
+            self.infer_detailed(
+                image_path,
+                ax_nodes,
+                self.cfg.strict_uncertainty,
+                self.cfg.detect_qr,
+            )
+            .map(|r| r.regions)
+        }
+
+        fn infer_detailed(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            strict_uncertainty: bool,
+            detect_qr: bool,
+        ) -> Result<ImageDetectionReport, RedactError> {
             let img = image::open(image_path)
                 .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
                 .to_rgb8();
             let (orig_w, orig_h) = (img.width(), img.height());
             let big = should_tile_frame(orig_w, orig_h, self.input_size);
+            let strict_active = strict_uncertainty || self.cfg.strict_uncertainty;
+            let qr_active = detect_qr || self.cfg.detect_qr;
 
             let non_empty_ax = ax_nodes.filter(|nodes| !nodes.is_empty());
-            if let (Some(nodes), Some(role_mutex)) = (non_empty_ax, self.role_session.as_ref()) {
+            let (mut regions, uncertainty) = if let (Some(nodes), Some(role_mutex)) =
+                (non_empty_ax, self.role_session.as_ref())
+            {
                 let prop_floor = self
                     .cfg
                     .conf_threshold
@@ -548,38 +576,59 @@ mod imp {
                     raw_props.extend(self.infer_window_proposals(&img, x, y, w, h, prop_floor)?);
                 }
                 let nms_props = crate::role_fusion::suppress_proposal_overlaps(raw_props, 0.55);
-                let fused = self.run_role_fusion(role_mutex, &nms_props, nodes, orig_w, orig_h)?;
-                return Ok(suppress_overlaps(fused));
-            }
-
-            // Pure-vision path (or fallback when role ONNX is absent):
-            let mut regions = if !self.cfg.tiled_inference || !big {
-                let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
-                self.extend_wrapped_secrets(&img, regions)
+                let (fused, stats) = self.run_role_fusion(
+                    role_mutex,
+                    &nms_props,
+                    nodes,
+                    orig_w,
+                    orig_h,
+                    strict_active,
+                )?;
+                (suppress_overlaps(fused), stats)
             } else {
-                // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
-                // whole-frame pass, they do not replace it.
-                let mut all: Vec<ImageRegion> = Vec::new();
-                for (i, (x, y, w, h)) in inference_windows(orig_w, orig_h).into_iter().enumerate() {
-                    let regions = self.infer_window(&img, x, y, w, h)?;
-                    if i == 0 {
-                        // Guard C: only whole-frame secret detections are eligible
-                        // for continuation extension.
-                        all.extend(self.extend_wrapped_secrets(&img, regions));
-                    } else {
-                        all.extend(regions);
+                // Pure-vision path (or fallback when role ONNX is absent):
+                let mut regions = if !self.cfg.tiled_inference || !big {
+                    let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
+                    self.extend_wrapped_secrets(&img, regions)
+                } else {
+                    // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
+                    // whole-frame pass, they do not replace it.
+                    let mut all: Vec<ImageRegion> = Vec::new();
+                    for (i, (x, y, w, h)) in
+                        inference_windows(orig_w, orig_h).into_iter().enumerate()
+                    {
+                        let regions = self.infer_window(&img, x, y, w, h)?;
+                        if i == 0 {
+                            // Guard C: only whole-frame secret detections are eligible
+                            // for continuation extension.
+                            all.extend(self.extend_wrapped_secrets(&img, regions));
+                        } else {
+                            all.extend(regions);
+                        }
                     }
+                    suppress_overlaps(all)
+                };
+
+                if let Some(nodes) = non_empty_ax {
+                    crate::a11y_context::merge_image_regions(
+                        &mut regions,
+                        crate::role_fusion::forced_a11y_secret_regions(nodes, orig_w, orig_h),
+                    );
                 }
-                suppress_overlaps(all)
+                (regions, Default::default())
             };
 
-            if let Some(nodes) = non_empty_ax {
+            if qr_active {
                 crate::a11y_context::merge_image_regions(
                     &mut regions,
-                    crate::role_fusion::forced_a11y_secret_regions(nodes, orig_w, orig_h),
+                    crate::image::visual_pii::detect_qr_regions(&img),
                 );
             }
-            Ok(regions)
+
+            Ok(ImageDetectionReport {
+                regions,
+                uncertainty,
+            })
         }
 
         fn run_role_fusion(
@@ -589,15 +638,26 @@ mod imp {
             nodes: &[crate::a11y_context::AxNode],
             orig_w: u32,
             orig_h: u32,
-        ) -> Result<Vec<ImageRegion>, RedactError> {
+            strict_uncertainty: bool,
+        ) -> Result<
+            (
+                Vec<ImageRegion>,
+                crate::role_fusion::RoleFusionUncertaintyStats,
+            ),
+            RedactError,
+        > {
             use crate::role_fusion::{
-                featurize_frame_v46, forced_a11y_secret_regions, fuse_proposals_with_role_outputs,
-                BOX_FEAT_DIM_V46, MAX_NODES, MAX_PROPOSALS, NODE_FEAT_DIM, REL_FEAT_DIM,
+                featurize_frame_v46, forced_a11y_secret_regions,
+                fuse_proposals_with_role_outputs_ext, RoleFusionUncertaintyStats, BOX_FEAT_DIM_V46,
+                MAX_NODES, MAX_PROPOSALS, NODE_FEAT_DIM, REL_FEAT_DIM,
             };
 
             let (bf, nf, rf, sorted_props) = featurize_frame_v46(nms_props, nodes, orig_w, orig_h);
             if sorted_props.is_empty() {
-                return Ok(forced_a11y_secret_regions(nodes, orig_w, orig_h));
+                return Ok((
+                    forced_a11y_secret_regions(nodes, orig_w, orig_h),
+                    RoleFusionUncertaintyStats::default(),
+                ));
             }
 
             let box_arr = Array3::<f32>::from_shape_vec((1, MAX_PROPOSALS, BOX_FEAT_DIM_V46), bf)
@@ -641,7 +701,7 @@ mod imp {
             let box_delta = box_delta
                 .ok_or_else(|| RedactError::Runtime("missing role box_delta output".into()))?;
 
-            Ok(fuse_proposals_with_role_outputs(
+            Ok(fuse_proposals_with_role_outputs_ext(
                 &sorted_props,
                 &keep_prob,
                 &epistemic_std,
@@ -650,6 +710,7 @@ mod imp {
                 orig_w,
                 orig_h,
                 self.cfg.conf_threshold,
+                strict_uncertainty,
             ))
         }
 
@@ -917,6 +978,17 @@ mod imp {
         ) -> Result<Vec<ImageRegion>, RedactError> {
             tokio::task::block_in_place(|| self.infer_with_a11y(image_path, ax_nodes))
         }
+        async fn detect_detailed(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            strict_uncertainty: bool,
+            detect_qr: bool,
+        ) -> Result<ImageDetectionReport, RedactError> {
+            tokio::task::block_in_place(|| {
+                self.infer_detailed(image_path, ax_nodes, strict_uncertainty, detect_qr)
+            })
+        }
     }
 
     pub(super) fn parse_input_size_from_dtype_debug(s: &str) -> Option<u32> {
@@ -1079,6 +1151,7 @@ mod tests {
             tiled_inference: true,
             extend_wrapped_secrets: true,
             role_model_path: None,
+            ..Default::default()
         };
         let res = RfdetrRedactor::load(cfg);
         assert!(matches!(res, Err(RedactError::Unavailable(_))));
@@ -1199,6 +1272,7 @@ mod tests {
                 tiled_inference: true,
                 extend_wrapped_secrets: true,
                 role_model_path: None,
+                ..Default::default()
             };
             // This must return Err, not panic.
             let res = RfdetrRedactor::load(cfg);
@@ -1230,6 +1304,7 @@ mod tests {
             tiled_inference: true,
             extend_wrapped_secrets: true,
             role_model_path: None,
+            ..Default::default()
         };
         // Wrong-checksum file → ensure_model_present tries to
         // download. Network may or may not be available in CI, so

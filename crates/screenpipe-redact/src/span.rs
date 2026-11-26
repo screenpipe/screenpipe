@@ -45,6 +45,10 @@ pub enum SpanLabel {
     Sensitive,
     /// Explicit dollar / USD amounts in text. Regex-only, opt-in; no image coverage.
     DollarAmount,
+    /// Opt-in non-text visual QR / 2D matrix code (e.g. 2FA TOTP setup,
+    /// device pairing, wallet / Wi-Fi credentials). Emitted only when visual
+    /// QR detection is explicitly enabled.
+    QrCode,
 }
 
 impl SpanLabel {
@@ -66,6 +70,7 @@ impl SpanLabel {
             Self::Secret => "[SECRET]",
             Self::Sensitive => "[SENSITIVE]",
             Self::DollarAmount => "[DOLLAR_AMOUNT]",
+            Self::QrCode => "[QR_CODE]",
         }
     }
 
@@ -90,6 +95,7 @@ impl SpanLabel {
             "secret" => Self::Secret,
             "sensitive" => Self::Sensitive,
             "dollar_amount" => Self::DollarAmount,
+            "qr_code" | "qrcode" | "qr" => Self::QrCode,
             _ => return None,
         })
     }
@@ -434,6 +440,10 @@ mod tests {
             SpanLabel::from_wire("sensitive"),
             Some(SpanLabel::Sensitive)
         );
+        assert_eq!(SpanLabel::from_wire("qr"), Some(SpanLabel::QrCode));
+        assert_eq!(SpanLabel::from_wire("QRCode"), Some(SpanLabel::QrCode));
+        assert_eq!(SpanLabel::from_wire("qr_code"), Some(SpanLabel::QrCode));
+        assert_eq!(SpanLabel::QrCode.placeholder(), "[QR_CODE]");
         assert_eq!(SpanLabel::from_wire("nonsense"), None);
         assert_eq!(SpanLabel::from_wire(""), None);
     }

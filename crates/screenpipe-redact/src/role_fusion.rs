@@ -23,6 +23,22 @@ pub const BOX_FEAT_DIM_V46: usize = 108;
 pub const NODE_FEAT_DIM: usize = 42;
 pub const REL_FEAT_DIM: usize = 6;
 pub const ROLE_PROPOSAL_FLOOR: f32 = 0.04;
+pub const KEEP_GATE: f32 = 0.30;
+pub const STRICT_UNCERTAINTY_MIN_PROB: f32 = 0.16;
+pub const STRICT_UNCERTAINTY_MIN_STD: f32 = 0.065;
+pub const COMPACT_LEAF_MAX_AREA: f32 = 0.025;
+pub const COMPACT_LEAF_MAX_HEIGHT: f32 = 0.06;
+
+/// Per-frame epistemic-uncertainty telemetry emitted by `pii_role_fusion_v4.onnx`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RoleFusionUncertaintyStats {
+    /// Count of borderline (`keep_prob in [0.16, 0.30)`) high-disagreement
+    /// (`epistemic_std >= 0.065`) proposals inside non-chrome content leaves
+    /// rescued when `strict_uncertainty` is enabled. Always `0` in default mode.
+    pub uncertain_proposals_rescued: usize,
+    /// Maximum `epistemic_std` observed across evaluated proposals on the frame.
+    pub max_epistemic_std: f32,
+}
 
 #[derive(Debug, Clone)]
 pub struct VisionProposal {
@@ -805,8 +821,179 @@ pub fn featurize_frame_v46(
     (box_feats, node_feats, rel_feats, sorted_props)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EnclosingContentLeaf {
+    /// Pixel bbox `[x, y, w, h]` of the enclosing leaf `AxNode` when compact
+    /// (`area <= 0.025` and `height <= 0.06`), or `None` when the leaf is too
+    /// large to container-mask safely (in which case only the proposal's
+    /// `box_delta`-refined bbox is masked).
+    compact_bbox: Option<[u32; 4]>,
+}
+
+fn is_chrome_or_control_role(role_id: usize) -> bool {
+    matches!(
+        role_id,
+        ROLE_TOOLBAR
+            | ROLE_NAVIGATION
+            | ROLE_COMPLEMENTARY
+            | ROLE_BUTTON
+            | ROLE_LINK
+            | ROLE_TAB
+            | ROLE_MENU_ITEM
+            | ROLE_POPUP_BUTTON
+            | ROLE_COMBO_BOX
+            | ROLE_SEARCH_FIELD
+            | ROLE_CHECK_BOX
+            | ROLE_RADIO_BUTTON
+            | ROLE_COLUMN_HEADER
+    )
+}
+
+fn is_chrome_landmark(lm: &str) -> bool {
+    matches!(
+        lm.trim().to_ascii_lowercase().as_str(),
+        "toolbar" | "nav" | "sidebar" | "code"
+    )
+}
+
+/// Check whether `bbox` sits inside a non-chrome content leaf (`AXStaticText`,
+/// `AXCell`, `AXTextField`, `AXTextArea` inside `main`, `article`, or a `table`
+/// data row — never `toolbar`, `nav`, `sidebar`, `AXButton`, `AXTab`, or
+/// `AXColumnHeader`).
+fn find_enclosing_content_leaf(
+    bbox: [u32; 4],
+    ax_nodes: &[AxNode],
+    img_w: u32,
+    img_h: u32,
+) -> Option<EnclosingContentLeaf> {
+    if img_w == 0 || img_h == 0 || ax_nodes.is_empty() {
+        return None;
+    }
+    let (bx, by, bw, bh) = (
+        bbox[0] as f32,
+        bbox[1] as f32,
+        (bbox[2] as f32).max(1.0),
+        (bbox[3] as f32).max(1.0),
+    );
+    let (x1, y1, x2, y2) = (bx, by, bx + bw, by + bh);
+    let (fw, fh) = (img_w as f32, img_h as f32);
+
+    let mut best_idx: Option<usize> = None;
+    let mut best_area = f32::INFINITY;
+    for (idx, n) in ax_nodes.iter().enumerate() {
+        let role_id = normalize_role_id(&n.role);
+        if is_container_role(role_id) {
+            continue;
+        }
+        let Some(b) = n.bounds else {
+            continue;
+        };
+        let (nx1, ny1, nw, nh) = (b.left * fw, b.top * fh, b.width * fw, b.height * fh);
+        if nw <= 2.0 || nh <= 2.0 {
+            continue;
+        }
+        let (nx2, ny2) = (nx1 + nw, ny1 + nh);
+        let ix = (x2.min(nx2) - x1.max(nx1)).max(0.0);
+        let iy = (y2.min(ny2) - y1.max(ny1)).max(0.0);
+        let area = nw * nh;
+        if (ix * iy) / (bw * bh).max(1.0) >= 0.50 && area < best_area {
+            best_area = area;
+            best_idx = Some(idx);
+        }
+    }
+
+    let leaf_idx = best_idx?;
+    let leaf = &ax_nodes[leaf_idx];
+    let leaf_role = normalize_role_id(&leaf.role);
+    if !matches!(
+        leaf_role,
+        ROLE_STATIC_TEXT | ROLE_CELL | ROLE_TEXT_FIELD | ROLE_TEXT_AREA
+    ) {
+        return None;
+    }
+
+    let mut in_main_or_article = matches!(
+        leaf.landmark.trim().to_ascii_lowercase().as_str(),
+        "main" | "article"
+    );
+    let mut in_table_data = leaf_role == ROLE_CELL || leaf.landmark.eq_ignore_ascii_case("table");
+
+    let mut cur_idx = Some(leaf_idx);
+    let mut hops = 0usize;
+    let mut visited = [usize::MAX; 16];
+    while let Some(idx) = cur_idx {
+        if hops >= 16 || visited[..hops].contains(&idx) {
+            break;
+        }
+        visited[hops] = idx;
+        hops += 1;
+
+        let node = ax_nodes.get(idx)?;
+        let r_id = normalize_role_id(&node.role);
+        if is_chrome_or_control_role(r_id) || is_chrome_landmark(&node.landmark) {
+            return None;
+        }
+        if matches!(r_id, ROLE_MAIN | ROLE_ARTICLE)
+            || matches!(
+                node.landmark.trim().to_ascii_lowercase().as_str(),
+                "main" | "article"
+            )
+        {
+            in_main_or_article = true;
+        }
+        if matches!(r_id, ROLE_CELL | ROLE_ROW | ROLE_TABLE) {
+            in_table_data = true;
+        }
+        if r_id == ROLE_ROW {
+            // Reject table header rows whose children include `AXColumnHeader`.
+            let row_i32 = idx as i32;
+            if ax_nodes.iter().any(|ch| {
+                ch.parent_idx == row_i32 && normalize_role_id(&ch.role) == ROLE_COLUMN_HEADER
+            }) {
+                return None;
+            }
+        }
+
+        cur_idx = if node.parent_idx >= 0 && (node.parent_idx as usize) < ax_nodes.len() {
+            Some(node.parent_idx as usize)
+        } else {
+            None
+        };
+    }
+
+    if !(in_main_or_article || in_table_data) {
+        return None;
+    }
+
+    let b = leaf.bounds?;
+    let norm_area = b.width * b.height;
+    let compact_bbox = if norm_area <= COMPACT_LEAF_MAX_AREA && b.height <= COMPACT_LEAF_MAX_HEIGHT
+    {
+        let ix1 = (b.left * fw + 1e-4).floor().max(0.0) as u32;
+        let iy1 = (b.top * fh + 1e-4).floor().max(0.0) as u32;
+        let ix2 = ((b.left + b.width) * fw - 1e-4)
+            .ceil()
+            .min(fw)
+            .max((ix1 + 1) as f32) as u32;
+        let iy2 = ((b.top + b.height) * fh - 1e-4)
+            .ceil()
+            .min(fh)
+            .max((iy1 + 1) as f32) as u32;
+        if ix2 > ix1 && iy2 > iy1 {
+            Some([ix1, iy1, ix2 - ix1, iy2 - iy1])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Some(EnclosingContentLeaf { compact_bbox })
+}
+
 /// Apply role-fusion outputs (`keep_prob`, `epistemic_std`, `box_delta`) +
-/// monotonic-safe box refinement + deterministic password bounds.
+/// monotonic-safe box refinement + deterministic password bounds in Default
+/// Consumer Mode (`strict_uncertainty = false`).
 #[allow(clippy::too_many_arguments)]
 pub fn fuse_proposals_with_role_outputs(
     sorted_props: &[VisionProposal],
@@ -818,7 +1005,35 @@ pub fn fuse_proposals_with_role_outputs(
     img_h: u32,
     min_output_score: f32,
 ) -> Vec<ImageRegion> {
-    const KEEP_GATE: f32 = 0.30;
+    fuse_proposals_with_role_outputs_ext(
+        sorted_props,
+        keep_probs,
+        epistemic_stds,
+        box_deltas,
+        ax_nodes,
+        img_w,
+        img_h,
+        min_output_score,
+        false,
+    )
+    .0
+}
+
+/// Apply role-fusion outputs with optional Enterprise Strict uncertainty
+/// rescue (`strict_uncertainty = true`) and return structured uncertainty
+/// telemetry alongside the resulting regions.
+#[allow(clippy::too_many_arguments)]
+pub fn fuse_proposals_with_role_outputs_ext(
+    sorted_props: &[VisionProposal],
+    keep_probs: &[f32],
+    epistemic_stds: &[f32],
+    box_deltas: &[f32],
+    ax_nodes: &[AxNode],
+    img_w: u32,
+    img_h: u32,
+    min_output_score: f32,
+    strict_uncertainty: bool,
+) -> (Vec<ImageRegion>, RoleFusionUncertaintyStats) {
     const BOOST_GATE: f32 = 0.88;
     const DELTA_SCALE: f32 = 1.35;
     const INWARD_MIN_WIDTH_PX: f32 = 96.0;
@@ -826,17 +1041,38 @@ pub fn fuse_proposals_with_role_outputs(
 
     let (fw, fh) = (img_w as f32, img_h as f32);
     let mut regions: Vec<ImageRegion> = Vec::new();
+    let mut stats = RoleFusionUncertaintyStats::default();
 
     for (i, pr) in sorted_props.iter().enumerate() {
         let vis_s = pr.score;
         let role_p = keep_probs.get(i).copied().unwrap_or(0.0);
         let ep_std = epistemic_stds.get(i).copied().unwrap_or(0.0);
+        stats.max_epistemic_std = stats.max_epistemic_std.max(ep_std);
 
+        let mut snapped_leaf_bbox: Option<[u32; 4]> = None;
         let new_s = if role_p >= BOOST_GATE && ep_std <= 0.16 && vis_s >= 0.065 {
             let boosted = 0.52 + 0.42 * ((role_p - BOOST_GATE) / (1.0 - BOOST_GATE).max(1e-4));
             (vis_s * (0.96 + 0.12 * role_p)).max(boosted).min(0.999)
         } else if role_p >= KEEP_GATE {
             (vis_s * (0.96 + 0.12 * role_p)).min(0.999)
+        } else if strict_uncertainty
+            && (STRICT_UNCERTAINTY_MIN_PROB..KEEP_GATE).contains(&role_p)
+            && ep_std >= STRICT_UNCERTAINTY_MIN_STD
+        {
+            if let Some(leaf_hit) = find_enclosing_content_leaf(pr.bbox, ax_nodes, img_w, img_h) {
+                stats.uncertain_proposals_rescued += 1;
+                snapped_leaf_bbox = leaf_hit.compact_bbox;
+                let band_t = ((role_p - STRICT_UNCERTAINTY_MIN_PROB)
+                    / (KEEP_GATE - STRICT_UNCERTAINTY_MIN_PROB).max(1e-4))
+                .clamp(0.0, 1.0);
+                (0.50 + 0.22 * band_t)
+                    .max(min_output_score)
+                    .max(vis_s * (0.96 + 0.12 * role_p))
+                    .min(0.999)
+            } else {
+                let ratio = role_p / KEEP_GATE;
+                (vis_s * 0.45).min(0.285) * ratio
+            }
         } else {
             let ratio = role_p / KEEP_GATE;
             (vis_s * 0.45).min(0.285) * ratio
@@ -851,7 +1087,9 @@ pub fn fuse_proposals_with_role_outputs(
         }
 
         let mut bbox = pr.bbox;
-        if rounded_s >= 0.30 && box_deltas.len() >= (i + 1) * 4 {
+        if let Some(leaf_bbox) = snapped_leaf_bbox {
+            bbox = leaf_bbox;
+        } else if rounded_s >= 0.30 && box_deltas.len() >= (i + 1) * 4 {
             let dl = &box_deltas[i * 4..(i + 1) * 4];
             let (bx, by, bw, bh) = (
                 bbox[0] as f32,
@@ -924,7 +1162,7 @@ pub fn fuse_proposals_with_role_outputs(
         }
     }
 
-    regions
+    (regions, stats)
 }
 
 #[cfg(test)]
@@ -998,5 +1236,164 @@ mod tests {
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].label, SpanLabel::Secret);
         assert_eq!(fused[0].score, 1.0);
+    }
+
+    #[test]
+    fn strict_uncertainty_rescues_borderline_high_std_content_leaf_and_snaps_compact_bounds() {
+        let nodes = extract_text_free_ax_nodes(
+            r#"[
+              {"role":"AXGroup","depth":0,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":1.0}},
+              {"role":"AXMain","depth":1,"bounds":{"left":0.0,"top":0.08,"width":1.0,"height":0.92}},
+              {"role":"AXTable","depth":2,"bounds":{"left":0.05,"top":0.20,"width":0.90,"height":0.50}},
+              {"role":"AXRow","depth":3,"bounds":{"left":0.05,"top":0.25,"width":0.90,"height":0.04}},
+              {"role":"AXCell","depth":4,"bounds":{"left":0.20,"top":0.25,"width":0.15,"height":0.04}}
+            ]"#,
+        );
+        let mut probs = [0.002f32; 12];
+        probs[0] = 0.24; // Person
+        let props = vec![VisionProposal {
+            // Partial glyph bbox inside the compact AXCell [200, 200, 150, 32] on 1000x800
+            bbox: [215, 204, 65, 20],
+            label: SpanLabel::Person,
+            score: 0.24,
+            probs12: probs,
+        }];
+
+        // Default Consumer Mode (`strict_uncertainty = false`): untouched (dropped)
+        let (def_regions, def_stats) = fuse_proposals_with_role_outputs_ext(
+            &props,
+            &[0.22], // borderline in [0.16, 0.30)
+            &[0.11], // high ensemble disagreement >= 0.065
+            &[0.0, 0.0, 0.0, 0.0],
+            &nodes,
+            1000,
+            800,
+            0.30,
+            false,
+        );
+        assert!(def_regions.is_empty());
+        assert_eq!(def_stats.uncertain_proposals_rescued, 0);
+        assert!((def_stats.max_epistemic_std - 0.11).abs() < 1e-5);
+
+        // Enterprise Strict Mode (`strict_uncertainty = true`): rescued & snapped to compact AXCell [200, 200, 150, 32]
+        let (strict_regions, strict_stats) = fuse_proposals_with_role_outputs_ext(
+            &props,
+            &[0.22],
+            &[0.11],
+            &[0.0, 0.0, 0.0, 0.0],
+            &nodes,
+            1000,
+            800,
+            0.50,
+            true,
+        );
+        assert_eq!(strict_regions.len(), 1);
+        assert_eq!(strict_stats.uncertain_proposals_rescued, 1);
+        assert_eq!(strict_regions[0].label, SpanLabel::Person);
+        assert_eq!(strict_regions[0].bbox, [200, 200, 150, 32]);
+        assert!(strict_regions[0].score >= 0.50);
+
+        // Confident ensemble veto (`epistemic_std < 0.065`) is NOT rescued even in strict mode
+        let (veto_regions, veto_stats) = fuse_proposals_with_role_outputs_ext(
+            &props,
+            &[0.22],
+            &[0.03],
+            &[0.0, 0.0, 0.0, 0.0],
+            &nodes,
+            1000,
+            800,
+            0.30,
+            true,
+        );
+        assert!(veto_regions.is_empty());
+        assert_eq!(veto_stats.uncertain_proposals_rescued, 0);
+    }
+
+    #[test]
+    fn strict_uncertainty_non_compact_leaf_uses_delta_bbox_not_full_container() {
+        let nodes = extract_text_free_ax_nodes(
+            r#"[
+              {"role":"AXMain","depth":0,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":1.0}},
+              {"role":"AXTextArea","depth":1,"bounds":{"left":0.10,"top":0.10,"width":0.60,"height":0.25}}
+            ]"#,
+        );
+        let mut probs = [0.002f32; 12];
+        probs[1] = 0.25;
+        let props = vec![VisionProposal {
+            bbox: [150, 120, 110, 20],
+            label: SpanLabel::Email,
+            score: 0.25,
+            probs12: probs,
+        }];
+        let (regions, stats) = fuse_proposals_with_role_outputs_ext(
+            &props,
+            &[0.24],
+            &[0.09],
+            &[0.0, 0.0, 0.0, 0.0],
+            &nodes,
+            1000,
+            800,
+            0.50,
+            true,
+        );
+        assert_eq!(stats.uncertain_proposals_rescued, 1);
+        assert_eq!(regions.len(), 1);
+        // Must NOT swallow the 600x200 AXTextArea (`area = 0.15 > 0.025`, `height = 0.25 > 0.06`)
+        assert_eq!(regions[0].bbox, [150, 120, 110, 20]);
+    }
+
+    #[test]
+    fn strict_uncertainty_never_rescues_toolbar_nav_sidebar_button_tab_or_column_header() {
+        let nodes = extract_text_free_ax_nodes(
+            r#"[
+              {"role":"AXGroup","depth":0,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":1.0}},
+              {"role":"AXToolbar","depth":1,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":0.08}},
+              {"role":"AXStaticText","depth":2,"bounds":{"left":0.05,"top":0.02,"width":0.10,"height":0.03}},
+              {"role":"AXNavigation","depth":1,"bounds":{"left":0.0,"top":0.08,"width":0.18,"height":0.92}},
+              {"role":"AXStaticText","depth":2,"bounds":{"left":0.02,"top":0.15,"width":0.12,"height":0.03}},
+              {"role":"AXComplementary","depth":1,"bounds":{"left":0.82,"top":0.08,"width":0.18,"height":0.92}},
+              {"role":"AXStaticText","depth":2,"bounds":{"left":0.84,"top":0.15,"width":0.12,"height":0.03}},
+              {"role":"AXMain","depth":1,"bounds":{"left":0.18,"top":0.08,"width":0.64,"height":0.92}},
+              {"role":"AXButton","depth":2,"bounds":{"left":0.20,"top":0.12,"width":0.12,"height":0.04}},
+              {"role":"AXStaticText","depth":3,"bounds":{"left":0.21,"top":0.125,"width":0.10,"height":0.03}},
+              {"role":"AXTab","depth":2,"bounds":{"left":0.35,"top":0.12,"width":0.12,"height":0.04}},
+              {"role":"AXTable","depth":2,"bounds":{"left":0.20,"top":0.25,"width":0.60,"height":0.40}},
+              {"role":"AXRow","depth":3,"bounds":{"left":0.20,"top":0.25,"width":0.60,"height":0.04}},
+              {"role":"AXColumnHeader","depth":4,"bounds":{"left":0.20,"top":0.25,"width":0.15,"height":0.04}},
+              {"role":"AXStaticText","depth":5,"bounds":{"left":0.21,"top":0.255,"width":0.12,"height":0.03}}
+            ]"#,
+        );
+        let mut probs = [0.002f32; 12];
+        probs[9] = 0.28;
+        let chrome_boxes = [
+            [55, 18, 80, 20],   // toolbar AXStaticText
+            [25, 122, 90, 20],  // nav AXStaticText
+            [845, 122, 90, 20], // sidebar AXStaticText
+            [215, 102, 80, 20], // main -> AXButton -> AXStaticText
+            [355, 100, 90, 24], // main -> AXTab
+            [215, 206, 90, 20], // main -> AXTable -> AXRow -> AXColumnHeader -> AXStaticText
+        ];
+        let props: Vec<VisionProposal> = chrome_boxes
+            .into_iter()
+            .map(|bbox| VisionProposal {
+                bbox,
+                label: SpanLabel::Id,
+                score: 0.28,
+                probs12: probs,
+            })
+            .collect();
+        let kp = vec![0.24; props.len()];
+        let ep = vec![0.18; props.len()];
+        let dl = vec![0.0; props.len() * 4];
+
+        let (regions, stats) = fuse_proposals_with_role_outputs_ext(
+            &props, &kp, &ep, &dl, &nodes, 1000, 800, 0.30, true,
+        );
+        assert!(
+            regions.is_empty(),
+            "structural chrome must NEVER be rescued in strict mode: {regions:?}"
+        );
+        assert_eq!(stats.uncertain_proposals_rescued, 0);
+        assert!((stats.max_epistemic_std - 0.18).abs() < 1e-5);
     }
 }

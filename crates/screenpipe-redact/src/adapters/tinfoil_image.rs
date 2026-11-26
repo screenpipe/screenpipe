@@ -52,7 +52,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::adapters::tinfoil::{looks_like_attestation_drift, strip_scheme_and_path};
-use crate::image::{ImageRedactor, ImageRegion};
+use crate::image::{ImageDetectionReport, ImageRedactor, ImageRegion};
+use crate::role_fusion::RoleFusionUncertaintyStats;
 use crate::{RedactError, SpanLabel};
 
 const DEFAULT_ENCLAVE: &str = "pii.screenpipe.containers.tinfoil.dev";
@@ -95,6 +96,10 @@ pub struct TinfoilImageConfig {
     /// back. Empty = enclave default. Populated from the
     /// `piiRedactionLabels` setting.
     pub labels: Vec<String>,
+    /// Enable Enterprise Strict epistemic-uncertainty rescue on `/image/detect`.
+    pub strict_mode: bool,
+    /// Enable opt-in visual QR-code finder-pattern detection on `/image/detect`.
+    pub detect_qr: bool,
 }
 
 /// See sibling `tinfoil::CachedClient` for the rationale on holding
@@ -114,6 +119,8 @@ pub struct TinfoilImageRedactor {
     /// Server-side label allow-list forwarded on every request; empty =
     /// enclave default.
     labels: Vec<String>,
+    strict_mode: bool,
+    detect_qr: bool,
     client: RwLock<Option<CachedClient>>,
     has_auth: bool,
 }
@@ -176,6 +183,14 @@ impl TinfoilImageRedactor {
             0.30
         };
 
+        let detect_qr = cfg.detect_qr
+            || cfg.labels.iter().any(|l| {
+                matches!(
+                    l.trim().to_ascii_lowercase().as_str(),
+                    "qr" | "qrcode" | "qr_code" | "visual" | "all"
+                )
+            });
+
         Self {
             enclave,
             repo,
@@ -185,6 +200,8 @@ impl TinfoilImageRedactor {
             // Dollar amounts are handled by the local text regex pre-pass.
             // The deployed enclave taxonomy has no such model category.
             labels: super::model_labels(cfg.labels),
+            strict_mode: cfg.strict_mode,
+            detect_qr,
             client: RwLock::new(None),
             has_auth,
         }
@@ -257,11 +274,19 @@ struct DetectRequest<'a> {
     /// absent or empty; ignored cleanly by older enclave builds.
     #[serde(skip_serializing_if = "Option::is_none")]
     ax_nodes: Option<&'a [crate::a11y_context::AxNode]>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    strict_mode: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    detect_qr: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct DetectResponse {
     detections: Vec<RawDetection>,
+    #[serde(default)]
+    uncertain_proposals_rescued: usize,
+    #[serde(default)]
+    max_epistemic_std: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,11 +315,25 @@ impl ImageRedactor for TinfoilImageRedactor {
         image_path: &Path,
         ax_nodes: Option<&[crate::a11y_context::AxNode]>,
     ) -> Result<Vec<ImageRegion>, RedactError> {
+        self.detect_detailed(image_path, ax_nodes, self.strict_mode, self.detect_qr)
+            .await
+            .map(|r| r.regions)
+    }
+
+    async fn detect_detailed(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        strict_uncertainty: bool,
+        detect_qr: bool,
+    ) -> Result<ImageDetectionReport, RedactError> {
         let bytes = tokio::fs::read(image_path)
             .await
             .map_err(|e| RedactError::Runtime(format!("read {}: {e}", image_path.display())))?;
         let image_b64 = B64.encode(&bytes);
         let ax_nodes = ax_nodes.filter(|nodes| !nodes.is_empty());
+        let strict_active = self.strict_mode || strict_uncertainty;
+        let qr_active = self.detect_qr || detect_qr;
 
         let http = self.http().await?;
         let mut req = http
@@ -305,6 +344,8 @@ impl ImageRedactor for TinfoilImageRedactor {
                 threshold: self.threshold,
                 labels: &self.labels,
                 ax_nodes,
+                strict_mode: strict_active,
+                detect_qr: qr_active,
             });
         if let Some(b) = &self.bearer {
             req = req.header(AUTHORIZATION, b.clone());
@@ -347,7 +388,13 @@ impl ImageRedactor for TinfoilImageRedactor {
                 score: d.score,
             });
         }
-        Ok(out)
+        Ok(ImageDetectionReport {
+            regions: out,
+            uncertainty: RoleFusionUncertaintyStats {
+                uncertain_proposals_rescued: parsed.uncertain_proposals_rescued,
+                max_epistemic_std: parsed.max_epistemic_std,
+            },
+        })
     }
 }
 
@@ -365,6 +412,7 @@ fn parse_label(s: &str) -> Option<SpanLabel> {
         "private_id" => SpanLabel::Id,
         "private_date" => SpanLabel::Date,
         "secret" => SpanLabel::Secret,
+        "qr_code" | "qrcode" | "qr" => SpanLabel::QrCode,
         _ => return None,
     })
 }
@@ -400,6 +448,8 @@ mod tests {
             timeout: None,
             threshold: 0.0,
             labels: vec![],
+            strict_mode: false,
+            detect_qr: false,
         }
     }
 
@@ -426,6 +476,7 @@ mod tests {
     fn parse_label_round_trip() {
         assert_eq!(parse_label("private_person"), Some(SpanLabel::Person));
         assert_eq!(parse_label("secret"), Some(SpanLabel::Secret));
+        assert_eq!(parse_label("qr_code"), Some(SpanLabel::QrCode));
         assert_eq!(parse_label("nonsense"), None);
     }
 
@@ -448,9 +499,13 @@ mod tests {
             threshold: 0.30,
             labels: &labels,
             ax_nodes: None,
+            strict_mode: false,
+            detect_qr: false,
         })
         .unwrap();
         assert!(!no_ax.contains("ax_nodes"));
+        assert!(!no_ax.contains("strict_mode"));
+        assert!(!no_ax.contains("detect_qr"));
 
         let nodes = crate::a11y_context::extract_text_free_ax_nodes(
             r#"[{"role":"AXTextField","depth":1,"value":"sk-live-secret-999","placeholder":"API token","bounds":{"left":0.2,"top":0.3,"width":0.4,"height":0.05}}]"#,
@@ -460,9 +515,13 @@ mod tests {
             threshold: 0.30,
             labels: &labels,
             ax_nodes: Some(&nodes),
+            strict_mode: true,
+            detect_qr: true,
         })
         .unwrap();
         assert!(with_ax.contains("\"ax_nodes\""));
+        assert!(with_ax.contains("\"strict_mode\":true"));
+        assert!(with_ax.contains("\"detect_qr\":true"));
         assert!(with_ax.contains("\"has_cred_hint\":true"));
         assert!(!with_ax.contains("sk-live-secret-999"));
         assert!(!with_ax.contains("API token"));

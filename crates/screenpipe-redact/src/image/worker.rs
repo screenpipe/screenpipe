@@ -87,6 +87,8 @@ pub struct ImageWorkerStatus {
     pub paused: bool,
     pub frames_redacted_total: u64,
     pub regions_redacted_total: u64,
+    pub uncertain_proposals_rescued_total: u64,
+    pub last_max_epistemic_std: f32,
     pub last_error: Option<String>,
     pub last_redacted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -368,10 +370,16 @@ impl ImageWorker {
             .as_deref()
             .map(crate::a11y_context::extract_text_free_ax_nodes)
             .filter(|nodes| !nodes.is_empty());
-        let mut regions = self
+        let report = self
             .redactor
-            .detect_with_a11y(path, ax_nodes.as_deref())
+            .detect_detailed(
+                path,
+                ax_nodes.as_deref(),
+                self.cfg.policy.strict_uncertainty,
+                self.cfg.policy.redact_qr_codes,
+            )
             .await?;
+        let mut regions = report.regions;
         if let Some(tree) = accessibility_tree_json.as_deref() {
             let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
                 anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
@@ -384,14 +392,18 @@ impl ImageWorker {
             let a11y_regions = context.forced_image_regions(image_width, image_height);
             crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
         }
-        let outcome =
+        let mut outcome =
             redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
+        outcome.uncertain_proposals_rescued = report.uncertainty.uncertain_proposals_rescued;
+        outcome.max_epistemic_std = report.uncertainty.max_epistemic_std;
 
         self.mark_redacted(id).await?;
 
         let mut s = self.status.lock().await;
         s.frames_redacted_total += 1;
         s.regions_redacted_total += outcome.regions_redacted as u64;
+        s.uncertain_proposals_rescued_total += outcome.uncertain_proposals_rescued as u64;
+        s.last_max_epistemic_std = outcome.max_epistemic_std;
         s.last_redacted_at = Some(chrono::Utc::now());
         s.last_error = None;
 
@@ -461,10 +473,16 @@ impl ImageWorker {
                 let ax_nodes = tree_json
                     .map(crate::a11y_context::extract_text_free_ax_nodes)
                     .filter(|nodes| !nodes.is_empty());
-                let mut regions = self
+                let report = self
                     .redactor
-                    .detect_with_a11y(path, ax_nodes.as_deref())
+                    .detect_detailed(
+                        path,
+                        ax_nodes.as_deref(),
+                        true, // require_pii_completion release path always enables strict_uncertainty
+                        self.cfg.policy.redact_qr_codes,
+                    )
                     .await?;
+                let mut regions = report.regions;
                 if let Some(tree) = tree_json {
                     let (width, height) = image::image_dimensions(path)?;
                     let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
@@ -477,13 +495,28 @@ impl ImageWorker {
                 if before.len() != after.len() || before.modified()? != after.modified()? {
                     anyhow::bail!("image changed during privacy processing");
                 }
-                let outcome = redact_frame(path, &regions, &self.cfg.policy)?;
+                let mut outcome = redact_frame(path, &regions, &self.cfg.policy)?;
+                outcome.uncertain_proposals_rescued =
+                    report.uncertainty.uncertain_proposals_rescued;
+                outcome.max_epistemic_std = report.uncertainty.max_epistemic_std;
+                if report.uncertainty.uncertain_proposals_rescued > 0 {
+                    debug!(
+                        frame = id,
+                        uncertain_proposals_rescued =
+                            report.uncertainty.uncertain_proposals_rescued,
+                        max_epistemic_std = report.uncertainty.max_epistemic_std,
+                        "strict_uncertainty rescued borderline PII proposals before release"
+                    );
+                }
                 if !db.publish_image_release(&job).await? {
                     return Ok::<_, anyhow::Error>(None);
                 }
                 let mut status = self.status.lock().await;
                 status.frames_redacted_total += 1;
                 status.regions_redacted_total += outcome.regions_redacted as u64;
+                status.uncertain_proposals_rescued_total +=
+                    outcome.uncertain_proposals_rescued as u64;
+                status.last_max_epistemic_std = outcome.max_epistemic_std;
                 status.last_redacted_at = Some(chrono::Utc::now());
                 status.last_error = None;
                 Ok(Some(outcome))
@@ -1021,5 +1054,98 @@ mod tests {
         assert_eq!(captured[1].landmark, "toolbar");
         let json = serde_json::to_string(&captured).unwrap();
         assert!(!json.contains("SCR-1183"));
+    }
+
+    struct StrictObservingDetector {
+        saw_strict: AtomicBool,
+    }
+
+    #[async_trait]
+    impl ImageRedactor for StrictObservingDetector {
+        fn name(&self) -> &str {
+            "strict-observer"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn detect(&self, _path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            Ok(Vec::new())
+        }
+        async fn detect_detailed(
+            &self,
+            _image_path: &Path,
+            _ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            strict_uncertainty: bool,
+            _detect_qr: bool,
+        ) -> Result<crate::image::ImageDetectionReport, RedactError> {
+            self.saw_strict.store(strict_uncertainty, Ordering::SeqCst);
+            Ok(crate::image::ImageDetectionReport {
+                regions: vec![ImageRegion {
+                    bbox: [10, 10, 20, 20],
+                    label: SpanLabel::Secret,
+                    score: 0.62,
+                }],
+                uncertainty: crate::role_fusion::RoleFusionUncertaintyStats {
+                    uncertain_proposals_rescued: usize::from(strict_uncertainty),
+                    max_epistemic_std: 0.142,
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn release_image_enables_strict_uncertainty_and_tracks_epistemic_telemetry() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            screenpipe_db::DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
+            identity: "test:strict-uncertainty".into(),
+            text: false,
+            images: true,
+        })
+        .await
+        .unwrap();
+        let path = root.path().join("release_frame.png");
+        white_test_image(&path);
+        {
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            sqlx::query("INSERT INTO frames(id,timestamp,name) VALUES(1,'2020-01-01T00:00:00Z',?)")
+                .bind(path.to_str().unwrap())
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let detector = Arc::new(StrictObservingDetector {
+            saw_strict: AtomicBool::new(false),
+        });
+        let worker = ImageWorker::new_with_writer(
+            db.pool.clone(),
+            db.coordinated_writer(),
+            detector.clone(),
+            ImageWorkerConfig {
+                min_age_seconds: 0,
+                resource_governor: None,
+                ..Default::default()
+            },
+        )
+        .with_release_storage(db.clone());
+
+        let outcome = worker.process_one().await.unwrap().unwrap();
+        assert!(detector.saw_strict.load(Ordering::SeqCst));
+        assert_eq!(outcome.uncertain_proposals_rescued, 1);
+        assert!((outcome.max_epistemic_std - 0.142).abs() < 1e-5);
+        let st = worker.status().await;
+        assert_eq!(st.uncertain_proposals_rescued_total, 1);
+        assert!((st.last_max_epistemic_std - 0.142).abs() < 1e-5);
+        assert!(db.release_ready("image", "1").await.unwrap());
+        db.close().await;
     }
 }

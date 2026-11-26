@@ -38,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
             tiled_inference: tiled,
             extend_wrapped_secrets: true,
             role_model_path: None,
+            ..Default::default()
         };
         let redactor = RfdetrRedactor::load(cfg)?;
         let mode = if tiled { "tiled 2x2" } else { "whole-frame" };

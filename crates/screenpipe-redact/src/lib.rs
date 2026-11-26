@@ -88,10 +88,11 @@ mod span;
 
 pub use a11y_context::{extract_text_free_ax_nodes, AxNode, NormalizedBounds};
 pub use error::RedactError;
-pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
+pub use image::{ImageDetectionReport, ImageRedactionPolicy, ImageRedactor, ImageRegion};
 pub use pipeline::{Pipeline, PipelineConfig};
 pub use pseudonym::Pseudonymizer;
 pub use redaction_map::RedactionMap;
+pub use role_fusion::RoleFusionUncertaintyStats;
 pub use span::{RedactedSpan, SpanLabel, TextRedactionPolicy};
 pub use tree_json::{redact_tree_json, redact_tree_json_with_redactor, TreeRedactError};
 
