@@ -11,6 +11,12 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type HistorySyncProps = {
   enabled: boolean;
@@ -209,42 +215,57 @@ export function SyncPreferenceRow({
 }) {
   const ui = useGT();
   const [syncing, setSyncing] = useState(false);
+  const syncLabel = ui("Sync now: {label}", { label });
+  const syncUnavailable = ui("Screenpipe server is starting up. Try again in a moment.");
   return (
     <div className="flex items-start justify-between gap-4">
-      <div>
+      <div className="flex min-h-8 flex-col justify-center">
         <Label htmlFor={id} className="font-sans">{label}</Label>
         {description && (
           <p id={`${id}-description`} className="text-xs text-muted-foreground">{description}</p>
         )}
-        {enabled && (
-          <Button
-            variant="link"
-            size="sm"
-            className="mt-1 flex h-auto p-0 text-xs"
-            aria-label={ui("Sync now: {label}", { label })}
-            title={isServerDown ? ui("Screenpipe server is starting up. Try again in a moment.") : undefined}
-            disabled={syncing || isServerDown}
-            onClick={async () => {
-              setSyncing(true);
-              try {
-                await onSync();
-              } finally {
-                setSyncing(false);
-              }
-            }}
-          >
-            <RefreshCw aria-hidden="true" className={`mr-1 h-3 w-3 ${syncing ? "animate-spin motion-reduce:animate-none" : ""}`} />
-            {ui("Sync now")}
-          </Button>
-        )}
       </div>
-      <Switch
-        id={id}
-        className="shrink-0"
-        aria-describedby={description ? `${id}-description` : undefined}
-        checked={enabled}
-        onCheckedChange={onEnabledChange}
-      />
+      <div className="flex min-h-8 shrink-0 items-center gap-2">
+        {enabled && (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground"
+                    aria-label={syncLabel}
+                    aria-busy={syncing}
+                    disabled={syncing || isServerDown}
+                    onClick={async () => {
+                      setSyncing(true);
+                      try {
+                        await onSync();
+                      } finally {
+                        setSyncing(false);
+                      }
+                    }}
+                  >
+                    <RefreshCw
+                      aria-hidden="true"
+                      className={`h-4 w-4 ${syncing ? "animate-spin motion-reduce:animate-none" : ""}`}
+                    />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{isServerDown ? syncUnavailable : syncLabel}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+        <Switch
+          id={id}
+          aria-describedby={description ? `${id}-description` : undefined}
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+        />
+      </div>
     </div>
   );
 }
