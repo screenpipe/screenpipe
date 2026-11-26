@@ -290,6 +290,32 @@ impl ImageRedactor for TinfoilImageRedactor {
         image_path: &Path,
         ax_nodes: Option<&[crate::a11y_context::AxNode]>,
     ) -> Result<Vec<ImageRegion>, RedactError> {
+        self.detect_with_threshold_and_a11y(image_path, ax_nodes, self.threshold)
+            .await
+    }
+
+    async fn detect_candidates_with_a11y(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        candidate_floor: f32,
+    ) -> Result<Vec<ImageRegion>, RedactError> {
+        self.detect_with_threshold_and_a11y(
+            image_path,
+            ax_nodes,
+            self.threshold.min(candidate_floor),
+        )
+        .await
+    }
+}
+
+impl TinfoilImageRedactor {
+    async fn detect_with_threshold_and_a11y(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        threshold: f32,
+    ) -> Result<Vec<ImageRegion>, RedactError> {
         let bytes = tokio::fs::read(image_path)
             .await
             .map_err(|e| RedactError::Runtime(format!("read {}: {e}", image_path.display())))?;
@@ -302,7 +328,7 @@ impl ImageRedactor for TinfoilImageRedactor {
             .timeout(self.timeout)
             .json(&DetectRequest {
                 image_b64: &image_b64,
-                threshold: self.threshold,
+                threshold,
                 labels: &self.labels,
                 ax_nodes,
             });

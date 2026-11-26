@@ -88,7 +88,10 @@ mod span;
 
 pub use a11y_context::{extract_text_free_ax_nodes, AxNode, NormalizedBounds};
 pub use error::RedactError;
-pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
+pub use image::{
+    ImageRedactionPolicy, ImageRedactor, ImageRegion, TemporalFrameContext, TemporalReconcileStats,
+    TemporalRedactionTracker, TemporalTrackerConfig,
+};
 pub use pipeline::{Pipeline, PipelineConfig};
 pub use pseudonym::Pseudonymizer;
 pub use redaction_map::RedactionMap;

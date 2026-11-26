@@ -364,9 +364,18 @@ mod imp {
         }
 
         async fn infer(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            self.infer_with_threshold(image_path, self.cfg.conf_threshold)
+                .await
+        }
+
+        async fn infer_with_threshold(
+            &self,
+            image_path: &Path,
+            conf_threshold: f32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
             let model = self.ensure_loaded().await?;
             let image_path = image_path.to_path_buf();
-            let conf_threshold = self.cfg.conf_threshold;
+            let conf_threshold = self.cfg.conf_threshold.min(conf_threshold);
             tokio::task::block_in_place(move || {
                 let img = image::open(&image_path)
                     .map_err(|e| {
@@ -415,6 +424,14 @@ mod imp {
         }
         async fn detect(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
             self.infer(image_path).await
+        }
+        async fn detect_candidates_with_a11y(
+            &self,
+            image_path: &Path,
+            _ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            candidate_floor: f32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            self.infer_with_threshold(image_path, candidate_floor).await
         }
     }
 }

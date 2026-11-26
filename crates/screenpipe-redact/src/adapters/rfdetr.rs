@@ -518,7 +518,7 @@ mod imp {
         }
 
         fn infer(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
-            self.infer_with_a11y(image_path, None)
+            self.infer_with_a11y_and_floor(image_path, None, self.cfg.conf_threshold)
         }
 
         fn infer_with_a11y(
@@ -526,6 +526,16 @@ mod imp {
             image_path: &Path,
             ax_nodes: Option<&[crate::a11y_context::AxNode]>,
         ) -> Result<Vec<ImageRegion>, RedactError> {
+            self.infer_with_a11y_and_floor(image_path, ax_nodes, self.cfg.conf_threshold)
+        }
+
+        fn infer_with_a11y_and_floor(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            candidate_floor: f32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            let output_floor = self.cfg.conf_threshold.min(candidate_floor);
             let img = image::open(image_path)
                 .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
                 .to_rgb8();
@@ -534,10 +544,7 @@ mod imp {
 
             let non_empty_ax = ax_nodes.filter(|nodes| !nodes.is_empty());
             if let (Some(nodes), Some(role_mutex)) = (non_empty_ax, self.role_session.as_ref()) {
-                let prop_floor = self
-                    .cfg
-                    .conf_threshold
-                    .min(crate::role_fusion::ROLE_PROPOSAL_FLOOR);
+                let prop_floor = output_floor.min(crate::role_fusion::ROLE_PROPOSAL_FLOOR);
                 let windows = if !self.cfg.tiled_inference || !big {
                     vec![(0, 0, orig_w, orig_h)]
                 } else {
@@ -548,23 +555,30 @@ mod imp {
                     raw_props.extend(self.infer_window_proposals(&img, x, y, w, h, prop_floor)?);
                 }
                 let nms_props = crate::role_fusion::suppress_proposal_overlaps(raw_props, 0.55);
-                let fused = self.run_role_fusion(role_mutex, &nms_props, nodes, orig_w, orig_h)?;
+                let fused = self.run_role_fusion(
+                    role_mutex,
+                    &nms_props,
+                    nodes,
+                    orig_w,
+                    orig_h,
+                    output_floor,
+                )?;
                 return Ok(suppress_overlaps(fused));
             }
 
             // Pure-vision path (or fallback when role ONNX is absent):
             let mut regions = if !self.cfg.tiled_inference || !big {
-                let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
+                let regions = self.infer_window(&img, 0, 0, orig_w, orig_h, output_floor)?;
                 self.extend_wrapped_secrets(&img, regions)
             } else {
                 // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
                 // whole-frame pass, they do not replace it.
                 let mut all: Vec<ImageRegion> = Vec::new();
                 for (i, (x, y, w, h)) in inference_windows(orig_w, orig_h).into_iter().enumerate() {
-                    let regions = self.infer_window(&img, x, y, w, h)?;
+                    let regions = self.infer_window(&img, x, y, w, h, output_floor)?;
                     if i == 0 {
-                        // Guard C: only whole-frame secret detections are eligible
-                        // for continuation extension.
+                        // Guard C: only whole-frame secret detections (>= conf_threshold)
+                        // are eligible for continuation extension.
                         all.extend(self.extend_wrapped_secrets(&img, regions));
                     } else {
                         all.extend(regions);
@@ -574,9 +588,10 @@ mod imp {
             };
 
             if let Some(nodes) = non_empty_ax {
-                crate::a11y_context::merge_image_regions(
+                crate::a11y_context::merge_confirmed_image_regions(
                     &mut regions,
                     crate::role_fusion::forced_a11y_secret_regions(nodes, orig_w, orig_h),
+                    self.cfg.conf_threshold,
                 );
             }
             Ok(regions)
@@ -589,6 +604,7 @@ mod imp {
             nodes: &[crate::a11y_context::AxNode],
             orig_w: u32,
             orig_h: u32,
+            min_output_score: f32,
         ) -> Result<Vec<ImageRegion>, RedactError> {
             use crate::role_fusion::{
                 featurize_frame_v46, forced_a11y_secret_regions, fuse_proposals_with_role_outputs,
@@ -649,7 +665,7 @@ mod imp {
                 nodes,
                 orig_w,
                 orig_h,
-                self.cfg.conf_threshold,
+                min_output_score,
             ))
         }
 
@@ -696,9 +712,9 @@ mod imp {
             oy: u32,
             win_w: u32,
             win_h: u32,
+            min_floor: f32,
         ) -> Result<Vec<ImageRegion>, RedactError> {
-            let props =
-                self.infer_window_proposals(img, ox, oy, win_w, win_h, self.cfg.conf_threshold)?;
+            let props = self.infer_window_proposals(img, ox, oy, win_w, win_h, min_floor)?;
             Ok(props
                 .into_iter()
                 .map(|p| ImageRegion {
@@ -916,6 +932,16 @@ mod imp {
             ax_nodes: Option<&[crate::a11y_context::AxNode]>,
         ) -> Result<Vec<ImageRegion>, RedactError> {
             tokio::task::block_in_place(|| self.infer_with_a11y(image_path, ax_nodes))
+        }
+        async fn detect_candidates_with_a11y(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            candidate_floor: f32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            tokio::task::block_in_place(|| {
+                self.infer_with_a11y_and_floor(image_path, ax_nodes, candidate_floor)
+            })
         }
     }
 
@@ -1242,6 +1268,54 @@ mod tests {
                 msg.contains("rfdetr") || msg.contains("checksum") || msg.contains("GET"),
                 "unexpected error variant: {msg}"
             );
+        }
+    }
+
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn subthreshold_candidates_never_alter_confirmed_nms_survivors() {
+        let confirmed = vec![
+            ImageRegion {
+                bbox: [100, 200, 140, 20],
+                label: CLASSES[11],
+                score: 0.89,
+            },
+            ImageRegion {
+                bbox: [104, 201, 138, 20],
+                label: CLASSES[11],
+                score: 0.62,
+            },
+            ImageRegion {
+                bbox: [420, 310, 110, 18],
+                label: CLASSES[0],
+                score: 0.54,
+            },
+        ];
+        let mut with_subthreshold = confirmed.clone();
+        with_subthreshold.extend([
+            ImageRegion {
+                bbox: [101, 200, 140, 20],
+                label: CLASSES[11],
+                score: 0.24,
+            },
+            ImageRegion {
+                bbox: [600, 500, 95, 18],
+                label: CLASSES[5],
+                score: 0.19,
+            },
+        ]);
+
+        let baseline = imp::suppress_overlaps(confirmed);
+        let candidate_pass: Vec<ImageRegion> = imp::suppress_overlaps(with_subthreshold)
+            .into_iter()
+            .filter(|r| r.score >= 0.50)
+            .collect();
+
+        assert_eq!(baseline.len(), candidate_pass.len());
+        for (a, b) in baseline.iter().zip(candidate_pass.iter()) {
+            assert_eq!(a.bbox, b.bbox);
+            assert_eq!(a.label, b.label);
+            assert_eq!(a.score.to_bits(), b.score.to_bits());
         }
     }
 }

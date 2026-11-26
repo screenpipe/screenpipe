@@ -21,7 +21,7 @@
 //!   write, mp4 chunk paths) and deserve their own error handling.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use screenpipe_resource::ResourceGovernor;
@@ -33,6 +33,10 @@ use tokio::time;
 use tracing::{debug, info, warn};
 
 use super::frame_redactor::{redact_frame, FrameRedactionOutcome};
+use super::temporal::{
+    parse_frame_timestamp_ms, TemporalFrameContext, TemporalRedactionTracker,
+    TemporalTrackerConfig, DEFAULT_LOW_CONTINUE_SCORE,
+};
 use super::{ImageRedactionPolicy, ImageRedactor};
 use crate::DatabaseErrorHook;
 
@@ -64,6 +68,9 @@ pub struct ImageWorkerConfig {
     pub max_a11y_age_seconds: i64,
     /// Per-frame redaction policy (allow-list + score floor).
     pub policy: ImageRedactionPolicy,
+    /// Optional V5 cross-frame temporal consistency & Schmitt-trigger hysteresis
+    /// config (`Some` by default, `< 16 KB` RAM). Set `None` for stateless mode.
+    pub temporal: Option<TemporalTrackerConfig>,
 }
 
 impl Default for ImageWorkerConfig {
@@ -76,6 +83,7 @@ impl Default for ImageWorkerConfig {
             min_age_seconds: 60,
             max_a11y_age_seconds: 5,
             policy: ImageRedactionPolicy::default(),
+            temporal: Some(TemporalTrackerConfig::default()),
         }
     }
 }
@@ -87,6 +95,7 @@ pub struct ImageWorkerStatus {
     pub paused: bool,
     pub frames_redacted_total: u64,
     pub regions_redacted_total: u64,
+    pub temporal_rescues_total: u64,
     pub last_error: Option<String>,
     pub last_redacted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -99,6 +108,8 @@ pub struct ImageWorker {
     writer: SqliteWritePool,
     redactor: Arc<dyn ImageRedactor>,
     cfg: ImageWorkerConfig,
+    temporal: Option<Arc<StdMutex<TemporalRedactionTracker>>>,
+    has_device_name_col: Arc<OnceLock<bool>>,
     status: Arc<Mutex<ImageWorkerStatus>>,
     paused: Arc<AtomicBool>,
     database_error_hook: Option<DatabaseErrorHook>,
@@ -116,6 +127,10 @@ impl ImageWorker {
         redactor: Arc<dyn ImageRedactor>,
         cfg: ImageWorkerConfig,
     ) -> Self {
+        let temporal = cfg
+            .temporal
+            .clone()
+            .map(|t_cfg| Arc::new(StdMutex::new(TemporalRedactionTracker::new(t_cfg))));
         Self {
             release_db: None,
             release_oldest: Arc::new(AtomicBool::new(false)),
@@ -123,6 +138,8 @@ impl ImageWorker {
             writer,
             redactor,
             cfg,
+            temporal,
+            has_device_name_col: Arc::new(OnceLock::new()),
             status: Arc::new(Mutex::new(ImageWorkerStatus::default())),
             paused: Arc::new(AtomicBool::new(false)),
             database_error_hook: None,
@@ -282,6 +299,20 @@ impl ImageWorker {
         s.paused = paused;
     }
 
+    async fn frames_has_device_name(&self, pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+        if let Some(&cached) = self.has_device_name_col.get() {
+            return Ok(cached);
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('frames') WHERE name = 'device_name'",
+        )
+        .fetch_one(pool)
+        .await?;
+        let present = count > 0;
+        let _ = self.has_device_name_col.set(present);
+        Ok(present)
+    }
+
     /// Pick one frame, detect, redact, write back. Returns
     /// `Ok(Some(outcome))` if work was done, `Ok(None)` if the queue
     /// was empty.
@@ -291,14 +322,67 @@ impl ImageWorker {
                 return self.process_release_image(db).await;
             }
         }
-        let order = if self.release_oldest.fetch_xor(true, Ordering::SeqCst) {
-            "ASC"
+        let pick_oldest = self.release_oldest.fetch_xor(true, Ordering::SeqCst);
+        let picked_id: Option<i64> = if pick_oldest {
+            sqlx::query_scalar(
+                r#"
+                SELECT f.id
+                  FROM frames f
+                 WHERE f.name IS NOT NULL
+                   AND f.image_redacted_at IS NULL
+                   AND ( strftime('%s','now') - CAST(strftime('%s', f.timestamp) AS INTEGER) ) >= ?1
+                 ORDER BY f.id ASC
+                 LIMIT 1
+                "#,
+            )
+            .bind(self.cfg.min_age_seconds)
+            .fetch_optional(&self.pool)
+            .await?
         } else {
-            "DESC"
+            // Prioritize the recent capture burst over deep historical backlog,
+            // while traversing contiguous burst frames (<= 15s of the newest
+            // mature frame) in `id ASC` sequence instead of ping-ponging across
+            // the burst's tail first.
+            sqlx::query_scalar(
+                r#"
+                WITH recent AS (
+                    SELECT id, timestamp
+                      FROM frames
+                     WHERE name IS NOT NULL
+                       AND image_redacted_at IS NULL
+                       AND ( strftime('%s','now') - CAST(strftime('%s', timestamp) AS INTEGER) ) >= ?1
+                     ORDER BY id DESC
+                     LIMIT 16
+                ),
+                newest AS (
+                    SELECT timestamp FROM recent LIMIT 1
+                )
+                SELECT r.id
+                  FROM recent r, newest n
+                 WHERE ABS((julianday(r.timestamp) - julianday(n.timestamp)) * 86400.0) <= 15.0
+                    OR r.timestamp = n.timestamp
+                 ORDER BY r.id ASC
+                 LIMIT 1
+                "#,
+            )
+            .bind(self.cfg.min_age_seconds)
+            .fetch_optional(&self.pool)
+            .await?
+        };
+
+        let Some(id) = picked_id else {
+            return Ok(None);
+        };
+
+        let device_expr = if self.frames_has_device_name(&self.pool).await? {
+            "COALESCE(f.device_name, '')"
+        } else {
+            "''"
         };
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
-            SELECT f.id, f.name,
+            SELECT f.id, f.name, f.timestamp, f.app_name, f.window_name,
+                   {device_expr} AS device_name,
                    CASE
                      WHEN ctx.id IS NOT NULL
                       AND ABS((julianday(f.timestamp) - julianday(ctx.timestamp)) * 86400.0) <= ?2
@@ -311,21 +395,20 @@ impl ImageWorker {
                    END AS accessibility_tree_json
               FROM frames f
               LEFT JOIN frames ctx ON ctx.id = f.elements_ref_frame_id
-             WHERE f.name IS NOT NULL
-               AND f.image_redacted_at IS NULL
-               AND ( strftime('%s','now') - CAST(strftime('%s', f.timestamp) AS INTEGER) ) >= ?1
-             ORDER BY f.id {order}
-             LIMIT 1
+             WHERE f.id = ?1
             "#,
         )))
-        .bind(self.cfg.min_age_seconds)
+        .bind(id)
         .bind(self.cfg.max_a11y_age_seconds)
         .fetch_optional(&self.pool)
         .await?;
 
         let Some(row) = row else { return Ok(None) };
-        let id: i64 = row.get("id");
         let name: String = row.get("name");
+        let timestamp_raw: String = row.get("timestamp");
+        let app_name: Option<String> = row.get("app_name");
+        let window_name: Option<String> = row.get("window_name");
+        let device_name: String = row.get("device_name");
         let accessibility_tree_json: Option<String> = row.get("accessibility_tree_json");
 
         let path = std::path::Path::new(&name);
@@ -362,28 +445,79 @@ impl ImageWorker {
             return Ok(Some(FrameRedactionOutcome::default()));
         }
 
+        let (image_width, image_height) = image::image_dimensions(path)
+            .map_err(|e| anyhow::anyhow!("read image dimensions for {}: {e}", path.display()))?;
+
         // RF-DETR always runs. Accessibility is an additive semantic/spatial
         // signal, never a gate that skips image inference.
         let ax_nodes = accessibility_tree_json
             .as_deref()
             .map(crate::a11y_context::extract_text_free_ax_nodes)
             .filter(|nodes| !nodes.is_empty());
-        let mut regions = self
-            .redactor
-            .detect_with_a11y(path, ax_nodes.as_deref())
-            .await?;
-        if let Some(tree) = accessibility_tree_json.as_deref() {
-            let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
-                anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
-            })?;
+        let timestamp_ms = parse_frame_timestamp_ms(&timestamp_raw);
+        let can_track_temporally = self.temporal.is_some()
+            && app_name
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            && window_name
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            && timestamp_ms.is_some();
 
+        let mut regions = if can_track_temporally {
+            let low_floor = self
+                .cfg
+                .temporal
+                .as_ref()
+                .map(|t| t.low_continue_score)
+                .unwrap_or(DEFAULT_LOW_CONTINUE_SCORE);
+            self.redactor
+                .detect_candidates_with_a11y(path, ax_nodes.as_deref(), low_floor)
+                .await?
+        } else {
+            self.redactor
+                .detect_with_a11y(path, ax_nodes.as_deref())
+                .await?
+        };
+
+        if let Some(tree) = accessibility_tree_json.as_deref() {
             // Parse once and add only deterministic high-confidence fields.
             // Generic inputs remain RF-DETR-confirmed. If text redaction ran
             // first, values it marked `[SECRET]` are also force-masked here.
             let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
             let a11y_regions = context.forced_image_regions(image_width, image_height);
-            crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+            crate::a11y_context::merge_confirmed_image_regions(
+                &mut regions,
+                a11y_regions,
+                self.cfg.policy.min_score,
+            );
         }
+
+        let mut temporal_rescues = 0u64;
+        if can_track_temporally {
+            if let Some(tracker_mutex) = &self.temporal {
+                let mut tracker = tracker_mutex
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let (reconciled, stats) = tracker.reconcile(
+                    TemporalFrameContext {
+                        device_scope: &device_name,
+                        app_name: app_name.as_deref(),
+                        window_name: window_name.as_deref(),
+                        timestamp_ms,
+                        image_dims: (image_width, image_height),
+                        ax_nodes: ax_nodes.as_deref(),
+                    },
+                    &regions,
+                    &self.cfg.policy,
+                );
+                regions = reconciled;
+                temporal_rescues = stats.total_rescued() as u64;
+            }
+        }
+
         let outcome =
             redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
 
@@ -392,6 +526,7 @@ impl ImageWorker {
         let mut s = self.status.lock().await;
         s.frames_redacted_total += 1;
         s.regions_redacted_total += outcome.regions_redacted as u64;
+        s.temporal_rescues_total += temporal_rescues;
         s.last_redacted_at = Some(chrono::Utc::now());
         s.last_error = None;
 
@@ -452,6 +587,23 @@ impl ImageWorker {
             }
             let process = async {
                 let before = tokio::fs::metadata(path).await?;
+                let meta_row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+                    "SELECT COALESCE(device_name, ''), app_name, window_name FROM frames WHERE id = ?1",
+                )
+                .bind(id)
+                .fetch_optional(&db.pool)
+                .await?;
+                let (device_name, app_name, window_name) = meta_row.unwrap_or_default();
+                let timestamp_ms = timestamp.map(|at| at.timestamp_millis());
+                let can_track_temporally = self.temporal.is_some()
+                    && app_name.as_deref().map(str::trim).is_some_and(|s| !s.is_empty())
+                    && window_name
+                        .as_deref()
+                        .map(str::trim)
+                        .is_some_and(|s| !s.is_empty())
+                    && timestamp_ms.is_some();
+
+                let (width, height) = image::image_dimensions(path)?;
                 let payloads = db
                     .frame_payloads(&[id], screenpipe_db::storage::Projection::Detail)
                     .await?;
@@ -461,22 +613,57 @@ impl ImageWorker {
                 let ax_nodes = tree_json
                     .map(crate::a11y_context::extract_text_free_ax_nodes)
                     .filter(|nodes| !nodes.is_empty());
-                let mut regions = self
-                    .redactor
-                    .detect_with_a11y(path, ax_nodes.as_deref())
-                    .await?;
+                let mut regions = if can_track_temporally {
+                    let low_floor = self
+                        .cfg
+                        .temporal
+                        .as_ref()
+                        .map(|t| t.low_continue_score)
+                        .unwrap_or(DEFAULT_LOW_CONTINUE_SCORE);
+                    self.redactor
+                        .detect_candidates_with_a11y(path, ax_nodes.as_deref(), low_floor)
+                        .await?
+                } else {
+                    self.redactor
+                        .detect_with_a11y(path, ax_nodes.as_deref())
+                        .await?
+                };
                 if let Some(tree) = tree_json {
-                    let (width, height) = image::image_dimensions(path)?;
                     let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
-                    crate::a11y_context::merge_image_regions(
+                    crate::a11y_context::merge_confirmed_image_regions(
                         &mut regions,
                         context.forced_image_regions(width, height),
+                        self.cfg.policy.min_score,
                     );
                 }
                 let after = tokio::fs::metadata(path).await?;
                 if before.len() != after.len() || before.modified()? != after.modified()? {
                     anyhow::bail!("image changed during privacy processing");
                 }
+
+                let mut temporal_rescues = 0u64;
+                if can_track_temporally {
+                    if let Some(tracker_mutex) = &self.temporal {
+                        let mut tracker = tracker_mutex
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let (reconciled, stats) = tracker.reconcile(
+                            TemporalFrameContext {
+                                device_scope: &device_name,
+                                app_name: app_name.as_deref(),
+                                window_name: window_name.as_deref(),
+                                timestamp_ms,
+                                image_dims: (width, height),
+                                ax_nodes: ax_nodes.as_deref(),
+                            },
+                            &regions,
+                            &self.cfg.policy,
+                        );
+                        regions = reconciled;
+                        temporal_rescues = stats.total_rescued() as u64;
+                    }
+                }
+
                 let outcome = redact_frame(path, &regions, &self.cfg.policy)?;
                 if !db.publish_image_release(&job).await? {
                     return Ok::<_, anyhow::Error>(None);
@@ -484,6 +671,7 @@ impl ImageWorker {
                 let mut status = self.status.lock().await;
                 status.frames_redacted_total += 1;
                 status.regions_redacted_total += outcome.regions_redacted as u64;
+                status.temporal_rescues_total += temporal_rescues;
                 status.last_redacted_at = Some(chrono::Utc::now());
                 status.last_error = None;
                 Ok(Some(outcome))
@@ -1021,5 +1209,450 @@ mod tests {
         assert_eq!(captured[1].landmark, "toolbar");
         let json = serde_json::to_string(&captured).unwrap();
         assert!(!json.contains("SCR-1183"));
+    }
+
+    struct ScriptedTemporalDetector {
+        by_path: std::collections::HashMap<std::path::PathBuf, Vec<ImageRegion>>,
+        seen_floors: StdMutex<Vec<f32>>,
+    }
+
+    #[async_trait]
+    impl ImageRedactor for ScriptedTemporalDetector {
+        fn name(&self) -> &str {
+            "scripted-temporal"
+        }
+        fn version(&self) -> u32 {
+            5
+        }
+        async fn detect(&self, path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            self.detect_candidates_with_a11y(path, None, 0.50).await
+        }
+        async fn detect_candidates_with_a11y(
+            &self,
+            path: &Path,
+            _ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+            candidate_floor: f32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            self.seen_floors.lock().unwrap().push(candidate_floor);
+            Ok(self
+                .by_path
+                .get(path)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.score >= candidate_floor)
+                .collect())
+        }
+    }
+
+    fn white_canvas(path: &Path, w: u32, h: u32) {
+        image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]))
+            .save(path)
+            .unwrap();
+    }
+
+    async fn setup_with_device() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                name TEXT,
+                device_name TEXT NOT NULL DEFAULT '',
+                app_name TEXT,
+                window_name TEXT,
+                accessibility_tree_json TEXT,
+                elements_ref_frame_id INTEGER,
+                image_redacted_at INTEGER
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn temporal_stationary_and_vertical_scroll_rescues_redact_flicker_frames() {
+        let pool = setup_with_device().await;
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("f1_stationary_seed.png");
+        let f2 = dir.path().join("f2_stationary_flicker.png");
+        let f3 = dir.path().join("f3_scroll_seed.png");
+        let f4 = dir.path().join("f4_scroll_flicker.png");
+        for p in [&f1, &f2, &f3, &f4] {
+            white_canvas(p, 800, 800);
+        }
+
+        // Window 1: Stationary flicker (Frame 1 @ 0.89 -> Frame 2 @ 0.24 -> REDACTED)
+        sqlx::query("INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (1, '2026-10-01T12:00:00Z', ?1, 'monitor_1', 'Arc', 'CRM - Marcus Chen')")
+            .bind(f1.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (2, '2026-10-01T12:00:02Z', ?1, 'monitor_1', 'Arc', 'CRM - Marcus Chen')")
+            .bind(f2.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Window 2: Vertical scroll flicker (Frame 1 y=400 @ 0.91 -> Frame 2 y=260 @ 0.23 -> REDACTED)
+        sqlx::query("INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (3, '2026-10-01T12:00:04Z', ?1, 'monitor_1', 'Arc', 'Stripe Keys')")
+            .bind(f3.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (4, '2026-10-01T12:00:06Z', ?1, 'monitor_1', 'Arc', 'Stripe Keys')")
+            .bind(f4.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut by_path = std::collections::HashMap::new();
+        by_path.insert(
+            f1.clone(),
+            vec![ImageRegion {
+                bbox: [120, 200, 140, 22],
+                label: SpanLabel::Person,
+                score: 0.89,
+            }],
+        );
+        by_path.insert(
+            f2.clone(),
+            vec![ImageRegion {
+                bbox: [122, 201, 138, 22],
+                label: SpanLabel::Person,
+                score: 0.24,
+            }],
+        );
+        by_path.insert(
+            f3.clone(),
+            vec![ImageRegion {
+                bbox: [200, 400, 180, 20],
+                label: SpanLabel::Secret,
+                score: 0.91,
+            }],
+        );
+        by_path.insert(
+            f4.clone(),
+            vec![ImageRegion {
+                bbox: [201, 260, 178, 20],
+                label: SpanLabel::Secret,
+                score: 0.23,
+            }],
+        );
+
+        let detector = Arc::new(ScriptedTemporalDetector {
+            by_path,
+            seen_floors: StdMutex::new(Vec::new()),
+        });
+        let worker = ImageWorker::new(
+            pool,
+            detector.clone(),
+            ImageWorkerConfig {
+                min_age_seconds: 0,
+                resource_governor: None,
+                policy: ImageRedactionPolicy::from_labels(&["person".into(), "secret".into()]),
+                ..Default::default()
+            },
+        );
+
+        for _ in 0..4 {
+            let out = worker.process_one().await.unwrap().unwrap();
+            assert_eq!(out.regions_redacted, 1);
+        }
+
+        // Verify worker requested low candidate floor (0.18) and recorded 2 rescues.
+        let floors = detector.seen_floors.lock().unwrap().clone();
+        assert!(floors.iter().all(|&f| (f - 0.18).abs() < 1e-5));
+        let status = worker.status().await;
+        assert_eq!(status.frames_redacted_total, 4);
+        assert_eq!(status.regions_redacted_total, 4);
+        assert_eq!(status.temporal_rescues_total, 2);
+
+        // Verify both flicker frames were solid-black masked at their respective coordinates.
+        let img2 = image::open(&f2).unwrap().to_rgb8();
+        assert_eq!(img2.get_pixel(150, 210).0, [0, 0, 0]);
+        assert_eq!(img2.get_pixel(50, 50).0, [255, 255, 255]);
+
+        let img4 = image::open(&f4).unwrap().to_rgb8();
+        assert_eq!(img4.get_pixel(250, 270).0, [0, 0, 0]);
+        assert_eq!(img4.get_pixel(250, 410).0, [255, 255, 255]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn temporal_decay_cap_ttl_window_switch_negative_screen_and_chrome_veto_are_safe() {
+        let pool = setup_with_device().await;
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<std::path::PathBuf> = (0..10)
+            .map(|i| {
+                let p = dir.path().join(format!("frame_{i}.png"));
+                white_canvas(&p, 800, 800);
+                p
+            })
+            .collect();
+
+        let toolbar_tree = r#"[
+          {"role":"AXWindow","depth":0,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":1.0}},
+          {"role":"AXToolbar","depth":1,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":0.10}},
+          {"role":"AXColumnHeader","depth":1,"bounds":{"left":0.0,"top":0.10,"width":1.0,"height":0.06}},
+          {"role":"AXMain","depth":1,"bounds":{"left":0.0,"top":0.16,"width":1.0,"height":0.84}}
+        ]"#;
+
+        let initial_rows = [
+            // 0: Clean negative UI with 0.30 sub-threshold noise -> 0 masks
+            (1, "2026-10-01T10:00:00Z", "m1", "VSCode", "main.rs", None),
+            // 1..=4: Seed @ 0.90 -> Rescue #1 @ 0.25 -> Rescue #2 @ 0.22 -> Decay #3 @ 0.24 (unmasked!)
+            (2, "2026-10-01T10:01:00Z", "m1", "Arc", "Vault", None),
+            (3, "2026-10-01T10:01:02Z", "m1", "Arc", "Vault", None),
+            (4, "2026-10-01T10:01:04Z", "m1", "Arc", "Vault", None),
+            (5, "2026-10-01T10:01:06Z", "m1", "Arc", "Vault", None),
+            // 5: Fresh seed @ 0.92 in ("m1", "Arc", "Tab1"), then 6: switch to "Tab2" @ 0.27 -> 0 masks
+            (
+                6,
+                "2026-10-01T10:02:00Z",
+                "m1",
+                "Arc",
+                "Tab1",
+                Some(toolbar_tree),
+            ),
+            (
+                7,
+                "2026-10-01T10:02:02Z",
+                "m1",
+                "Arc",
+                "Tab2",
+                Some(toolbar_tree),
+            ),
+            // 7: Same "Tab1" at +3s, scrolled up into AXColumnHeader (y=96) @ 0.26 -> chrome veto, 0 masks
+            (
+                8,
+                "2026-10-01T10:02:03Z",
+                "m1",
+                "Arc",
+                "Tab1",
+                Some(toolbar_tree),
+            ),
+        ];
+
+        for (idx, (id, ts, dev, app, win, tree)) in initial_rows.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name, accessibility_tree_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .bind(id)
+            .bind(ts)
+            .bind(paths[idx].to_str().unwrap())
+            .bind(dev)
+            .bind(app)
+            .bind(win)
+            .bind(tree)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let box_body = [100, 300, 120, 20];
+        let box_col_hdr = [100, 96, 120, 20]; // y=96/800=0.12 inside AXColumnHeader (0.10..0.16)
+        let mut by_path = std::collections::HashMap::new();
+        for (idx, (bbox, score)) in [
+            (box_body, 0.30f32),
+            (box_body, 0.90),
+            (box_body, 0.25),
+            (box_body, 0.22),
+            (box_body, 0.24),
+            (box_body, 0.92),
+            (box_body, 0.27),
+            (box_col_hdr, 0.26),
+            (box_body, 0.91),
+            (box_body, 0.26),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            by_path.insert(
+                paths[idx].clone(),
+                vec![ImageRegion {
+                    bbox,
+                    label: SpanLabel::Secret,
+                    score,
+                }],
+            );
+        }
+
+        let worker = ImageWorker::new(
+            pool.clone(),
+            Arc::new(ScriptedTemporalDetector {
+                by_path,
+                seen_floors: StdMutex::new(Vec::new()),
+            }),
+            ImageWorkerConfig {
+                min_age_seconds: 0,
+                resource_governor: None,
+                ..Default::default()
+            },
+        );
+
+        while worker.process_one().await.unwrap().is_some() {}
+
+        // Now test >15s TTL gap directly: Frame 8 seeds @ 0.91, Frame 9 arrives +20s later @ 0.26 -> unmasked!
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (9, '2026-10-01T10:05:00Z', ?1, 'm1', 'Arc', 'TTLWindow')",
+        )
+        .bind(paths[8].to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            worker
+                .process_one()
+                .await
+                .unwrap()
+                .unwrap()
+                .regions_redacted,
+            1
+        );
+
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (10, '2026-10-01T10:05:20Z', ?1, 'm1', 'Arc', 'TTLWindow')",
+        )
+        .bind(paths[9].to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            worker
+                .process_one()
+                .await
+                .unwrap()
+                .unwrap()
+                .regions_redacted,
+            0
+        );
+
+        let status = worker.status().await;
+        assert_eq!(status.frames_redacted_total, 10);
+        assert_eq!(status.regions_redacted_total, 5); // 3 seeds (1, 5, 8) + 2 rescues (2, 3)
+        assert_eq!(status.temporal_rescues_total, 2);
+
+        // Masked frames: 1 (seed), 2 (rescue #1), 3 (rescue #2), 5 (seed), 8 (seed)
+        for masked_idx in [1usize, 2, 3, 5, 8] {
+            let img = image::open(&paths[masked_idx]).unwrap().to_rgb8();
+            assert_eq!(
+                img.get_pixel(110, 310).0,
+                [0, 0, 0],
+                "frame_{masked_idx} must be masked"
+            );
+        }
+
+        // Unmasked frames: 0 (negative), 4 (decay #3), 6 (tab switch), 7 (chrome veto), 9 (>15s TTL)
+        for unmasked_idx in [0usize, 4, 6, 7, 9] {
+            let img = image::open(&paths[unmasked_idx]).unwrap().to_rgb8();
+            assert_eq!(
+                img.get_pixel(110, 310).0,
+                [255, 255, 255],
+                "frame_{unmasked_idx} must not be ghost-masked"
+            );
+            assert_eq!(
+                img.get_pixel(110, 102).0,
+                [255, 255, 255],
+                "frame_{unmasked_idx} chrome header must not be ghost-masked"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn temporal_handles_both_oldest_first_and_newest_first_sqlite_batch_orderings() {
+        for descending_timestamps in [false, true] {
+            let pool = setup_with_device().await;
+            let dir = tempfile::tempdir().unwrap();
+            let p1 = dir.path().join("b1.png");
+            let p2 = dir.path().join("b2.png");
+            let p3 = dir.path().join("b3.png");
+            for p in [&p1, &p2, &p3] {
+                white_canvas(p, 640, 480);
+            }
+
+            let timestamps = if descending_timestamps {
+                // Newest-first batch traversal: t=14s -> t=12s -> t=10s
+                [
+                    "2026-10-01T15:00:14Z",
+                    "2026-10-01T15:00:12Z",
+                    "2026-10-01T15:00:10Z",
+                ]
+            } else {
+                // Oldest-first batch traversal: t=10s -> t=12s -> t=14s
+                [
+                    "2026-10-01T15:00:10Z",
+                    "2026-10-01T15:00:12Z",
+                    "2026-10-01T15:00:14Z",
+                ]
+            };
+
+            for (idx, (path, ts)) in [&p1, &p2, &p3].into_iter().zip(timestamps).enumerate() {
+                sqlx::query(
+                    "INSERT INTO frames (id, timestamp, name, device_name, app_name, window_name) VALUES (?1, ?2, ?3, 'm1', 'Slack', 'Eng')",
+                )
+                .bind((idx + 1) as i64)
+                .bind(ts)
+                .bind(path.to_str().unwrap())
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+
+            let mut by_path = std::collections::HashMap::new();
+            by_path.insert(
+                p1.clone(),
+                vec![ImageRegion {
+                    bbox: [80, 180, 140, 20],
+                    label: SpanLabel::Secret,
+                    score: 0.90,
+                }],
+            );
+            by_path.insert(
+                p2.clone(),
+                vec![ImageRegion {
+                    bbox: [81, 180, 140, 20],
+                    label: SpanLabel::Secret,
+                    score: 0.22,
+                }],
+            );
+            by_path.insert(
+                p3.clone(),
+                vec![ImageRegion {
+                    bbox: [81, 120, 140, 20],
+                    label: SpanLabel::Secret,
+                    score: 0.21,
+                }],
+            );
+
+            let worker = ImageWorker::new(
+                pool,
+                Arc::new(ScriptedTemporalDetector {
+                    by_path,
+                    seen_floors: StdMutex::new(Vec::new()),
+                }),
+                ImageWorkerConfig {
+                    min_age_seconds: 0,
+                    resource_governor: None,
+                    ..Default::default()
+                },
+            );
+
+            for step in 0..3 {
+                let out = worker.process_one().await.unwrap().unwrap();
+                assert_eq!(
+                    out.regions_redacted, 1,
+                    "descending={descending_timestamps} step={step}"
+                );
+            }
+            assert_eq!(worker.status().await.temporal_rescues_total, 2);
+        }
     }
 }

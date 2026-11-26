@@ -289,10 +289,24 @@ pub fn augment_text(base: &str, tree_json: Option<&str>) -> AugmentedText {
 /// Union accessibility regions with model detections. Overlapping Secret
 /// regions are combined so a tight RF-DETR glyph box plus a full AX control
 /// box becomes one complete mask, while unrelated detections remain intact.
+#[cfg(test)]
 pub fn merge_image_regions(regions: &mut Vec<ImageRegion>, additions: Vec<ImageRegion>) {
+    merge_confirmed_image_regions(regions, additions, 0.0);
+}
+
+/// Union forced accessibility regions only with confirmed (`score >= min_confirmed_score`)
+/// model detections of the same label so unpromoted sub-threshold candidates
+/// (`0.18..0.50`) never widen a deterministic control mask.
+pub fn merge_confirmed_image_regions(
+    regions: &mut Vec<ImageRegion>,
+    additions: Vec<ImageRegion>,
+    min_confirmed_score: f32,
+) {
     for addition in additions {
         let Some(existing) = regions.iter_mut().find(|region| {
-            region.label == addition.label && overlap_fraction(region.bbox, addition.bbox) >= 0.2
+            region.label == addition.label
+                && region.score >= min_confirmed_score
+                && overlap_fraction(region.bbox, addition.bbox) >= 0.2
         }) else {
             regions.push(addition);
             continue;

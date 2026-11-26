@@ -39,7 +39,12 @@
 
 pub mod frame_redactor;
 pub mod secret_continuation;
+pub mod temporal;
 pub mod worker;
+
+pub use temporal::{
+    TemporalFrameContext, TemporalReconcileStats, TemporalRedactionTracker, TemporalTrackerConfig,
+};
 
 use std::path::Path;
 
@@ -101,6 +106,27 @@ pub trait ImageRedactor: Send + Sync {
     ) -> Result<Vec<ImageRegion>, RedactError> {
         let _ = ax_nodes;
         self.detect(image_path).await
+    }
+
+    /// Run inference on `image_path` with optional text-free OS accessibility
+    /// nodes (`ax_nodes`), surfacing sub-threshold candidates down to
+    /// `candidate_floor` (e.g. `0.18`) for V5 temporal cross-frame hysteresis
+    /// ([`TemporalRedactionTracker`]).
+    ///
+    /// Callers MUST still filter the reconciled regions through
+    /// [`ImageRedactionPolicy`] (`min_score`, default `0.50`) so unpromoted
+    /// sub-threshold proposals are never redacted.
+    ///
+    /// Defaults to [`Self::detect_with_a11y`] so custom or test implementors
+    /// remain source-compatible without extra boilerplate.
+    async fn detect_candidates_with_a11y(
+        &self,
+        image_path: &Path,
+        ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        candidate_floor: f32,
+    ) -> Result<Vec<ImageRegion>, RedactError> {
+        let _ = candidate_floor;
+        self.detect_with_a11y(image_path, ax_nodes).await
     }
 }
 

@@ -916,10 +916,11 @@ pub fn fuse_proposals_with_role_outputs(
     }
 
     for forced in forced_a11y_secret_regions(ax_nodes, img_w, img_h) {
-        if !regions
-            .iter()
-            .any(|nr| iou_xywh(forced.bbox, nr.bbox) >= 0.30)
-        {
+        if !regions.iter().any(|nr| {
+            nr.label == SpanLabel::Secret
+                && nr.score >= 0.50
+                && iou_xywh(forced.bbox, nr.bbox) >= 0.30
+        }) {
             regions.push(forced);
         }
     }
