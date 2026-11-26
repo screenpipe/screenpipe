@@ -70,7 +70,7 @@ import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { useRecordingStorage } from "@/lib/hooks/use-recording-storage";
-import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
+import { RecordingStatus, type RecordingDevice, type RecordingAttention } from "@/components/recording-status";
 import { StarredTimeline } from "@/components/starred-sessions/starred-timeline";
 import Timeline from "@/components/rewind/timeline";
 import {
@@ -325,7 +325,7 @@ function HomeContent() {
   // recovery and the first-run guide must never compete (#5407). The guide
   // isn't lost: `firstRunGuidePending` is React state, so it appears once
   // health recovers.
-  const { health, isServerDown } = useHealthCheck();
+  const { health, isServerDown, fetchHealth } = useHealthCheck();
   const captureUnhealthy =
     isServerDown || health?.status === "unhealthy" || health?.status === "error";
   const showFirstRunGuide = shouldShowFirstRunGuide({
@@ -1206,7 +1206,15 @@ function HomeContent() {
 
   // Chat and Workflows share the same recorder state, events and controls.
   const recordingStorage = useRecordingStorage(isCapturePaused);
+  let recordingAttention: RecordingAttention | undefined;
+  if (isServerDown) recordingAttention = "disconnected";
+  else if (!health || health.status === "error") recordingAttention = "connecting";
+  else if (health.status === "degraded") recordingAttention = "unavailable";
+  else if (health.vision_reason === "permission_denied") recordingAttention = "screen-permission";
+  else if (health.vision_reason === "capture_stalled") recordingAttention = "screen-stalled";
+  else if (health.capture_status?.status === "audio_stalled") recordingAttention = "audio-stalled";
   const recordingStatusProps = {
+    attention: recordingAttention,
     storageWarning: recordingStorage.warning,
     storageChecking: recordingStorage.checking,
     storageError: recordingStorage.error,
@@ -1218,8 +1226,15 @@ function HomeContent() {
     onPauseRecording: pauseRecording,
     onResumeRecording: resumeRecording,
     isGloballyPaused: isCapturePaused,
-    onRefreshDevices: refreshRecordingDevices,
+    onRefreshDevices: async () => {
+      await Promise.all([fetchHealth(), refreshRecordingDevices()]);
+    },
     allCaptureDisabled: !!(settings.disableAudio && settings.disableVision),
+    onOpenScreenPermission: () => {
+      void commands.openPermissionSettings("screenRecording").catch(() =>
+        toast({ title: ui("Could not open System Settings"), variant: "destructive" })
+      );
+    },
     onOpenRecordingSettings: () => openSettings("recording"),
   };
 

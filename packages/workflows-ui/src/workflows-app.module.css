@@ -778,14 +778,22 @@
 .skeletonLines { display: grid; align-content: start; gap: 7px; min-height: 40px; }
 .skeletonDetail { display: grid; gap: 16px; }
 .skeletonDetail .skeletonCard { display: flex; flex-direction: column; gap: 12px; }
-.catalogLoadStatus, .catalogRefreshNotice { color: var(--muted); font-size: 12px; }
-.catalogRefreshNotice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.catalogRefreshNotice { color: var(--muted); font-size: 12px; }
+.catalogRefreshNotice { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; padding: 10px 0; }
 .catalogRefreshNotice button { color: inherit; background: none; border: 0; text-decoration: underline; cursor: pointer; }
-.catalogLoadError { border: 1px solid var(--line); border-radius: 8px; padding: 40px 24px; text-align: center; }
-.catalogLoadError > svg { color: var(--muted); }
-.catalogLoadError h2 { font-size: 20px; margin: 16px 0 8px; }
-.catalogLoadError p { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
-.catalogLoadError button { margin: auto; }
+.catalogLoadError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.catalogLoadError > svg { color: var(--muted); flex: none; }
+.catalogLoadError > div { flex: 1 1 220px; }
+.catalogLoadError h2 { font-size: 14px; margin: 0; }
+.catalogLoadError p { color: var(--muted); margin: 4px 0 0; font-size: 12px; }
 @keyframes catalogPulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .skeletonBar { animation: none; } }
 .filterBar { border: 0; padding-left: 0; background: transparent; }

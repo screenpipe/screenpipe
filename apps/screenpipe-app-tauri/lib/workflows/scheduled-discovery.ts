@@ -17,8 +17,13 @@ async function request(path: string, body?: unknown, signal?: AbortSignal) {
   const response = await localFetch(path, body === undefined ? (signal ? { signal } : undefined) : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
-  const value = await response.json();
-  if (!response.ok || value.error) throw Object.assign(new Error(value.error || "Could not reach the workflow task."), { status: response.status });
+  const value = await response.json().catch((error: unknown) => {
+    // Keep the HTTP status when a gateway or starting engine returns a
+    // non-JSON error. Abort and body transport errors still propagate.
+    if (!response.ok && error instanceof SyntaxError) return {};
+    throw error;
+  });
+  if (!response.ok || value?.error) throw Object.assign(new Error(value?.error || "Could not reach the workflow task."), { status: response.status });
   return value;
 }
 

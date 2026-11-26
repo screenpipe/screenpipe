@@ -174,6 +174,11 @@ describe("workflow agent workspace adapter",()=>{
 
 
 describe("catalog request lifecycle", () => {
+  it("preserves an HTTP startup failure even when the response has no JSON", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("Service unavailable", { status: 503 }));
+    await expect(loadScheduledCatalog()).rejects.toMatchObject({ status: 503 });
+  });
+
   it("bounds stalled requests and classifies timeouts for reconnect", async () => {
     vi.useFakeTimers();
     try {
