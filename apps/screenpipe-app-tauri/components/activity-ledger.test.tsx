@@ -507,6 +507,65 @@ it("retries privacy admission failures even before the first summary loads", asy
   expect(mocks.localFetch.mock.calls.filter(([path]) => String(path).startsWith("/activity-summary?")).length).toBe(2);
 });
 
+it("offers to reload Activity after a failed read before showing setup", async () => {
+  mocks.settings.activitiesEnabled = false;
+  const healthyFetch = mocks.localFetch.getMockImplementation()!;
+  let unavailable = true;
+  mocks.localFetch.mockImplementation((path: string, ...args: unknown[]) =>
+    unavailable && path.startsWith("/activity-summary?")
+      ? Promise.resolve({ ok: false, status: 500 })
+      : healthyFetch(path, ...args),
+  );
+
+  render(<ActivityLedger />);
+  const retry = await screen.findByRole("button", { name: "Retry loading activity" });
+  expect(screen.queryByRole("button", { name: "Enable activities" })).toBeNull();
+  unavailable = false;
+  fireEvent.click(retry);
+  expect(await screen.findByRole("button", { name: "Enable activities" })).toBeVisible();
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+});
+
+it("retries a failed Activity read when the recorder reconnects", async () => {
+  mocks.settings.activitiesEnabled = false;
+  const healthyFetch = mocks.localFetch.getMockImplementation()!;
+  let unavailable = true;
+  mocks.localFetch.mockImplementation((path: string, ...args: unknown[]) =>
+    unavailable && path.startsWith("/activity-summary?")
+      ? Promise.resolve({ ok: false, status: 500 })
+      : healthyFetch(path, ...args),
+  );
+
+  const view = render(<ActivityLedger recorderConnected={false} />);
+  expect(await screen.findByText("Couldn’t load recent activity")).toBeVisible();
+  unavailable = false;
+  view.rerender(<ActivityLedger recorderConnected />);
+  expect(await screen.findByRole("button", { name: "Enable activities" })).toBeVisible();
+  expect(screen.queryByText("Couldn’t load recent activity")).toBeNull();
+});
+
+it("keeps saved activities readable when the live snapshot fails", async () => {
+  mocks.settings.activitiesEnabled = true;
+  const range = {
+    start: new Date("2026-08-17T07:00:00Z"),
+    end: new Date("2026-08-17T20:00:00Z"),
+  };
+  mocks.loadPersistedActivityHistory.mockResolvedValue({
+    entries: parseActivityHistoryResponse(HISTORY_RESPONSE, range).entries,
+    coverage: [{ start: range.start.toISOString(), end: range.end.toISOString() }],
+  });
+  const healthyFetch = mocks.localFetch.getMockImplementation()!;
+  mocks.localFetch.mockImplementation((path: string, ...args: unknown[]) =>
+    path.startsWith("/activity-summary?")
+      ? Promise.resolve({ ok: false, status: 500 })
+      : healthyFetch(path, ...args),
+  );
+
+  render(<ActivityLedger />);
+  expect(await screen.findByText("Saved activities are still available below.")).toBeVisible();
+  expect(screen.getByText("Fixed a capture reliability regression")).toBeVisible();
+});
+
 describe("activity history helpers", () => {
   it("offers only today and 24 hours when activity history is restricted", () => {
     expect(activityRangePresets(true)).toEqual(["today", "24h"]);
