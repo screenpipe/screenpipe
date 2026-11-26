@@ -29,6 +29,19 @@ try {
       'Unauthenticated enterprise devices must remain behind the workspace gate');
     await page.getByPlaceholder('ENT-XXXX-XXXX-XXXX-XXXX').fill('ENT-TEST-TEST-TEST-TEST');
     await page.getByRole('button', { name: 'Activate', exact: true }).click();
+    await page.getByRole('heading', { name: 'Sign in required', exact: true }).waitFor();
+    assert.equal(await page.getByRole('group', { name: 'Switch workspace', exact: true }).count(), 0,
+      'Device key authorization must leave the desktop locked until the user signs in');
+    await page.evaluate(() => {
+      localStorage.setItem('screenpipe_e2e_account_fixture_active', '1');
+      localStorage.setItem('screenpipe_e2e_account_user', JSON.stringify({
+        id: 'example-user',
+        email: 'recorder@example.test',
+        token: 'e2e-fake-token-workflow-entry',
+        __e2eSkipAccountRefresh: true,
+      }));
+      window.dispatchEvent(new Event('screenpipe-e2e-seed-account-user'));
+    });
     await page.getByRole('button', { name: 'Do later', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }
   const capture = name => page.screenshot({ path: `${out}/${name}.png`, animations: 'disabled', style: 'nextjs-portal { display: none; }' });
