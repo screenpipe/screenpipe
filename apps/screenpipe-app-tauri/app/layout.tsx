@@ -6,7 +6,6 @@
 
 import { Inter, Space_Grotesk } from "next/font/google";
 import "@/lib/dev/browser-runtime";
-import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { Providers } from "./providers";
 import { Toaster } from "@/components/ui/toaster";
