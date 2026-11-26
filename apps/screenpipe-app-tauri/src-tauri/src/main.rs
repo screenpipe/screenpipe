@@ -772,6 +772,10 @@ async fn main() {
     #[cfg(target_os = "windows")]
     windows_crash_dump::install();
 
+    if let Err(error) = commands::finish_workspace_switch() {
+        eprintln!("screenpipe: could not finish workspace switch: {error}");
+    }
+
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
     let store_json = store::read_startup_store(&store_path).ok();

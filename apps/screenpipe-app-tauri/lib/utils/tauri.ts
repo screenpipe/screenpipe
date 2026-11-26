@@ -132,6 +132,9 @@ async calendarStatus() : Promise<Result<CalendarStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async canSwitchToPersonalAccount() : Promise<boolean> {
+    return await TAURI_INVOKE("can_switch_to_personal_account");
+},
 async cancelStorageMigration(root: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("cancel_storage_migration", { root }) };
@@ -2966,6 +2969,14 @@ async stopScreenpipe() : Promise<Result<null, string>> {
 async suspendGlobalShortcuts() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("suspend_global_shortcuts") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async switchToPersonalAccount() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("switch_to_personal_account") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

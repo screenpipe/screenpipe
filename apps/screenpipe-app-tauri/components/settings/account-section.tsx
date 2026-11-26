@@ -24,6 +24,7 @@ export const searchIndex: SettingsField[] = [
   { label: msg("Connected accounts", {}), keywords: ["connection sync", "sync", "slack", "notion"] },
   { label: msg("Restart remote sync", {}), keywords: ["reset sync", "older key", "new device", "decryption"] },
 ];
+import { SwitchToPersonalAccount } from "@/components/switch-to-personal-account";
 import { AccountDataSyncCard, SyncPreferenceRow } from "./account-data-sync-card";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -230,6 +231,7 @@ function ManagedWorkspaceAccountCard() {
           ? ui("Enterprise access has been verified for this session.")
           : ui("Verify the enterprise key or sign in with an authorized organization account to enable recording.")}
       </p>
+      <div className="mt-3 empty:hidden"><SwitchToPersonalAccount /></div>
     </Card>
   );
 }

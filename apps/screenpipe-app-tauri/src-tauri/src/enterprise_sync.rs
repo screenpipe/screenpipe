@@ -2635,11 +2635,13 @@ mod imp {
                                 let cursor = ee_sync::Cursor::for_account_enrollment(chrono::Utc::now());
                                 match cursor.save(&cfg.cursor_path) {
                                     Ok(()) => {
-                                        if let Err(error) = crate::commands::persist_enterprise_device_config(
-                                            Some(&remote.license_key),
+                                        if let Err(error) = crate::commands::persist_sign_in_enrollment(
+                                            &remote.license_key,
                                             remote.ingest_url.as_deref(),
                                         ) {
                                             warn!("enterprise sync: failed to persist device config: {error}");
+                                            tokio::time::sleep(std::time::Duration::from_secs(CONFIG_POLL_SECS)).await;
+                                            continue;
                                         }
                                         info!("enterprise sync: device auto-configured from verified workspace sign-in");
                                         break cfg;

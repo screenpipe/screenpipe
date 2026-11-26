@@ -906,6 +906,13 @@ describe("AppEntitlementGate", () => {
     }
   });
 
+  it("lets a signed-out user explicitly choose another browser account", async () => {
+    mocks.state.user = null;
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    fireEvent.click(await screen.findByRole("button", { name: "Use a different account" }));
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true, null);
+  });
+
   it("uses enterprise authentication instead of consumer subscription gating", () => {
     mocks.enterprise = {
       isManagedDeployment: true,
