@@ -13,6 +13,7 @@
 
 mod imp {
     use chrono::{DateTime, Utc};
+    use screenpipe_telemetry_wire::paging::{advance_timestamp_boundary, split_jsonl_requests};
     use screenpipe_telemetry_wire::{
         build_jsonl_with_parsed, AudioRow, FrameRow, MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
     };
@@ -844,7 +845,7 @@ mod imp {
             return Ok(false);
         }
 
-        for chunk in split_jsonl(body) {
+        for chunk in split_jsonl_requests(body, MAX_REQUEST_BYTES) {
             if crate::app_mode::is_managed(app) {
                 return Ok(false);
             }
@@ -871,31 +872,31 @@ mod imp {
             }
         }
 
-        advance(
+        advance_timestamp_boundary(
             &mut cursor.last_frame_ts,
             &mut cursor.boundary.frames,
             &frames,
             |row| &row.timestamp,
         );
-        advance(
+        advance_timestamp_boundary(
             &mut cursor.last_audio_ts,
             &mut cursor.boundary.audio,
             &audio,
             |row| &row.timestamp,
         );
-        advance(
+        advance_timestamp_boundary(
             &mut cursor.last_ui_ts,
             &mut cursor.boundary.ui,
             &ui,
             |row| &row.timestamp,
         );
-        advance(
+        advance_timestamp_boundary(
             &mut cursor.last_memory_ts,
             &mut cursor.boundary.memories,
             &memories,
             |row| &row.created_at,
         );
-        advance(
+        advance_timestamp_boundary(
             &mut cursor.last_parsed_ts,
             &mut cursor.boundary.parsed,
             &parsed,
@@ -935,50 +936,6 @@ mod imp {
                 Vec::new()
             }
         }
-    }
-
-    fn advance<T>(
-        timestamp: &mut Option<String>,
-        offset: &mut u32,
-        rows: &[T],
-        row_timestamp: impl Fn(&T) -> &str,
-    ) {
-        let Some(last) = rows.last() else {
-            return;
-        };
-        let latest = row_timestamp(last);
-        let rows_at_latest = rows
-            .iter()
-            .rev()
-            .take_while(|row| row_timestamp(row) == latest)
-            .count() as u32;
-        if timestamp.as_deref() == Some(latest) {
-            *offset = offset.saturating_add(rows_at_latest);
-        } else {
-            *timestamp = Some(latest.to_string());
-            *offset = rows_at_latest;
-        }
-    }
-
-    fn split_jsonl(body: Vec<u8>) -> Vec<Vec<u8>> {
-        if body.len() <= MAX_REQUEST_BYTES {
-            return vec![body];
-        }
-        let mut chunks = Vec::new();
-        let mut current = Vec::with_capacity(MAX_REQUEST_BYTES);
-        for line in body.split_inclusive(|byte| *byte == b'\n') {
-            if !current.is_empty() && current.len() + line.len() > MAX_REQUEST_BYTES {
-                chunks.push(std::mem::replace(
-                    &mut current,
-                    Vec::with_capacity(MAX_REQUEST_BYTES),
-                ));
-            }
-            current.extend_from_slice(line);
-        }
-        if !current.is_empty() {
-            chunks.push(current);
-        }
-        chunks
     }
 
     async fn sync_once(app: &tauri::AppHandle, local: &LocalClient, http: &reqwest::Client) {

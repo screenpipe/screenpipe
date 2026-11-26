@@ -33,6 +33,7 @@
 //!   wall-clock; explicit backfills use deterministic batch storage keys
 //! - **Graceful shutdown** — task respects cancellation token, drains in flight
 
+use screenpipe_telemetry_wire::paging::{advance_timestamp_boundary, split_jsonl_requests};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -800,35 +801,6 @@ pub fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
 // `build_jsonl` moved to the wire crate with the record types (the gateway
 // uses it to synthesize test fixtures byte-identical to real batches).
 pub use screenpipe_telemetry_wire::{build_jsonl, build_jsonl_with_parsed};
-
-/// Split JSONL on record boundaries for hosted ingest. Concatenating the
-/// returned chunks always reproduces `body` byte-for-byte; no record is
-/// truncated or discarded. A single record larger than the target travels in
-/// its own ticketed storage transfer.
-pub fn split_jsonl_requests(body: Vec<u8>, target_bytes: usize) -> Vec<Vec<u8>> {
-    if body.is_empty() {
-        return Vec::new();
-    }
-    if target_bytes == 0 || body.len() <= target_bytes {
-        return vec![body];
-    }
-
-    let mut chunks = Vec::new();
-    let mut current = Vec::with_capacity(target_bytes);
-    for line in body.split_inclusive(|byte| *byte == b'\n') {
-        if !current.is_empty() && current.len() + line.len() > target_bytes {
-            chunks.push(std::mem::replace(
-                &mut current,
-                Vec::with_capacity(target_bytes),
-            ));
-        }
-        current.extend_from_slice(line);
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
 
 // ─── Ingest HTTP ────────────────────────────────────────────────────────────
 
@@ -2023,30 +1995,6 @@ async fn protected_replay_pending(
             &after,
         )
         .await
-}
-
-fn advance_timestamp_boundary<T>(
-    cursor_ts: &mut Option<String>,
-    boundary_offset: &mut u32,
-    rows: &[T],
-    timestamp: impl Fn(&T) -> &str,
-) {
-    let Some(last) = rows.last() else {
-        return;
-    };
-    let latest_ts = timestamp(last);
-    let rows_at_latest = rows
-        .iter()
-        .rev()
-        .take_while(|row| timestamp(row) == latest_ts)
-        .count() as u32;
-
-    if cursor_ts.as_deref() == Some(latest_ts) {
-        *boundary_offset = boundary_offset.saturating_add(rows_at_latest);
-    } else {
-        *cursor_ts = Some(latest_ts.to_string());
-        *boundary_offset = rows_at_latest;
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
