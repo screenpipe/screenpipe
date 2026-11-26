@@ -13,14 +13,24 @@ trap 'security delete-keychain "$tmp/mirror.keychain-db" >/dev/null 2>&1 || true
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$tmp/input.p12"
 openssl pkcs12 -in "$tmp/input.p12" -passin env:APPLE_CERTIFICATE_PASSWORD -nodes -out "$tmp/input.pem"
 # Apple Security does not import OpenSSL's default PKCS#12 encryption on all runners.
-openssl pkcs12 -export -in "$tmp/input.pem" -passout pass: \
+MIRROR_IMPORT_PASSWORD="$(openssl rand -hex 24)"
+export MIRROR_IMPORT_PASSWORD
+openssl pkcs12 -export -in "$tmp/input.pem" -passout env:MIRROR_IMPORT_PASSWORD \
   -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -out "$tmp/import.p12"
 rm -f "$tmp/input.p12" "$tmp/input.pem"
 
 export MIRROR_KEYCHAIN="$tmp/mirror.keychain-db"
 security create-keychain -p '' "$MIRROR_KEYCHAIN"
 security unlock-keychain -p '' "$MIRROR_KEYCHAIN"
-security import "$tmp/import.p12" -k "$MIRROR_KEYCHAIN" -P '' -T /usr/bin/codesign
+# The security interpreter reads the import arguments from stdin.
+# Suppress its output since it can repeat the supplied passphrase.
+printf 'import "%s" -k "%s" -f pkcs12 -P %s -T /usr/bin/codesign\n' \
+  "$tmp/import.p12" "$MIRROR_KEYCHAIN" "$MIRROR_IMPORT_PASSWORD" | security -i >/dev/null 2>&1
+unset MIRROR_IMPORT_PASSWORD
+if ! security find-identity -v -p codesigning "$MIRROR_KEYCHAIN" | grep -Fq "$APPLE_SIGNING_IDENTITY"; then
+  echo "The Screenpipe signing identity was not imported" >&2
+  exit 1
+fi
 rm -f "$tmp/import.p12"
 security set-key-partition-list -S apple-tool:,apple: -s -k '' "$MIRROR_KEYCHAIN" >/dev/null
 
