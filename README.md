@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **Black Friday (ends Monday, November 30 at 11:59pm PT):** 20% off your first year on annual plans.
+> **Business annual is $400/seat** (save $100, includes frontier Claude + GPT models, 400 AI credits/mo, and sync across devices) and **Basic annual is $200** (save $50).
+> **[Claim the Black Friday offer](https://screenpipe.com/black-friday?utm_source=github&utm_medium=readme&utm_campaign=black_friday_2026)**
+
 <h1 align="center"><a href="https://screenpipe.com/how-to-install?download=1">DOWNLOAD SCREENPIPE</a></h1>
 
 <img width="1500" height="500" alt="image" src="https://github.com/user-attachments/assets/058a44b8-fcad-4a37-92d8-830167dbd400" />
