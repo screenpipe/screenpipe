@@ -31,6 +31,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
+import { AccountLogoutButton } from "./account-logout-button";
 import { commands } from "@/lib/utils/tauri";
 import { openExternalUrl } from "@/lib/open-external-url";
 import {
@@ -664,27 +665,7 @@ export function AccountSection() {
                 <UserCog className="w-4 h-4 mr-1.5" />
                 Web account
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="account-logout-button"
-                onClick={async () => {
-                  await updateSettings({ user: null as any });
-                  try {
-                    await commands.setCloudToken(null);
-                  } catch (e) {
-                    console.warn("failed to clear cloud token on logout:", e);
-                  }
-                  // Restart Pi with null token so it stops using the old
-                  // account's quota. Next message will auto-start as anonymous.
-                  try {
-                    await commands.piUpdateConfig(null, null);
-                  } catch {}
-                  toast({ title: ui("Logged out") });
-                }}
-              >
-                Logout
-              </Button>
+              <AccountLogoutButton />
             </>
           ) : (
             <Button
