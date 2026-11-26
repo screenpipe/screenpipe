@@ -111,6 +111,7 @@ test("one release workflow gates enterprise packaging and supports enterprise-on
   expect(step.with.script).toContain("await markEnterprisePending(");
   for (const platform of platformJobs.filter((name) => name.startsWith("release-enterprise-"))) {
     expect(app.jobs[platform].needs).toEqual(["check_commit", "localization", "enterprise-start"]);
+    expect(app.jobs[platform].if).toBe("!cancelled() && needs.enterprise-start.result == 'success'");
     expect(app.jobs[platform].steps.find((step: any) => step.uses === "actions/checkout@v4").with.ref)
       .toBe("${{ needs.check_commit.outputs.release_sha }}");
   }
