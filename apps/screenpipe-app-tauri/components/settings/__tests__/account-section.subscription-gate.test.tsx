@@ -733,19 +733,19 @@ describe("AccountSection subscription/login gating", () => {
   });
 });
 
-it("lets a signed-in workspace member choose workspace policy in the same app", async () => {
+it("shows workspace access without a personal plan or activation button in managed mode", () => {
+  mocks.managed = true;
   mocks.state.user = {
     id: "workspace-member",
     token: "fixture-token",
     email: "member@example.test",
+    cloud_subscribed: true,
+    subscription_plan: "pro",
     enterprise_account: { requires_enterprise_app: true },
   };
   render(<AccountSection />);
 
-  expect(mocks.updateSettings).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Use workspace on this device" }));
-
-  await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
-    workspaceModeAccountId: "workspace-member",
-  }));
+  expect(screen.getByTestId("account-enterprise-managed-card")).toBeInTheDocument();
+  expect(screen.queryByTestId("account-cloud-active-card")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Use workspace on this device" })).not.toBeInTheDocument();
 });

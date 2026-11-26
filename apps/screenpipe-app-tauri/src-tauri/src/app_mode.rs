@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_subscription_is_an_opt_out_only_when_the_org_permits_it() {
+    fn workspace_membership_takes_precedence_over_a_paid_personal_plan() {
         let mut settings = SettingsStore::default();
         settings.user.id = Some("personal-subscriber".into());
         settings.user.app_entitled = Some(true);
@@ -232,27 +232,10 @@ mod tests {
             "active": true, "plan": "standard", "source": "subscription",
             "checked_at": chrono::Utc::now().to_rfc3339(), "features": {"app": true}
         }));
-        assert!(!resolve_mode(
-            &AtomicBool::new(false),
-            false,
-            false,
-            &settings
-        ));
-        settings.extra.insert("workspaceModeAccountId".into(), json!("another-account"));
-        assert!(!resolve_mode(&AtomicBool::new(false), false, false, &settings));
-        settings.extra.insert("workspaceModeAccountId".into(), json!("personal-subscriber"));
         assert!(resolve_mode(&AtomicBool::new(false), false, false, &settings));
-        settings.extra.remove("workspaceModeAccountId");
 
-        settings.user.enterprise_account = Some(json!({
-            "requires_enterprise_app": true, "restrict_consumer_build_access": true
-        }));
-        assert!(resolve_mode(
-            &AtomicBool::new(false),
-            false,
-            false,
-            &settings
-        ));
+        settings.user.enterprise_account = None;
+        assert!(!resolve_mode(&AtomicBool::new(false), false, false, &settings));
     }
 
     #[test]

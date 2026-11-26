@@ -50,7 +50,7 @@ fn fetch_account(url: &str, token: &str, timeout: Duration) -> Result<AccountRef
         .map_err(|_| "could not create account refresh client".to_string())?;
     let response = client
         .post(url)
-        .json(&serde_json::json!({ "token": token, "verify": true }))
+        .json(&serde_json::json!({ "token": token, "verify": true, "prefer_workspace": true }))
         .send()
         .map_err(|error| {
             if error.is_timeout() {
@@ -362,7 +362,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/api/user"))
             .and(body_json(
-                json!({ "token": "test-session", "verify": true }),
+                json!({ "token": "test-session", "verify": true, "prefer_workspace": true }),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(paid_response()))
             .expect(1)

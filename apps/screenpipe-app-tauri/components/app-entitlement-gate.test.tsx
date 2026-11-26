@@ -932,7 +932,7 @@ describe("AppEntitlementGate", () => {
     }
   });
 
-  it("routes enterprise accounts away from the consumer app", async () => {
+  it("retries workspace verification from the installed app", async () => {
     mocks.state.user = baseUser({
       app_entitled: true,
       cloud_subscribed: true,
@@ -957,15 +957,9 @@ describe("AppEntitlementGate", () => {
     expect(screen.getByText(/belongs to Bungalow/i)).toBeInTheDocument();
     expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /download screenpipe/i }),
-    );
-
-    const downloadUrl = String(mocks.open.mock.calls.at(-1)?.[0] ?? "");
-    expect(downloadUrl).toContain("/api/download");
-    expect(downloadUrl).toContain("token=verified");
-    expect(downloadUrl).toContain("channel=enterprise");
-    expect(downloadUrl).toContain("platform=windows");
+    fireEvent.click(screen.getByRole("button", { name: /refresh workspace access/i }));
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
+    expect(mocks.open).not.toHaveBeenCalled();
   });
 
   it("clears app auth and opens a fresh browser session when switching accounts", async () => {
@@ -1001,7 +995,7 @@ describe("AppEntitlementGate", () => {
     expect(mocks.openLoginWindow).toHaveBeenCalledWith(true, null);
   });
 
-  it("does not route enterprise members away when they also have a consumer app subscription", () => {
+  it("waits for workspace policy when the member also has a personal subscription", () => {
     mocks.state.user = baseUser({
       app_entitled: true,
       cloud_subscribed: true,
@@ -1024,9 +1018,8 @@ describe("AppEntitlementGate", () => {
 
     expect(
       screen.queryByText(/workspace access required/i),
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
-    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
   });
 
   it("routes restricted enterprise members away even with a consumer subscription", () => {
@@ -1056,7 +1049,7 @@ describe("AppEntitlementGate", () => {
   });
 
   it.each(["pro_max", "pro_ultra"] as const)(
-    "does not route an enterprise workspace admin with a %s consumer plan away",
+    "waits for workspace authorization even with a %s personal plan",
     (plan) => {
       mocks.state.user = baseUser({
         app_entitled: true,
@@ -1080,9 +1073,8 @@ describe("AppEntitlementGate", () => {
 
       expect(
         screen.queryByText(/workspace access required/i),
-      ).not.toBeInTheDocument();
-      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
-      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
     },
   );
 

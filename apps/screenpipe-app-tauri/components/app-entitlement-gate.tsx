@@ -5,25 +5,18 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Building2, CreditCard, Download, KeyRound, LogIn, RefreshCw } from "lucide-react";
+import { Building2, CreditCard, KeyRound, LogIn, RefreshCw } from "lucide-react";
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import {
-  arch as getOsArch,
-  platform as getOsPlatform,
-} from "@tauri-apps/plugin-os";
 import { Button } from "@/components/ui/button";
 import {
   AppUser,
-  ENTERPRISE_BUILDS_URL,
-  ENTERPRISE_DOWNLOAD_URL,
   getDeviceLimitStatus,
   getEnterpriseAccount,
   getLocalPlanPolicy,
   getOrgSeatAvailable,
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
-  hasConsumerAppSubscription,
   isDevBillingBypassEnabled,
   isDevLoginSkipEnabled,
   isDevLoginEnabled,
@@ -38,6 +31,7 @@ import {
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { invalidateEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 import { commands } from "@/lib/utils/tauri";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -60,31 +54,6 @@ export type StartupAuthenticationStatus =
 
 export const StartupAuthenticationContext =
   React.createContext<StartupAuthenticationStatus>("authenticated");
-
-function getDownloadPlatform(): string | null {
-  try {
-    const os = getOsPlatform();
-    if (os === "windows")
-      return getOsArch() === "aarch64" ? "windows-arm" : "windows";
-    if (os === "macos")
-      return getOsArch() === "aarch64" ? "macos-arm" : "macos-intel";
-    if (os === "linux") return "linux";
-  } catch {}
-  return null;
-}
-
-function getEnterpriseDownloadUrl() {
-  try {
-    const url = new URL(ENTERPRISE_DOWNLOAD_URL);
-    url.searchParams.set("token", "verified");
-    url.searchParams.set("channel", "enterprise");
-    const platform = getDownloadPlatform();
-    if (platform) url.searchParams.set("platform", platform);
-    return url.toString();
-  } catch {
-    return ENTERPRISE_BUILDS_URL;
-  }
-}
 
 function EntitlementShell({
   title,
@@ -172,7 +141,6 @@ export function AppEntitlementGate({
   // them; computing it last could observe "expired" after they observed paid.
   const paidPolicyDeadlineMs = getPaidPlanPolicyDeadlineMs(user, Date.now());
   const isEntitled = hasAppEntitlement(user);
-  const hasConsumerSubscription = hasConsumerAppSubscription(user);
   const localPlanPolicy = getLocalPlanPolicy(user);
   const needsRefresh = needsAppEntitlementRefresh(user);
   const enterpriseAccount = getEnterpriseAccount(user);
@@ -286,9 +254,7 @@ export function AppEntitlementGate({
     !devLoginSkip &&
     !isManagedDeployment &&
     Boolean(user?.token) &&
-    enterpriseAccount?.requires_enterprise_app === true &&
-    (!hasConsumerSubscription ||
-      enterpriseAccount.restrict_consumer_build_access === true);
+    enterpriseAccount?.requires_enterprise_app === true;
   const shouldGateForOrgSeat =
     !devBypass &&
     !devLoginSkip &&
@@ -551,14 +517,6 @@ export function AppEntitlementGate({
     }
     commands.openLoginWindow(true, null);
   }, [updateSettings]);
-
-  const downloadScreenpipe = useCallback(() => {
-    const url = getEnterpriseDownloadUrl();
-    posthog.capture("app_entitlement_enterprise_download_clicked", {
-      org_name: enterpriseAccount?.org_name ?? null,
-    });
-    openUrl(url).catch(() => window.open(url, "_blank"));
-  }, [enterpriseAccount?.org_name]);
 
   const requestOrgSeat = useCallback(async () => {
     const token = user?.token;
@@ -926,25 +884,25 @@ export function AppEntitlementGate({
     return (
       <EntitlementShell
         title={ui("Workspace access required")}
-        description={ui("{value1} belongs to {value2}. Install the latest Screenpipe and sign in to apply your workspace’s recording and upload policies.", { value1: email, value2: enterpriseOrgName })}
+        description={ui("{value1} belongs to {value2}. Screenpipe is verifying your workspace’s recording and upload policies.", { value1: email, value2: enterpriseOrgName })}
       >
         <div className="flex flex-col gap-3">
-          <Button onClick={downloadScreenpipe} className="w-full gap-2">
-            <Download className="h-4 w-4" />
-            Download Screenpipe
-          </Button>
           <Button
-            onClick={() =>
-              openUrl(ENTERPRISE_BUILDS_URL).catch(() =>
-                window.open(ENTERPRISE_BUILDS_URL, "_blank"),
-              )
-            }
-            variant="outline"
+            onClick={() => {
+              invalidateEnterpriseBuildStatus();
+              void refreshUser();
+            }}
+            disabled={isRefreshing}
             className="w-full gap-2"
           >
-            <Building2 className="h-4 w-4" />
-            Open workspace downloads
+            <RefreshCw className="h-4 w-4" />
+            {ui("Refresh workspace access")}
           </Button>
+          {refreshError && (
+            <p role="alert" className="text-xs text-destructive">
+              {refreshError}
+            </p>
+          )}
           <Button
             onClick={useDifferentAccount}
             variant="ghost"
