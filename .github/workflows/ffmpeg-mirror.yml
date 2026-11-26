@@ -8,6 +8,10 @@ on:
       - .github/workflows/ffmpeg-mirror.yml
   workflow_dispatch:
 
+concurrency:
+  group: ffmpeg-mirror-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -40,7 +44,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         run: |
-          mkdir -p mirror-output
+          bash scripts/ffmpeg-mirror/package-macos.sh ${{ matrix.arch }} mirror-output
           bash scripts/ffmpeg-mirror/sign-macos.sh scripts/ffmpeg-mirror/artifacts/${{ matrix.arch }} "mirror-output/ffmpeg-8.1.3-macos-${{ matrix.arch }}.zip"
           cd mirror-output
           shasum -a 256 *.zip > SHA256SUMS
