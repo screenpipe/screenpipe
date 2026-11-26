@@ -46,7 +46,7 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 if ! check_ffmpeg; then
     case "$OS" in
         darwin)
-            echo "screenpipe: install FFmpeg and FFprobe before recording (brew install ffmpeg)."
+            echo "screenpipe: install FFmpeg and FFprobe before recording (screenpipe setup --ffmpeg or brew install ffmpeg)."
             ;;
         linux) install_ffmpeg_linux ;;
     esac

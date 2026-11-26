@@ -214,6 +214,20 @@ fn has_matching_ffprobe(ffmpeg_path: &std::path::Path) -> bool {
     which(probe_name).is_ok()
 }
 
+#[cfg(target_os = "macos")]
+pub const FFMPEG_MIRROR_RELEASE: &str = "8.1.3-screenpipe.1";
+
+#[cfg(target_os = "macos")]
+pub fn mirrored_ffmpeg_dir() -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".screenpipe")
+            .join("bin")
+            .join(FFMPEG_MIRROR_RELEASE)
+            .join(std::env::consts::ARCH),
+    )
+}
+
 fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     debug!("Starting search for ffmpeg executable");
 
@@ -306,6 +320,14 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
         );
     }
     debug!("ffmpeg not found in PATH");
+
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = mirrored_ffmpeg_dir() {
+        let ffmpeg = dir.join(EXECUTABLE_NAME);
+        if ffmpeg.is_file() && dir.join("ffprobe").is_file() {
+            return Some(ffmpeg);
+        }
+    }
 
     None
 }

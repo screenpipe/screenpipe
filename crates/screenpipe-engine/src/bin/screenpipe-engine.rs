@@ -398,7 +398,11 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
             return Ok(());
         }
-        Command::Setup { ref api_url } => {
+        Command::Setup { ref api_url, ffmpeg } => {
+            if ffmpeg {
+                screenpipe_engine::cli::setup_ffmpeg::install().await?;
+                return Ok(());
+            }
             screenpipe_engine::cli::agent::setup_all_detected(api_url)?;
             return Ok(());
         }
@@ -491,7 +495,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                 eprintln!("  ffmpeg: missing");
                 eprintln!("    install FFmpeg and FFprobe from a trusted package manager and add them to PATH");
                 #[cfg(target_os = "macos")]
-                eprintln!("    for example: brew install ffmpeg");
+                eprintln!("    on macOS: screenpipe setup --ffmpeg or brew install ffmpeg");
             }
             eprintln!();
 
@@ -899,6 +903,8 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             let message =
                 "FFmpeg or FFprobe missing. Install both from a trusted package manager and add them to PATH.";
             eprintln!("{message}");
+            #[cfg(target_os = "macos")]
+            eprintln!("Or run screenpipe setup --ffmpeg to install the verified pair.");
             screenpipe_core::health_diagnostics::startup_failure(
                 "ffmpeg_missing",
                 message,
