@@ -468,3 +468,89 @@ describe("agent handoff on the ready summary", () => {
     );
   });
 });
+
+const CURSOR = {
+  id: "cursor",
+  label: "Cursor",
+  deeplink: "cursor://anysphere.cursor-deeplink/prompt?text=test",
+  hint: "Cursor opened. Review and send the question.",
+};
+
+describe("connected agents footer while learning, writing, and on trial screen", () => {
+  it("offers connected agents calmly while learning without hiding summary progress", () => {
+    mocks.view = view({ phase: "learning", showProgress: true, remainingMs: 45_000 });
+    mocks.handoff.targets = [CLAUDE, CODEX];
+    render(<FirstRunLearningBanner />);
+
+    expect(screen.getByText("Building your first summary")).toBeInTheDocument();
+    expect(screen.getByTestId("first-run-countdown")).toHaveTextContent("0:45");
+    const footer = screen.getByTestId("first-run-connected-agents-footer");
+    expect(footer).toHaveTextContent("While you wait:");
+    expect(footer).toHaveTextContent("We connected Claude and ChatGPT for you.");
+
+    const asks = screen.getAllByTestId("first-run-ask-agent");
+    expect(asks.map((el) => el.getAttribute("data-agent"))).toEqual([
+      "claude",
+      "codex",
+    ]);
+    fireEvent.click(asks[0]);
+    expect(mocks.handoff.askAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "claude" }),
+    );
+  });
+
+  it("formats three connected agents cleanly while writing", () => {
+    mocks.view = view({ phase: "writing", showProgress: true });
+    mocks.handoff.targets = [CLAUDE, CURSOR, CODEX];
+    render(<FirstRunLearningBanner />);
+
+    expect(screen.getByText("Writing your summary")).toBeInTheDocument();
+    expect(screen.getByTestId("first-run-connected-agents-footer")).toHaveTextContent(
+      "We connected Claude, Cursor, and ChatGPT for you.",
+    );
+  });
+
+  it("hides the connected agents footer during learning when no agent is wired", () => {
+    mocks.view = view({ phase: "learning", showProgress: true });
+    mocks.handoff.targets = [];
+    render(<FirstRunLearningBanner />);
+
+    expect(
+      screen.queryByTestId("first-run-connected-agents-footer"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("surfaces connected agents in the full-page trial screen and swaps spinner for check on ready", () => {
+    mocks.view = view({
+      activationState: "summary",
+      phase: "learning",
+      remainingMs: 45_000,
+    });
+    mocks.handoff.targets = [CLAUDE, CODEX];
+    const { rerender } = render(<TrialActivationSummaryExperience />);
+
+    expect(screen.getByTestId("trial-activation-view-summary")).toBeDisabled();
+    expect(screen.getByTestId("trial-activation-view-summary")).toHaveTextContent(
+      "View summary (ready in ~0:45)",
+    );
+    expect(screen.getByTestId("first-run-connected-agents-footer")).toHaveTextContent(
+      "In the meantime: We connected Claude and ChatGPT for you.",
+    );
+    fireEvent.click(screen.getAllByTestId("first-run-ask-agent")[0]);
+    expect(mocks.handoff.askAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "claude" }),
+    );
+
+    mocks.view = view({
+      activationState: "summary",
+      phase: "ready",
+      chatId: "trial-ready-1",
+    });
+    rerender(<TrialActivationSummaryExperience />);
+    expect(screen.getByTestId("trial-activation-ready-check")).toBeInTheDocument();
+    expect(screen.getByTestId("trial-activation-view-summary")).toBeEnabled();
+    expect(screen.getByTestId("first-run-connected-agents-footer")).toHaveTextContent(
+      "Or ask directly:",
+    );
+  });
+});

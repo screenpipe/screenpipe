@@ -63,14 +63,45 @@ describe("first-run learning provider", () => {
     expect(mocks.useLearningWindow).toHaveBeenCalledTimes(1);
   });
 
-  it("does not own notification delivery", () => {
+  it("does not probe connected agents for quiet background retries", () => {
     render(
       <FirstRunLearningWindowProvider>
         <div>settings screen</div>
       </FirstRunLearningWindowProvider>,
     );
 
-    expect(mocks.useAgentHandoff).toHaveBeenCalledWith(false, []);
+    expect(mocks.useAgentHandoff).toHaveBeenCalledWith(false, [], "learning");
+  });
+
+  it("enables agent handoff during foreground learning and on the trial summary screen", () => {
+    mocks.useLearningWindow.mockReturnValue({
+      phase: "learning",
+      showProgress: true,
+      summaryOpenedAt: null,
+      capturedApps: [],
+      activationState: "inactive",
+    });
+    const { rerender } = render(
+      <FirstRunLearningWindowProvider>
+        <div>home</div>
+      </FirstRunLearningWindowProvider>,
+    );
+    expect(mocks.useAgentHandoff).toHaveBeenCalledWith(true, [], "learning");
+
+    mocks.useAgentHandoff.mockClear();
+    mocks.useLearningWindow.mockReturnValue({
+      phase: "writing",
+      showProgress: false,
+      summaryOpenedAt: null,
+      capturedApps: [],
+      activationState: "summary",
+    });
+    rerender(
+      <FirstRunLearningWindowProvider>
+        <div>home</div>
+      </FirstRunLearningWindowProvider>,
+    );
+    expect(mocks.useAgentHandoff).toHaveBeenCalledWith(true, [], "writing");
   });
 
   it("keeps checkout closed until the locked-summary CTA opens it", () => {

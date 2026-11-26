@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 
 import { type ConnectAllToolId, detectAiTools } from "@/lib/ai-tools-mcp";
@@ -21,7 +21,10 @@ import {
   preferredHandoffTargetForRecentApps,
   type AgentHandoffTarget,
 } from "@/lib/first-run/agent-handoff";
-import type { FirstRunCapturedApp } from "@/lib/first-run/learning-window";
+import type {
+  FirstRunCapturedApp,
+  FirstRunLearningPhase,
+} from "@/lib/first-run/learning-window";
 import { commands } from "@/lib/utils/tauri";
 
 /**
@@ -82,10 +85,13 @@ export type AgentHandoffView = {
 export function useAgentHandoff(
   enabled: boolean,
   recentApps: readonly FirstRunCapturedApp[] = [],
+  phase?: FirstRunLearningPhase,
 ): AgentHandoffView {
   const [targets, setTargets] = useState<AgentHandoffTarget[]>([]);
   const [resolved, setResolved] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  const phaseRef = useRef<FirstRunLearningPhase | undefined>(phase);
+  phaseRef.current = phase;
 
   useEffect(() => {
     if (!enabled) {
@@ -117,6 +123,7 @@ export function useAgentHandoff(
           posthog.capture("first_run_agent_handoff_shown", {
             agents: resolved.map((t) => t.id),
             agent_count: resolved.length,
+            ...(phaseRef.current ? { phase: phaseRef.current } : {}),
           });
         }
       } catch {
@@ -187,6 +194,7 @@ export function useAgentHandoff(
       replayed: result.replayed,
       copy_only: !result.prefilled,
       clipboard_copied: result.copied,
+      ...(phaseRef.current ? { phase: phaseRef.current } : {}),
     });
   }, []);
 
