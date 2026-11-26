@@ -386,7 +386,6 @@ export function PrivacySection() {
   // The managed policy runtime reapplies PII policy on every policy poll.
   const { getManagedValue, isManagedDeployment } = useManagedPolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
-  const sharingRequiresCloud = !!settings.workflowSharing;
   // Same idea for input capture: the admin can force keyboard/click rows on
   // or off org-wide (applied by the managed policy runtime).
   // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
@@ -596,9 +595,6 @@ export function PrivacySection() {
   // Where the AI workers run — one switch covers both modalities.
   const piiBackend = (settings.piiBackend as "local" | "tinfoil" | undefined) ?? "local";
   const handlePiiBackendChange = (next: "local" | "tinfoil") => {
-    // Sharing requires the enclave, but keep Cloud selectable so a stale or
-    // partially migrated Local setting can be repaired from this screen.
-    if (sharingRequiresCloud && next !== "tinfoil") return;
     handleSettingsChange({ piiBackend: next } as any, true);
   };
 
@@ -1494,16 +1490,16 @@ export function PrivacySection() {
               including when synced. Basic pattern filtering remains available.
             </p>
 
-            {(aiPiiRemovalEnabled || sharingRequiresCloud) && (
+            {aiPiiRemovalEnabled && (
               <div id="workflow-cloud-redaction" className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                   <span className="font-medium text-foreground">Where it runs</span>
-                  <label className={`flex items-center gap-1.5 ${managedPiiBackend || sharingRequiresCloud ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                  <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
                     <input
                       type="radio"
                       name="piiBackend"
                       checked={piiBackend === "local"}
-                      disabled={!!managedPiiBackend || sharingRequiresCloud}
+                      disabled={!!managedPiiBackend}
                       onChange={() => handlePiiBackendChange("local")}
                     />
                     <span className="text-foreground">Local</span>
@@ -1520,9 +1516,6 @@ export function PrivacySection() {
                   </label>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  {sharingRequiresCloud && <span className="block font-medium">{piiBackend === "tinfoil"
-                    ? "Cloud redaction is required while Workflows sharing is on. The choices below control redaction in recordings."
-                    : "Workflows sharing requires Cloud (enclave), but this device is still set to Local. Choose Cloud, then apply the change."}</span>}
                   Local stays on-device — strongest privacy, slower on weak
                   hardware. Cloud uses screenpipe&apos;s attested
                   confidential-compute enclave — fast everywhere; your device

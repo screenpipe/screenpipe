@@ -5,7 +5,7 @@
 import { WorkflowSharingControls } from "./workflow-sharing-controls";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { SHARING_NOTICE_VERSION } from "@/lib/trajectories/collector";
+import { TRAINING_NOTICE_VERSION } from "@/lib/workflows/training-consent";
 import { Clock3, Loader2, RefreshCw } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import styles from "./workflow-tasks-prompt.module.css";
@@ -47,17 +47,17 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
 
   const finishSharing = useCallback(() => {
     const account = current.current.user?.id;
-    if (account) void updateSettings({ workflowSharingPromptSeen: { ...current.current.workflowSharingPromptSeen, [account]: SHARING_NOTICE_VERSION } }).catch(() => {});
+    if (account) void updateSettings({ workflowSharingPromptSeen: { ...current.current.workflowSharingPromptSeen, [account]: TRAINING_NOTICE_VERSION } }).catch(() => {});
     setOpen(false);
   }, [updateSettings]);
-  // Sharing is an optional Workflows choice, independent of scheduled discovery.
+  // AI training consent is an optional Workflows choice, independent of scheduled discovery.
   // Account hydration and workspace entry can happen before the recorder is ready.
   useEffect(() => {
     const value = current.current;
     const account = value.user?.id;
     setOpen(false);
     setStep("tasks");
-    if (active && account && value.workflowSharingPromptSeen?.[account] !== SHARING_NOTICE_VERSION) {
+    if (active && account && value.workflowSharingPromptSeen?.[account] !== TRAINING_NOTICE_VERSION) {
       setStep("sharing");
       setOpen(true);
     }
@@ -182,7 +182,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
           {step === "tasks" ? "Keep your workflows up to date?" : "Help improve Screenpipe"}
         </DialogTitle>
         <DialogDescription className="text-muted-foreground">
-          {step === "tasks" ? "Discover workflows and keep them accurate with automatic updates." : "Share new Workflows chats to improve workflows and train Screenpipe’s own AI models. Never external providers’ models."}
+          {step === "tasks" ? "Discover workflows and keep them accurate with automatic updates." : "Allow Screenpipe to use your chats (text, images, and files) to train Screenpipe’s own AI models. Never external providers’ models."}
         </DialogDescription>
       </DialogHeader>
       {step === "sharing" ? <WorkflowSharingControls key={settings.user?.id} compact onDone={finishSharing} onBusyChange={setBusy} /> : <>
