@@ -64,13 +64,14 @@ import { PipeStoreView } from "@/components/pipe-store";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
+import { MemoryStatusNotice } from "@/components/memory-status-notice";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { ChatHistoryView } from "@/components/chat/chat-history-view";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { useRecordingStorage } from "@/lib/hooks/use-recording-storage";
-import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
+import { RecordingStatus, type RecordingDevice, type RecordingAttention } from "@/components/recording-status";
 import { StarredTimeline } from "@/components/starred-sessions/starred-timeline";
 import Timeline from "@/components/rewind/timeline";
 import {
@@ -325,7 +326,7 @@ function HomeContent() {
   // recovery and the first-run guide must never compete (#5407). The guide
   // isn't lost: `firstRunGuidePending` is React state, so it appears once
   // health recovers.
-  const { health, isServerDown } = useHealthCheck();
+  const { health, isServerDown, fetchHealth } = useHealthCheck();
   const captureUnhealthy =
     isServerDown || health?.status === "unhealthy" || health?.status === "error";
   const showFirstRunGuide = shouldShowFirstRunGuide({
@@ -1125,6 +1126,7 @@ function HomeContent() {
       case "activity":
         return (
           <ActivityLedger
+            recorderConnected={Boolean(health) && !isServerDown && health?.status !== "error" && health?.status !== "degraded"}
             onOpenArtifact={() => setActivityReturnVisible(true)}
           />
         );
@@ -1206,22 +1208,56 @@ function HomeContent() {
 
   // Chat and Workflows share the same recorder state, events and controls.
   const recordingStorage = useRecordingStorage(isCapturePaused);
+  let recordingAttention: RecordingAttention | undefined;
+  if (isServerDown) recordingAttention = "disconnected";
+  else if (!health || health.status === "error") recordingAttention = "connecting";
+  else if (health.status === "degraded") recordingAttention = "unavailable";
+  else if (health.vision_reason === "permission_denied") recordingAttention = "screen-permission";
+  else if (health.vision_reason === "capture_stalled") recordingAttention = "screen-stalled";
+  else if (health.capture_status?.status === "audio_stalled") recordingAttention = "audio-stalled";
+  const allCaptureDisabled = !!(settings.disableAudio && settings.disableVision);
+  const checkRecorder = async () => {
+    await Promise.all([fetchHealth(), refreshRecordingDevices()]);
+  };
+  const openScreenPermission = () => {
+    void commands.openPermissionSettings("screenRecording").catch(() =>
+      toast({ title: ui("Could not open System Settings"), variant: "destructive" })
+    );
+  };
+  const openRecordingSettings = () => openSettings("recording");
+  const openStorageSettings = () => openSettings("storage");
   const recordingStatusProps = {
+    attention: recordingAttention,
     storageWarning: recordingStorage.warning,
     storageChecking: recordingStorage.checking,
     storageError: recordingStorage.error,
     onRefreshStorage: recordingStorage.refresh,
-    onOpenStorageSettings: () => openSettings("storage"),
+    onOpenStorageSettings: openStorageSettings,
     devices: recordingDevices,
     onDevicesChange: setRecordingDevices,
     meetingActive: meetingState.active ?? false,
     onPauseRecording: pauseRecording,
     onResumeRecording: resumeRecording,
     isGloballyPaused: isCapturePaused,
-    onRefreshDevices: refreshRecordingDevices,
-    allCaptureDisabled: !!(settings.disableAudio && settings.disableVision),
-    onOpenRecordingSettings: () => openSettings("recording"),
+    onRefreshDevices: checkRecorder,
+    allCaptureDisabled,
+    onOpenScreenPermission: openScreenPermission,
+    onOpenRecordingSettings: openRecordingSettings,
   };
+  const captureFault = recordingAttention === "screen-permission" ||
+    recordingAttention === "screen-stalled" || recordingAttention === "audio-stalled";
+  const memoryNoticeState = recordingStorage.warning && !allCaptureDisabled
+    ? "low-storage"
+    : captureFault && (isCapturePaused || allCaptureDisabled) ? undefined : recordingAttention;
+  const memoryStatusNotice = !workflowsActive && isSettingsLoaded && !trialActivationLocked && (
+    <MemoryStatusNotice
+      state={memoryNoticeState}
+      onCheck={checkRecorder}
+      onOpenRecording={openRecordingSettings}
+      onOpenPermission={openScreenPermission}
+      onOpenStorage={openStorageSettings}
+    />
+  );
 
   const persistSidebarLayout = (next: ReturnType<typeof normalizeSidebarNavLayout>) => {
     void updateSettings({ sidebarNavLayout: next });
@@ -1710,11 +1746,13 @@ function HomeContent() {
                   chatShortcutsEnabled={!workflowsActive && activeSection === "home"}
                   sidebarCollapsed={sidebarCollapsed}
                   firstRunLearningEnabled={!workflowsActive && activeSection === "home"}
+                  statusNotice={activeSection === "home" ? memoryStatusNotice : undefined}
                 />
               </div>
             )}
 
             {/* Non-chat sections render on top when active. */}
+            {activeSection !== "home" && memoryStatusNotice}
             {activeSection !== "home" && (
               isFullHeight ? (
                 <div className="flex-1 min-h-0 overflow-hidden">

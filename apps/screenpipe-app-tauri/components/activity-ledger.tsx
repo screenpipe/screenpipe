@@ -1384,8 +1384,10 @@ function compactEntryContext(entry: ActivityHistoryEntry): string {
 
 export function ActivityLedger({
   onOpenArtifact,
+  recorderConnected,
 }: {
   onOpenArtifact?: () => void;
+  recorderConnected?: boolean;
 } = {}) {
 
   const ui = useGT();
@@ -1424,10 +1426,20 @@ export function ActivityLedger({
     ActivityHistoryCoverage[]
   >([]);
   const [loading, setLoading] = useState(true);
+  const [loadRevision, setLoadRevision] = useState(0);
   const [cacheReady, setCacheReady] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState("");
+  const wasDisconnected = useRef(false);
+  useEffect(() => {
+    if (recorderConnected === false) {
+      wasDisconnected.current = true;
+    } else if (recorderConnected && wasDisconnected.current) {
+      wasDisconnected.current = false;
+      if (error) setLoadRevision((revision) => revision + 1);
+    }
+  }, [error, recorderConnected]);
   const [recentEligibilityTick, setRecentEligibilityTick] = useState(0);
   const historyAbortRef = useRef<AbortController | null>(null);
   const historyLoadingRef = useRef(false);
@@ -1615,6 +1627,11 @@ export function ActivityLedger({
               },
             ),
           ]);
+          // The engine can accept connections before both readers are ready.
+          // Let the same startup retry cover HTTP unavailability and rejected fetches.
+          const isStarting = [summaryResponse.status, meetingsResponse.status]
+            .some((status) => status === 502 || status === 503 || status === 504);
+          if (isStarting && attempt < 5) continue;
           return { summaryResponse, meetingsResponse };
         } catch (reason) {
           lastError = reason;
@@ -1693,7 +1710,7 @@ export function ActivityLedger({
       }
     });
     return () => { controller.abort(); clearTimeout(privacyTimer); };
-  }, [activityHistoryAccessStart, range]);
+  }, [activityHistoryAccessStart, range, loadRevision]);
 
   useEffect(() => {
     historyAbortRef.current?.abort();
@@ -2185,11 +2202,23 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
               ready.
             </p>
           ) : null}
+          {error && !invalidRange && (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4">
+              <div role="alert">
+                <p className="text-sm font-medium">{ui("Couldn’t load recent activity")}</p>
+                {activitiesEnabled && history && <p className="mt-1 text-xs text-muted-foreground">{ui("Saved activities are still available below.")}</p>}
+              </div>
+              <Button type="button" variant="outline" size="sm" className="font-sans normal-case tracking-normal"
+                onClick={() => setLoadRevision((revision) => revision + 1)}>
+                {ui("Retry loading activity")}
+              </Button>
+            </div>
+          )}
           {invalidRange ? (
             <p className="text-sm text-muted-foreground">
               Start time must be before end time.
             </p>
-          ) : !activitiesEnabled ? (
+          ) : error && (!history || !activitiesEnabled) ? null : !activitiesEnabled ? (
             loading && !summary ? (
               <ActivityLedgerSkeleton label={ui("Reading your day…")} />
             ) : !cacheReady ? (
@@ -2317,8 +2346,6 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             </section>
           ) : loading && !summary ? (
             <ActivityLedgerSkeleton label={ui("Reading your day…")} />
-          ) : error ? (
-            <p className="text-sm text-muted-foreground">{error}</p>
           ) : !cacheReady ? (
             <ActivityLedgerSkeleton label={ui("Loading generated activities…")} />
           ) : historyLoading && !history ? (

@@ -38,6 +38,58 @@ beforeEach(() => {
 });
 
 describe("RecordingStatus", () => {
+  it("shows a neutral startup state while the recorder is connecting", () => {
+    openStatus({ attention: "connecting" });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Checking recording status…");
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the local recorder");
+    expect(screen.queryByText("Display 1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recording-status-pause-all")).not.toBeInTheDocument();
+  });
+
+  it("can recheck a lost connection without exposing stale device controls", async () => {
+    const props = openStatus({ attention: "disconnected" });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Recorder disconnected");
+    expect(screen.queryByText("Display 1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recording-status-pause-all")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled());
+    expect(props.onRefreshDevices).toHaveBeenCalledOnce();
+    expect(props.onResumeRecording).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["screen-stalled", "Screen recording stalled"],
+    ["audio-stalled", "Audio recording stalled"],
+  ] as const)("shows %s ahead of device eligibility and keeps pause available", (attention, title) => {
+    const props = openStatus({ attention });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName(title);
+    expect(screen.getByRole("button", { name: "Pause all recording" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Recording settings" }));
+    expect(props.onOpenRecordingSettings).toHaveBeenCalledOnce();
+  });
+
+  it("offers a status recheck after the engine fails to produce a snapshot", () => {
+    openStatus({ attention: "unavailable" });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Recording status unavailable");
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+    expect(screen.queryByTestId("recording-status-pause-all")).not.toBeInTheDocument();
+  });
+
+  it("routes a screen permission fault to System Settings", () => {
+    const onOpenScreenPermission = vi.fn();
+    const props = openStatus({ attention: "screen-permission", onOpenScreenPermission });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Screen recording permission needed");
+    fireEvent.click(screen.getByRole("button", { name: "Open System Settings" }));
+    expect(onOpenScreenPermission).toHaveBeenCalledOnce();
+    expect(props.onOpenRecordingSettings).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit user pause even when the recorder is unreachable", () => {
+    openStatus({ attention: "disconnected", isGloballyPaused: true });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Recording paused");
+    expect(screen.getByRole("button", { name: "Resume all recording" })).toBeEnabled();
+  });
+
   it("shows low storage without opening the status dot and routes to cleanup", () => {
     const props = openStatus({ isGloballyPaused: true,
       storageWarning: { availableBytes: 3 * 1024 ** 3, thresholdBytes: 5 * 1024 ** 3 },

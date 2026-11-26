@@ -560,12 +560,11 @@ export function CatalogPlaceholder({ detail = false, reconnecting = false, retry
   const bar = (width: string, height = 10) => <span className={styles.skeletonBar} style={{ width, height }} />;
   const message = reconnecting ? ui("Connecting to Screenpipe…") : ui("Loading saved workflows…");
   return <section aria-busy="true" aria-label={ui("Loading workflows")}>
-    {detail ? <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>{ui("Workflow")}</h1><span role="status" className={styles.catalogLoadStatus}>{message}</span></div> : <div className={`${styles.catalogHeader} ${styles.quietCatalogHeader}`}>
-      <div className={styles.catalogHeading}><h1>{ui("Your workflows")}</h1><div className={styles.catalogCount} aria-hidden="true">{bar("150px", 12)}</div></div>
-      <div className={styles.quietHeaderActions} aria-hidden="true">{bar("36px", 36)}</div>
-      <div className={styles.quietRefreshControls}><span role="status" className={`${styles.runProgress} ${styles.catalogLoadStatus}`}>{message}</span></div>
-    </div>}
-    {reconnecting && <div className={styles.catalogRefreshNotice}><span>We’ll load your workflows automatically when the connection returns.</span><button onClick={retry}>Retry loading</button></div>}
+    <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>{detail ? ui("Workflow") : ui("Your workflows")}</h1></div>
+    <div className={styles.catalogRefreshNotice}>
+      <span role="status">{message}</span>
+      {reconnecting && <button type="button" onClick={retry}>{ui("Retry loading")}</button>}
+    </div>
     <div aria-hidden="true">
       <div className={detail ? styles.skeletonDetail : styles.workflowGrid}>
         {Array.from({ length: detail ? 3 : 4 }, (_, i) => <div key={i} className={`${styles.workflowCard} ${styles.skeletonCard}`}>
@@ -1347,8 +1346,15 @@ export function WorkflowsApp({ onUsageEvent, modelControl, readyWorkflowIds, rev
   const detailAwaitingCatalog = view === "workflow" && !catalogReady;
   if (catalogView && (!knownWorkflows.length || detailAwaitingCatalog) && (catalogLoading || catalogLoadError)) {
     content = catalogLoading ? <CatalogPlaceholder detail={view === "workflow"} reconnecting={catalogReconnecting} retry={refreshRuntime} /> : <>
-      <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>Your workflows</h1></div>
-      <section className={styles.catalogLoadError} role="alert"><AlertTriangle size={20} /><h2>Couldn’t load your workflows</h2><p>Your saved workflows haven’t been changed. Try loading them again.</p><button className={styles.primaryButton} onClick={refreshRuntime}><RefreshCw size={14} />Retry loading</button></section>
+      <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>{view === "workflow" ? ui("Workflow") : ui("Your workflows")}</h1></div>
+      <div className={styles.catalogLoadError}>
+        <AlertTriangle size={16} aria-hidden="true" />
+        <div role="alert">
+          <h2>{ui("Couldn’t load your workflows")}</h2>
+          <p>{ui("Retry to read the saved catalog for this source.")}</p>
+        </div>
+        <button type="button" className={styles.secondaryButton} onClick={refreshRuntime}><RefreshCw size={14} aria-hidden="true" />{ui("Retry loading")}</button>
+      </div>
     </>;
   } else if (catalogView && analysis) {
     // Keep the document at the same React position while its catalog refreshes.

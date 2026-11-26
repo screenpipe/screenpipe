@@ -5,7 +5,7 @@
 "use client";
 
 import React from "react";
-import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Pause, Play, AlertTriangle } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Pause, Play, AlertTriangle, Loader2, Unplug } from "lucide-react";
 import posthog from "posthog-js";
 import {
   Popover,
@@ -35,7 +35,10 @@ export interface RecordingDevice {
 
 import type { RecordingStorageWarning } from "@/lib/hooks/use-recording-storage";
 
+export type RecordingAttention = "connecting" | "disconnected" | "unavailable" | "screen-permission" | "screen-stalled" | "audio-stalled";
+
 interface RecordingStatusProps {
+  attention?: RecordingAttention;
   storageWarning?: RecordingStorageWarning | null;
   storageChecking?: boolean;
   storageError?: boolean;
@@ -58,6 +61,7 @@ interface RecordingStatusProps {
   allCaptureDisabled?: boolean;
   /** Retry the parent's device status request without changing capture. */
   onRefreshDevices?: () => void | Promise<void>;
+  onOpenScreenPermission?: () => void;
   /** navigate to recording settings */
   onOpenRecordingSettings?: () => void;
 }
@@ -79,6 +83,7 @@ const KIND_ICONS: Record<
  * disclosure — the chrome only answers "is it recording?").
  */
 export function RecordingStatus({
+  attention,
   devices,
   storageWarning, storageChecking, storageError, onRefreshStorage, onOpenStorageSettings,
   onDevicesChange,
@@ -90,6 +95,7 @@ export function RecordingStatus({
   floatingOverMedia,
   allCaptureDisabled,
   onOpenRecordingSettings,
+  onOpenScreenPermission,
   onRefreshDevices,
 }: RecordingStatusProps) {
 
@@ -112,18 +118,53 @@ export function RecordingStatus({
   const statusUnavailable = !allCaptureDisabled && !isGloballyPaused && visibleDevices.length === 0;
   const allPaused = !allCaptureDisabled && (isGloballyPaused || (visibleDevices.length > 0 && !canPauseRecording));
   const lowStorage = isGloballyPaused && !allCaptureDisabled && storageWarning;
-  const summary = allCaptureDisabled
-    ? ui("Recording disabled")
-    : lowStorage
-      ? ui("Recording paused: low storage")
-    : isGloballyPaused
-      ? ui("Recording paused")
-      : statusUnavailable
-        ? ui("Recording status unavailable")
-        : pausedCount === 0
-          ? ui("Recording")
-          : ui("{value1, plural, one {# device} other {# devices}} paused", { value1: pausedCount });
-  const label = meetingActive ? ui("{status} · meeting notes", { status: summary }) : summary;
+  // Explicit pause and storage state take precedence over background health.
+  const healthNotice = allCaptureDisabled || isGloballyPaused ? undefined : attention;
+  const checking = healthNotice === "connecting";
+  const connectionLost = healthNotice === "disconnected";
+  const canControlDevices = !checking && !connectionLost && healthNotice !== "unavailable";
+  const permissionAction = healthNotice === "screen-permission" && onOpenScreenPermission;
+  const openSettings = permissionAction || onOpenRecordingSettings;
+  const notice = healthNotice && {
+    connecting: {
+      title: ui("Checking recording status…"),
+      detail: ui("Waiting for the local recorder to report its status."),
+    },
+    disconnected: {
+      title: ui("Recorder disconnected"),
+      detail: ui("Screenpipe will keep trying to connect. Recording status is unknown."),
+    },
+    unavailable: {
+      title: ui("Recording status unavailable"),
+      detail: ui("The recorder hasn’t returned a current status. Check again in a moment."),
+    },
+    "screen-permission": {
+      title: ui("Screen recording permission needed"),
+      detail: ui("Allow Screenpipe to capture your screen in System Settings."),
+    },
+    "screen-stalled": {
+      title: ui("Screen recording stalled"),
+      detail: ui("Screenpipe stopped receiving new frames. Check your display in recording settings."),
+    },
+    "audio-stalled": {
+      title: ui("Audio recording stalled"),
+      detail: ui("Screenpipe stopped receiving audio. Check your audio devices in recording settings."),
+    },
+  }[healthNotice];
+  const summary = notice?.title ?? (
+    allCaptureDisabled
+      ? ui("Recording disabled")
+      : lowStorage
+        ? ui("Recording paused: low storage")
+        : isGloballyPaused
+          ? ui("Recording paused")
+          : statusUnavailable
+            ? ui("Recording status unavailable")
+            : pausedCount === 0
+              ? ui("Recording")
+              : ui("{value1, plural, one {# device} other {# devices}} paused", { value1: pausedCount })
+  );
+  const label = meetingActive && canControlDevices ? ui("{status} · meeting notes", { status: summary }) : summary;
 
   // Monitors pause via /vision/device/* (screen capture only — audio keeps
   // running); mics/speakers pause via /audio/device/*. Both flip optimistically
@@ -234,7 +275,11 @@ export function RecordingStatus({
                   : isTranslucent ? "hover:bg-white/10" : "hover:bg-muted/60"
               )}
             >
-              {lowStorage ? <><AlertTriangle aria-hidden="true" className="h-3 w-3" /><span>{ui("Low storage")}</span></> : <span
+              {lowStorage ? <><AlertTriangle aria-hidden="true" className="h-3 w-3" /><span>{ui("Low storage")}</span></>
+                : checking ? <Loader2 aria-hidden="true" className="h-3 w-3 text-muted-foreground motion-safe:animate-spin" />
+                : connectionLost ? <Unplug aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
+                : notice ? <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 text-foreground" />
+                : <span
                 aria-hidden="true"
                 className={cn(
                   "h-2 w-2 rounded-full transition-all",
@@ -271,6 +316,21 @@ export function RecordingStatus({
         <div className="px-3 py-2 border-b border-border">
           <span className="text-xs font-medium text-foreground">{label}</span>
         </div>
+        {notice && (
+          <div className="space-y-2 px-3 py-2.5 text-xs">
+            <p role="status" className="text-muted-foreground">{notice.detail}</p>
+            {!checking && (
+              <div className="flex flex-wrap items-center gap-3">
+                {onRefreshDevices && <button type="button" disabled={refreshLoading} onClick={() => void refreshDevices()}
+                  className="text-foreground underline underline-offset-2 disabled:opacity-40">
+                  {refreshLoading ? ui("Checking…") : ui("Check again")}
+                </button>}
+                {canControlDevices && openSettings && <button type="button" onClick={() => { openSettings(); setOpen(false); }}
+                  className="text-foreground underline underline-offset-2">{permissionAction ? ui("Open System Settings") : ui("Recording settings")}</button>}
+              </div>
+            )}
+          </div>
+        )}
         {lowStorage && (
           <div className="px-3 py-3 space-y-2 border-b border-border" role="status">
             <p className="text-xs text-muted-foreground">{ui("{free} GB free. Recording needs more than {reserve} GB.", {
@@ -291,7 +351,7 @@ export function RecordingStatus({
               onClick={() => { onOpenStorageSettings(); setOpen(false); }}>{ui("Manage storage")}</button>}
           </div>
         )}
-        {(onPauseRecording || onResumeRecording) && !allCaptureDisabled && !statusUnavailable && !lowStorage && (
+        {(onPauseRecording || onResumeRecording) && !allCaptureDisabled && !statusUnavailable && !lowStorage && canControlDevices && (
           <div className="px-3 py-2 border-b border-border">
             <button
               type="button"
@@ -312,8 +372,8 @@ export function RecordingStatus({
             </button>
           </div>
         )}
-        <div className="py-1">
-          {visibleDevices.length === 0 && (
+        {canControlDevices && <div className="py-1">
+          {visibleDevices.length === 0 && !notice && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
               <p>
                 {allCaptureDisabled
@@ -403,7 +463,7 @@ export function RecordingStatus({
               </div>
             );
           })}
-        </div>
+        </div>}
       </PopoverContent>
     </Popover>
   );

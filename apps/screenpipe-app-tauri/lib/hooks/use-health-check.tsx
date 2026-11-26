@@ -106,6 +106,7 @@ let snapshot: HealthSnapshot = {
   isLoading: true,
 };
 let wsRef: WebSocket | null = null;
+let healthConnectionAttempt = 0;
 let retryInterval: ReturnType<typeof setInterval> | null = null;
 let serverDownTimer: ReturnType<typeof setTimeout> | null = null;
 let consumerCount = 0;
@@ -204,10 +205,12 @@ function errorHealth(message: string): HealthCheckResponse {
 }
 
 export async function fetchHealth(): Promise<void> {
+  const attempt = ++healthConnectionAttempt;
   closeHealthSocket(1000, "refreshing");
 
   try {
     await ensureApiReady();
+    if (attempt !== healthConnectionAttempt) return;
     const wsBase = getApiBaseUrl().replace("http://", "ws://");
     const wsUrl = appendAuthToken(`${wsBase}/ws/health`);
     const ws = new WebSocket(wsUrl);
@@ -277,12 +280,13 @@ export async function fetchHealth(): Promise<void> {
         isLoading: false,
       });
 
-      if (event.code !== 1000) {
-        scheduleServerDownGracePeriod();
-        if (consumerCount > 0) startRetryInterval();
-      }
+      // Intentional local closes detach this listener. A server can close
+      // cleanly during shutdown and still needs to be reconnected.
+      scheduleServerDownGracePeriod();
+      if (consumerCount > 0) startRetryInterval();
     };
   } catch (error) {
+    if (attempt !== healthConnectionAttempt) return;
     console.error("Error creating WebSocket:", error);
     emitSnapshot({ isLoading: false });
     scheduleServerDownGracePeriod();
@@ -313,6 +317,7 @@ export function useHealthCheck(): HealthCheckHook {
       consumerCount = Math.max(0, consumerCount - 1);
       if (consumerCount > 0) return;
 
+      healthConnectionAttempt += 1;
       closeHealthSocket(1000, "last consumer unmounted");
       clearRetryInterval();
       clearServerDownTimer();
