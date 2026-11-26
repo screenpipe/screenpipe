@@ -77,6 +77,7 @@ pub mod ocr_json;
 pub mod pipeline;
 pub mod pseudonym;
 pub mod redaction_map;
+pub mod role_fusion;
 pub mod sessions;
 pub mod tree_json;
 pub mod worker;
@@ -85,6 +86,7 @@ mod cache;
 mod error;
 mod span;
 
+pub use a11y_context::{extract_text_free_ax_nodes, AxNode, NormalizedBounds};
 pub use error::RedactError;
 pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
 pub use pipeline::{Pipeline, PipelineConfig};

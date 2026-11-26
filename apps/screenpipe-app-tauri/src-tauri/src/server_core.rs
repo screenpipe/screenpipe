@@ -1189,7 +1189,7 @@ impl ServerCore {
         // The single `pii_backend` config flag selects the inner
         // adapter for BOTH modalities:
         //   - "local"   → on-device ONNX models for both text and image
-        //   - "tinfoil" → confidential-compute enclave (H200) for both
+        //   - "tinfoil" → confidential-compute CPU enclave (`cpus: 8, gpus: 0`) for both
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
 
@@ -1469,11 +1469,11 @@ impl ServerCore {
                 .with_database_error_hook(redact_database_error_hook.clone())
                 .spawn_with_shutdown(redact_shutdown.clone());
             } else {
-                // Local mode: rfdetr ONNX. First-run downloads ~108 MB
-                // from huggingface.co/screenpipe/pii-image-redactor and
-                // verifies SHA-256 before landing in ~/.screenpipe/models/.
-                // The concrete model name + version are logged once it
-                // loads, so they never drift on a model bump.
+                // Local mode: V4 rfdetr_v108b + pii_role_fusion_v4 ONNX.
+                // First-run downloads ~36.8 MiB HTTP gzip from the pinned
+                // public mirror and verifies SHA-256 before atomic rename
+                // into ~/.screenpipe/models/. The concrete model name +
+                // version are logged once loaded.
                 let shutdown = redact_shutdown.clone();
                 let image_release_db = Arc::clone(&db);
                 let labels = pii_labels.clone();

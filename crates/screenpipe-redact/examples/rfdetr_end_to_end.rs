@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         conf_threshold: 0.50,
         tiled_inference: true,
         extend_wrapped_secrets: true,
+        role_model_path: None,
     })?;
 
     let regions = redactor.detect(&frame).await?;

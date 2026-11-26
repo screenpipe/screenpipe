@@ -77,7 +77,7 @@ use crate::RedactError;
 use crate::SpanLabel;
 
 const RFDETR_NAME: &str = "rfdetr";
-pub(crate) const RFDETR_VERSION: u32 = 38; // matches the rfdetr_v38 ONNX (fp16, 512px, real-app trained)
+pub(crate) const RFDETR_VERSION: u32 = 108; // matches rfdetr_v108b.onnx (W16A32 dl36, 768px, V4 real+synth bridge)
 
 #[cfg(feature = "onnx-cpu")]
 const NUM_CLASSES: usize = 12;
@@ -163,6 +163,10 @@ pub struct RfdetrConfig {
     /// Off only for measurement: the audit example runs a corpus both ways to
     /// show the added area is confined to genuinely wrapped secrets.
     pub extend_wrapped_secrets: bool,
+    /// Optional path to `pii_role_fusion_v4.onnx` (~2.1 MB). When present and
+    /// `ax_nodes` are passed via [`ImageRedactor::detect_with_a11y`], fuses
+    /// zero-text OS accessibility structure with vision proposals (~1.4 ms CPU).
+    pub role_model_path: Option<PathBuf>,
 }
 
 impl Default for RfdetrConfig {
@@ -178,36 +182,55 @@ impl Default for RfdetrConfig {
             conf_threshold: 0.50,
             tiled_inference: true,
             extend_wrapped_secrets: true,
+            role_model_path: match std::env::var_os("SCREENPIPE_PII_ROLE_MODEL_PATH") {
+                Some(v) if v.is_empty() => None,
+                Some(v) => Some(PathBuf::from(v)),
+                None => Some(Self::default_role_model_path()),
+            },
         }
     }
 }
 
 impl RfdetrConfig {
-    /// `~/.screenpipe/models/rfdetr_v38.onnx`. Created lazily by
+    /// `~/.screenpipe/models/rfdetr_v108b.onnx`. Created lazily by
     /// [`Self::ensure_model_present`] on first run.
     pub fn default_model_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx")
+            .join("rfdetr_v108b.onnx")
     }
 
-    /// HuggingFace download URL for the canonical ONNX. Pinned to
-    /// `main` so a model bump goes through a deliberate code change
-    /// (URL + expected SHA-256 + [`RFDETR_VERSION`] all bumped
-    /// together).
-    pub const HF_DOWNLOAD_URL: &'static str =
-        "https://huggingface.co/screenpipe/pii-image-redactor/resolve/main/rfdetr_v38.onnx";
+    /// `~/.screenpipe/models/pii_role_fusion_v4.onnx` — canonical local cache
+    /// location for the optional V4 accessibility role-fusion head (~2.1 MB).
+    pub fn default_role_model_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".screenpipe")
+            .join("models")
+            .join("pii_role_fusion_v4.onnx")
+    }
 
-    /// Expected SHA-256 of the canonical `rfdetr_v38.onnx`. Verified
-    /// after every download. If a future training run produces a new
-    /// best, bump [`RFDETR_VERSION`], re-publish to HF, update this
-    /// constant. Note: the worker is destructive-only and does NOT
-    /// re-redact already-processed frames, so a model-version bump
-    /// only takes effect for newly-captured frames going forward.
+    /// Immutable public download URL for the canonical `rfdetr_v108b.onnx`
+    /// (`35.16 MiB` HTTP gzip), pinned to an exact `models-static` commit so a
+    /// model bump goes through a deliberate code change (URL + expected SHA-256
+    /// + [`RFDETR_VERSION`] all bumped together).
+    pub const HF_DOWNLOAD_URL: &'static str =
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/6e3d5f7ea20ad43fab39a292c0f273ee13701c62/rfdetr_v108b.onnx";
+
+    /// Expected SHA-256 of the canonical `rfdetr_v108b.onnx`. Verified
+    /// after every download before atomic rename into place.
     pub const EXPECTED_SHA256: &'static str =
-        "0e968657aafcfb2c5d61ece264d5959ddeeec53091171fae226b45ecd3a8a880";
+        "884018d88343ab1ceb0aeb18f558bc76cac6fb7100f8760cdc28aed809e18dfd";
+
+    /// Pinned public download URL + SHA-256 for `pii_role_fusion_v4.onnx`
+    /// (`1.68 MiB` HTTP gzip; combined `36.84 MiB < 40 MB`).
+    pub const ROLE_HF_DOWNLOAD_URL: Option<&'static str> = Some(
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/6e3d5f7ea20ad43fab39a292c0f273ee13701c62/pii_role_fusion_v4.onnx",
+    );
+    pub const ROLE_EXPECTED_SHA256: Option<&'static str> =
+        Some("5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789");
 
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
@@ -219,61 +242,95 @@ impl RfdetrConfig {
     /// `<model_path>`. A killed process leaves at most a `.partial`
     /// that the next call cleans up.
     pub async fn ensure_model_present(&self) -> Result<(), RedactError> {
-        if self.model_path.exists() && Self::sha256_matches(&self.model_path)? {
+        Self::ensure_file_present(
+            &self.model_path,
+            Self::HF_DOWNLOAD_URL,
+            Self::EXPECTED_SHA256,
+            "rfdetr",
+        )
+        .await?;
+
+        if let (Some(rp), Some(role_url), Some(role_sha)) = (
+            self.role_model_path.as_deref(),
+            Self::ROLE_HF_DOWNLOAD_URL,
+            Self::ROLE_EXPECTED_SHA256,
+        ) {
+            if rp == Self::default_role_model_path() {
+                if let Err(e) =
+                    Self::ensure_file_present(rp, role_url, role_sha, "rfdetr-role").await
+                {
+                    tracing::warn!(
+                        target = %rp.display(),
+                        error = %e,
+                        "optional V4 role-fusion download failed; continuing with pure vision"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_file_present(
+        target: &Path,
+        url: &'static str,
+        expected_sha256: &'static str,
+        label: &'static str,
+    ) -> Result<(), RedactError> {
+        if target.exists() && Self::sha256_matches_expected(target, expected_sha256)? {
             return Ok(());
         }
 
-        if let Some(parent) = self.model_path.parent() {
+        if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| RedactError::Runtime(format!("mkdir {}: {e}", parent.display())))?;
         }
 
-        let tmp = self.model_path.with_extension("onnx.partial");
+        let tmp = target.with_extension("onnx.partial");
         // Best-effort cleanup of a stale partial.
         let _ = tokio::fs::remove_file(&tmp).await;
 
         tracing::info!(
-            url = Self::HF_DOWNLOAD_URL,
-            target = %self.model_path.display(),
-            "downloading rfdetr_v38.onnx (~60 MB) — first-run only"
+            url = url,
+            target = %target.display(),
+            label = label,
+            "downloading PII model — first-run only"
         );
         let resp = reqwest::Client::new()
-            .get(Self::HF_DOWNLOAD_URL)
+            .get(url)
             .send()
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr download GET: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} download GET: {e}")))?;
         if !resp.status().is_success() {
             return Err(RedactError::Runtime(format!(
-                "rfdetr download returned {}",
+                "{label} download returned {}",
                 resp.status()
             )));
         }
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr download body: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} download body: {e}")))?;
 
         // Verify SHA-256 BEFORE landing the file at the final path.
         let actual = Self::hex_sha256(&bytes);
-        if actual != Self::EXPECTED_SHA256 {
+        if actual != expected_sha256 {
             return Err(RedactError::Runtime(format!(
-                "rfdetr download checksum mismatch: got {}, want {}",
-                actual,
-                Self::EXPECTED_SHA256
+                "{label} download checksum mismatch: got {actual}, want {expected_sha256}"
             )));
         }
 
         tokio::fs::write(&tmp, &bytes)
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr write tmp: {e}")))?;
-        tokio::fs::rename(&tmp, &self.model_path)
+            .map_err(|e| RedactError::Runtime(format!("{label} write tmp: {e}")))?;
+        tokio::fs::rename(&tmp, target)
             .await
-            .map_err(|e| RedactError::Runtime(format!("rfdetr rename: {e}")))?;
+            .map_err(|e| RedactError::Runtime(format!("{label} rename: {e}")))?;
         tracing::info!(
-            target = %self.model_path.display(),
+            target = %target.display(),
             bytes = bytes.len(),
-            "rfdetr_v38.onnx ready"
+            label = label,
+            "PII model ready"
         );
         Ok(())
     }
@@ -291,10 +348,10 @@ impl RfdetrConfig {
         s
     }
 
-    fn sha256_matches(path: &Path) -> Result<bool, RedactError> {
+    fn sha256_matches_expected(path: &Path, expected_sha256: &str) -> Result<bool, RedactError> {
         let bytes = std::fs::read(path)
             .map_err(|e| RedactError::Runtime(format!("read {}: {e}", path.display())))?;
-        Ok(Self::hex_sha256(&bytes) == Self::EXPECTED_SHA256)
+        Ok(Self::hex_sha256(&bytes) == expected_sha256)
     }
 }
 
@@ -305,7 +362,7 @@ mod imp {
     use super::*;
     use std::sync::Mutex;
 
-    use ndarray::Array4;
+    use ndarray::{Array3, Array4};
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::TensorRef;
 
@@ -338,17 +395,17 @@ mod imp {
                     // (With CoreML the CPU pool only runs CoreML-rejected
                     // fallback ops, where 2 was already the right number.)
                     .with_intra_threads(2)?;
-                // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
-                // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
-                // faster than the legacy default and keeps the work off the CPU/GPU.
-                // Shadowed again by the directml rebind when both features are
-                // enabled (Windows app build), which leaves this `mut` unused there.
+                // Offload to Apple Metal GPU (`ComputeUnits::CPUAndGPU`) instead of
+                // `ComputeUnits::All` (ANE). Exported FP16 / W16A32 ONNX ops underflow
+                // on the ANE compiler (measured on v38: detections collapsed 164 -> 13
+                // over 400 real frames). `MLProgram` + `ComputeUnits::CPUAndGPU`
+                // preserves full CPU parity at ~114-201 ms p50 vs ~926 ms CPU fallback.
                 #[cfg(feature = "onnx-coreml")]
                 #[allow(unused_mut)]
                 let mut builder = builder.with_execution_providers([
                     ort::ep::CoreML::default()
                         .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                        .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+                        .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndGPU)
                         .with_subgraphs(true)
                         .build(),
                     ort::ep::CPU::default().with_arena_allocator(false).build(),
@@ -388,6 +445,7 @@ mod imp {
         cfg: RfdetrConfig,
         // Mutex because ort::Session::run takes &mut self.
         session: Mutex<Session>,
+        role_session: Option<Mutex<Session>>,
         input_size: u32,
     }
 
@@ -412,6 +470,34 @@ mod imp {
 
             let session = create_session_safe(&cfg.model_path)?;
 
+            let role_session = match cfg.role_model_path.as_deref() {
+                Some(rp) if rp.exists() => match create_session_safe(rp) {
+                    Ok(rs) => {
+                        tracing::info!(
+                            path = %rp.display(),
+                            "loaded V4 role-fusion ONNX session"
+                        );
+                        Some(Mutex::new(rs))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %rp.display(),
+                            error = %e,
+                            "optional V4 role-fusion ONNX failed to load; falling back to pure vision"
+                        );
+                        None
+                    }
+                },
+                Some(rp) => {
+                    tracing::warn!(
+                        path = %rp.display(),
+                        "optional V4 role-fusion ONNX not found; falling back to pure vision"
+                    );
+                    None
+                }
+                None => None,
+            };
+
             let input_size = if cfg.input_size > 0 {
                 cfg.input_size
             } else {
@@ -421,56 +507,150 @@ mod imp {
             Ok(Self {
                 cfg,
                 session: Mutex::new(session),
+                role_session,
                 input_size,
             })
         }
 
+        /// Whether the optional V4 accessibility role-fusion session is active.
+        pub fn has_role_fusion(&self) -> bool {
+            self.role_session.is_some()
+        }
+
         fn infer(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            self.infer_with_a11y(image_path, None)
+        }
+
+        fn infer_with_a11y(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
             let img = image::open(image_path)
                 .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
                 .to_rgb8();
             let (orig_w, orig_h) = (img.width(), img.height());
+            let big = should_tile_frame(orig_w, orig_h, self.input_size);
 
-            // Tiling only pays when the frame is much larger than the model
-            // input. On a frame already near `input_size` the downscale loses
-            // nothing, so 4× the compute would buy nothing.
-            let big = orig_w >= self.input_size * 2 && orig_h >= self.input_size * 3 / 2;
-            if !self.cfg.tiled_inference || !big {
-                let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
-                return Ok(self.extend_wrapped_secrets(&img, regions));
+            let non_empty_ax = ax_nodes.filter(|nodes| !nodes.is_empty());
+            if let (Some(nodes), Some(role_mutex)) = (non_empty_ax, self.role_session.as_ref()) {
+                let prop_floor = self
+                    .cfg
+                    .conf_threshold
+                    .min(crate::role_fusion::ROLE_PROPOSAL_FLOOR);
+                let windows = if !self.cfg.tiled_inference || !big {
+                    vec![(0, 0, orig_w, orig_h)]
+                } else {
+                    inference_windows(orig_w, orig_h)
+                };
+                let mut raw_props = Vec::new();
+                for (x, y, w, h) in windows {
+                    raw_props.extend(self.infer_window_proposals(&img, x, y, w, h, prop_floor)?);
+                }
+                let nms_props = crate::role_fusion::suppress_proposal_overlaps(raw_props, 0.55);
+                let fused = self.run_role_fusion(role_mutex, &nms_props, nodes, orig_w, orig_h)?;
+                return Ok(suppress_overlaps(fused));
             }
 
-            // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
-            // whole-frame pass, they do not replace it.
-            //
-            // This is load-bearing. The model has a narrow trained scale band.
-            // Real desktop frames sit BELOW it (a 14 px line lands at ~8 px
-            // once squeezed to 512), so tiling lifts them into band and recall
-            // rises. But content already inside the band gets magnified OUT of
-            // it by the same 1.8×, and recall collapses: measured on the
-            // planted harness, tiles alone score 56.1 % (person 25/109,
-            // address 43/107) against 95.7 % for the whole frame. Taking the
-            // union scores 96.7 % — better than either alone, because
-            // whichever pass presents a given string at the trained scale
-            // catches it.
-            //
-            let mut all: Vec<ImageRegion> = Vec::new();
-            for (i, (x, y, w, h)) in inference_windows(orig_w, orig_h).into_iter().enumerate() {
-                let regions = self.infer_window(&img, x, y, w, h)?;
-                if i == 0 {
-                    // Guard C: only whole-frame secret detections are eligible
-                    // for continuation extension. Tiled inference emits ~8.5x
-                    // more secret boxes, and every model-reachable
-                    // over-redaction found while stress-testing this came
-                    // through a tile-only box. `inference_windows()[0]` is the
-                    // whole frame, so restricting it here is structural rather
-                    // than a flag someone can flip.
-                    all.extend(self.extend_wrapped_secrets(&img, regions));
-                } else {
-                    all.extend(regions);
+            // Pure-vision path (or fallback when role ONNX is absent):
+            let mut regions = if !self.cfg.tiled_inference || !big {
+                let regions = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
+                self.extend_wrapped_secrets(&img, regions)
+            } else {
+                // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
+                // whole-frame pass, they do not replace it.
+                let mut all: Vec<ImageRegion> = Vec::new();
+                for (i, (x, y, w, h)) in inference_windows(orig_w, orig_h).into_iter().enumerate() {
+                    let regions = self.infer_window(&img, x, y, w, h)?;
+                    if i == 0 {
+                        // Guard C: only whole-frame secret detections are eligible
+                        // for continuation extension.
+                        all.extend(self.extend_wrapped_secrets(&img, regions));
+                    } else {
+                        all.extend(regions);
+                    }
+                }
+                suppress_overlaps(all)
+            };
+
+            if let Some(nodes) = non_empty_ax {
+                crate::a11y_context::merge_image_regions(
+                    &mut regions,
+                    crate::role_fusion::forced_a11y_secret_regions(nodes, orig_w, orig_h),
+                );
+            }
+            Ok(regions)
+        }
+
+        fn run_role_fusion(
+            &self,
+            role_mutex: &Mutex<Session>,
+            nms_props: &[crate::role_fusion::VisionProposal],
+            nodes: &[crate::a11y_context::AxNode],
+            orig_w: u32,
+            orig_h: u32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            use crate::role_fusion::{
+                featurize_frame_v46, forced_a11y_secret_regions, fuse_proposals_with_role_outputs,
+                BOX_FEAT_DIM_V46, MAX_NODES, MAX_PROPOSALS, NODE_FEAT_DIM, REL_FEAT_DIM,
+            };
+
+            let (bf, nf, rf, sorted_props) = featurize_frame_v46(nms_props, nodes, orig_w, orig_h);
+            if sorted_props.is_empty() {
+                return Ok(forced_a11y_secret_regions(nodes, orig_w, orig_h));
+            }
+
+            let box_arr = Array3::<f32>::from_shape_vec((1, MAX_PROPOSALS, BOX_FEAT_DIM_V46), bf)
+                .map_err(rt_err("role box_feats shape"))?;
+            let node_arr = Array3::<f32>::from_shape_vec((1, MAX_NODES, NODE_FEAT_DIM), nf)
+                .map_err(rt_err("role node_feats shape"))?;
+            let rel_arr =
+                Array4::<f32>::from_shape_vec((1, MAX_PROPOSALS, MAX_NODES, REL_FEAT_DIM), rf)
+                    .map_err(rt_err("role rel_feats shape"))?;
+
+            let mut r_session = role_mutex
+                .lock()
+                .map_err(|_| RedactError::Runtime("role_fusion session mutex poisoned".into()))?;
+            let outputs = r_session
+                .run(ort::inputs![
+                    "box_feats" => TensorRef::from_array_view(box_arr.view()).map_err(rt_err("role box_feats view"))?,
+                    "node_feats" => TensorRef::from_array_view(node_arr.view()).map_err(rt_err("role node_feats view"))?,
+                    "rel_feats" => TensorRef::from_array_view(rel_arr.view()).map_err(rt_err("role rel_feats view"))?
+                ])
+                .map_err(rt_err("role_fusion ort run"))?;
+
+            let mut keep_prob: Option<Vec<f32>> = None;
+            let mut epistemic_std: Option<Vec<f32>> = None;
+            let mut box_delta: Option<Vec<f32>> = None;
+            for (name, value) in outputs.iter() {
+                let arr = value
+                    .try_extract_array::<f32>()
+                    .map_err(rt_err("extract role output"))?;
+                let flat: Vec<f32> = arr.iter().copied().collect();
+                match name {
+                    "keep_prob" => keep_prob = Some(flat),
+                    "epistemic_std" => epistemic_std = Some(flat),
+                    "box_delta" => box_delta = Some(flat),
+                    _ => {}
                 }
             }
-            Ok(suppress_overlaps(all))
+            let keep_prob = keep_prob
+                .ok_or_else(|| RedactError::Runtime("missing role keep_prob output".into()))?;
+            let epistemic_std = epistemic_std
+                .ok_or_else(|| RedactError::Runtime("missing role epistemic_std output".into()))?;
+            let box_delta = box_delta
+                .ok_or_else(|| RedactError::Runtime("missing role box_delta output".into()))?;
+
+            Ok(fuse_proposals_with_role_outputs(
+                &sorted_props,
+                &keep_prob,
+                &epistemic_std,
+                &box_delta,
+                nodes,
+                orig_w,
+                orig_h,
+                self.cfg.conf_threshold,
+            ))
         }
 
         /// Grow whole-frame `Secret` boxes over their wrapped continuation
@@ -517,6 +697,29 @@ mod imp {
             win_w: u32,
             win_h: u32,
         ) -> Result<Vec<ImageRegion>, RedactError> {
+            let props =
+                self.infer_window_proposals(img, ox, oy, win_w, win_h, self.cfg.conf_threshold)?;
+            Ok(props
+                .into_iter()
+                .map(|p| ImageRegion {
+                    bbox: p.bbox,
+                    label: p.label,
+                    score: p.score,
+                })
+                .collect())
+        }
+
+        /// Run the model over one window of `img` and return full 12-class
+        /// [`crate::role_fusion::VisionProposal`]s in FULL-FRAME pixel coordinates.
+        fn infer_window_proposals(
+            &self,
+            img: &image::RgbImage,
+            ox: u32,
+            oy: u32,
+            win_w: u32,
+            win_h: u32,
+            min_floor: f32,
+        ) -> Result<Vec<crate::role_fusion::VisionProposal>, RedactError> {
             let window;
             let src: &image::RgbImage =
                 if ox == 0 && oy == 0 && win_w == img.width() && win_h == img.height() {
@@ -581,20 +784,22 @@ mod imp {
             // Per-class sigmoid (RF-DETR uses independent sigmoid, NOT softmax).
             // Best PII class per query (excluding the no-object channel).
             let stride = NUM_CLASSES + 1;
-            let mut out: Vec<ImageRegion> = Vec::new();
+            let mut out: Vec<crate::role_fusion::VisionProposal> = Vec::new();
             for q in 0..NUM_QUERIES {
                 let off = q * stride;
                 let mut best_class = 0usize;
                 let mut best_score = f32::NEG_INFINITY;
-                for c in 0..NUM_CLASSES {
+                let mut probs12 = [0.0f32; NUM_CLASSES];
+                for (c, slot) in probs12.iter_mut().enumerate() {
                     let lg = logits[off + c];
                     let p = 1.0 / (1.0 + (-lg).exp());
+                    *slot = p;
                     if p > best_score {
                         best_score = p;
                         best_class = c;
                     }
                 }
-                let floor = self.cfg.conf_threshold.max(CLASS_MIN_SCORE[best_class]);
+                let floor = min_floor.max(CLASS_MIN_SCORE[best_class]);
                 if best_score < floor {
                     continue;
                 }
@@ -612,10 +817,11 @@ mod imp {
                 if w_px <= 0.0 || h_px <= 0.0 {
                     continue;
                 }
-                out.push(ImageRegion {
+                out.push(crate::role_fusion::VisionProposal {
                     bbox: [x1 as u32, y1 as u32, w_px as u32, h_px as u32],
                     label: CLASSES[best_class],
                     score: best_score,
+                    probs12,
                 });
             }
             Ok(out)
@@ -634,6 +840,15 @@ mod imp {
     ///
     /// Tiles are 2×2 with ~20 % overlap so a PII string on a seam is still
     /// wholly inside at least one tile.
+    /// Tiling pays whenever the frame is desktop-sized (`>= 1024×768`, the
+    /// original 512px 2× / 1.5× threshold), even when `input_size` increases
+    /// to 640 or 768 so `1440×900`, `1512×982`, and `1920×1080` captures still
+    /// receive 2×2 quadrant magnification (matching `gen_preds.py`).
+    pub(super) fn should_tile_frame(orig_w: u32, orig_h: u32, input_size: u32) -> bool {
+        let tile_base = input_size.min(512);
+        orig_w >= tile_base * 2 && orig_h >= tile_base * 3 / 2
+    }
+
     pub(super) fn inference_windows(w: u32, h: u32) -> Vec<(u32, u32, u32, u32)> {
         let mut out = vec![(0, 0, w, h)];
         let (tw, th) = (w / 2, h / 2);
@@ -693,27 +908,30 @@ mod imp {
             RFDETR_VERSION
         }
         async fn detect(&self, image_path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
-            // Inference is synchronous CPU/GPU work; tell tokio so it
-            // doesn't starve other tasks. `block_in_place` works on
-            // any `&self` without 'static gymnastics — the runtime
-            // moves other work off this thread for the duration.
             tokio::task::block_in_place(|| self.infer(image_path))
+        }
+        async fn detect_with_a11y(
+            &self,
+            image_path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            tokio::task::block_in_place(|| self.infer_with_a11y(image_path, ax_nodes))
         }
     }
 
-    fn detect_input_size(session: &Session) -> Option<u32> {
-        // inputs[0].shape is Vec<Option<i64>>-ish in ort 2.0-rc; use
-        // the last dim, fall back to None if it isn't a static int.
-        let shape = session.inputs().first()?.dtype();
-        let s = format!("{shape:?}");
-        // Cheap parse: look for a known square size in the shape.
-        // Keep this in sync with every shipped model: v8=320, v9=384,
-        // v11=512. Omitting the current model's size makes detection
-        // fall back to 384 and feed a wrong-sized tensor → ort "invalid
-        // dimensions for input" on every frame (silent redaction outage).
-        [320u32, 384, 512]
+    pub(super) fn parse_input_size_from_dtype_debug(s: &str) -> Option<u32> {
+        // Keep in sync with every shipped model: v8=320, v9=384,
+        // v11..v38=512, v39..v45=640, v46+/v54/V4=768. Omitting a shipped size
+        // falls back to 384 and feeds a wrong-sized tensor → ort dimension error.
+        [768u32, 640, 512, 384, 320]
             .into_iter()
             .find(|cand| s.contains(&cand.to_string()))
+    }
+
+    fn detect_input_size(session: &Session) -> Option<u32> {
+        let shape = session.inputs().first()?.dtype();
+        let s = format!("{shape:?}");
+        parse_input_size_from_dtype_debug(&s)
     }
 
     fn rt_err<E: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(E) -> RedactError {
@@ -743,6 +961,10 @@ impl RfdetrRedactor {
         Err(RedactError::Unavailable(
             "rfdetr adapter requires the `onnx-cpu` cargo feature".into(),
         ))
+    }
+
+    pub fn has_role_fusion(&self) -> bool {
+        false
     }
 }
 
@@ -856,9 +1078,72 @@ mod tests {
             conf_threshold: 0.3,
             tiled_inference: true,
             extend_wrapped_secrets: true,
+            role_model_path: None,
         };
         let res = RfdetrRedactor::load(cfg);
         assert!(matches!(res, Err(RedactError::Unavailable(_))));
+    }
+
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn detect_input_size_recognizes_768_640_and_512_models() {
+        assert_eq!(
+            imp::parse_input_size_from_dtype_debug(
+                "Tensor { ty: Float32, dimensions: [1, 3, 768, 768] }"
+            ),
+            Some(768)
+        );
+        assert_eq!(
+            imp::parse_input_size_from_dtype_debug(
+                "Tensor { ty: Float32, dimensions: [1, 3, 640, 640] }"
+            ),
+            Some(640)
+        );
+        assert_eq!(
+            imp::parse_input_size_from_dtype_debug(
+                "Tensor { ty: Float32, dimensions: [1, 3, 512, 512] }"
+            ),
+            Some(512)
+        );
+    }
+
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn v4_768_keeps_tiling_on_laptop_and_1080p_desktops() {
+        assert!(!imp::should_tile_frame(960, 720, 768));
+        for (w, h) in [
+            (1024, 768),
+            (1440, 900),
+            (1512, 982),
+            (1920, 1080),
+            (2560, 1440),
+        ] {
+            assert!(
+                imp::should_tile_frame(w, h, 768),
+                "{w}x{h} must tile at input_size=768 to match gen_preds.py"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_model_constants_are_coherent() {
+        assert_eq!(RFDETR_VERSION, 108, "model bump must move the version");
+        assert!(
+            RfdetrConfig::default_model_path().ends_with(Path::new("rfdetr_v108b.onnx")),
+            "default filename must track RFDETR_VERSION"
+        );
+        assert!(
+            RfdetrConfig::HF_DOWNLOAD_URL.ends_with("/rfdetr_v108b.onnx"),
+            "download URL must track RFDETR_VERSION"
+        );
+        assert_eq!(
+            RfdetrConfig::EXPECTED_SHA256,
+            "884018d88343ab1ceb0aeb18f558bc76cac6fb7100f8760cdc28aed809e18dfd"
+        );
+        assert_eq!(
+            RfdetrConfig::ROLE_EXPECTED_SHA256,
+            Some("5dec3c65565b1229b40be401fb7246f962a8099694e0cefcf13f04555ca14789")
+        );
     }
 
     #[test]
@@ -866,7 +1151,7 @@ mod tests {
         let p = RfdetrConfig::default_model_path();
         let expected_suffix = Path::new(".screenpipe")
             .join("models")
-            .join("rfdetr_v38.onnx");
+            .join("rfdetr_v108b.onnx");
         assert!(
             p.ends_with(&expected_suffix),
             "default path {} should end with {}",
@@ -913,6 +1198,7 @@ mod tests {
                 conf_threshold: 0.3,
                 tiled_inference: true,
                 extend_wrapped_secrets: true,
+                role_model_path: None,
             };
             // This must return Err, not panic.
             let res = RfdetrRedactor::load(cfg);
@@ -934,7 +1220,7 @@ mod tests {
         // (Real download path is exercised by integration tests off
         // the unit-test harness.)
         let d = tempdir().unwrap();
-        let p = d.path().join("models").join("rfdetr_v38.onnx");
+        let p = d.path().join("models").join("rfdetr_v108b.onnx");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"not the real model").unwrap();
         let cfg = RfdetrConfig {
@@ -943,6 +1229,7 @@ mod tests {
             conf_threshold: 0.3,
             tiled_inference: true,
             extend_wrapped_secrets: true,
+            role_model_path: None,
         };
         // Wrong-checksum file → ensure_model_present tries to
         // download. Network may or may not be available in CI, so

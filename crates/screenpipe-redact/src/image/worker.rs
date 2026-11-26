@@ -364,7 +364,14 @@ impl ImageWorker {
 
         // RF-DETR always runs. Accessibility is an additive semantic/spatial
         // signal, never a gate that skips image inference.
-        let mut regions = self.redactor.detect(path).await?;
+        let ax_nodes = accessibility_tree_json
+            .as_deref()
+            .map(crate::a11y_context::extract_text_free_ax_nodes)
+            .filter(|nodes| !nodes.is_empty());
+        let mut regions = self
+            .redactor
+            .detect_with_a11y(path, ax_nodes.as_deref())
+            .await?;
         if let Some(tree) = accessibility_tree_json.as_deref() {
             let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
                 anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
@@ -445,14 +452,20 @@ impl ImageWorker {
             }
             let process = async {
                 let before = tokio::fs::metadata(path).await?;
-                let mut regions = self.redactor.detect(path).await?;
                 let payloads = db
                     .frame_payloads(&[id], screenpipe_db::storage::Projection::Detail)
                     .await?;
-                if let Some(tree) = payloads
+                let tree_json = payloads
                     .get(&id)
-                    .and_then(|p| p.accessibility_tree_json.as_deref())
-                {
+                    .and_then(|p| p.accessibility_tree_json.as_deref());
+                let ax_nodes = tree_json
+                    .map(crate::a11y_context::extract_text_free_ax_nodes)
+                    .filter(|nodes| !nodes.is_empty());
+                let mut regions = self
+                    .redactor
+                    .detect_with_a11y(path, ax_nodes.as_deref())
+                    .await?;
+                if let Some(tree) = tree_json {
                     let (width, height) = image::image_dimensions(path)?;
                     let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
                     crate::a11y_context::merge_image_regions(
@@ -938,5 +951,75 @@ mod tests {
             .unwrap();
         let when: Option<i64> = row.get(0);
         assert!(when.is_some(), "must mark redacted_at to skip");
+    }
+
+    struct CapturingA11yDetector {
+        captured: tokio::sync::Mutex<Option<Vec<crate::a11y_context::AxNode>>>,
+    }
+
+    #[async_trait]
+    impl ImageRedactor for CapturingA11yDetector {
+        fn name(&self) -> &str {
+            "capturing-a11y"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn detect(&self, _path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            panic!("worker must call detect_with_a11y");
+        }
+        async fn detect_with_a11y(
+            &self,
+            _path: &Path,
+            ax_nodes: Option<&[crate::a11y_context::AxNode]>,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            *self.captured.lock().await = ax_nodes.map(|s| s.to_vec());
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forwards_text_free_ax_nodes_into_redactor() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        white_test_image(&image_path);
+        let tree = r#"[
+          {"role":"AXToolbar","depth":1,"bounds":{"left":0.0,"top":0.0,"width":1.0,"height":0.08}},
+          {"role":"AXButton","depth":2,"text":"SCR-1183","bounds":{"left":0.1,"top":0.02,"width":0.1,"height":0.04}}
+        ]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, accessibility_tree_json) VALUES (1, datetime('now','-1 hour'), ?1, 'Linear', 'Board', ?2)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .bind(tree)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detector = Arc::new(CapturingA11yDetector {
+            captured: tokio::sync::Mutex::new(None),
+        });
+        let worker = ImageWorker::new(
+            pool,
+            detector.clone(),
+            ImageWorkerConfig {
+                min_age_seconds: 0,
+                resource_governor: None,
+                ..Default::default()
+            },
+        );
+        let _ = worker.process_one().await.unwrap().unwrap();
+        let captured = detector
+            .captured
+            .lock()
+            .await
+            .clone()
+            .expect("ax_nodes passed");
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[1].role, "AXButton");
+        assert_eq!(captured[1].landmark, "toolbar");
+        let json = serde_json::to_string(&captured).unwrap();
+        assert!(!json.contains("SCR-1183"));
     }
 }
