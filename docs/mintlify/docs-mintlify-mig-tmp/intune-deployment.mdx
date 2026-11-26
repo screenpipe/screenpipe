@@ -129,6 +129,8 @@ Screenpipe needs the license key to enable enterprise mode (centralized telemetr
 <Tabs>
   <Tab title="Users paste it once">
     After Intune installs Screenpipe, users open the app, choose **use enterprise key**, and paste the license key. The key is saved in the device's local Screenpipe configuration. If your organization requires account login, users choose **sign in with enterprise account** instead; the key-only route is disabled by that policy.
+
+    After the key is activated, the app shows **Sign in required** until the user signs in with their account. The key enrolls the device, but opening the desktop app still requires a signed-in user. If the user later logs out, the app locks again until they sign in.
   </Tab>
   <Tab title="pre-stage via registry (zero-touch)">
     Add a **PowerShell script** to your Intune device-configuration profile, assigned to the same group, that writes the key before Screenpipe first launches:
