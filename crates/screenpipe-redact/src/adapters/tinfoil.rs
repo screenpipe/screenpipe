@@ -72,7 +72,7 @@ use crate::{RedactError, RedactionOutput, Redactor};
 /// Same threshold the existing `screenpipe-engine::privacy_filter` uses.
 pub const MIN_FILTER_CHARS: usize = 8;
 
-pub(crate) const TINFOIL_REDACTOR_VERSION: u32 = 1;
+pub(crate) const TINFOIL_REDACTOR_VERSION: u32 = 2; // v52_multilingual_sensitive_int8 enclave text model
 const DEFAULT_ENCLAVE: &str = "pii.screenpipe.containers.tinfoil.dev";
 /// GitHub repo whose Sigstore-attested release measurement must match
 /// the running enclave (Step 2/3 of Tinfoil's verification).
