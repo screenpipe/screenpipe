@@ -3085,7 +3085,7 @@ jobs:
                 codesign --verify --deep --strict "$consumer/screenpipe.app"
                 ort_dylib="$consumer/screenpipe.app/Contents/MacOS/libonnxruntime.dylib"
               fi
-              lipo -verify_arch x86_64 "$ort_dylib"
+              lipo -archs "$ort_dylib" | grep -qw x86_64
               install -m 0755 "$ort_dylib" apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib
             fi
             COMMAND=bundle

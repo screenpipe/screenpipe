@@ -318,6 +318,7 @@ test("legacy Enterprise Intel packaging restores the consumer ONNX runtime", () 
   expect(build.run).toContain('ort_dylib="$artifact_dir/libonnxruntime.dylib"');
   expect(build.run).toContain('download/stable/$version/$TARGET/screenpipe.app.tar.gz');
   expect(build.run).toContain('codesign --verify --deep --strict "$consumer/screenpipe.app"');
+  expect(build.run).toContain('lipo -archs "$ort_dylib" | grep -qw x86_64');
   expect(build.run).toContain('install -m 0755 "$ort_dylib" apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib');
 });
 
