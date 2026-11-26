@@ -2092,12 +2092,18 @@ mod tests {
             ("/ws/health", Some("null"), false),
             ("/ws/health", Some("tauri://localhost"), true),
             ("/ws/health", Some("chrome-extension://test"), false),
-            ("/connections/browser/ws", Some("chrome-extension://test"), true),
+            (
+                "/connections/browser/ws",
+                Some("chrome-extension://test"),
+                true,
+            ),
             ("/browser/ws", Some("moz-extension://test"), true),
             ("/ws/health", None, true),
         ];
         for (path, origin, allowed) in cases {
-            let mut builder = Request::builder().uri(path).header(header::UPGRADE, "websocket");
+            let mut builder = Request::builder()
+                .uri(path)
+                .header(header::UPGRADE, "websocket");
             if let Some(origin) = origin {
                 builder = builder.header(header::ORIGIN, origin);
             }
