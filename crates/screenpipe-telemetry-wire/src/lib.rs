@@ -25,6 +25,7 @@
 pub mod identity;
 pub mod keys;
 pub mod manifest;
+pub mod paging;
 pub mod records;
 
 pub use keys::{
