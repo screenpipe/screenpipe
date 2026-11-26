@@ -5,13 +5,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { SettingsField } from "./settings-search";
 
+export const accountLogoutSearchField: SettingsField = {
+  label: msg("Logout", {}),
+  keywords: ["signout", "sign out", "log out"],
+};
+
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   // Mirrors the labels actually rendered by AccountSection below. Keep in sync
   // when you add/remove a control — phantom entries route users to a page that
   // doesn't contain the field.
   { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
-  { label: msg("Logout", {}), keywords: ["signout", "sign out", "log out"] },
+  accountLogoutSearchField,
   { label: msg("Screenpipe Business", {}), keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
   { label: msg("Data sync", {}), keywords: ["allow data sync", "sync this device", "cloud", "account", "upload"] },
   { label: msg("AI connections", {}), keywords: ["codex", "claude", "connect"] },
@@ -137,6 +142,70 @@ function syncErrorDescription(e: unknown): string {
     return "Screenpipe server isn't reachable — give it a few seconds after launch and try again";
   }
   return msg;
+}
+
+export function AccountSessionHeader({ sessionOnly = false }: { sessionOnly?: boolean }) {
+  const ui = useGT();
+  const { settings, updateSettings } = useSettings();
+  const { isManagedDeployment, isManagedAuthenticated } = useManagedPolicy();
+
+  return (
+    <div className="flex items-center justify-between">
+      <p className="text-sm text-muted-foreground" data-testid="account-login-status">
+        {settings.user?.token
+          ? ui("Logged in as {value1}", { value1: settings.user.email })
+          : isManagedDeployment
+            ? isManagedAuthenticated
+              ? ui("Enterprise device access active")
+              : ui("Enterprise access verification required")
+            : ui("Not logged in")}
+      </p>
+      <div className="flex gap-2">
+        {settings.user?.token ? (
+          <>
+            {!sessionOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openExternalUrl(ACCOUNT_URL)}
+              >
+                <UserCog className="w-4 h-4 mr-1.5" />
+                Web account
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="account-logout-button"
+              onClick={async () => {
+                await updateSettings({ user: null as any });
+                try {
+                  await commands.setCloudToken(null);
+                } catch (error) {
+                  console.warn("failed to clear cloud token on logout:", error);
+                }
+                // Restart Pi without the signed-out account's token.
+                try {
+                  await commands.piUpdateConfig(null, null);
+                } catch {}
+                toast({ title: ui("Logged out") });
+              }}
+            >
+              {ui("Logout")}
+            </Button>
+          </>
+        ) : !sessionOnly ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => commands.openLoginWindow(null, null)}
+          >
+            Login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function AccountSection() {
@@ -642,61 +711,7 @@ export function AccountSection() {
 
   return (
     <div className="space-y-6">
-      {/* Header + login status */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground" data-testid="account-login-status">
-          {settings.user?.token
-            ? ui("Logged in as {value1}", { value1: settings.user.email })
-            : isManagedDeployment
-              ? isManagedAuthenticated
-                ? ui("Enterprise device access active")
-                : ui("Enterprise access verification required")
-              : ui("Not logged in")}
-        </p>
-        <div className="flex gap-2">
-          {settings.user?.token ? (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openExternalUrl(ACCOUNT_URL)}
-              >
-                <UserCog className="w-4 h-4 mr-1.5" />
-                Web account
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="account-logout-button"
-                onClick={async () => {
-                  await updateSettings({ user: null as any });
-                  try {
-                    await commands.setCloudToken(null);
-                  } catch (e) {
-                    console.warn("failed to clear cloud token on logout:", e);
-                  }
-                  // Restart Pi with null token so it stops using the old
-                  // account's quota. Next message will auto-start as anonymous.
-                  try {
-                    await commands.piUpdateConfig(null, null);
-                  } catch {}
-                  toast({ title: ui("Logged out") });
-                }}
-              >
-                Logout
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => commands.openLoginWindow(null, null)}
-            >
-              Login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
-            </Button>
-          )}
-        </div>
-      </div>
+      <AccountSessionHeader />
 
       {/* Subscribed view — requires a session token, not just cloud_subscribed,
           so a token-hydration failure can't render this "active" card under a
