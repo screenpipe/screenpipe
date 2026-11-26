@@ -119,21 +119,6 @@ interface CurrentFrameTimelineProps {
 }
 
 
-export const SkeletonLoader: FC = () => {
-	return (
-		<div className="absolute inset-0 w-full h-full bg-gray-900/50 overflow-hidden">
-			<div
-				className="w-full h-full bg-gradient-to-r from-gray-800/30 via-gray-600/30 to-gray-800/30 animate-shimmer"
-				style={{
-					backgroundSize: "200% 100%",
-					animation: "shimmer 1.5s infinite linear",
-				}}
-			/>
-		</div>
-	);
-};
-
-
 export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	currentFrame,
 	onNavigate,

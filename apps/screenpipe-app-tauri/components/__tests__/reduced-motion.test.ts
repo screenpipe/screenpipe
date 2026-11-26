@@ -93,7 +93,6 @@ describe("reduced motion", () => {
       return found;
     });
     expect(selectors).toContain(".meeting-listening-stick");
-    expect(selectors).toContain(".sp-flow-dot");
   });
 
   it("routes framer-motion through MotionConfig at the app root", () => {

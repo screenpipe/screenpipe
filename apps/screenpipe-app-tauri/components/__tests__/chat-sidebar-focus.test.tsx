@@ -63,7 +63,6 @@ function renderRow(
         onDeleteRequest={noop}
         onTogglePin={noop}
         onRenameRequest={noop}
-        showActions={false}
       />
     </TooltipProvider>,
   );

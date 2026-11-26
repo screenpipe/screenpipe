@@ -19,7 +19,6 @@ use futures::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -44,8 +43,6 @@ const USER_AGENT_SKILL_LOCATIONS: [(&str, &str); 6] = [
 const WORKFLOW_SYSTEM_PROMPT: &str = include_str!("workflows/discovery.md");
 
 const SKILL_SYSTEM_PROMPT: &str = include_str!("workflows/skill.md");
-
-static USING_EXTERNAL_RECORDER: AtomicBool = AtomicBool::new(false);
 
 fn production_data_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".screenpipe"))
@@ -141,27 +138,13 @@ async fn own_recorder(app: &AppHandle) -> Option<RecorderEndpoint> {
 
 async fn selected_recorder(app: &AppHandle) -> Option<RecorderEndpoint> {
     if let Some(external) = external_recorder().await {
-        USING_EXTERNAL_RECORDER.store(true, Ordering::Relaxed);
         return Some(external);
     }
-    USING_EXTERNAL_RECORDER.store(false, Ordering::Relaxed);
     own_recorder(app).await
 }
 
 pub async fn external_recorder_is_available() -> bool {
-    let available = fetch_health(EXTERNAL_API_BASE).await.is_some();
-    USING_EXTERNAL_RECORDER.store(available, Ordering::Relaxed);
-    available
-}
-
-pub fn using_external_recorder() -> bool {
-    USING_EXTERNAL_RECORDER.load(Ordering::Relaxed)
-}
-
-/// The copied app remains useful without a second account bootstrap. Cloud AI
-/// still requires an existing Screenpipe session, but local capture does not.
-pub const fn account_free_local_recording() -> bool {
-    true
+    fetch_health(EXTERNAL_API_BASE).await.is_some()
 }
 
 async fn cloud_token() -> Option<String> {

@@ -35,14 +35,12 @@ import Image from "next/image";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import {
-  Pin,
   Archive,
   Undo2,
   Trash2,
   AlertCircle,
   ChevronDown,
   ChevronRight,
-  MessageSquare,
   MoreVertical,
   Pencil,
   FolderOpen,
@@ -81,8 +79,6 @@ import { isInjectedTitle } from "@/lib/chat-utils";
 import { createConversationBranch } from "@/lib/chat/branch-conversation";
 import { showChatArchiveUndoToast } from "@/components/chat/archive-undo-toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -2245,241 +2241,6 @@ export function ChatSidebar({
   );
 }
 
-export function CollapsedChatSidebarButton({
-  onSelect,
-  isTranslucent,
-}: {
-  onSelect: (id: string) => void;
-  isTranslucent: boolean;
-}) {
-  const ui = useGT();
-  const currentId = useChatStore((s) => s.currentId);
-  const { pinned, recents, archived } = useVisibleChatSections();
-  const diskHydrated = useChatStore((s) => s.diskHydrated);
-  const [open, setOpen] = useState(false);
-  const [tooltipOpen, setTooltipOpen] = useState(false);
-  const [suppressTooltip, setSuppressTooltip] = useState(false);
-  const [tab, setTab] = useState<"pinned" | "recents" | "archived">(() => {
-    if (pinned.length > 0) return "pinned";
-    if (recents.length > 0) return "recents";
-    return "archived";
-  });
-  const emptyText = pinned.length === 0
-    ? "no chats yet — click + to start"
-    : "no recent chats";
-  const recentsTabLoading = !diskHydrated && recents.length === 0;
-  const isLoadingChats =
-    !diskHydrated && pinned.length === 0 && recents.length === 0;
-
-  useEffect(() => {
-    // Bail when all three sections are empty: every fallback target is also
-    // empty, so each setTab lands on another empty tab and re-triggers this
-    // effect → React #185 ("Maximum update depth exceeded").
-    if (pinned.length === 0 && recents.length === 0 && archived.length === 0) return;
-    if (tab === "pinned" && pinned.length === 0) {
-      setTab(recents.length > 0 ? "recents" : "archived");
-    } else if (tab === "recents" && recents.length === 0) {
-      setTab(pinned.length > 0 ? "pinned" : "archived");
-    } else if (tab === "archived" && archived.length === 0) {
-      setTab(pinned.length > 0 ? "pinned" : "recents");
-    }
-  }, [archived.length, pinned.length, recents.length, tab]);
-
-  const handleSelect = (id: string) => {
-    setOpen(false);
-    setTooltipOpen(false);
-    setSuppressTooltip(true);
-    onSelect(id);
-  };
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        setTooltipOpen(false);
-        if (nextOpen) setSuppressTooltip(true);
-      }}
-    >
-      <Tooltip
-        open={!open && !suppressTooltip ? tooltipOpen : false}
-        onOpenChange={(nextOpen) => {
-          if (open || suppressTooltip) {
-            setTooltipOpen(false);
-            return;
-          }
-          setTooltipOpen(nextOpen);
-        }}
-      >
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              aria-label={ui("Recent chats")}
-              onClick={() => {
-                setTooltipOpen(false);
-                setSuppressTooltip(true);
-              }}
-              onPointerLeave={() => setSuppressTooltip(false)}
-              className={cn(
-                "w-full flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
-                isTranslucent
-                  ? "vibrant-nav-item vibrant-nav-hover"
-                  : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <MessageSquare
-                className={cn(
-                  "h-3.5 w-3.5 transition-colors flex-shrink-0",
-                  isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
-                )}
-              />
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="text-xs">Recent chats</TooltipContent>
-      </Tooltip>
-      <PopoverContent
-        side="right"
-        align="start"
-        sideOffset={8}
-        className="w-64 p-0 rounded-lg shadow-none"
-      >
-        {isLoadingChats ? (
-          <div className="py-1" aria-busy="true" data-testid="collapsed-chat-sidebar-skeleton">
-            <ChatRowsSkeleton rows={4} />
-          </div>
-        ) : pinned.length === 0 && recents.length === 0 && archived.length === 0 ? (
-          <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-            {emptyText}
-          </div>
-        ) : (
-          <Tabs
-            value={tab}
-            onValueChange={(v) => setTab(v as typeof tab)}
-            className="w-full"
-          >
-            <TabsList className="grid w-full grid-cols-3 h-8 rounded-none bg-transparent border-b border-border p-0">
-              <TabsTrigger
-                value="pinned"
-                disabled={pinned.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
-              >
-                Pinned
-              </TabsTrigger>
-              <TabsTrigger
-                value="recents"
-                disabled={recents.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
-              >
-                Recents
-              </TabsTrigger>
-              <TabsTrigger
-                value="archived"
-                disabled={archived.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
-              >
-                Archived
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="pinned" className="mt-0">
-              <CompactDrawerList
-                items={pinned}
-                currentId={currentId}
-                onSelect={handleSelect}
-              />
-            </TabsContent>
-            <TabsContent value="recents" className="mt-0">
-              {recentsTabLoading ? (
-                <div className="py-1" aria-busy="true">
-                  <ChatRowsSkeleton rows={4} />
-                </div>
-              ) : recents.length === 0 ? (
-                <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {pinned.length === 0 ? emptyText : ui("No recent chats")}
-                </div>
-              ) : (
-                <CompactDrawerList items={recents} currentId={currentId} onSelect={handleSelect} />
-              )}
-            </TabsContent>
-            <TabsContent value="archived" className="mt-0">
-              <CompactDrawerList items={archived} currentId={currentId} onSelect={handleSelect} />
-            </TabsContent>
-          </Tabs>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function CompactDrawerList({
-  items,
-  currentId,
-  onSelect,
-}: {
-  items: SessionRecord[];
-  currentId: string | null;
-  onSelect: (id: string) => void;
-}) {
-
-  return (
-    <div className="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-minimal">
-      <div className="flex flex-col py-1">
-        {items.map((session) => (
-          <SidebarChatRow
-            key={session.id}
-            session={session}
-            isCurrent={session.id === currentId}
-            queuedCount={0}
-            onSelect={onSelect}
-            onArchive={() => {}}
-            onUnarchive={() => {}}
-            onDeleteRequest={() => {}}
-            onTogglePin={() => {}}
-            onRenameRequest={() => {}}
-            showActions={false}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const CHAT_ROW_SKELETON_WIDTHS = [
-  "w-[82%]",
-  "w-[68%]",
-  "w-[88%]",
-  "w-[58%]",
-  "w-[74%]",
-  "w-[64%]",
-] as const;
-
-function ChatRowsSkeleton({ rows }: { rows: number }) {
-
-  return (
-    <div
-      className="flex flex-col"
-      aria-hidden
-      data-testid="chat-sidebar-recents-skeleton"
-    >
-      {Array.from({ length: rows }).map((_, index) => (
-        <div
-          key={index}
-          className="flex items-center gap-2 px-2.5 py-1 rounded-md select-none"
-        >
-          <span className="h-1.5 w-1.5 rounded-full border border-muted-foreground/25 bg-transparent animate-pulse shrink-0" />
-          <Skeleton
-            className={cn(
-              "h-3 rounded-sm bg-muted-foreground/15",
-              CHAT_ROW_SKELETON_WIDTHS[index % CHAT_ROW_SKELETON_WIDTHS.length]
-            )}
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function Section({
   title,
   count,
@@ -2851,7 +2612,6 @@ interface ChatRowProps {
   onMoveToGroup?: (id: string, group: string | undefined) => void;
   onNewGroupRequest?: (id: string) => void;
   existingGroups?: string[];
-  showActions?: boolean;
   insideGroup?: boolean;
   openConversationMenuId?: string | null;
   setOpenConversationMenuId?: (id: string | null) => void;
@@ -3080,7 +2840,6 @@ export function SidebarChatRow({
   onMoveToGroup,
   onNewGroupRequest,
   existingGroups,
-  showActions = true,
   insideGroup = false,
   openConversationMenuId,
   setOpenConversationMenuId,
@@ -3101,8 +2860,7 @@ export function SidebarChatRow({
   const isUnread = session.unread && !isCurrent;
   const showCurrentLabel =
     isCurrent && !isLive && !isError && queuedCount === 0;
-  const canShowActions =
-    showActions && !disableHover && !conversationRestrictionActive;
+  const canShowActions = !disableHover && !conversationRestrictionActive;
   const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
   const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
   const rowLocale = useLocale();
