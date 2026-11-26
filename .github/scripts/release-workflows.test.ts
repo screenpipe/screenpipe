@@ -417,15 +417,18 @@ test("consumer and enterprise signing refresh trust before any Windows signing",
 });
 
 
-test("new Screenpipe releases upload one platform matrix and keep legacy recovery pinned", () => {
+test("new Screenpipe releases reuse native artifacts for legacy Enterprise packages", () => {
   const resolver = app.jobs.check_commit.steps.find((step: any) => step.id === "resolve-release");
   expect(resolver.run).toContain('$RELEASE_SHA:apps/screenpipe-app-tauri/unified-installer.json');
   expect(resolver.run).toContain('if [[ "$ENTERPRISE_ONLY" == true ]]');
-  expect(app.jobs["enterprise-start"].if).toContain("needs.check_commit.outputs.unified_installer != 'true'");
+  expect(app.jobs["enterprise-start"].if).not.toContain("outputs.unified_installer");
   const matrix = app.jobs["publish-tauri"];
   expect(matrix.strategy.matrix.include).toHaveLength(5);
-  expect(matrix.steps.find((step: any) => step.name === "Share linked executable with enterprise packaging").if)
-    .toContain("needs.check_commit.outputs.unified_installer != 'true'");
+  for (const name of ["Collect linked executable and generated resources", "Share linked executable with enterprise packaging"]) {
+    const step = matrix.steps.find((candidate: any) => candidate.name === name);
+    expect(step.if).toContain("outputs.shared_native == 'true'");
+    expect(step.if).not.toContain("outputs.unified_installer");
+  }
   for (const step of matrix.steps.filter((step: any) => step.name?.startsWith("Upload to Cloudflare R2 ("))) {
     expect(step.if).toContain("dry_run != 'true'");
     expect(step.run.indexOf("unified-installer.json")).toBeLessThan(step.run.indexOf('"\${BUNDLE_DIR}"'));

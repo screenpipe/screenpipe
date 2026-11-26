@@ -106,7 +106,7 @@ jobs:
           echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
           if git cat-file -e "$RELEASE_SHA:apps/screenpipe-app-tauri/unified-installer.json"; then
             if [[ "$ENTERPRISE_ONLY" == true ]]; then
-              echo "::error::This version has one Screenpipe installer. Rerun its failed platform jobs."
+              echo "::error::This version requires the shared desktop release workflow. Rerun its failed jobs."
               exit 1
             fi
             echo "unified_installer=true" >> "$GITHUB_OUTPUT"
@@ -1751,7 +1751,7 @@ jobs:
           }
 
       - name: Collect linked executable and generated resources
-        if: needs.check_commit.outputs.unified_installer != 'true' && needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
         shell: bash
         working-directory: apps/screenpipe-app-tauri/src-tauri
         env:
@@ -1786,7 +1786,7 @@ jobs:
           tar -cf "$artifact_dir/screenpipe-native.tar" -C "$stage" .
 
       - name: Share linked executable with enterprise packaging
-        if: needs.check_commit.outputs.unified_installer != 'true' && needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
         uses: actions/upload-artifact@v4
         with:
           name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-${{ matrix.target }}
@@ -1929,11 +1929,10 @@ jobs:
   enterprise-start:
     name: Mark enterprise artifacts pending
     needs: [check_commit, localization, publish-tauri]
-    # Enterprise recovery intentionally skips the consumer matrix. Each
-    # Enterprise build gates on this job instead of implicit ancestor success.
+    # Preserve the installed package identity while shipping the same linked
+    # executable. Historical Enterprise-only recovery skips the main matrix.
     if: >-
       !cancelled() && needs.check_commit.result == 'success' &&
-      needs.check_commit.outputs.unified_installer != 'true' &&
       needs.localization.result == 'success' &&
       (needs.publish-tauri.result == 'success' ||
       (inputs.enterprise_only && needs.publish-tauri.result == 'skipped'))
