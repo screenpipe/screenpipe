@@ -20,7 +20,6 @@ type SafeNotificationType =
 type SafeNotificationPriority = "high" | "normal" | "low" | "unknown";
 type SafeNotificationCategory =
   | "workflow_review"
-  | "onboarding_h1_follow_up"
   | "general"
   | "meeting"
   | "pipe"
@@ -80,9 +79,6 @@ function notificationCategory(
   type: SafeNotificationType,
 ): SafeNotificationCategory {
   if (notification?.id?.startsWith("workflow-review:")) return "workflow_review";
-  if (notification?.id?.startsWith("onboarding-live-view-follow-up:")) {
-    return "onboarding_h1_follow_up";
-  }
   return type;
 }
 

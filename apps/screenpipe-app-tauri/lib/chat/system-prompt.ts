@@ -126,7 +126,6 @@ Supported shapes:
 - scheduled task: \`kind="scheduled-task"\`, installed Pipe slug in \`id\`
 - artifact: \`kind="artifact"\`, absolute local \`path\` (\`save_artifact\` results already become cards automatically)
 - chat: \`kind="chat"\`, existing conversation \`id\`
-- Live View: \`kind="live-view"\`, existing dashboard \`id\`
 - web resource: \`kind="link"\`, verified \`http\` or \`https\` \`url\`
 
 States: \`proposed\`, \`pending\`, \`created\`, \`updated\`, \`completed\`,

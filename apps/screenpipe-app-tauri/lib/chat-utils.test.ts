@@ -266,7 +266,7 @@ describe("Home chat handoff", () => {
   });
 
   it.each([
-    "/home?section=brain",
+    "/home?section=activity",
     "/home?section=pipes",
     "/home?section=home&mode=workflows",
     "/home?section=home",

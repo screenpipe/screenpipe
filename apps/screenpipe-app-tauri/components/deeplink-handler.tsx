@@ -21,7 +21,6 @@ import {
 } from "@/components/markdown";
 import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
-import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-activation";
 import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
 import { localFetch } from "@/lib/api";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
@@ -38,10 +37,6 @@ import {
   readLearningWindow,
 } from "@/lib/first-run/learning-window";
 import { trackFirstRunSummaryNotificationOpened } from "@/lib/first-run/telemetry";
-import {
-  artifactOpenRequestFromUrl,
-  OPEN_BRAIN_ARTIFACT_EVENT,
-} from "@/lib/artifact-deeplink";
 import { useGT } from "gt-react";
 import { useUiLocale } from "@/lib/i18n/provider";
 
@@ -371,26 +366,6 @@ export function DeeplinkHandler() {
         await commands.showWindowActivated({ Home: { page: "activity" } });
       }
 
-      // A Live View follow-up notification points directly at the dashboard
-      // created during onboarding. Persisting the selection before opening
-      // Home also covers a cold-started Settings window.
-      if (
-        parsedUrl.host === "live-view" ||
-        parsedUrl.pathname?.startsWith("/live-view/")
-      ) {
-        const viewId = decodeURIComponent(
-          parsedUrl.host === "live-view"
-            ? (parsedUrl.pathname.replace(/^\/+/, "").split("/")[0] ?? "")
-            : (parsedUrl.pathname
-                .replace(/^\/live-view\/?/, "")
-                .split("/")[0] ?? ""),
-        );
-        if (viewId) {
-          rememberSelectedLiveViewDashboard(viewId);
-          await openSettingsWindow("brain");
-        }
-      }
-
       if (url.includes("changelog")) {
         setShowChangelogDialog(true);
       }
@@ -493,23 +468,6 @@ export function DeeplinkHandler() {
       // enable, edit, and run remain explicit in-app actions.
       if (parsedUrl.host === "pipe") {
         await handleExternalDeepLink(parsedUrl);
-        return;
-      }
-
-      // Stable artifact links recover the exact saved result in Brain. The
-      // repeated event makes a cold-started Home webview reliable while the
-      // request key in Brain keeps delivery idempotent.
-      if (parsedUrl.host === "artifact") {
-        const request = artifactOpenRequestFromUrl(url, "deeplink");
-        if (!request) return;
-        await commands.showWindowActivated({ Home: { page: "brain" } });
-        for (const delayMs of [0, 250, 750, 1500]) {
-          if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-          await emit("navigate", { url: "/home?section=brain" });
-          await emit(OPEN_BRAIN_ARTIFACT_EVENT, request);
-        }
         return;
       }
 

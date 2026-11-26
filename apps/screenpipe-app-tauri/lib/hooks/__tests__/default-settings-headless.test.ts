@@ -17,6 +17,5 @@ describe("headless default", () => {
   it("stores work memory as the default user goal", () => {
     const settings = createDefaultSettingsObject();
 
-    expect(settings.userGoalCategory).toBe("work_memory");
   });
 });

@@ -61,7 +61,6 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
-import { BrainSection } from "@/components/settings/brain-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
@@ -115,7 +114,6 @@ import {
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import { getEnterpriseAccount, type AppUser } from "@/lib/app-entitlement";
 import { useTeamSummary } from "@/lib/hooks/use-team-summary";
-import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 import { ActivityLedger } from "@/components/activity-ledger";
 import { ShortcutKeycap } from "@/components/shortcut-keycap";
 import { ExperimentalShortcutGuide } from "@/components/shortcut-guide";
@@ -145,7 +143,7 @@ import { useGT } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
 
-type MainSection = "home" | "timeline" | "activity" | "brain" | "pipes" | "connections" | "meetings" | "help";
+type MainSection = "home" | "timeline" | "activity" | "pipes" | "connections" | "meetings" | "help";
 const TRIAL_ACTIVATION_ALLOWED_SECTIONS = new Set<MainSection>([
   "home",
   "timeline",
@@ -160,10 +158,8 @@ type ConnectionFocusRequest = {
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "activity", "pipes", "help", "brain", "connections", "meetings", "history",
+  "home", "timeline", "activity", "pipes", "help", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
-  "memories", // backwards compat → maps to "brain"
-  "artifacts", // backwards compat → maps to "brain"
 ];
 
 // Settings sections that should redirect to /settings. Sourced from
@@ -222,8 +218,6 @@ function HomeContent() {
     history: "push",
     parse: (value) => {
       if (value === "feedback") return "help"; // backwards compat
-      if (value === "memories") return "brain"; // backwards compat — renamed to brain
-      if (value === "artifacts") return "brain"; // backwards compat — artifacts merged into brain
       // Settings sections redirect to /settings page
       if (isSettingsRoute(value)) return value; // handled by redirect effect below
       return ALL_SECTIONS.includes(value) ? value : "home";
@@ -1134,8 +1128,6 @@ function HomeContent() {
             onOpenArtifact={() => setActivityReturnVisible(true)}
           />
         );
-      case "brain":
-        return <BrainSection />;
       case "pipes":
         return <PipeStoreView />;
       case "connections":
@@ -1313,9 +1305,6 @@ function HomeContent() {
       const mapped = section === "feedback" ? "help" : section;
       if (ALL_SECTIONS.includes(mapped)) {
         setActiveSection(mapped);
-        if (mapped === "brain") {
-          window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
-        }
       }
     }
   });
@@ -1325,8 +1314,7 @@ function HomeContent() {
     activeSection === "timeline" ||
     activeSection === "activity" ||
     activeSection === "meetings" ||
-    activeSection === "history" ||
-    activeSection === "brain";
+    activeSection === "history";
 
   const trialActivationContent = (() => {
     if (!trialActivationLocked || activeSection !== "home") return null;

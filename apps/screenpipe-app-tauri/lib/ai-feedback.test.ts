@@ -4,7 +4,6 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  isNotificationFeedbackEligible,
   submitChatResponseFeedback,
   submitNotificationFeedback,
 } from "./ai-feedback";
@@ -87,16 +86,6 @@ describe("submitNotificationFeedback", () => {
     expect(JSON.parse(request.body)).not.toHaveProperty("comment");
   });
 
-  it("shows feedback controls on the H1 onboarding follow-up", () => {
-    expect(
-      isNotificationFeedbackEligible({
-        id: "onboarding-live-view-follow-up:first-dashboard",
-        type: "system",
-        title: "Launch focus has new context",
-        body: "open this Live View",
-      }),
-    ).toBe(true);
-  });
 });
 
 describe("submitChatResponseFeedback", () => {

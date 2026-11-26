@@ -27,7 +27,6 @@ import {
 } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { registerAppVersionProperty } from "@/lib/analytics/app-version-property";
-import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-follow-up";
 import { BackgroundPipeAllowanceNotifier } from "@/components/background-pipe-allowance-notifier";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
@@ -193,7 +192,6 @@ export const Providers = forwardRef<
                             <PermissionMonitorProvider>
                               <UpdateListenerMount />
                               <DesktopRemoteControl enabled={posthogReady} />
-                              {!isOverlay && <LiveViewOnboardingFollowUp />}
                               {!isOverlay && <BackgroundPipeAllowanceNotifier />}
                               {!isOverlay && <WorkflowsRolloutSync />}
                               {children}

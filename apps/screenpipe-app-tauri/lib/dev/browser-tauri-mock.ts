@@ -5,15 +5,10 @@
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type {
   StorageMigrationStatus,
-  BrainViewCanvasDocument,
-  BrainViewDefinition,
-  BrainViewTemplateKit,
   ImportedSkill,
   PiExtensionPackage,
   ProviderAutomation,
   RegistrySkill,
-  SaveBrainViewCanvasRequest,
-  SaveBrainViewRequest,
 } from "@/lib/utils/tauri";
 import type { BrowserDevScenario } from "./browser-engine-mock";
 import { buildProviderErrorPresentation } from "../chat/provider-errors";
@@ -37,125 +32,6 @@ export interface BrowserIpcMockOptions {
   onEvent?: (event: string, payload: unknown) => void;
   warn?: (message: string) => void;
 }
-
-const BROWSER_DEV_TEMPLATE_KITS: BrainViewTemplateKit[] = [
-  {
-    id: "daily-memory",
-    title: "Daily memory",
-    description: "Remember what changed today and exactly where to resume.",
-    version: 1,
-    timeRange: "today",
-    periodPolicy: { type: "fixed.v1", value: "today" },
-    pipes: [
-      { name: "day-recap", distribution: "bundled" },
-      { name: "missed-todos", distribution: "bundled" },
-    ],
-    slots: [
-      {
-        id: "today-in-brief",
-        title: "Today in brief",
-        component: "markdown.v1",
-        width: 12,
-        order: 0,
-        intent: "Summarize today's source-backed work.",
-        binding: { pipeName: "day-recap" },
-      },
-      {
-        id: "unfinished-work",
-        title: "Unfinished work",
-        component: "list.v1",
-        width: 12,
-        order: 1,
-        intent: "Find work that needs a next step.",
-        binding: { pipeName: "missed-todos" },
-      },
-    ],
-  },
-  {
-    id: "meeting-follow-ups",
-    title: "Meeting follow-ups",
-    description: "Keep decisions, promises, and unanswered questions visible.",
-    version: 1,
-    timeRange: "7d",
-    periodPolicy: {
-      type: "selectable.v1",
-      values: ["today", "7d", "30d"],
-    },
-    pipes: [{ name: "meeting-follow-ups", distribution: "bundled" }],
-    slots: [
-      {
-        id: "commitments",
-        title: "Open commitments",
-        component: "list.v1",
-        width: 12,
-        order: 0,
-        intent: "Find source-backed commitments from recent meetings.",
-        binding: { pipeName: "meeting-follow-ups" },
-      },
-    ],
-  },
-  {
-    id: "work-patterns",
-    title: "Work patterns",
-    description: "See where time goes and which habits are changing.",
-    version: 1,
-    timeRange: "7d",
-    periodPolicy: {
-      type: "selectable.v1",
-      values: ["7d", "30d"],
-    },
-    pipes: [{ name: "activity-summary", distribution: "bundled" }],
-    slots: [
-      {
-        id: "time-by-app",
-        title: "Time by app",
-        component: "bar-chart.v1",
-        width: 6,
-        order: 0,
-        intent: "Summarize measured app activity without judging productivity.",
-        binding: { pipeName: "activity-summary" },
-      },
-      {
-        id: "focus-trend",
-        title: "Focus trend",
-        component: "line-chart.v1",
-        width: 6,
-        order: 1,
-        intent: "Show how uninterrupted work time changed.",
-        binding: { pipeName: "activity-summary" },
-      },
-    ],
-  },
-  {
-    id: "process-map",
-    title: "Process map",
-    description: "Map a repeated workflow from trigger to improvement.",
-    version: 1,
-    timeRange: "30d",
-    periodPolicy: { type: "fixed.v1", value: "30d" },
-    pipes: [{ name: "automate-my-work", distribution: "bundled" }],
-    slots: [
-      {
-        id: "observed-steps",
-        title: "Observed steps",
-        component: "timeline.v1",
-        width: 12,
-        order: 0,
-        intent: "Map evidence-backed steps in the repeated workflow.",
-        binding: { pipeName: "automate-my-work" },
-      },
-      {
-        id: "improvement-path",
-        title: "Improvement path",
-        component: "markdown.v1",
-        width: 12,
-        order: 1,
-        intent: "Propose a traceable improvement path.",
-        binding: { pipeName: "automate-my-work" },
-      },
-    ],
-  },
-];
 
 const NOOP_COMMANDS = new Set([
   "close_window",
@@ -248,88 +124,6 @@ const GRANTED_PERMISSION_COMMANDS = new Set([
   "check_permission",
   "check_screen_recording_permission",
 ]);
-
-function createBrowserDevLiveView(now: string): BrainViewDefinition {
-  const dataTimestamp = new Date(
-    Date.parse(now) - 6 * 24 * 60 * 60 * 1_000,
-  ).toISOString();
-  return {
-    id: "browser-dev-live-view",
-    title: "How I spend my time today",
-    revision: 1,
-    timeRange: "today",
-    periodPolicy: {
-      type: "selectable.v1",
-      values: ["today", "24h", "7d", "30d"],
-    },
-    slots: [
-      {
-        id: "activity-timeline",
-        title: "Today's activity timeline",
-        component: "timeline.v1",
-        width: 12,
-        order: 0,
-        intent: "Summarize today's source-backed activity",
-        binding: { pipeName: "daily-summary" },
-        value: {
-          payload: {
-            items: [
-              {
-                timestamp: dataTimestamp,
-                title: "Recorded activity begins",
-                description:
-                  "The newest available activity is older than today.",
-              },
-            ],
-          },
-          evidence: [
-            {
-              eventId: null,
-              frameId: 88,
-              transcriptionId: null,
-              ts: dataTimestamp,
-              deviceId: null,
-            },
-          ],
-          sourcePipe: "daily-summary",
-          artifactOutputId: 88,
-          artifactVersion: 2,
-          updatedAt: now,
-        },
-        feedback: { upCount: 0, downCount: 0, current: null },
-        itemActions: { items: [] },
-      },
-    ],
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function createBrowserDevLiveViewCanvas(
-  viewId: string,
-  now: string,
-): BrainViewCanvasDocument {
-  return {
-    schema: "live-view-canvas.v1",
-    viewId,
-    revision: 1,
-    mode: "dashboard",
-    viewport: { x: 24, y: 24, zoom: 1 },
-    blocks: [
-      {
-        slotId: "activity-timeline",
-        x: 64,
-        y: 64,
-        width: 440,
-        height: 280,
-      },
-    ],
-    notes: [],
-    arrows: [],
-    strokes: [],
-    updatedAt: now,
-  };
-}
 
 function createBrowserDevProviderAutomations(): ProviderAutomation[] {
   return [
@@ -499,7 +293,6 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
   const providerSkills = BROWSER_DEV_PROVIDER_SKILLS.map((skill) => ({
     ...skill,
   }));
-  const initialTimestamp = new Date().toISOString();
   const chatsDir = "/Users/screenpipe/.screenpipe/chats";
   const chatFixtures = new Map<string, string>(
     [
@@ -563,15 +356,6 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       ],
     }));
   }
-  let liveViews =
-    options.scenario === "empty"
-      ? []
-      : [createBrowserDevLiveView(initialTimestamp)];
-  let liveViewCanvas = createBrowserDevLiveViewCanvas(
-    liveViews[0]?.id ?? "browser-dev-live-view",
-    initialTimestamp,
-  );
-
   const getStore = (resourceId: number) => {
     let store = stores.get(resourceId);
     if (!store) {
@@ -941,10 +725,6 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
         piExtensionPackages = piExtensionPackages.filter((pkg) => pkg.source !== source);
         return piExtensionPackages.map((pkg) => ({ ...pkg }));
       }
-      case "list_brain_views":
-        return liveViews;
-      case "list_brain_view_template_kits":
-        return BROWSER_DEV_TEMPLATE_KITS;
       case "list_provider_automations":
         return browserDevProviderAutomations.map((task) => ({
           ...task,
@@ -1001,56 +781,6 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           task.updatedAtMs = Date.now();
         }
         return null;
-      }
-      case "save_brain_view": {
-        const request = input.request as SaveBrainViewRequest;
-        const existing = liveViews.find((view) => view.id === request.id);
-        const savedView: BrainViewDefinition = {
-          id: request.id,
-          title: request.title,
-          revision: (request.expectedRevision ?? existing?.revision ?? 0) + 1,
-          timeRange: request.timeRange,
-          periodPolicy: request.periodPolicy,
-          slots: request.slots.map((slot) => {
-            const existingSlot = existing?.slots.find(
-              (candidate) => candidate.id === slot.id,
-            );
-            return {
-              ...slot,
-              value: existingSlot?.value ?? null,
-              feedback: existingSlot?.feedback ?? {
-                upCount: 0,
-                downCount: 0,
-                current: null,
-              },
-              itemActions: existingSlot?.itemActions ?? { items: [] },
-            };
-          }),
-          createdAt: existing?.createdAt ?? new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        liveViews = existing
-          ? liveViews.map((view) =>
-              view.id === savedView.id ? savedView : view,
-            )
-          : [...liveViews, savedView];
-        return savedView;
-      }
-      case "delete_brain_view":
-        liveViews = liveViews.filter((view) => view.id !== String(input.id));
-        return null;
-      case "load_brain_view_canvas":
-        return input.viewId === liveViewCanvas.viewId ? liveViewCanvas : null;
-      case "save_brain_view_canvas": {
-        const { expectedRevision, ...document } =
-          input.request as SaveBrainViewCanvasRequest;
-        liveViewCanvas = {
-          ...document,
-          schema: "live-view-canvas.v1",
-          revision: (expectedRevision ?? 0) + 1,
-          updatedAt: new Date().toISOString(),
-        };
-        return liveViewCanvas;
       }
       case "show_window": {
         const target = input.window as { Home?: { page?: string | null } } | undefined;

@@ -6,9 +6,8 @@
 /**
  * Meeting chat transport.
  *
- * Runs one private Pi session per turn, isolated the same way the Live View
- * editor is (`lib/live-views/generate-live-view-with-pi.ts`): its own project
- * dir, no Chat system prompt, and a tool allowlist.
+ * Runs one private Pi session per turn with its own project directory and
+ * a tool allowlist, without the general Chat system prompt.
  *
  * `allowedTools` is the enforcement boundary, not a hint. Raw Pi receives it as
  * `--tools`; an ACP session receives it as `SCREENPIPE_ACP_TOOL_ALLOWLIST`,

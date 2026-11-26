@@ -1464,8 +1464,7 @@ export function ConnectedShareDialog({
 
         {artifact.sections.length === 0 && (
           <div className="border border-border px-3 py-2 text-xs" role="status">
-            This snapshot has no shareable blocks yet. Close this review, let
-            the Live View finish loading, then try again.
+            This snapshot has no shareable content.
           </div>
         )}
 

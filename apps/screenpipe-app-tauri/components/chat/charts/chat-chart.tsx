@@ -15,14 +15,6 @@ import {
   parseChartSpec,
   type ChartSpec,
 } from "./chart-spec";
-import { LayoutDashboard, MoreHorizontal } from "lucide-react";
-
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useChartPalette } from "./chart-palette";
 import {
   BarChart,
@@ -39,76 +31,7 @@ import {
   TimelineChart,
   WaterfallChart,
 } from "./chart-marks";
-import { useGT } from "gt-react";
-
-
-export type SendChartPrompt = (
-  prompt: string,
-  displayLabel: string,
-) => void | Promise<void>;
-
-const LIVE_VIEW_DISPLAY_LABEL = "Add chart to a Live View";
-
-export function buildChartLiveViewPrompt(spec: ChartSpec): string {
-  return `Add the chart below to a Live View as a new, refreshable block.
-
-List my Live Views first. If there is one, use it. If there is more than one, ask me which one. If there are none, create one for this chart. Map the chart to the closest supported Live View component, preserve its question, evidence scope, title, labels, values, and units where the Live View schema supports them, and do not change or remove unrelated blocks. If no scheduled source can refresh this block, tell me before saving an empty block.
-
-Chart spec from this answer:
-
-\`\`\`json
-${JSON.stringify(spec, null, 2)}
-\`\`\``;
-}
-
-function ChartActions({
-  spec,
-  onSendPrompt,
-}: {
-  spec: ChartSpec;
-  onSendPrompt: SendChartPrompt;
-}) {
-  const ui = useGT();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={ui("Chart actions")}
-          title={ui("Chart actions")}
-          className="not-prose absolute right-2 top-2 z-20 flex h-7 w-7 items-center justify-center border border-transparent bg-background/80 text-muted-foreground opacity-70 transition-[color,background-color,border-color,opacity] duration-150 hover:border-border hover:bg-muted hover:text-foreground hover:opacity-100 focus-visible:border-foreground focus-visible:text-foreground focus-visible:opacity-100 focus-visible:outline-none"
-        >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="w-48 rounded-lg border-border shadow-lg shadow-black/5"
-      >
-        <DropdownMenuItem
-          className="gap-2 rounded-sm font-mono text-xs normal-case"
-          onSelect={() =>
-            void onSendPrompt(
-              buildChartLiveViewPrompt(spec),
-              LIVE_VIEW_DISPLAY_LABEL,
-            )
-          }
-        >
-          <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
-          Add to live view…
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-export function ChatChart({
-  spec,
-  onSendPrompt,
-}: {
-  spec: ChartSpec;
-  onSendPrompt?: SendChartPrompt;
-}) {
+export function ChatChart({ spec }: { spec: ChartSpec }) {
   const palette = useChartPalette();
 
   let chart: React.ReactNode;
@@ -155,17 +78,8 @@ export function ChatChart({
   }
 
   return (
-    <div
-      className={
-        onSendPrompt
-          ? "relative my-3 w-full min-w-0 max-w-full self-stretch [&>figure]:my-0 [&>figure]:pr-11"
-          : "contents"
-      }
-    >
+    <div className="my-3 w-full min-w-0 max-w-full self-stretch [&>figure]:my-0">
       {chart}
-      {onSendPrompt && (
-        <ChartActions spec={spec} onSendPrompt={onSendPrompt} />
-      )}
     </div>
   );
 }
@@ -182,10 +96,9 @@ export function ChatChart({
 export function renderChartFence(
   language: string,
   content: string,
-  onSendPrompt?: SendChartPrompt,
 ): React.ReactNode | null {
   if (language !== CHART_FENCE_LANGUAGE) return null;
   const spec = parseChartSpec(content);
   if (!spec) return null;
-  return <ChatChart spec={spec} onSendPrompt={onSendPrompt} />;
+  return <ChatChart spec={spec} />;
 }

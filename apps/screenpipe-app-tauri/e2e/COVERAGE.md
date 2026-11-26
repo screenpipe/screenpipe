@@ -10,9 +10,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 145
-- Declared test blocks: 416
-- Weighted coverage points: 335.4
+- Mapped specs: 139
+- Declared test blocks: 394
+- Weighted coverage points: 317.6
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 111 | 353 | 295.0 | 15 | 125 | 85% |
-| macos | 140 | 377 | 304.8 | 17 | 134 | 88% |
-| linux | 98 | 310 | 264.0 | 14 | 122 | 80% |
+| windows | 106 | 335 | 280.0 | 15 | 119 | 85% |
+| macos | 134 | 355 | 287.0 | 17 | 126 | 88% |
+| linux | 92 | 288 | 246.2 | 14 | 114 | 80% |
 
 ## Runtime Results
 
@@ -43,16 +43,16 @@ pass/fail/skip counts.
 | capture-ocr | 3 specs / 17 tests / 6.8 pts | 10 specs / 14 tests / 6.2 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 37 specs / 87 tests / 71.3 pts | 51 specs / 116 tests / 90.8 pts | 35 specs / 86 tests / 70.8 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 30 specs / 122 tests / 102.5 pts | 41 specs / 120 tests / 102.4 pts | 25 specs / 90 tests / 80.7 pts |
-| notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
-| onboarding | 9 specs / 39 tests / 34.8 pts | 11 specs / 43 tests / 38.2 pts | 9 specs / 39 tests / 34.8 pts |
+| local-api | 28 specs / 116 tests / 96.5 pts | 39 specs / 114 tests / 96.4 pts | 23 specs / 84 tests / 74.7 pts |
+| notifications | 3 specs / 25 tests / 16.3 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
+| onboarding | 8 specs / 38 tests / 33.8 pts | 10 specs / 42 tests / 37.2 pts | 8 specs / 38 tests / 33.8 pts |
 | os-integration | 8 specs / 37 tests / 31.9 pts | 17 specs / 36 tests / 23.8 pts | 3 specs / 20 tests / 15.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
-| pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
-| real-ui-e2e | 82 specs / 243 tests / 205.7 pts | 99 specs / 261 tests / 220.8 pts | 75 specs / 218 tests / 191.4 pts |
+| pipes | 3 specs / 13 tests / 13.0 pts | 5 specs / 19 tests / 19.0 pts | 3 specs / 13 tests / 13.0 pts |
+| real-ui-e2e | 77 specs / 225 tests / 190.7 pts | 93 specs / 239 tests / 202.9 pts | 69 specs / 196 tests / 173.6 pts |
 | settings | 16 specs / 43 tests / 39.4 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 11 specs / 47 tests / 38.3 pts | 11 specs / 32 tests / 31.1 pts | 8 specs / 25 tests / 24.1 pts |
-| tauri-command | 26 specs / 73 tests / 59.4 pts | 38 specs / 96 tests / 77.8 pts | 25 specs / 74 tests / 60.3 pts |
+| tauri-command | 26 specs / 73 tests / 59.4 pts | 37 specs / 92 tests / 75.0 pts | 24 specs / 70 tests / 57.5 pts |
 | window-lifecycle | 22 specs / 71 tests / 59.5 pts | 23 specs / 55 tests / 40.9 pts | 16 specs / 44 tests / 34.4 pts |
 
 ## Critical Feature Matrix
@@ -71,13 +71,13 @@ pass/fail/skip counts.
 | AI presets and preferences UX | settings | covered (strong; settings-sections) | covered (strong; settings-sections) | covered (strong; settings-sections) |
 | Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
 | Permissions settings recovery UX | settings | - | covered (strong; settings-sections) | - |
-| Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) |
+| Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (partial; notification-viewer-link, audio-fallback) | covered (partial; notification-viewer-link) |
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; capture-restart-device-recovery, meetings-only-audio-lifecycle) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; renderer-recovery, window-lifecycle) | covered (strong; window-lifecycle, chat-window) |
 | macOS frozen WebKit renderer recovery | window-lifecycle, tauri-command, real-ui-e2e, local-api | - | covered (strong; renderer-recovery) | - |
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-chat-panel) | covered (strong; meeting-note-bottom-click, meeting-restart-live-transcription) |
-| Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) |
+| Pipes discover, install, and play | pipes | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipe-continuous-chat) | covered (strong; pipes, pipes-mcp-connections) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; acp-backend, chat-tool-activity) | covered (strong; acp-backend, chat-tool-activity) | covered (strong; acp-backend, chat-tool-activity) |
 | Conversation-owned coding worktrees | chat-ai | gap | gap | gap |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
@@ -115,8 +115,6 @@ pass/fail/skip counts.
 | app-lifecycle.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, webview-stability, route-churn, browser-storage | high | strong | mixed | 14 | Home webview, routing, reload, focus, resize, and storage stability. |
 | artifacts-api.spec.ts | windows, macos, linux | local-api | local-api-auth, artifacts | medium | strong | api | 7 | CRUD coverage for artifact registration, validation, unified listing, upsert, and delete. |
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
-| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 5 | Opens Brain via the Home deep link. Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
-| brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Opens Brain via the Home deep link and covers filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
 | capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
 | capture-restart-device-recovery.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | audio-device-health | high | conditional | real-user-flow | 3 | Opt-in real-audio continuous lane for #6089: a capture-session restart must bring back the same running device set, and the device monitor must survive to recover a device stopped afterwards. |
@@ -167,7 +165,7 @@ pass/fail/skip counts.
 | chat-window.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, window-lifecycle | high | strong | real-user-flow | 2 | Opens Chat and focuses the composer for typing. A chat saved from the floating window syncs into Home's Recents without becoming a second Home working tab. |
 | chat-within-session-context-loss.spec.ts | macos | chat-ai | chat, chat-context | medium | conditional | synthetic | 5 | macOS-only within-chat context retention regression. |
 | chat-workspace-tabs.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tabs, chat-split-pane, owned-browser, browser-session-consent, right-panel-tabs | high | strong | real-user-flow | 2 | Native pointer clicks reach tabs, close, and new-chat controls above the window drag region; unused mount placeholders do not create extra untitled tabs. Multiple real chats remain in a non-destructive working set, a second live transcript stays visible, and promoting it swaps primary composer ownership. Back-to-back owned-browser navigation and consent events keep the login prompt visible without a false loading animation, retain the current address, and render both browser chrome rows at 36px. |
-| connected-share.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, brain-overview, live-views, connections | high | strong | real-user-flow | 1 | Exercises the Send snapshot dialog from meeting notes and Live Views opened via the Home deep link across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage. |
+| connected-share.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, connections | high | strong | real-user-flow | 1 | Exercises the Send snapshot dialog from meeting notes across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage. |
 | db-hard-fault-fail-closed.spec.ts | windows, macos, linux | local-api, tauri-command, real-ui-e2e | database-hard-fault-containment, app-launch | high | strong | mixed | 2 | Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window. |
 | first-run-agent-handoff.spec.ts | windows, macos, linux | onboarding, real-ui-e2e | onboarding, first-run-learning, mcp-registration | high | partial | real-user-flow | 4 | Agent handoff beside the first-run summary: the summary stays primary and clickable whether or not an agent is offered, an offered target is never nameless or unclickable, the filesystem probe cannot break the ready banner or the summary click-through, opening the result collapses into the compact setup dock, and the paste instruction appears only after the handoff runs. Waits for the async probe before concluding absence. Does not assert WHICH agent: detectAiTools resolves the real home in the webview (SCREENPIPE_E2E_AI_TOOLS_HOME is Rust-only), so selection is host-dependent and is covered in lib/first-run/agent-handoff.test.ts and use-agent-handoff.test.ts. |
 | first-run-ai-summary.spec.ts | macos | onboarding, chat-ai, local-api, real-ui-e2e, tauri-command | onboarding, first-run-learning, chat, notifications | high | strong | real-user-flow | 3 | Opt-in hosted-AI lane for the post-setup summary: the real app starts its own Pi session through the Rust command and the production Worker under Miniflare. It proves a low-tier parsed-only fixture with one sustained app and no Timeline dependency reaches the model, accessibility evidence is used when parsed context is unavailable, and two transient activity-engine failures recover without a deterministic fallback. The seeded chat must hold the model's text and never the deterministic opener. Once ready, the real app must persist one content-free /notify entry whose primary deep link returns to the locally resolved summary and marks it opened. |
@@ -180,9 +178,6 @@ pass/fail/skip counts.
 | help-discord-link.spec.ts | windows, macos, linux | real-ui-e2e | help | low | smoke | real-user-flow | 2 | Help section Discord invite link. |
 | history-swipe-navigation.spec.ts | windows, macos | real-ui-e2e, window-lifecycle, tauri-command | home-navigation, window-lifecycle | medium | partial | real-user-flow | 2 | Reads back the real WKWebView/WebView2 history-swipe setting, verifies top-level UI sections are browser-history entries, proves Back to app consumes Settings so the next back action restores the prior Home state, and captures every destination plus the production back/forward gesture-arrow design. Physical OS trackpad input remains manual. |
 | home-window.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, sidebar-collapse, timeline, settings-recording, pipes | high | strong | real-user-flow | 2 | Clicks through Home, Pipes, Timeline, Help, and Settings; verifies collapsed sidebar chrome hides recording status and restores it on expand. |
-| html-artifact-render.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, html-sandbox | high | strong | real-user-flow | 1 | Registers an HTML artifact, opens Brain via the Home deep link, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window). |
-| live-view-item-actions.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain-overview, live-view-item-actions, artifacts, pipes | high | strong | real-user-flow | 1 | Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots. |
-| live-view-pinch-zoom.spec.ts | macos, linux | real-ui-e2e, tauri-command | brain-overview, live-view-canvas-pinch-zoom, live-view-canvas-click-stability | medium | strong | real-user-flow | 4 | Drives the Live View canvas with the same window-scoped native-magnify payload the macOS magnification gesture recognizer emits. Asserts pinch works even when WKWebView lacks DOM focus, the recognizer takes ownership so WebKit's duplicate ctrl+wheel stops zooming while plain scroll still pans, ordinary pane, Block, and double clicks do not change the viewport, and canvas zoom stays anchored, clamped at 25%, and persisted through load_brain_view_canvas. |
 | macos-ui-performance.spec.ts | macos | performance, real-ui-e2e | timeline, audio-device-health | medium | conditional | performance | 2 | macOS-only timeline/audio UI performance guards. |
 | main-overlay-visibility.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | window-lifecycle, main-overlay | medium | partial | command | 1 | Main overlay show/hide without duplicate handles. |
 | main-window-close-reopen.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | window-lifecycle, main-window | medium | partial | command | 1 | Main close/reopen without handle leaks. |
@@ -202,7 +197,6 @@ pass/fail/skip counts.
 | notification-viewer-link.spec.ts | windows, macos, linux | notifications, local-api, window-lifecycle | notifications, viewer-deeplink | high | partial | mixed | 3 | Notification local file links rewrite into in-app viewer links. |
 | onboarding-background-ai-tools.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, storage-privacy | onboarding, settings-ai | high | strong | real-user-flow | 2 | Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and migration from the removed connection slide through engine startup to optional recommended setup and completion. |
 | onboarding-first-run.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, first-run-learning, settings-persistence | high | strong | real-user-flow | 9 | Fresh-install setup walk: signed-out users restoring a post-login step return to login; after account creation, the acquisition slide is reachable in the shipped order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and existing lifetime owners stay out of mandatory checkout. |
-| onboarding-h1-follow-up.spec.ts | windows, macos, linux | onboarding, notifications, pipes, real-ui-e2e | onboarding, notifications, pipes | high | strong | real-user-flow | 1 | A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 5 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | onboarding-trust-affordances.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, settings-privacy-api-auth, storage-retention | high | strong | real-user-flow | 4 | Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the screenshot choice slide states the capture bounds (incognito skipped, per-app exclusions) where screenshot capture is chosen independently of sidebar visibility. The mac assertions share one visit because the slide auto-advances 600ms after all grants land. |
 | owned-browser-tabs.spec.ts | windows, macos | chat-ai, real-ui-e2e | owned-browser, right-panel-tabs, native-child-webviews | high | strong | command | 0 | A surviving app window drives two native child webviews after the home automation context is replaced, then verifies retained per-tab URLs and close cleanup through the E2E harness. |

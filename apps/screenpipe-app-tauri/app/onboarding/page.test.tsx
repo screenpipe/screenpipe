@@ -269,21 +269,15 @@ describe("enterprise onboarding authentication", () => {
     mocks.isSettingsLoaded = true;
   });
 
-  it("resumes the first-task choice and saves a workflow goal without duplicating a prior save", async () => {
+  it("resumes the first-task choice and opens Workflows without writing priorities", async () => {
     mocks.enterprisePolicy.isManagedDeployment = false;
     onboardingData.currentStep = "first-task";
-    mocks.loadWorkProfile.mockResolvedValueOnce({
-      priorities: "Customer follow-ups", summary: "Customer support",
-    });
     render(<OnboardingPage />);
     fireEvent.click(await screen.findByRole("button", { name: /Understand a workflow/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Customer follow-ups" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open Workflows" }));
     await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalledWith({ method: "setup_finished" }));
     expect(mocks.saveProductMode).toHaveBeenCalledWith("workflows");
-    expect(mocks.saveWorkProfile).toHaveBeenCalledWith(expect.objectContaining({
-      priorities: "Customer follow-ups", summary: "Customer support",
-    }));
+    expect(mocks.loadWorkProfile).not.toHaveBeenCalled();
+    expect(mocks.saveWorkProfile).not.toHaveBeenCalled();
     expect(screen.queryByText("regular sign in")).not.toBeInTheDocument();
   });
 

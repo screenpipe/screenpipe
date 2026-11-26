@@ -43,7 +43,6 @@ import { shouldRestoreOnboardingLogin } from "@/lib/onboarding-auth-restore";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { FirstTaskChoice } from "@/components/workflows/first-task-choice";
 import { saveProductMode } from "@/lib/workflows/entry-preference";
-import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 
 type SlideKey =
   | "login"
@@ -654,7 +653,7 @@ export default function OnboardingPage() {
         return;
       }
       commands
-        .showWindow({ Home: { page: "brain" } })
+        .showWindow({ Home: { page: null } })
         .then(() => window.close())
         .catch(() => {});
     }
@@ -968,18 +967,7 @@ export default function OnboardingPage() {
           {currentSlide === "plan" && (
             <PlanSelectionStep handleNextSlide={handleNextSlide} />
           )}
-          {currentSlide === "first-task" && workflowsRolloutEnabled && <FirstTaskChoice onComplete={async (mode, goal) => {
-            if (mode === "workflows" && goal) {
-              const existing = await desktopWorkflowsPlatform.loadWorkProfile?.();
-              await desktopWorkflowsPlatform.saveWorkProfile?.({
-                scope: "personal", summary: "", kpis: [], hourlyValue: null,
-                vocabulary: "", guidance: "", visibility: "device-only", ...existing,
-                priorities: existing?.priorities
-                  ? existing.priorities.split("\n").some(line => line.trim() === goal)
-                    ? existing.priorities : `${existing.priorities}\n${goal}`
-                  : goal,
-              });
-            }
+          {currentSlide === "first-task" && workflowsRolloutEnabled && <FirstTaskChoice onComplete={async (mode) => {
             await saveProductMode(mode);
             await handleNextSlide();
           }} />}

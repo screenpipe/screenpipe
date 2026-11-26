@@ -161,7 +161,7 @@ describe("notification deeplink routing", () => {
     );
   });
 
-  it("sends file link actions to the Brain artifact detail", async () => {
+  it("sends file link actions to the standalone viewer", async () => {
     tauriCommandMocks.openViewerWindow.mockClear();
     tauriCommandMocks.showWindowActivated.mockClear();
     const { emit } = await import("@tauri-apps/api/event");
@@ -174,14 +174,11 @@ describe("notification deeplink routing", () => {
     await vi.runAllTimersAsync();
     await actionPromise;
 
-    expect(tauriCommandMocks.openViewerWindow).not.toHaveBeenCalled();
-    expect(tauriCommandMocks.showWindowActivated).toHaveBeenCalledWith({
-      Home: { page: "brain" },
-    });
-    expect(emit).toHaveBeenCalledWith("open-brain-artifact", {
-      path: "/Users/louis/.screenpipe/pipes/time-breakdown/output/2026-08-25.md",
-      source: "notification",
-    });
+    expect(tauriCommandMocks.openViewerWindow).toHaveBeenCalledWith(
+      "/Users/louis/.screenpipe/pipes/time-breakdown/output/2026-08-25.md",
+    );
+    expect(tauriCommandMocks.showWindowActivated).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
   });
 });
 

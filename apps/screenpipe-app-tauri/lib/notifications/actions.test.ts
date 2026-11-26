@@ -55,49 +55,19 @@ describe("notification file links", () => {
     expect(viewerPathFromNotificationUrl("https://example.com/report.md")).toBeNull();
   });
 
-  it("recovers legacy file links into the Brain artifact detail", async () => {
-    const showWindowActivated = vi.fn().mockResolvedValue(undefined);
-    const emitEvent = vi.fn().mockResolvedValue(undefined);
+  it("opens file links in the standalone viewer", async () => {
+    const showWindowActivated = vi.fn();
+    const emitEvent = vi.fn();
+    const openViewerWindow = vi.fn().mockResolvedValue({ status: "ok", data: null });
 
     await routeNotificationDeeplink(
       "screenpipe://view?path=%2FUsers%2Flouis%2Freport.md",
-      {
-        showWindowActivated,
-        emitEvent,
-        sleepMs: vi.fn().mockResolvedValue(undefined),
-      },
+      { showWindowActivated, emitEvent, openViewerWindow },
     );
 
-    expect(showWindowActivated).toHaveBeenCalledWith({
-      Home: { page: "brain" },
-    });
-    expect(emitEvent).toHaveBeenCalledWith("open-brain-artifact", {
-      path: "/Users/louis/report.md",
-      source: "notification",
-    });
-    expect(emitEvent).not.toHaveBeenCalledWith(
-      "deep-link-received",
-      expect.anything(),
-    );
-  });
-
-  it("routes stable artifact ids without putting paths in the deeplink", async () => {
-    const showWindowActivated = vi.fn().mockResolvedValue(undefined);
-    const emitEvent = vi.fn().mockResolvedValue(undefined);
-
-    await routeNotificationDeeplink("screenpipe://artifact/42", {
-      showWindowActivated,
-      emitEvent,
-      sleepMs: vi.fn().mockResolvedValue(undefined),
-    });
-
-    expect(showWindowActivated).toHaveBeenCalledWith({
-      Home: { page: "brain" },
-    });
-    expect(emitEvent).toHaveBeenCalledWith("open-brain-artifact", {
-      registeredId: 42,
-      source: "notification",
-    });
+    expect(openViewerWindow).toHaveBeenCalledWith("/Users/louis/report.md");
+    expect(showWindowActivated).not.toHaveBeenCalled();
+    expect(emitEvent).not.toHaveBeenCalled();
   });
 });
 

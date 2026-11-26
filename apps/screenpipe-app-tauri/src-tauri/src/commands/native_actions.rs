@@ -373,69 +373,11 @@ fn viewer_path_from_notification_url(url: &str) -> Option<String> {
     Some(decoded)
 }
 
-fn artifact_request_from_notification_url(url: &str) -> Option<serde_json::Value> {
-    if let Some(rest) = url.strip_prefix("screenpipe://artifact/") {
-        let id = rest
-            .split(|c| c == '/' || c == '?')
-            .next()?
-            .parse::<u64>()
-            .ok()?;
-        if id > 0 {
-            return Some(serde_json::json!({
-                "registeredId": id,
-                "source": "notification",
-            }));
-        }
-    }
-
-    if let Some(query) = url
-        .strip_prefix("screenpipe://artifact?")
-        .or_else(|| url.strip_prefix("screenpipe://artifact/?"))
-    {
-        let id = query.split('&').find_map(|part| {
-            let value = part.strip_prefix("id=")?;
-            value.parse::<u64>().ok().filter(|id| *id > 0)
-        });
-        if let Some(id) = id {
-            return Some(serde_json::json!({
-                "registeredId": id,
-                "source": "notification",
-            }));
-        }
-    }
-
-    viewer_path_from_notification_url(url).map(|path| {
-        serde_json::json!({
-            "path": path,
-            "source": "notification",
-        })
-    })
-}
-
-/// Recover a notification result into Brain. The event is repeated because a
-/// notification can cold-create Home before React has mounted its listener;
-/// Brain deduplicates the stable request while preserving the artifact list.
-fn open_brain_artifact_from_notification(app: &tauri::AppHandle, request: serde_json::Value) {
+fn open_notification_file(app: &tauri::AppHandle, path: String) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        let app_for_show = app.clone();
-        if let Err(error) = app.run_on_main_thread(move || {
-            if let Err(error) = (ShowRewindWindow::Home {
-                page: Some("brain".to_string()),
-            })
-            .show(&app_for_show)
-            {
-                error!("failed to show Brain for notification artifact: {error}");
-            }
-        }) {
-            error!("failed to schedule Brain notification artifact open: {error}");
-        }
-
-        let navigation = serde_json::json!({ "url": "/home?section=brain" });
-        for delay_ms in [150_u64, 500, 1200, 2200] {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-            let _ = app.emit("navigate", navigation.clone());
-            let _ = app.emit("open-brain-artifact", request.clone());
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::viewer::open_viewer_window(app, path).await {
+            error!("failed to open notification file: {error}");
         }
     });
 }
@@ -863,8 +805,8 @@ pub(crate) fn dispatch_notification_action(json: String) {
             return;
         };
 
-        if let Some(request) = artifact_request_from_notification_url(&url) {
-            open_brain_artifact_from_notification(app, request);
+        if let Some(path) = viewer_path_from_notification_url(&url) {
+            open_notification_file(app, path);
             return;
         }
 
@@ -1003,10 +945,8 @@ pub(crate) fn dispatch_notification_action(json: String) {
             return;
         };
 
-        // Saved result links recover into Brain. Legacy view/file links carry
-        // a path; new artifact links carry only a registered local id.
-        if let Some(request) = artifact_request_from_notification_url(&url) {
-            open_brain_artifact_from_notification(app, request);
+        if let Some(path) = viewer_path_from_notification_url(&url) {
+            open_notification_file(app, path);
             return;
         }
 
@@ -1188,11 +1128,7 @@ fn is_first_run_deeplink(url: &str) -> bool {
 }
 
 fn notification_deeplink_target(url: &str) -> ShowRewindWindow {
-    if url.starts_with("screenpipe://artifact") {
-        ShowRewindWindow::Home {
-            page: Some("brain".to_string()),
-        }
-    } else if is_meeting_deeplink(url) {
+    if is_meeting_deeplink(url) {
         ShowRewindWindow::Home {
             page: Some(meeting_page_with_id(url)),
         }
@@ -1637,7 +1573,7 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_request_from_notification_url, chat_prefill_payload_from_action,
+        chat_prefill_payload_from_action,
         native_overlay_meeting_note_id, notification_copy_value, notification_deeplink_target,
         notification_source_url, parse_meeting_deeplink, parse_overlay_anchor,
         resolve_timeline_event_target, start_meeting_join_screen_detail,
@@ -1748,48 +1684,6 @@ mod tests {
             None
         );
         assert_eq!(viewer_path_from_notification_url("file://host/x.md"), None);
-    }
-
-    #[test]
-    fn notification_artifact_request_prefers_stable_ids() {
-        assert_eq!(
-            artifact_request_from_notification_url("screenpipe://artifact/42"),
-            Some(json!({
-                "registeredId": 42,
-                "source": "notification",
-            }))
-        );
-        assert_eq!(
-            artifact_request_from_notification_url("screenpipe://artifact?id=84"),
-            Some(json!({
-                "registeredId": 84,
-                "source": "notification",
-            }))
-        );
-        assert_eq!(
-            artifact_request_from_notification_url("screenpipe://artifact/not-a-number"),
-            None
-        );
-    }
-
-    #[test]
-    fn notification_artifact_request_accepts_legacy_paths() {
-        assert_eq!(
-            artifact_request_from_notification_url(
-                "screenpipe://view?path=%2FUsers%2Flouis%2Freport.md"
-            ),
-            Some(json!({
-                "path": "/Users/louis/report.md",
-                "source": "notification",
-            }))
-        );
-        assert_eq!(
-            artifact_request_from_notification_url("file:///Users/louis/report.md"),
-            Some(json!({
-                "path": "/Users/louis/report.md",
-                "source": "notification",
-            }))
-        );
     }
 
     #[test]
@@ -1959,15 +1853,6 @@ mod tests {
             notification_deeplink_target("screenpipe://activity?range=today"),
             crate::window::ShowRewindWindow::Home { page: Some(page) }
                 if page == "activity"
-        ));
-    }
-
-    #[test]
-    fn artifact_notification_deeplink_targets_brain_home() {
-        assert!(matches!(
-            notification_deeplink_target("screenpipe://artifact/42"),
-            crate::window::ShowRewindWindow::Home { page: Some(page) }
-                if page == "brain"
         ));
     }
 

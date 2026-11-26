@@ -2470,7 +2470,6 @@ export function StandaloneChat({
           onUpdateCustomTemplate: updateCustomTemplate,
           onDeleteCustomTemplate: deleteCustomTemplate,
           userName: settings.userName,
-          userGoalCategory: settings.userGoalCategory,
           templatePipes,
           existingPipes: pipes
             .filter((pipe) => pipe.config.config?.template !== true)
