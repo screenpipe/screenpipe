@@ -34,7 +34,7 @@ fn consumer_update_channel(settings: Option<&SettingsStore>) -> &'static str {
     }
 }
 
-fn consumer_update_endpoint(channel: &str) -> String {
+fn app_update_endpoint(channel: &str) -> String {
     format!(
         "https://screenpipe.com/api/app-update/{channel}/{{{{target}}}}-{{{{arch}}}}/{{{{current_version}}}}"
     )
@@ -43,14 +43,19 @@ fn consumer_update_endpoint(channel: &str) -> String {
 fn configured_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, Error> {
     let mut builder = app.updater_builder();
     let settings = SettingsStore::get(app).ok().flatten();
+    let managed = is_enterprise_build(app);
     let is_beta_build = app.config().identifier.contains("beta");
     // Packaged updater acceptance supplies a local signed fixture endpoint.
     // Keep that endpoint in E2E builds; shipping consumer builds use their channel.
     if !crate::app_mode::is_enterprise_package() && !is_beta_build && !cfg!(feature = "e2e") {
-        let channel = consumer_update_channel(settings.as_ref());
-        builder = builder.endpoints(vec![consumer_update_endpoint(channel).parse()?])?;
+        let channel = if managed {
+            "managed"
+        } else {
+            consumer_update_channel(settings.as_ref())
+        };
+        builder = builder.endpoints(vec![app_update_endpoint(channel).parse()?])?;
     }
-    if is_enterprise_build(app) {
+    if managed {
         if let Some(license_key) = crate::commands::get_enterprise_license_key() {
             builder = builder.header("X-License-Key", license_key)?;
         }
@@ -2763,7 +2768,7 @@ pub(crate) mod tests {
     fn old_settings_use_stable_update_channel() {
         assert_eq!(consumer_update_channel(None), "stable");
         assert!(
-            consumer_update_endpoint(consumer_update_channel(None)).contains("/app-update/stable/")
+            app_update_endpoint(consumer_update_channel(None)).contains("/app-update/stable/")
         );
     }
 
@@ -2774,7 +2779,7 @@ pub(crate) mod tests {
 
         assert_eq!(consumer_update_channel(Some(&settings)), "pre-release");
         assert_eq!(
-            consumer_update_endpoint("pre-release"),
+            app_update_endpoint("pre-release"),
             "https://screenpipe.com/api/app-update/pre-release/{{target}}-{{arch}}/{{current_version}}"
         );
     }

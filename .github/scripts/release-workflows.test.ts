@@ -393,3 +393,19 @@ test("consumer and enterprise signing refresh trust before any Windows signing",
   const contracts = readYaml(".github/workflows/test-release-workflows.yml");
   expect(contracts.jobs["windows-signing-trust"].strategy.matrix.os).toEqual(["windows-latest", "windows-11-arm"]);
 });
+
+
+test("new Screenpipe releases upload one platform matrix and keep legacy recovery pinned", () => {
+  const resolver = app.jobs.check_commit.steps.find((step: any) => step.id === "resolve-release");
+  expect(resolver.run).toContain('$RELEASE_SHA:apps/screenpipe-app-tauri/unified-installer.json');
+  expect(resolver.run).toContain('if [[ "$ENTERPRISE_ONLY" == true ]]');
+  expect(app.jobs["enterprise-start"].if).toContain("needs.check_commit.outputs.unified_installer != 'true'");
+  const matrix = app.jobs["publish-tauri"];
+  expect(matrix.strategy.matrix.include).toHaveLength(5);
+  expect(matrix.steps.find((step: any) => step.name === "Share linked executable with enterprise packaging").if)
+    .toContain("needs.check_commit.outputs.unified_installer != 'true'");
+  for (const step of matrix.steps.filter((step: any) => step.name?.startsWith("Upload to Cloudflare R2 ("))) {
+    expect(step.if).toContain("dry_run != 'true'");
+    expect(step.run.indexOf("unified-installer.json")).toBeLessThan(step.run.indexOf('"\${BUNDLE_DIR}"'));
+  }
+});

@@ -698,3 +698,20 @@ describe("AccountSection subscription/login gating", () => {
     expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+it("lets a signed-in workspace member choose workspace policy in the same app", async () => {
+  mocks.state.user = {
+    id: "workspace-member",
+    token: "fixture-token",
+    email: "member@example.test",
+    enterprise_account: { requires_enterprise_app: true },
+  };
+  render(<AccountSection />);
+
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Use workspace on this device" }));
+
+  await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+    workspaceModeAccountId: "workspace-member",
+  }));
+});

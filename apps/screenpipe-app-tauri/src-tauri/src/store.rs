@@ -2719,6 +2719,22 @@ impl SettingsStore {
             return true;
         }
 
+        // A signed-in member can choose the workspace from the same installer
+        // even when they also have a personal plan. Bind the choice to their
+        // account. The managed recording gate still verifies policy and seat.
+        let workspace_account = self
+            .extra
+            .get("workspaceModeAccountId")
+            .and_then(serde_json::Value::as_str);
+        if self
+            .user
+            .id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && workspace_account == Some(id))
+        {
+            return true;
+        }
+
         let has_consumer_entitlement = self
             .user
             .entitlement
