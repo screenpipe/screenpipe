@@ -322,6 +322,13 @@ test("legacy Enterprise Intel packaging restores the consumer ONNX runtime", () 
   expect(build.run).toContain('install -m 0755 "$ort_dylib" apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib');
 });
 
+test("the Enterprise Intel smoke test runs on a native Intel host", () => {
+  const job = app.jobs["release-enterprise-macos"];
+  const intel = job.strategy.matrix.include.find((entry: any) => entry.target === "x86_64-apple-darwin");
+  expect(intel.platform).toBe("macos-26-intel");
+  expect(job["runs-on"]).toContain("shared_native == 'true' && matrix.target == 'x86_64-apple-darwin'");
+});
+
 test("every desktop target packages the shared export from its pinned release inputs", () => {
   const preparation = app.jobs.localization;
   expect(preparation.outputs.frontend).toBe("${{ steps.localization.outputs.frontend }}");

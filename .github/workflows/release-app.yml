@@ -2816,13 +2816,14 @@ jobs:
             features: metal,parakeet-mlx,enterprise-build
             shared_features: metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml,official-build
             package_arch: arm64
-          - platform: macos-26
+          - platform: macos-26-intel
             runner: screenpipe-release-macos-x64
             target: x86_64-apple-darwin
             features: metal,redact-onnx-coreml,enterprise-build
             shared_features: metal,redact-onnx-coreml,official-build
             package_arch: x64
-    runs-on: ${{ inputs.force_github_runners && matrix.platform || matrix.runner }}
+    # Shared packaging launches the signed executable for its edition smoke test.
+    runs-on: ${{ (inputs.force_github_runners || (needs.check_commit.outputs.shared_native == 'true' && matrix.target == 'x86_64-apple-darwin')) && matrix.platform || matrix.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
