@@ -35,8 +35,12 @@ import {
   rememberSettingsSection,
   type SettingsSection,
 } from "@/lib/settings-sections";
-import { AccountLogoutButton } from "@/components/settings/account-logout-button";
-import { AccountSection, searchIndex as accountSearchIndex } from "@/components/settings/account-section";
+import {
+  AccountSection,
+  AccountSessionHeader,
+  accountLogoutSearchField,
+  searchIndex as accountSearchIndex,
+} from "@/components/settings/account-section";
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
 import { AIPresets, searchIndex as aiSearchIndex } from "@/components/settings/ai-presets";
 import { AISettings, searchIndex as aiSettingsSearchIndex } from "@/components/settings/ai-settings";
@@ -100,6 +104,7 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...referralSearchIndex.map((f) => ({ ...f, section: "referral" })),
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 import { msg, useMessages } from "gt-react";
@@ -128,7 +133,9 @@ function SettingsContent() {
   const searchParams = useSearchParams();
   const fromSection = searchParams.get("from");
   const { isManagedDeployment, isSectionHidden } = useManagedPolicy();
-  const showManagedLogout = isManagedDeployment && isSectionHidden("account");
+  const { settings } = useSettings();
+  const accountHidden = isSectionHidden("account");
+  const showManagedAccountSession = isManagedDeployment && accountHidden && Boolean(settings.user?.token);
   const { isTranslucent } = useSidebarContext();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   // macOS TCC recovery only. Non-mac must not see the nav item, search hits,
@@ -140,6 +147,7 @@ function SettingsContent() {
   const isSettingsSectionHidden = useCallback(
     (sectionId: SettingsSection) => {
       if (sectionId === "permissions" && !showPermissions) return true;
+      if (sectionId === "account" && showManagedAccountSession) return false;
       const policySection = sectionId === "ai-settings"
         ? "ai"
         : sectionId === "audio"
@@ -147,7 +155,7 @@ function SettingsContent() {
           : sectionId;
       return isSectionHidden(policySection);
     },
-    [isSectionHidden, showPermissions],
+    [isSectionHidden, showManagedAccountSession, showPermissions],
   );
 
   // Static default, not the remembered section: callers pass an explicit
@@ -225,7 +233,7 @@ function SettingsContent() {
         { id: "account" as const, label: gt("Account"), icon: <User className="h-4 w-4" /> },
         { id: "team" as const, label: gt("Team"), icon: <Users className="h-4 w-4" /> },
         { id: "referral" as const, label: gt("Refer a friend"), icon: <Gift className="h-4 w-4" /> },
-      ].filter((s) => !isSectionHidden(s.id)),
+      ].filter((s) => !isSettingsSectionHidden(s.id)),
     },
     {
       label: gt("App"),
@@ -256,9 +264,16 @@ function SettingsContent() {
   const flatItems = navGroups.flatMap((g) =>
     g.items.map((it) => ({ ...it, group: g.label })),
   );
-  const searchableFields = showPermissions
-    ? localizeDefinitions(ALL_SETTINGS_FIELDS, uiMessages)
-    : localizeDefinitions(ALL_SETTINGS_FIELDS, uiMessages).filter((f) => f.section !== "permissions");
+  const searchableFields = localizeDefinitions(
+    ALL_SETTINGS_FIELDS.filter((field) => {
+      if (field.section === "permissions") return showPermissions;
+      if (field.section === "account" && showManagedAccountSession) {
+        return field.label === accountLogoutSearchField.label;
+      }
+      return true;
+    }),
+    uiMessages,
+  );
   const results = searchSettingsNav(searchQuery, flatItems, searchableFields);
 
   useEffect(() => {
@@ -353,7 +368,10 @@ function SettingsContent() {
       case "ai":            return <AIPresets />;
       case "ai-settings":   return <AISettings />;
       case "activities":    return <ActivitiesSettings />;
-      case "account":       return showManagedLogout ? null : <AccountSection />;
+      case "account": {
+        if (showManagedAccountSession) return <AccountSessionHeader sessionOnly />;
+        return accountHidden ? null : <AccountSection />;
+      }
       case "recording":     return <RecordingSettings section="screen" />;
       case "audio":         return <RecordingSettings section="audio" />;
       case "shortcuts":     return <ShortcutSection />;
@@ -500,9 +518,8 @@ function SettingsContent() {
       {/* Content area — always opaque; only the sidebar gets vibrancy */}
       <div className="flex-1 flex flex-col min-w-0 bg-background">
         {/* Header */}
-        <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-border flex-shrink-0 pt-8">
+        <div className="flex items-center px-6 py-3 border-b border-border flex-shrink-0 pt-8">
           <h2 className="text-sm font-medium text-foreground">{currentLabel}</h2>
-          {showManagedLogout && <AccountLogoutButton />}
         </div>
 
         {/* Scrollable content */}
