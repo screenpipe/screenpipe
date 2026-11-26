@@ -12,7 +12,9 @@ trap 'security delete-keychain "$tmp/mirror.keychain-db" >/dev/null 2>&1 || true
 # Keep the certificate and its password out of process arguments.
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$tmp/input.p12"
 openssl pkcs12 -in "$tmp/input.p12" -passin env:APPLE_CERTIFICATE_PASSWORD -nodes -out "$tmp/input.pem"
-openssl pkcs12 -export -in "$tmp/input.pem" -passout pass: -out "$tmp/import.p12"
+# Apple Security does not import OpenSSL's default PKCS#12 encryption on all runners.
+openssl pkcs12 -export -in "$tmp/input.pem" -passout pass: \
+  -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -out "$tmp/import.p12"
 rm -f "$tmp/input.p12" "$tmp/input.pem"
 
 export MIRROR_KEYCHAIN="$tmp/mirror.keychain-db"
