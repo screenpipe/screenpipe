@@ -1213,4 +1213,75 @@ describe("AppEntitlementGate", () => {
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
+
+  it("pauses capture when device_limit_status reports device_limit_exceeded and lets user reclaim this device", async () => {
+    mocks.state.user = baseUser({
+      subscription_plan: "standard",
+      app_entitled: true,
+      entitlement: {
+        active: true,
+        plan: "standard",
+        source: "subscription",
+        checked_at: minsAgo(1),
+        features: { app: true, cloud: false },
+      },
+      device_limit_status: {
+        allowed: false,
+        reason: "device_limit_exceeded",
+        limit: 2,
+        active_count: 2,
+      },
+    });
+
+    const { rerender } = render(
+      <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
+    );
+
+    expect(screen.getByText(/device limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 active devices/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /use this device instead/i }),
+    );
+    await waitFor(() =>
+      expect(mocks.loadUser).toHaveBeenCalledWith("tok", false, {
+        claimDevice: true,
+      }),
+    );
+
+    // Once server confirms this device is active, gate clears and resumes recording
+    mocks.state.user = {
+      ...mocks.state.user,
+      device_limit_status: {
+        allowed: true,
+        reason: null,
+        limit: 2,
+        active_count: 2,
+      },
+    };
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    await waitFor(() =>
+      expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
+    );
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+  });
+
+  it("does not pause capture when device_limit_status is allowed or absent", () => {
+    mocks.state.user = baseUser({
+      device_limit_status: {
+        allowed: true,
+        reason: null,
+        limit: 1,
+        active_count: 1,
+      },
+    });
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.queryByText(/device limit reached/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
 });

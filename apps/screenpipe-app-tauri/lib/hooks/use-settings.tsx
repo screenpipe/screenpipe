@@ -1605,7 +1605,11 @@ interface SettingsContextType {
 	resetSettings: () => Promise<void>;
 	resetSetting: <K extends keyof Settings>(key: K) => Promise<void>;
 	reloadStore: () => Promise<void>;
-	loadUser: (token: string, verify?: boolean) => Promise<void>;
+	loadUser: (
+		token: string,
+		verify?: boolean,
+		options?: { claimDevice?: boolean },
+	) => Promise<void>;
 	getDataDir: () => Promise<string>;
 	isSettingsLoaded: boolean;
 	loadingError: string | null;
@@ -2045,7 +2049,11 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		return `${homeDirPath}/.screenpipe`;
 	};
 
-	const loadUser = async (token: string, verify = false) => {
+	const loadUser = async (
+		token: string,
+		verify = false,
+		options?: { claimDevice?: boolean },
+	) => {
 		// Every background verifier funnels through loadUser. E2E account fixtures
 		// already contain their scenario's exact server response, and their tokens
 		// must never be sent to the production account API. Check this webview's
@@ -2094,8 +2102,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 					},
 					// verify=true asks the server to consult Stripe directly (used by the
 					// entitlement gate right after purchase); normal polls omit it to keep
-					// the hot path off Stripe.
-					body: JSON.stringify({ token, ...(verify ? { verify: true } : {}) }),
+					// the hot path off Stripe. device_id enables per-plan active device
+					// tracking and eviction enforcement on the server.
+					body: JSON.stringify({
+						token,
+						...(verify ? { verify: true } : {}),
+						...(settingsRef.current.deviceId
+							? { device_id: settingsRef.current.deviceId }
+							: {}),
+						...(options?.claimDevice ? { claim_device: true } : {}),
+					}),
 				},
 			);
 
