@@ -17,7 +17,7 @@ import {
   t,
 } from "../helpers/test-utils.js";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
 
@@ -739,9 +739,7 @@ describe("Brain Live Views", function () {
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
 
-      const brainNav = await $("[data-testid=nav-brain]");
-      await brainNav.waitForExist({ timeout: t(10_000) });
-      await brainNav.click();
+      await showWindow({ Home: { page: "brain" } });
       await waitForTestId("section-brain", 15_000);
       const selector = await waitForTestId(
         "overview-dashboard-selector",
@@ -984,8 +982,7 @@ describe("Brain Live Views", function () {
       const pipesNav = await waitForTestId("nav-pipes", 10_000);
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
-      const brainNav = await waitForTestId("nav-brain", 10_000);
-      await brainNav.click();
+      await showWindow({ Home: { page: "brain" } });
       await waitForTestId("section-brain", 15_000);
       await selectDashboard(emptyViewId);
       await $("button=add your first Block").waitForDisplayed({
@@ -1200,8 +1197,7 @@ describe("Brain Live Views", function () {
       const pipesNav = await waitForTestId("nav-pipes", 10_000);
       await pipesNav.click();
       await waitForTestId("section-pipes", 15_000);
-      const brainNav = await waitForTestId("nav-brain", 10_000);
-      await brainNav.click();
+      await showWindow({ Home: { page: "brain" } });
       await waitForTestId("section-brain", 15_000);
       await selectDashboard("process-map");
       const chatsDir = await invokeOrThrow<string>("get_chats_dir");
@@ -2406,8 +2402,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     const pipesNav = await waitForTestId("nav-pipes", 10_000);
     await pipesNav.click();
     await waitForTestId("section-pipes", 15_000);
-    const restoredBrainNav = await waitForTestId("nav-brain", 10_000);
-    await restoredBrainNav.click();
+    await showWindow({ Home: { page: "brain" } });
     await waitForTestId("section-brain", 15_000);
     await waitForTestId("overview-dashboard-selector", 10_000);
     await selectDashboard(SELECTABLE_VIEW_ID);

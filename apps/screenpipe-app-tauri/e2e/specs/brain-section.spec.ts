@@ -23,7 +23,7 @@
 import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { join } from "path";
 import { openHomeWindow, waitForAppReady, t, waitForTestId } from "../helpers/test-utils.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 
@@ -125,8 +125,7 @@ async function reloadBrainSection() {
   const pipesNav = await $('[data-testid="nav-pipes"]');
   await pipesNav.click();
   await browser.pause(500);
-  const brainNav = await $('[data-testid="nav-brain"]');
-  await brainNav.click();
+  await showWindow({ Home: { page: "brain" } });
   await waitForTestId("section-brain", 10_000);
 }
 
@@ -234,9 +233,7 @@ describe.skip("Brain section", function () {
     seededOutputId = outRes.body.id;
 
     // Navigate to Brain section
-    const brainNav = await $('[data-testid="nav-brain"]');
-    await brainNav.waitForExist({ timeout: t(10_000) });
-    await brainNav.click();
+    await showWindow({ Home: { page: "brain" } });
     await waitForTestId("section-brain", 15_000);
   });
 

@@ -8,7 +8,6 @@ import React, { useEffect, useState, useRef, Suspense, useCallback } from "react
 import {
   TimerReset,
   Plus,
-  Brain,
   MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
@@ -1193,14 +1192,13 @@ function HomeContent() {
     meetings: { label: ui("Meetings"), icon: <CalendarClock className="h-3.5 w-3.5" /> },
     timeline: { label: ui("Timeline"), icon: <MonitorPlay className="h-3.5 w-3.5" /> },
     activity: { label: ui("Activity"), icon: <ListTree className="h-3.5 w-3.5" /> },
-    brain: { label: ui("Library"), icon: <Brain className="h-3.5 w-3.5" /> },
     pipes: { label: ui("Automations"), icon: <TimerReset className="h-3.5 w-3.5" /> },
     connections: { label: ui("Connections"), icon: <Plug className="h-3.5 w-3.5" /> },
   };
 
   const sidebarLayout = normalizeSidebarNavLayout(settings.sidebarNavLayout);
   const availableSidebarIds = (Object.keys(SIDEBAR_SECTION_DEFS) as SidebarNavId[])
-    .filter((id) => !isSectionHidden(id) && !(id === "brain" && isSectionHidden("memories")))
+    .filter((id) => !isSectionHidden(id))
     // Timeline can be turned off in Display settings — when it is, drop it from
     // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
     .filter((id) => !(id === "timeline" && (settings.disableTimeline ?? false)));

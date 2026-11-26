@@ -22,7 +22,6 @@ export const SIDEBAR_NAV_ORDER = [
   "meetings",
   "timeline",
   "activity",
-  "brain",
   "pipes",
   "connections",
 ] as const;
@@ -31,7 +30,6 @@ export type SidebarNavId = (typeof SIDEBAR_NAV_ORDER)[number];
 
 const PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER = [
   "home",
-  "brain",
   "meetings",
   "pipes",
   "timeline",
@@ -41,13 +39,13 @@ const PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER = [
 export type SidebarNavLayout = {
   /** Ids in render order. May omit ids (they fall back to canonical position). */
   order: SidebarNavId[];
-  /** Ids kept out of the sidebar. Library is hidden by default. */
+  /** Ids kept out of the sidebar. */
   hidden: SidebarNavId[];
 };
 
 export const DEFAULT_SIDEBAR_NAV_LAYOUT: SidebarNavLayout = {
   order: [...SIDEBAR_NAV_ORDER],
-  hidden: ["brain"],
+  hidden: [],
 };
 
 /** At least one row must stay in the sidebar — an empty nav is a dead end. */
@@ -89,8 +87,8 @@ export function normalizeSidebarNavLayout(
     return { order: [...SIDEBAR_NAV_ORDER], hidden };
   }
 
-  // Move installs that still have the previous shipped default to the new
-  // default. Any other stored order remains user-owned and untouched.
+  // Match the previous shipped default after dropping retired IDs. Preserve
+  // the relative order of all other saved layouts.
   const hadPreviousDefaultOrder =
     storedOrder.length === PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER.length &&
     storedOrder.every(

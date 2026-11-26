@@ -12,7 +12,7 @@ import {
   t,
 } from "../helpers/test-utils.js";
 import { getLocalApiConfig, authHeaders } from "../helpers/api-utils.js";
-import { invokeOrThrow } from "../helpers/tauri.js";
+import { invokeOrThrow, showWindow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
 const MEETING_TITLE = "Connected sharing review";
@@ -711,8 +711,7 @@ describe("connected snapshot sharing", function () {
     const backToMeetings = await $(`[aria-label="back to meetings"]`);
     await backToMeetings.waitForExist({ timeout: t(10_000) });
     await backToMeetings.click();
-    const brainNav = await waitForTestId("nav-brain", 10_000);
-    await brainNav.click();
+    await showWindow({ Home: { page: "brain" } });
     await waitForTestId("section-brain", 25_000);
     await waitForTestId("brain-overview-scroll", 25_000);
     await selectDashboard(VIEW_ID);

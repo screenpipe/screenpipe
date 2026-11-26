@@ -33,6 +33,7 @@ import {
   waitForAppReady,
   waitForTestId,
 } from "../helpers/test-utils.js";
+import { showWindow } from "../helpers/tauri.js";
 import { authHeaders, getLocalApiConfig } from "../helpers/api-utils.js";
 
 // Unique signature color so we can prove containment: if this hex ever appears
@@ -127,8 +128,7 @@ describe.skip("HTML artifact rendering (Brain, sandboxed)", function () {
     if (artifactId == null) this.skip();
 
     // Go to Brain and narrow the list to our artifact.
-    const nav = await waitForTestId("nav-brain", 20_000);
-    await nav.click();
+    await showWindow({ Home: { page: "brain" } });
 
     const search = await waitForTestId("brain-search-input", 20_000);
     await search.setValue(title);

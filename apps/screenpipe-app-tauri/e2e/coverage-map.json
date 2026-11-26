@@ -555,7 +555,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+      "notes": "Opens Brain via the Home deep link. Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
       "spec": "brain-section.spec.ts",
@@ -576,7 +576,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview."
+      "notes": "Opens Brain via the Home deep link and covers filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview."
     },
     {
       "spec": "capture-frequency-floor.spec.ts",
@@ -1881,7 +1881,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Registers an HTML artifact, opens it in Brain, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window)."
+      "notes": "Registers an HTML artifact, opens Brain via the Home deep link, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window)."
     },
     {
       "spec": "live-view-item-actions.spec.ts",
@@ -3125,7 +3125,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Exercises the Send snapshot dialog from meeting notes and Live Views across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
+      "notes": "Exercises the Send snapshot dialog from meeting notes and Live Views opened via the Home deep link across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
     },
     {
       "spec": "zz-account-basic-upgrade-billing.spec.ts",
