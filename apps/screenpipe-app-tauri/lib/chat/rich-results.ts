@@ -276,6 +276,7 @@ export function formatChatRichResultsForContext(results: ChatRichResult[]): stri
 
 export function canOpenChatRichResult(result: ChatRichResult): boolean {
   if (["pending", "deleted", "missing", "error"].includes(result.state)) return false;
+  if (result.kind === "live-view") return false;
   if (result.kind === "artifact") return Boolean(result.path);
   if (result.kind === "link") return Boolean(result.url);
   return Boolean(result.id);

@@ -18,7 +18,7 @@ describe("SummaryCards", () => {
     vi.clearAllMocks();
   });
 
-  it("prioritizes cards from the saved onboarding goal", () => {
+  it("uses the same starter card order for everyone", () => {
     render(
       <SummaryCards
         onSendMessage={vi.fn()}
@@ -26,50 +26,24 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_patterns"
       />,
     );
 
     const cards = screen.getAllByTestId(/^summary-card-/);
     expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
-      "summary-card-time-breakdown",
       "summary-card-day-recap",
-      "summary-card-automate-my-work",
       "summary-card-missed-todos",
+      "summary-card-time-breakdown",
+      "summary-card-automate-my-work",
     ]);
     expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
       schema_version: 1,
       surface: "chat_home",
       layout_version: "home_v2",
-      card: "other_builtin",
+      card: "day_recap",
       position: 1,
       presentation: "hero",
     });
-  });
-
-  it("reorders an open Home view when the General Settings goal changes", () => {
-    const props = {
-      onSendMessage: vi.fn(),
-      customTemplates: [],
-      onSaveCustomTemplate: vi.fn(),
-      onUpdateCustomTemplate: vi.fn(),
-      onDeleteCustomTemplate: vi.fn(),
-    };
-    const { rerender } = render(
-      <SummaryCards {...props} userGoalCategory="work_memory" />,
-    );
-
-    rerender(
-      <SummaryCards {...props} userGoalCategory="meeting_follow_through" />,
-    );
-
-    const cards = screen.getAllByTestId(/^summary-card-/);
-    expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
-      "summary-card-missed-todos",
-      "summary-card-day-recap",
-      "summary-card-automate-my-work",
-      "summary-card-time-breakdown",
-    ]);
   });
 
   it("keeps every built-in action directly available", () => {
@@ -80,7 +54,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_memory"
       />,
     );
 
@@ -104,7 +77,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_memory"
       />,
     );
 
@@ -154,7 +126,7 @@ describe("SummaryCards", () => {
     const onSendMessage = vi.fn();
     render(<SummaryCards onSendMessage={onSendMessage} customTemplates={[]}
       onSaveCustomTemplate={vi.fn()} onUpdateCustomTemplate={vi.fn()}
-      onDeleteCustomTemplate={vi.fn()} userGoalCategory="work_memory" />);
+      onDeleteCustomTemplate={vi.fn()} />);
     const stack = screen.getByTestId("home-card-agent-actions-time-breakdown");
     fireEvent.focus(stack.querySelector('[aria-label="Choose an AI agent"]')!);
     expect(stack).toHaveAttribute("data-expanded", "true");
@@ -170,7 +142,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_memory"
       />,
     );
 
@@ -196,7 +167,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_memory"
       />,
     );
 
@@ -253,7 +223,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="work_memory"
       />,
     );
 
@@ -341,7 +310,6 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
-        userGoalCategory="default"
         existingPipes={[
           {
             name: "focus-pulse",
@@ -384,8 +352,8 @@ describe("SummaryCards", () => {
       surface: "chat_home",
       layout_version: "home_v2",
       card: "automate_my_work",
-      position: 1,
-      presentation: "hero",
+      position: 4,
+      presentation: "quick_action",
     });
     expect(
       screen

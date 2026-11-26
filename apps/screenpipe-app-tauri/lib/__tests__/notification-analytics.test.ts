@@ -43,19 +43,6 @@ describe("notification analytics properties", () => {
     });
   });
 
-  it("recognizes the H1 follow-up without emitting its Live View ID", () => {
-    const properties = notificationAnalyticsProperties(
-      {
-        id: "onboarding-live-view-follow-up:private-view-id",
-        type: "system",
-      },
-      "toast",
-    );
-
-    expect(properties.notification_category).toBe("onboarding_h1_follow_up");
-    expect(properties).not.toHaveProperty("notification_id");
-  });
-
   it("allowlists action types and rejects dynamic action names", () => {
     expect(notificationActionAnalyticsProperties("deeplink")).toEqual({
       action_type: "deeplink",

@@ -19,7 +19,6 @@ import {
   type ChatRichResult,
 } from "@/lib/chat/rich-results";
 import { openPipeForReview } from "@/lib/external-deeplink";
-import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-activation";
 import type { TurnLivenessStatus } from "@/lib/chat/turn-liveness";
 
 interface UseChatMessageActionsOptions {
@@ -235,11 +234,6 @@ export function useChatMessageActions({
         conversationId: result.id,
         targetWindow: "home",
       });
-      return;
-    }
-    if (result.kind === "live-view" && result.id) {
-      rememberSelectedLiveViewDashboard(result.id);
-      await commands.showWindowActivated({ Home: { page: "brain" } });
       return;
     }
     if (result.kind === "link" && result.url) {

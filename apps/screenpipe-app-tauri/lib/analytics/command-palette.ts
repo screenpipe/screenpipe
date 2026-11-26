@@ -17,7 +17,6 @@ export const COMMAND_PALETTE_ACTION_IDS = [
   "next_recent_chat",
   "previous_recent_chat",
   "go_chat",
-  "go_brain",
   "go_meetings",
   "go_scheduled",
   "go_timeline",

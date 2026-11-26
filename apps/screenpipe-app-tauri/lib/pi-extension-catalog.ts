@@ -99,7 +99,7 @@ export const PORTABLE_AGENT_EXTENSION_CATALOG: PortableAgentExtensionCatalogItem
   {
     id: "artifacts",
     name: "Artifacts",
-    summary: "Save finished reports, notes, code, and images to the Artifacts library.",
+    summary: "Save finished reports, notes, code, and images as local artifacts.",
     tools: ["save_artifact"],
   },
   {

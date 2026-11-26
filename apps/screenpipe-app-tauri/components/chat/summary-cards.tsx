@@ -29,10 +29,6 @@ import {
   homeCardImpressionProperties,
 } from "@/lib/chat/response-feedback";
 import type { ChatEntryCard, ChatEntrySource } from "@/lib/chat/types";
-import {
-  DEFAULT_USER_GOAL_CATEGORY,
-  type UserGoalCategory,
-} from "@/lib/live-views/onboarding-activation";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 import {
   HomeCardAgentActions,
@@ -58,7 +54,6 @@ interface SummaryCardsProps {
   userName?: string;
   templatePipes?: TemplatePipe[];
   existingPipes?: AutomationPipeInventory[];
-  userGoalCategory?: UserGoalCategory;
 }
 
 export interface ConnectionSetupSuggestion {
@@ -68,32 +63,7 @@ export interface ConnectionSetupSuggestion {
   icon: string;
 }
 
-const HOME_CARD_SLUGS_BY_GOAL: Record<UserGoalCategory, string[]> = {
-  default: ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"],
-  process_automation: [
-    "automate-my-work",
-    "day-recap",
-    "missed-todos",
-    "time-breakdown",
-  ],
-  work_memory: ["day-recap", "missed-todos", "time-breakdown", "automate-my-work"],
-  meeting_follow_through: [
-    "missed-todos",
-    "day-recap",
-    "automate-my-work",
-    "time-breakdown",
-  ],
-  work_patterns: [
-    "time-breakdown",
-    "day-recap",
-    "automate-my-work",
-    "missed-todos",
-  ],
-};
-
-export function homeCardSlugsForGoal(category: UserGoalCategory): string[] {
-  return HOME_CARD_SLUGS_BY_GOAL[category];
-}
+const HOME_CARD_SLUGS = ["day-recap", "missed-todos", "time-breakdown", "automate-my-work"] as const;
 
 // Chip labels centre in the whole chip. The agent logos only appear on hover,
 // focus or while a launch opens (always on touch screens), so room for them
@@ -174,7 +144,6 @@ export function SummaryCards({
   userName,
   templatePipes = [],
   existingPipes = [],
-  userGoalCategory = DEFAULT_USER_GOAL_CATEGORY,
 }: SummaryCardsProps) {
 
   const uiMessages = useMessages();
@@ -193,11 +162,10 @@ export function SummaryCards({
   // (install_builtin_pipes never overwrites an existing pipe.md). The discover
   // tier is intentionally removed — the metrics showed it earned ~9% of clicks
   // across 6 cards while doubling the visible surface.
-  const homeCardSlugs = homeCardSlugsForGoal(userGoalCategory);
   const byName = new Map<string, TemplatePipe>();
   for (const t of templatePipes) byName.set(t.name, t);
   for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);
-  const featured = homeCardSlugs.map((slug) => byName.get(slug)).filter(
+  const featured = HOME_CARD_SLUGS.map((slug) => byName.get(slug)).filter(
     (t): t is TemplatePipe => Boolean(t),
   );
   const discover: TemplatePipe[] = [];

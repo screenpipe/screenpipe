@@ -18,27 +18,8 @@ import {
   LEARNING_WINDOW_RESET_EVENT,
   resetLearningWindow,
 } from "@/lib/first-run/learning-window";
-import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
-export type OnboardingCompletionContext = {
-  method:
-    // Setup finished at its last slide. This is now the ordinary path: setup
-    // no longer builds a dashboard, so completion is not tied to a Live View
-    // outcome. The live_view_* methods remain for installs that resume mid
-    // flow and for the enterprise short-circuit.
-    | "setup_finished"
-    | "pipes_installed"
-    | "pipe_step_skipped"
-    | "live_view_deferred"
-    | "hidden_enterprise"
-    | "live_view_created"
-    | "existing_live_view_selected"
-    | "ai_connections_selected";
-  pipeCount?: number;
-  customized?: boolean;
-  dashboardBlockCount?: number;
-  goalCategory?: string;
-} & Partial<OnboardingLiveViewFlowProperties>;
+type OnboardingCompletionContext = { method: "setup_finished" | "hidden_enterprise" };
 
 interface OnboardingState {
   onboardingData: OnboardingStore;
@@ -95,8 +76,6 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
     const attemptId = crypto.randomUUID();
     try {
       set({ isLoading: true, error: null });
-      // The personalized Brain dashboard owns activation after onboarding.
-      // The generic app tour remains available explicitly from Help.
       setFirstRunGuidePending(false);
       // Native code owns the persisted completion receipt: this webview may
       // be destroyed before the command resolves. Send intent and context now.
@@ -105,21 +84,6 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         {
           attempt_id: attemptId,
           completion_method: context.method,
-          pipe_count: context.pipeCount,
-          customized: context.customized,
-          ...(context.dashboardBlockCount !== undefined
-            ? { dashboard_block_count: context.dashboardBlockCount }
-            : {}),
-          ...(context.goalCategory
-            ? { goal_category: context.goalCategory }
-            : {}),
-          ...(context.live_view_flow_variant
-            ? {
-                live_view_flow_variant: context.live_view_flow_variant,
-                existing_live_view_count_bucket:
-                  context.existing_live_view_count_bucket,
-              }
-            : {}),
         },
         { send_instantly: true },
       ); } catch { /* Telemetry must not block the native completion attempt. */ }
@@ -141,23 +105,12 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           },
           isLoading: false,
         }));
-        // Setup no longer builds a dashboard, so Brain would open on an empty
-        // container. Land on Home instead: it always has something to render,
-        // it is where the learning window runs, and it is where the summary
-        // chat appears when the window resolves.
-        const destination =
-          context.method === "ai_connections_selected"
-            ? "connections"
-            : context.method === "setup_finished"
-              ? "home"
-              : "brain";
-        // Rust routes a newly created Home to Brain. This covers a reused Home
-        // and sends the explicit AI-context path to Connections instead.
+        // A reused Home webview also needs the selected onboarding destination.
         try {
           const mode = context.method === "setup_finished"
             ? await readProductMode().catch(() => "screenpipe") : "screenpipe";
           void emit("navigate", {
-            url: `screenpipe://home?section=${destination}${mode === "workflows" ? "&mode=workflows" : ""}`,
+            url: `screenpipe://home?section=home${mode === "workflows" ? "&mode=workflows" : ""}`,
           }).catch(() => {});
         } catch {
           // not in tauri (preview/tests)

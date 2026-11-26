@@ -45,13 +45,6 @@ import {
 	resolveEnterpriseBuild,
 } from "./use-is-enterprise-build";
 import {
-	clearLegacyUserGoalCategory,
-	DEFAULT_USER_GOAL_CATEGORY,
-	normalizeUserGoalCategory,
-	readLegacyUserGoalCategory,
-	type UserGoalCategory,
-} from "@/lib/live-views/onboarding-activation";
-import {
 	cloneLocalDesktopRemotePolicy,
 	LOCAL_DESKTOP_REMOTE_POLICY,
 	NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
@@ -334,7 +327,6 @@ export type Settings = SettingsStore & {
 	/** Native account allowance backoff; null clears it for an explicit retry. */
 	activitiesQuotaPause?: { context: string; code: string; retry_at: string | null } | null;
 	/** Goal used to prioritize the Home cards. Persisted in store.bin. */
-	userGoalCategory?: UserGoalCategory;
 	/** Where the user says they found screenpipe, answered once during setup.
 	 *  A fixed enum from the onboarding step — never free text. */
 	acquisitionSource?: string;
@@ -739,7 +731,6 @@ let DEFAULT_SETTINGS: Settings = {
 			activitiesEnabled: false,
 			activitiesIntervalMinutes: 15,
 			aiPresets: makeDefaultPresets(false) as any,
-			userGoalCategory: DEFAULT_USER_GOAL_CATEGORY,
 			// Native startup persists the device identity before opening a webview.
 			deviceId: "",
 			deepgramApiKey: "",
@@ -1153,16 +1144,6 @@ function createSettingsStore() {
 		}
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
-		const existingUserGoal = normalizeUserGoalCategory(
-			settings.userGoalCategory,
-		);
-		const shouldMigrateUserGoal = existingUserGoal === null;
-		if (shouldMigrateUserGoal) {
-			settings.userGoalCategory = readLegacyUserGoalCategory();
-			needsUpdate = true;
-		} else {
-			settings.userGoalCategory = existingUserGoal;
-		}
 		if (!settings.deviceId) {
 			settings.deviceId = crypto.randomUUID();
 			needsUpdate = true;
@@ -1474,11 +1455,6 @@ function createSettingsStore() {
 			await setSettingsStripped(store, settings);
 			await saveAndEncrypt(store);
 		}
-
-		// Remove browser-only values only after the durable app setting exists.
-		// This makes the migration one-shot without risking data loss on a failed
-		// settings write.
-		if (shouldMigrateUserGoal && persistMigrations) clearLegacyUserGoalCategory();
 
 		return settings;
 	};

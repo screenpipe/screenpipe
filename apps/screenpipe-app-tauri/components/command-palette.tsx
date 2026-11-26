@@ -6,7 +6,6 @@
 import React, { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  Brain,
   CalendarClock,
   History,
   Keyboard,
@@ -91,7 +90,6 @@ export interface PaletteEntry {
 
 const SECTION_ACTION_IDS: Record<SidebarNavId, CommandPaletteActionId> = {
   home: "go_chat",
-  brain: "go_brain",
   meetings: "go_meetings",
   pipes: "go_scheduled",
   timeline: "go_timeline",
@@ -101,7 +99,6 @@ const SECTION_ACTION_IDS: Record<SidebarNavId, CommandPaletteActionId> = {
 
 const SECTION_ICONS: Record<SidebarNavId, LucideIcon> = {
   home: MessageSquare,
-  brain: Brain,
   meetings: CalendarClock,
   pipes: TimerReset,
   timeline: MonitorPlay,

@@ -38,7 +38,6 @@ const isDestructiveDbFaultRun = (process.env.SCREENPIPE_E2E_SEED ?? '')
   .some((flag) => flag.trim().toLowerCase() === 'db-hard-fault');
 const allSpecs = [resolve(__dirname, 'specs', '**', '*.spec.ts')];
 const windowsCiSpecs = [
-  'brain-overview.spec.ts',
   'acp-backend.spec.ts',
   'history-swipe-navigation.spec.ts',
   'search/search-bugs-4645.spec.ts',

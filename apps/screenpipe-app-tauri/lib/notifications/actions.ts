@@ -7,16 +7,11 @@ import { emit } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 import { localFetch, isLocalApiUrl } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
-import {
-  artifactOpenRequestFromUrl,
-  OPEN_BRAIN_ARTIFACT_EVENT,
-} from "@/lib/artifact-deeplink";
 
 export const CALENDAR_CONNECTIONS_URL = "screenpipe://calendar-connections";
 
 const GENERIC_DEEPLINK_MOUNT_DELAY_MS = 150;
 const MEETING_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
-const ARTIFACT_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
 
 // A single action attached to a notification. Carried both by the transient
 // notification panel (toast) and — once persisted — by the notification
@@ -98,9 +93,6 @@ export function parseMeetingDeeplink(url: string): {
 export function windowForDeeplink(url: string) {
   if (url === CALENDAR_CONNECTIONS_URL) return { Home: { page: "connections&category=Calendar" } };
   if (workflowReviewLink(url)) return { Home: { page: "home" } };
-  if (artifactOpenRequestFromUrl(url, "notification")) {
-    return { Home: { page: "brain" } };
-  }
   if (isMeetingDeeplink(url)) return { Home: { page: "meetings" } };
   if (isActivityDeeplink(url)) return { Home: { page: "activity" } };
   return "Main";
@@ -110,10 +102,6 @@ export function windowForDeeplink(url: string) {
  * Local file a notification action points at, or null. Covers the two shapes
  * producers use: `screenpipe://view?path=…` (what the /notify body rewriter
  * emits) and raw `file://` URLs (what pipes tend to put in link actions).
- *
- * Notification file links recover into the Brain artifact detail. This helper
- * remains exported for callers that only need to detect or inspect the legacy
- * path form.
  */
 export function viewerPathFromNotificationUrl(url: string): string | null {
   let parsed: URL;
@@ -128,7 +116,7 @@ export function viewerPathFromNotificationUrl(url: string): string | null {
   ) {
     return parsed.searchParams.get("path");
   }
-  if (parsed.protocol === "file:") {
+  if (parsed.protocol === "file:" && (!parsed.hostname || parsed.hostname === "localhost")) {
     let path = parsed.pathname;
     try {
       path = decodeURIComponent(path);
@@ -153,6 +141,7 @@ export async function routeNotificationDeeplink(
   deps: {
     showWindowActivated?: typeof commands.showWindowActivated;
     emitEvent?: typeof emit;
+    openViewerWindow?: typeof commands.openViewerWindow;
     sleepMs?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
@@ -182,16 +171,11 @@ export async function routeNotificationDeeplink(
     }
     return;
   }
-  const artifactRequest = artifactOpenRequestFromUrl(url, "notification");
-  if (artifactRequest) {
-    await showWindowActivated({ Home: { page: "brain" } });
-    for (const delayMs of ARTIFACT_DEEPLINK_RETRY_DELAYS_MS) {
-      if (delayMs > 0) {
-        await sleepMs(delayMs);
-      }
-      await emitEvent("navigate", { url: "/home?section=brain" });
-      await emitEvent(OPEN_BRAIN_ARTIFACT_EVENT, artifactRequest);
-    }
+  const viewerPath = viewerPathFromNotificationUrl(url);
+  if (viewerPath) {
+    const openViewerWindow = deps.openViewerWindow ?? commands.openViewerWindow;
+    const result = await openViewerWindow(viewerPath);
+    if (result.status === "error") throw new Error(result.error);
     return;
   }
 

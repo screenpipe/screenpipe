@@ -2881,9 +2881,9 @@ fn migrate_timeline_visibility_to_sidebar(
         .as_object_mut()
         .unwrap()
         .entry("hidden".to_string())
-        .or_insert_with(|| serde_json::json!(["brain"]));
+        .or_insert_with(|| serde_json::json!([]));
     if !hidden.is_array() {
-        *hidden = serde_json::json!(["brain"]);
+        *hidden = serde_json::json!([]);
     }
     let hidden = hidden.as_array_mut().unwrap();
     if !hidden.iter().any(|id| id.as_str() == Some("timeline")) {
@@ -3804,7 +3804,7 @@ mod tests {
         assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
         assert_eq!(
             settings.extra["sidebarNavLayout"]["hidden"],
-            serde_json::json!(["brain", "timeline"])
+            serde_json::json!(["timeline"])
         );
     }
 

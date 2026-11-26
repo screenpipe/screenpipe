@@ -10,7 +10,7 @@ describe("native Home navigation", () => {
       expect(navigationProductMode(new URLSearchParams(section ? { section } : {}))).toBeNull();
     },
   );
-  it.each(["timeline", "meetings", "brain", "connections", "pipes"])(
+  it.each(["timeline", "meetings", "connections", "pipes"])(
     "still opens the Chat workspace for a %s deep link", section => {
       expect(navigationProductMode(new URLSearchParams({ section }))).toBe("screenpipe");
     },
