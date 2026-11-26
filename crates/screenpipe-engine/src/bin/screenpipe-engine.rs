@@ -398,7 +398,10 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
             return Ok(());
         }
-        Command::Setup { ref api_url, ffmpeg } => {
+        Command::Setup {
+            ref api_url,
+            ffmpeg,
+        } => {
             if ffmpeg {
                 screenpipe_engine::cli::setup_ffmpeg::install().await?;
                 return Ok(());
