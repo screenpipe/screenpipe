@@ -370,8 +370,7 @@ fn is_allowed_websocket_origin(path: &str, origin: &axum::http::HeaderValue) -> 
     else {
         return false;
     };
-    matches!(uri.scheme_str(), Some("chrome-extension" | "moz-extension"))
-        && uri.host().is_some()
+    matches!(uri.scheme_str(), Some("chrome-extension" | "moz-extension")) && uri.host().is_some()
 }
 
 fn is_loopback_authority(authority: &axum::http::uri::Authority) -> bool {
@@ -395,7 +394,11 @@ fn request_boundary_allows(req: &axum::extract::Request, loopback_only: bool) ->
                 .to_str()
                 .ok()
                 .and_then(|value| value.parse::<Authority>().ok());
-            if !authority.as_ref().is_some_and(is_loopback_authority) || hosts.next().is_some() {
+            if authority
+                .as_ref()
+                .is_none_or(|host| !is_loopback_authority(host))
+                || hosts.next().is_some()
+            {
                 return false;
             }
         }
