@@ -1770,6 +1770,9 @@ jobs:
             macos)
               cp "$output/screenpipe-app" "$stage/"
               cp -R PermissionFlow_PermissionFlow.bundle "$stage/"
+              if [[ "$TARGET" == x86_64-apple-darwin ]]; then
+                cp libonnxruntime.dylib "$stage/"
+              fi
               ;;
             linux) cp "$output/screenpipe-app" "$stage/" ;;
             windows)
@@ -3067,6 +3070,24 @@ jobs:
             install -m 0755 "$artifact_dir/screenpipe-app" "${BUNDLE_DIR%/bundle}/screenpipe-app"
             ditto "$artifact_dir/PermissionFlow_PermissionFlow.bundle" \
               apps/screenpipe-app-tauri/src-tauri/PermissionFlow_PermissionFlow.bundle
+            if [[ "$TARGET" == x86_64-apple-darwin ]]; then
+              ort_dylib="$artifact_dir/libonnxruntime.dylib"
+              if [[ ! -s "$ort_dylib" ]]; then
+                # Older native archives omitted the Intel runtime. Recover it
+                # from the signed consumer bundle for this exact release.
+                consumer=$(mktemp -d "$RUNNER_TEMP/screenpipe-consumer.XXXXXX")
+                trap 'rm -rf "$consumer"' EXIT
+                version="${{ needs.check_commit.outputs.release_version }}"
+                curl --fail --location --silent --show-error --retry 3 \
+                  "https://screenpi.pe/api/app-update/download/stable/$version/$TARGET/screenpipe.app.tar.gz" \
+                  -o "$consumer/screenpipe.app.tar.gz"
+                tar -xzf "$consumer/screenpipe.app.tar.gz" -C "$consumer"
+                codesign --verify --deep --strict "$consumer/screenpipe.app"
+                ort_dylib="$consumer/screenpipe.app/Contents/MacOS/libonnxruntime.dylib"
+              fi
+              lipo -verify_arch x86_64 "$ort_dylib"
+              install -m 0755 "$ort_dylib" apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib
+            fi
             COMMAND=bundle
             FEATURES="${{ matrix.shared_features }}"
           elif [[ "$TARGET" == aarch64-apple-darwin ]]; then

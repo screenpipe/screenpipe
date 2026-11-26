@@ -307,6 +307,20 @@ test("enterprise packaging consumes the consumer executable for each supported t
     .toContain("shared_native != 'true'");
 });
 
+test("legacy Enterprise Intel packaging restores the consumer ONNX runtime", () => {
+  const producer = app.jobs["publish-tauri"].steps.find(
+    (step: any) => step.name === "Collect linked executable and generated resources",
+  );
+  expect(producer.run).toContain('cp libonnxruntime.dylib "$stage/"');
+  const build = app.jobs["release-enterprise-macos"].steps.find(
+    (step: any) => step.name?.startsWith("Build (enterprise, macOS"),
+  );
+  expect(build.run).toContain('ort_dylib="$artifact_dir/libonnxruntime.dylib"');
+  expect(build.run).toContain('download/stable/$version/$TARGET/screenpipe.app.tar.gz');
+  expect(build.run).toContain('codesign --verify --deep --strict "$consumer/screenpipe.app"');
+  expect(build.run).toContain('install -m 0755 "$ort_dylib" apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib');
+});
+
 test("every desktop target packages the shared export from its pinned release inputs", () => {
   const preparation = app.jobs.localization;
   expect(preparation.outputs.frontend).toBe("${{ steps.localization.outputs.frontend }}");
