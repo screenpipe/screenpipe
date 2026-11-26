@@ -37,8 +37,8 @@ import {
 } from "@/lib/settings-sections";
 import {
   AccountSection,
-  AccountSessionHeader,
-  accountLogoutSearchField,
+  ManagedAccountSessionSection,
+  accountSessionSearchIndex,
   searchIndex as accountSearchIndex,
 } from "@/components/settings/account-section";
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
@@ -104,7 +104,6 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...referralSearchIndex.map((f) => ({ ...f, section: "referral" })),
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 import { msg, useMessages } from "gt-react";
@@ -132,10 +131,8 @@ function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromSection = searchParams.get("from");
-  const { isManagedDeployment, isSectionHidden } = useManagedPolicy();
-  const { settings } = useSettings();
-  const accountHidden = isSectionHidden("account");
-  const showManagedAccountSession = isManagedDeployment && accountHidden && Boolean(settings.user?.token);
+  const { isSectionHidden } = useManagedPolicy();
+  const showManagedAccountSession = isSectionHidden("account");
   const { isTranslucent } = useSidebarContext();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   // macOS TCC recovery only. Non-mac must not see the nav item, search hits,
@@ -147,7 +144,8 @@ function SettingsContent() {
   const isSettingsSectionHidden = useCallback(
     (sectionId: SettingsSection) => {
       if (sectionId === "permissions" && !showPermissions) return true;
-      if (sectionId === "account" && showManagedAccountSession) return false;
+      // Account is the entry point for authentication even on managed devices.
+      if (sectionId === "account") return false;
       const policySection = sectionId === "ai-settings"
         ? "ai"
         : sectionId === "audio"
@@ -155,7 +153,7 @@ function SettingsContent() {
           : sectionId;
       return isSectionHidden(policySection);
     },
-    [isSectionHidden, showManagedAccountSession, showPermissions],
+    [isSectionHidden, showPermissions],
   );
 
   // Static default, not the remembered section: callers pass an explicit
@@ -268,7 +266,7 @@ function SettingsContent() {
     ALL_SETTINGS_FIELDS.filter((field) => {
       if (field.section === "permissions") return showPermissions;
       if (field.section === "account" && showManagedAccountSession) {
-        return field.label === accountLogoutSearchField.label;
+        return accountSessionSearchIndex.some(({ label }) => label === field.label);
       }
       return true;
     }),
@@ -368,10 +366,7 @@ function SettingsContent() {
       case "ai":            return <AIPresets />;
       case "ai-settings":   return <AISettings />;
       case "activities":    return <ActivitiesSettings />;
-      case "account": {
-        if (showManagedAccountSession) return <AccountSessionHeader sessionOnly />;
-        return accountHidden ? null : <AccountSection />;
-      }
+      case "account":       return showManagedAccountSession ? <ManagedAccountSessionSection /> : <AccountSection />;
       case "recording":     return <RecordingSettings section="screen" />;
       case "audio":         return <RecordingSettings section="audio" />;
       case "shortcuts":     return <ShortcutSection />;
