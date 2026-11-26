@@ -41,9 +41,17 @@ export function FirstRunLearningWindowProvider({
   const learning = useLearningWindow();
   const [trialActivationPaywallOpen, setTrialActivationPaywallOpen] =
     useState(false);
+  const handoffEnabled =
+    learning.activationState === "summary" ||
+    (learning.phase === "ready" && !learning.summaryOpenedAt) ||
+    (Boolean(learning.showProgress) &&
+      (learning.phase === "learning" ||
+        learning.phase === "writing" ||
+        learning.phase === "empty"));
   const handoff = useAgentHandoff(
-    learning.phase === "ready" && !learning.summaryOpenedAt,
+    handoffEnabled,
     learning.capturedApps,
+    learning.phase,
   );
 
   useEffect(() => {

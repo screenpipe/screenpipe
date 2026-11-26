@@ -318,4 +318,26 @@ describe("useAgentHandoff — performing the handoff", () => {
     const payload = JSON.stringify(capture.mock.calls);
     expect(payload).not.toContain("screenpipe, summarize");
   });
+
+  it("tags shown and clicked events with the active learning phase without re-probing on phase change", async () => {
+    detectAiTools.mockResolvedValue(["claude"]);
+    const { result, rerender } = renderHook(
+      ({ phase }: { phase: "learning" | "writing" }) =>
+        useAgentHandoff(true, [], phase),
+      { initialProps: { phase: "learning" } },
+    );
+    await waitFor(() => expect(result.current.targets[0]?.id).toBe("claude"));
+    expect(capture).toHaveBeenCalledWith(
+      "first_run_agent_handoff_shown",
+      expect.objectContaining({ agent_count: 1, phase: "learning" }),
+    );
+
+    rerender({ phase: "writing" });
+    expect(detectAiTools).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.askAgent(result.current.targets[0]);
+    });
+    expect(clicked()[0]?.[1]).toMatchObject({ agent: "claude", phase: "writing" });
+  });
 });

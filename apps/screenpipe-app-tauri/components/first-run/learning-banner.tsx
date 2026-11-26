@@ -7,7 +7,7 @@
 import React from "react";
 import { emit } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
-import { Clock, Loader2 } from "lucide-react";
+import { Check, Clock, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
 import {
@@ -15,10 +15,74 @@ import {
   type FirstRunCapturedApp,
 } from "@/lib/first-run/learning-window";
 import { appIconUrl } from "@/lib/first-run/recent-activity";
-import { AgentHandoffPicker } from "@/components/first-run/agent-handoff-picker";
+import {
+  AgentHandoffPicker,
+  formatConnectedAgentNames,
+} from "@/components/first-run/agent-handoff-picker";
 import { useFirstRunLearningWindow } from "@/components/first-run/learning-window-provider";
 import type { AgentHandoffTarget } from "@/lib/first-run/agent-handoff";
 import { useGT } from "gt-react";
+
+
+function FirstRunConnectedAgentsFooter({
+  lead,
+  targets,
+  hint,
+  onPickAgent,
+  centered = false,
+}: {
+  lead: string;
+  targets: readonly AgentHandoffTarget[];
+  hint: string | null;
+  onPickAgent: (target: AgentHandoffTarget) => void;
+  centered?: boolean;
+}) {
+  if (targets.length === 0) return null;
+  const names = formatConnectedAgentNames(targets);
+
+  return (
+    <div
+      data-testid="first-run-connected-agents-footer"
+      className={
+        centered
+          ? "border-t border-border bg-muted/25 px-8 py-5 text-center"
+          : "flex flex-col gap-2.5 border-t border-border bg-muted/25 px-4 py-3"
+      }
+    >
+      <p
+        className={
+          centered
+            ? "text-xs leading-relaxed text-muted-foreground"
+            : "text-[11px] leading-relaxed text-muted-foreground"
+        }
+      >
+        <span className="font-medium text-foreground">{lead}</span>{" "}
+        We connected {names} for you. Ask about your day anytime.
+      </p>
+      <div className={centered ? "mt-3 flex justify-center" : ""}>
+        <AgentHandoffPicker
+          targets={targets}
+          onPick={onPickAgent}
+          variant="buttons"
+          align={centered ? "center" : "start"}
+        />
+      </div>
+      {hint && (
+        <p
+          className={
+            centered
+              ? "mt-2 text-xs leading-relaxed text-muted-foreground"
+              : "text-[11px] leading-relaxed text-muted-foreground"
+          }
+          data-testid="first-run-ask-agent-hint"
+          role="status"
+        >
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
 
 
 function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
@@ -69,34 +133,33 @@ export function FirstRunReadyPanel({
             First result · ready
           </span>
         </div>
-        <h2 className="mt-3 font-mono text-base font-semibold normal-case text-foreground">
-          Screenpipe learned enough to help
-        </h2>
-        <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
-          An evidence-backed summary of the apps and activity captured since
-          setup is waiting in a new chat.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-mono text-base font-semibold normal-case text-foreground">
+              Screenpipe learned enough to help
+            </h2>
+            <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+              An evidence-backed summary of the apps and activity captured since
+              setup is waiting in a new chat.
+            </p>
+          </div>
           <Button
             size="sm"
-            className="h-8 border-foreground bg-foreground px-3 text-[10px] text-background hover:bg-background hover:text-foreground"
+            className="h-8 shrink-0 border-foreground bg-foreground px-3.5 text-[10px] text-background hover:bg-background hover:text-foreground"
             data-testid="first-run-open-summary"
             onClick={onOpenSummary}
           >
             Open the summary
           </Button>
-          <AgentHandoffPicker targets={handoffTargets} onPick={onPickAgent} />
         </div>
-        {handoffHint && (
-          <p
-            className="mt-2 text-[11px] leading-relaxed text-muted-foreground"
-            data-testid="first-run-ask-agent-hint"
-            role="status"
-          >
-            {handoffHint}
-          </p>
-        )}
       </div>
+
+      <FirstRunConnectedAgentsFooter
+        lead="Or ask directly:"
+        targets={handoffTargets}
+        hint={handoffHint}
+        onPickAgent={onPickAgent}
+      />
 
       <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
         <p className="text-[10px] leading-relaxed text-muted-foreground">
@@ -116,8 +179,14 @@ export function FirstRunReadyPanel({
 }
 
 export function FirstRunSetupReadyPanel({
+  handoffTargets = [],
+  handoffHint = null,
+  onPickAgent,
   onDismiss,
 }: {
+  handoffTargets?: readonly AgentHandoffTarget[];
+  handoffHint?: string | null;
+  onPickAgent?: (target: AgentHandoffTarget) => void;
   onDismiss: () => void;
 }) {
   return (
@@ -138,6 +207,15 @@ export function FirstRunSetupReadyPanel({
           background.
         </p>
       </div>
+
+      {onPickAgent && (
+        <FirstRunConnectedAgentsFooter
+          lead="In the meantime:"
+          targets={handoffTargets}
+          hint={handoffHint}
+          onPickAgent={onPickAgent}
+        />
+      )}
 
       <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
         <p className="text-[10px] leading-relaxed text-muted-foreground">
@@ -214,74 +292,86 @@ export function FirstRunLearningBanner(
     <section
       data-testid="first-run-learning-banner"
       data-phase={phase}
-      className={`mx-auto mb-4 w-full border border-border bg-background ${
-        phase === "ready" || phase === "empty"
-          ? "max-w-3xl overflow-hidden"
-          : "max-w-3xl p-4"
-      }`}
+      className="mx-auto mb-4 w-full max-w-3xl overflow-hidden border border-border bg-background"
     >
       {phase === "learning" && (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-3">
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-            <p className="text-xs font-medium text-foreground">
-              Learning about your work
-            </p>
-            <span className="ml-auto flex shrink-0 items-center gap-1.5 text-muted-foreground">
-              <Clock className="h-3 w-3" />
-              <span
-                className="text-[11px] tabular-nums"
-                data-testid="first-run-countdown"
-              >
-                {formatCountdown(remainingMs)}
-              </span>
-            </span>
-          </div>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Keep working normally. As soon as there is enough to describe, a
-            summary of what Screenpipe picked up shows up in a new chat.
-          </p>
-          {capturedApps.length > 0 && (
-            <div className="flex items-center gap-2 pt-0.5">
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                Reading from
-              </span>
-              <span className="flex items-center gap-1">
-                {capturedApps.map((app) => (
-                  <CapturedAppIcon key={app.name} app={app} />
-                ))}
+        <div>
+          <div className="flex flex-col gap-2 p-4">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+              <p className="text-xs font-medium text-foreground">
+                Building your first summary
+              </p>
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                <span
+                  className="text-[11px] tabular-nums"
+                  data-testid="first-run-countdown"
+                >
+                  {formatCountdown(remainingMs)}
+                </span>
               </span>
             </div>
-          )}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Keep working normally. As soon as there is enough to describe, a
+              summary of what Screenpipe picked up shows up in a new chat.
+            </p>
+            {capturedApps.length > 0 && (
+              <div className="flex items-center gap-2 pt-0.5">
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  Reading from
+                </span>
+                <span className="flex items-center gap-1">
+                  {capturedApps.map((app) => (
+                    <CapturedAppIcon key={app.name} app={app} />
+                  ))}
+                </span>
+              </div>
+            )}
+          </div>
+          <FirstRunConnectedAgentsFooter
+            lead="While you wait:"
+            targets={handoffTargets}
+            hint={handoffHint}
+            onPickAgent={(target) => void askAgent(target)}
+          />
         </div>
       )}
 
       {phase === "writing" && (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-3">
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-            <p className="text-xs font-medium text-foreground">
-              Writing your summary
-            </p>
-          </div>
-          {/* No countdown. The clock measured evidence collection; the selected
-              agent now owns this visible writing state until it finishes. */}
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Screenpipe saw enough. Your selected AI is putting the summary
-            together now — this can take a minute or two.
-          </p>
-          {capturedApps.length > 0 && (
-            <div className="flex items-center gap-2 pt-0.5">
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                Reading from
-              </span>
-              <span className="flex items-center gap-1">
-                {capturedApps.map((app) => (
-                  <CapturedAppIcon key={app.name} app={app} />
-                ))}
-              </span>
+        <div>
+          <div className="flex flex-col gap-2 p-4">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+              <p className="text-xs font-medium text-foreground">
+                Writing your summary
+              </p>
             </div>
-          )}
+            {/* No countdown. The clock measured evidence collection; the selected
+                agent now owns this visible writing state until it finishes. */}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Screenpipe saw enough. Your selected AI is putting the summary
+              together now — this can take a minute or two.
+            </p>
+            {capturedApps.length > 0 && (
+              <div className="flex items-center gap-2 pt-0.5">
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  Reading from
+                </span>
+                <span className="flex items-center gap-1">
+                  {capturedApps.map((app) => (
+                    <CapturedAppIcon key={app.name} app={app} />
+                  ))}
+                </span>
+              </div>
+            )}
+          </div>
+          <FirstRunConnectedAgentsFooter
+            lead="In the meantime:"
+            targets={handoffTargets}
+            hint={handoffHint}
+            onPickAgent={(target) => void askAgent(target)}
+          />
         </div>
       )}
 
@@ -296,7 +386,12 @@ export function FirstRunLearningBanner(
       )}
 
       {phase === "empty" && (
-        <FirstRunSetupReadyPanel onDismiss={() => dismiss()} />
+        <FirstRunSetupReadyPanel
+          handoffTargets={handoffTargets}
+          handoffHint={handoffHint}
+          onPickAgent={(target) => void askAgent(target)}
+          onDismiss={() => dismiss()}
+        />
       )}
     </section>
   );
@@ -305,8 +400,9 @@ export function FirstRunLearningBanner(
 export function TrialActivationSummaryExperience() {
 
   const ui = useGT();
-  const { learning } = useFirstRunLearningWindow();
+  const { learning, handoff } = useFirstRunLearningWindow();
   const { phase, remainingMs, chatId, markSummaryOpened } = learning;
+  const { targets: handoffTargets, hint: handoffHint, askAgent } = handoff;
 
   const openSummary = async () => {
     if (!chatId || phase !== "ready") return;
@@ -345,49 +441,70 @@ export function TrialActivationSummaryExperience() {
       data-testid="trial-activation-summary-experience"
       data-phase={phase}
     >
-      <section className="w-full max-w-2xl border border-border bg-background p-10 text-center">
-        <div className="mx-auto flex h-20 w-20 items-center justify-center border border-border">
-          {phase === "learning" ? (
-            <span
-              className="font-mono text-2xl tabular-nums"
-              data-testid="trial-activation-countdown"
-            >
-              {formatCountdown(remainingMs)}
-            </span>
+      <section className="w-full max-w-2xl overflow-hidden border border-border bg-background text-center">
+        <div className="p-10">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center border border-border">
+            {phase === "learning" ? (
+              <span
+                className="font-mono text-2xl tabular-nums"
+                data-testid="trial-activation-countdown"
+              >
+                {formatCountdown(remainingMs)}
+              </span>
+            ) : phase === "ready" ? (
+              <Check
+                className="h-7 w-7 text-foreground"
+                data-testid="trial-activation-ready-check"
+              />
+            ) : phase === "empty" ? (
+              <RotateCw className="h-6 w-6 text-muted-foreground" />
+            ) : (
+              <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          <h1 className="mt-7 text-2xl font-semibold normal-case">
+            {phase === "ready"
+              ? ui("Your first summary is ready")
+              : phase === "empty"
+                ? ui("We need another try")
+                : phase === "writing"
+                  ? ui("Writing your first summary")
+                  : ui("Building your first summary")}
+          </h1>
+          <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
+            {phase === "empty"
+              ? ui("Screenpipe did not capture enough valid activity to show you a useful result. Keep working normally, then retry.")
+              : phase === "ready"
+                ? ui("Open the result to see what Screenpipe understood from your work.")
+                : ui("Keep working normally while Screenpipe records only what it needs to build your summary here.")}
+          </p>
+          {phase === "empty" ? (
+            <Button className="mt-8 h-12 px-8 text-sm" onClick={() => void retry()}>
+              Retry summary
+            </Button>
           ) : (
-            <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+            <Button
+              className="mt-8 h-12 min-w-56 px-8 text-sm"
+              disabled={phase !== "ready" || !chatId}
+              onClick={() => void openSummary()}
+              data-testid="trial-activation-view-summary"
+            >
+              {phase === "learning"
+                ? `View summary (ready in ~${formatCountdown(remainingMs)})`
+                : phase === "writing"
+                  ? "Writing summary..."
+                  : "View summary"}
+            </Button>
           )}
         </div>
-        <h1 className="mt-7 text-2xl font-semibold normal-case">
-          {phase === "ready"
-            ? ui("Your first summary is ready")
-            : phase === "empty"
-              ? ui("We need another try")
-              : phase === "writing"
-                ? ui("Writing your first summary")
-                : ui("Building your first summary")}
-        </h1>
-        <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
-          {phase === "empty"
-            ? ui("Screenpipe did not capture enough valid activity to show you a useful result. Keep working normally, then retry.")
-            : phase === "ready"
-              ? ui("Open the result to see what Screenpipe understood from your work.")
-              : ui("Keep working normally while Screenpipe records only what it needs to build this result.")}
-        </p>
-        {phase === "empty" ? (
-          <Button className="mt-8 h-12 px-8 text-sm" onClick={() => void retry()}>
-            Retry summary
-          </Button>
-        ) : (
-          <Button
-            className="mt-8 h-12 min-w-56 px-8 text-sm"
-            disabled={phase !== "ready" || !chatId}
-            onClick={() => void openSummary()}
-            data-testid="trial-activation-view-summary"
-          >
-            View summary
-          </Button>
-        )}
+
+        <FirstRunConnectedAgentsFooter
+          lead={phase === "ready" ? "Or ask directly:" : "In the meantime:"}
+          targets={handoffTargets}
+          hint={handoffHint}
+          onPickAgent={(target) => void askAgent(target)}
+          centered
+        />
       </section>
     </main>
   );

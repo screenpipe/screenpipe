@@ -5,11 +5,23 @@
 "use client";
 
 import React from "react";
+import { ArrowUpRight } from "lucide-react";
 
 import { CursorLogo } from "@/components/settings/tool-logos";
 import type { AgentHandoffTarget } from "@/lib/first-run/agent-handoff";
 import type { ConnectAllToolId } from "@/lib/ai-tools-mcp";
 import { cn } from "@/lib/utils";
+
+/** Format connected agent names cleanly for inline UI copy. */
+export function formatConnectedAgentNames(
+  targets: readonly AgentHandoffTarget[],
+): string {
+  const labels = targets.map((target) => target.label);
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
 
 /**
  * Real product marks, the same assets the Settings tools card uses. A logo is
@@ -70,14 +82,54 @@ function restRotation(index: number): number {
 export function AgentHandoffPicker({
   targets,
   onPick,
+  variant = "fan",
+  align = "start",
 }: {
   targets: readonly AgentHandoffTarget[];
   onPick: (target: AgentHandoffTarget) => void;
+  variant?: "fan" | "buttons";
+  align?: "start" | "center";
 }) {
   if (targets.length === 0) return null;
 
   const verb = (target: AgentHandoffTarget) =>
     target.deeplink ? `Ask ${target.label}` : `Copy for ${target.label}`;
+
+  if (variant === "buttons") {
+    const renderButton = (target: AgentHandoffTarget) => (
+      <button
+        key={target.id}
+        type="button"
+        data-testid="first-run-ask-agent"
+        data-agent={target.id}
+        aria-label={verb(target)}
+        onClick={() => onPick(target)}
+        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <AgentLogo id={target.id} />
+        <span>{verb(target)}</span>
+        {target.deeplink && (
+          <ArrowUpRight className="h-3 w-3 opacity-60" aria-hidden="true" />
+        )}
+      </button>
+    );
+
+    if (targets.length === 1) {
+      return renderButton(targets[0]);
+    }
+
+    return (
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-1.5",
+          align === "center" && "justify-center",
+        )}
+        data-testid="first-run-ask-agent-picker"
+      >
+        {targets.map(renderButton)}
+      </div>
+    );
+  }
 
   if (targets.length === 1) {
     const only = targets[0];
