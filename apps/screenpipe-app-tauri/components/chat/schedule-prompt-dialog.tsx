@@ -86,7 +86,7 @@ the pipe.md file MUST start with --- on the very first line (YAML front-matter).
 
 ## artifacts
 
-if the pipe creates a user-facing output file (summary, profile, report, etc.), declare it in frontmatter so it appears in the Artifacts library:
+if the pipe creates a user-facing output file (summary, profile, report, etc.), declare it in frontmatter so Screenpipe tracks it as a run output:
 
 \`\`\`
 ---

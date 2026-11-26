@@ -127,7 +127,7 @@ export function useChatInspector(
 
   // Auto-registration happens just after the final pipe message is persisted.
   // Refresh on transcript growth and once more after that short async window so
-  // the Outputs control appears without waiting for the library's background poll.
+  // the Outputs control appears without waiting for the artifact query's background poll.
   useEffect(() => {
     if (!pipeRunArtifactSource) return;
     refreshPipeRunArtifacts();
