@@ -264,7 +264,6 @@ struct AppRecoveryHost<'a>(&'a AppHandle);
 impl RecoveryHost for AppRecoveryHost<'_> {
     fn prepare(&self) -> Result<(), String> {
         crate::store::persist_store_before_restart(self.0)
-            .and_then(|_| crate::search_only::prepare_restart())
     }
     fn restart(&self) -> Result<(), String> {
         crate::process_exit::try_recovery_relaunch(self.0.clone())
@@ -453,7 +452,6 @@ async fn accept_and_execute<H: RecoveryHost>(
     }
     journal.stage = Stage::Committed;
     if let Err(error) = save_journal(cfg, &journal) {
-        crate::search_only::cancel_restart();
         return mark_failed(cfg, http, instance_id, journal, &error).await;
     }
     crate::recording::recovery_log::append(
@@ -463,10 +461,7 @@ async fn accept_and_execute<H: RecoveryHost>(
     );
     match host.restart() {
         Ok(()) => Ok(true),
-        Err(error) => {
-            crate::search_only::cancel_restart();
-            mark_failed(cfg, http, instance_id, journal, &error).await
-        }
+        Err(error) => mark_failed(cfg, http, instance_id, journal, &error).await,
     }
 }
 

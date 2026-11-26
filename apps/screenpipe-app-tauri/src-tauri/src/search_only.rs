@@ -19,6 +19,7 @@ static SESSION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static STOPPED_AT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static LIFECYCLE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 const SESSION_FILE: &str = "search-session.json";
+pub(crate) const REMOTE_RESTART: &str = "SCREENPIPE_REMOTE_RESTART";
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -103,14 +104,13 @@ fn diagnostic(event: &str, detail: &str) {
     crate::recording::recovery_log::append(&crate::config::app_data_dir(), event, detail);
 }
 
-fn restore_at(root: &Path, from_autostart: bool) -> Result<Session, String> {
+fn restore_at(root: &Path, from_autostart: bool, remote_restart: bool) -> Result<Session, String> {
     let mut session = load_at(root)?;
     let was_paused = session.capture_paused;
-    // Only a launch that stays in search-only mode retains Quit's pause.
-    // A normal UI launch, including an updater handoff, starts recording just
-    // like a fresh launch. OS login keeps a previously quit app in the background.
+    // Login and search-only handoffs can retain Quit's pause. An explicit
+    // Devices restart takes the normal capture path even with inherited login args.
     session.resume_search_only =
-        session.capture_paused && (from_autostart || session.resume_search_only);
+        !remote_restart && session.capture_paused && (from_autostart || session.resume_search_only);
     session.capture_paused = session.resume_search_only;
     if !session.capture_paused {
         session.stopped_at = None;
@@ -144,17 +144,23 @@ fn restore_at(root: &Path, from_autostart: bool) -> Result<Session, String> {
 /// Resolve Quit's pause before startup publishes capture intent. Only launches
 /// that retain search-only mode stay paused; normal launches start recording.
 pub fn initialize(from_autostart: bool) -> bool {
-    let session =
-        restore_at(&crate::config::app_data_dir(), from_autostart).unwrap_or_else(|error| {
-            diagnostic(
-                "search_session_restore_failed",
-                &format!("cause={error}; outcome=capture_paused"),
-            );
-            Session {
-                capture_paused: true,
-                ..Session::default()
-            }
-        });
+    let remote_restart = std::env::var(REMOTE_RESTART).as_deref() == Ok("1");
+    std::env::remove_var(REMOTE_RESTART);
+    let session = restore_at(
+        &crate::config::app_data_dir(),
+        from_autostart,
+        remote_restart,
+    )
+    .unwrap_or_else(|error| {
+        diagnostic(
+            "search_session_restore_failed",
+            &format!("cause={error}; outcome=capture_paused"),
+        );
+        Session {
+            capture_paused: true,
+            ..Session::default()
+        }
+    });
     *STOPPED_AT.lock().unwrap_or_else(|e| e.into_inner()) = session.stopped_at;
     CAPTURE_PAUSED.store(session.capture_paused, Ordering::SeqCst);
     let background = session.capture_paused && session.resume_search_only;
@@ -429,11 +435,11 @@ mod tests {
             },
         )
         .unwrap();
-        let hidden = restore_at(dir.path(), false).unwrap();
+        let hidden = restore_at(dir.path(), false, false).unwrap();
         assert_eq!(hidden.stopped_at.as_deref(), Some(stopped));
-        let login = restore_at(dir.path(), true).unwrap();
+        let login = restore_at(dir.path(), true, false).unwrap();
         assert_eq!(login.stopped_at.as_deref(), Some(stopped));
-        let reopened = restore_at(dir.path(), false).unwrap();
+        let reopened = restore_at(dir.path(), false, false).unwrap();
         assert!(!reopened.capture_paused);
         assert!(reopened.stopped_at.is_none());
         assert!(load_at(dir.path()).unwrap().stopped_at.is_none());
@@ -458,9 +464,9 @@ mod tests {
             },
         )
         .unwrap();
-        let restored = restore_at(dir.path(), false).unwrap();
+        let restored = restore_at(dir.path(), false, false).unwrap();
         assert!(restored.capture_paused && restored.resume_search_only);
-        let manual = restore_at(dir.path(), false).unwrap();
+        let manual = restore_at(dir.path(), false, false).unwrap();
         assert!(!manual.capture_paused);
         assert!(!manual.resume_search_only);
         assert!(!load_at(dir.path()).unwrap().capture_paused);
@@ -477,14 +483,14 @@ mod tests {
             },
         )
         .unwrap();
-        let login = restore_at(dir.path(), true).unwrap();
+        let login = restore_at(dir.path(), true, false).unwrap();
         assert!(login.capture_paused);
         assert!(
             login.resume_search_only,
             "login must not open a normal but paused app"
         );
-        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
-        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
+        assert!(!restore_at(dir.path(), false, false).unwrap().capture_paused);
+        assert!(!restore_at(dir.path(), false, false).unwrap().capture_paused);
     }
 
     #[tokio::test]
@@ -497,11 +503,11 @@ mod tests {
             br#"{"capture_paused":true,"resume_search_only":false,"restart_pending":true}"#,
         )
         .unwrap();
-        let updated = restore_at(dir.path(), false).unwrap();
+        let updated = restore_at(dir.path(), false, false).unwrap();
         assert!(!updated.capture_paused);
         assert!(!updated.resume_search_only);
         assert!(!load_at(dir.path()).unwrap().capture_paused);
-        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
+        assert!(!restore_at(dir.path(), false, false).unwrap().capture_paused);
         let report = crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().into()])
             .await
             .unwrap();
@@ -521,16 +527,36 @@ mod tests {
             },
         )
         .unwrap();
-        let launched = restore_at(dir.path(), false).unwrap();
+        let launched = restore_at(dir.path(), false, false).unwrap();
         assert!(!launched.capture_paused);
         assert!(!launched.resume_search_only);
+    }
+
+    #[test]
+    fn remote_restart_clears_quit_pause_even_with_autostart_args() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_at(
+            dir.path(),
+            &Session {
+                capture_paused: true,
+                resume_search_only: true,
+                stopped_at: Some("2026-10-14T18:00:00Z".into()),
+            },
+        )
+        .unwrap();
+
+        let restarted = restore_at(dir.path(), true, true).unwrap();
+        assert!(!restarted.capture_paused);
+        assert!(!restarted.resume_search_only);
+        assert!(restarted.stopped_at.is_none());
+        assert!(!restore_at(dir.path(), true, false).unwrap().capture_paused);
     }
 
     #[test]
     fn damaged_session_is_an_error_not_permission_to_record() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(SESSION_FILE), b"{interrupted").unwrap();
-        assert!(restore_at(dir.path(), false).is_err());
+        assert!(restore_at(dir.path(), false, false).is_err());
     }
 
     #[tokio::test]

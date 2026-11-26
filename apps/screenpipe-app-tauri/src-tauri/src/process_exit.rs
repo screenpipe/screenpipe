@@ -342,7 +342,7 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 }
 
 fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Option<bool>) -> ! {
-    if let Err(error) = try_app_relaunch_with_home(&app, home_visible) {
+    if let Err(error) = try_app_relaunch_with_home(&app, home_visible, false) {
         warn!("safe relaunch: {error}");
     }
     force_process_exit(status);
@@ -354,6 +354,7 @@ fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Optio
 fn try_app_relaunch_with_home(
     app: &AppHandle,
     home_visible: Option<bool>,
+    remote_restart: bool,
 ) -> Result<(), String> {
     // Apply a staged update now, at the last moment before this process goes
     // away — installing any earlier orphans the running bundle and kills TCC
@@ -399,6 +400,9 @@ fn try_app_relaunch_with_home(
         // Startup repoints this variable at recordings. A replacement app must
         // reopen the original settings store before selecting recordings again.
         command.env("SCREENPIPE_DATA_DIR", crate::config::app_data_dir());
+        if remote_restart {
+            command.env(crate::search_only::REMOTE_RESTART, "1");
+        }
         #[cfg(target_os = "windows")]
         command.env(RELAUNCH_PARENT_PID, std::process::id().to_string());
         configure_relaunch_home(
@@ -455,7 +459,7 @@ pub(crate) fn try_recovery_relaunch(app: AppHandle) -> Result<(), String> {
         return Err("protected database repair is active; recovery relaunch deferred".into());
     }
     let home_visible = home_window_visible(&app);
-    try_app_relaunch_with_home(&app, home_visible)?;
+    try_app_relaunch_with_home(&app, home_visible, true)?;
     force_process_exit(0)
 }
 
