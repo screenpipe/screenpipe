@@ -56,8 +56,8 @@ use crate::{RedactError, RedactedSpan, RedactionOutput, Redactor, SpanLabel};
 // Keep the `_onnx` suffix: `Pipeline::name` matches on the "onnx"
 // substring to report `pipeline+onnx` (the previous name,
 // `v45_phase5_pruned`, silently broke that match).
-const ONNX_REDACTOR_NAME: &str = "v50_distilled6l_onnx";
-pub(crate) const ONNX_REDACTOR_VERSION: u32 = 7;
+const ONNX_REDACTOR_NAME: &str = "v52_multilingual_sensitive_int8_onnx";
+pub(crate) const ONNX_REDACTOR_VERSION: u32 = 8;
 
 /// Configuration for an ONNX text redactor.
 #[derive(Debug, Clone)]
@@ -84,11 +84,15 @@ impl Default for OnnxConfig {
 }
 
 impl OnnxConfig {
-    /// `~/.screenpipe/models/v50_distilled6l/` by convention.
+    /// `~/.screenpipe/models/v52_multilingual_sensitive_int8/` by convention.
     pub fn default_model_dir() -> PathBuf {
         dirs::home_dir()
-            .map(|h| h.join(".screenpipe").join("models").join("v50_distilled6l"))
-            .unwrap_or_else(|| PathBuf::from(".screenpipe/models/v50_distilled6l"))
+            .map(|h| {
+                h.join(".screenpipe")
+                    .join("models")
+                    .join("v52_multilingual_sensitive_int8")
+            })
+            .unwrap_or_else(|| PathBuf::from(".screenpipe/models/v52_multilingual_sensitive_int8"))
     }
 
     fn resolve_model_file(&self) -> PathBuf {
@@ -106,49 +110,39 @@ impl OnnxConfig {
         self.model_dir.join("tokenizer.json")
     }
 
-    /// HuggingFace repo where the canonical v50 ONNX artifacts live.
-    /// Pinned to `main` so a model bump goes through a deliberate
-    /// code change (URL + expected SHA-256 + [`ONNX_REDACTOR_VERSION`]
-    /// all bumped together — same discipline as `RfdetrConfig`).
+    /// Immutable commit-pinned repository URL where the canonical v52 ONNX
+    /// artifacts live (matching `RfdetrConfig`'s `models-static` hosting).
     pub const HF_REPO_BASE: &'static str =
-        "https://huggingface.co/screenpipe/pii-redactor/resolve/main/v50_distilled6l";
+        "https://raw.githubusercontent.com/screenpipe/privacy-filter/c6421b1beb13d6014632f6d498c81113bee57cbd/v52_multilingual_sensitive_int8";
 
-    /// Files to download from the HF repo on first run. Each is
-    /// (filename, expected sha256). Recompute via
-    ///   shasum -a 256 model_quantized.onnx tokenizer.json config.json remap.json
-    /// when bumping the model (and bump [`ONNX_REDACTOR_VERSION`]).
+    /// Files to download on first run: `(filename, expected_sha256)`.
     ///
-    /// v50_distilled6l = v49's full recipe with a corrected negative tail:
-    /// the 15.4k negative/real-capture rows are GOLD-EMPTY (pure CE, no KD
-    /// pull) instead of pseudo-labeled by v45_phase5 — whose own false
-    /// positives had poisoned them. Same xlm-roberta-large teacher on the
-    /// 128.6k gold corpus, vocab-pruned + mixed-quantized (116 MB).
-    /// vs v49 on real captured strings (out-of-distribution): firing 6.6%
-    /// vs 7.4%, brand/git-diff/typo/localhost FP families fixed. Bench:
-    /// 300k-EN 89.3 (oversmash 8.3), FR 85.2, DE 78.2, in-bench 75.0 /
-    /// oversmash 9.3, secret probe 35/0 (perfect). `remap.json` maps
-    /// full-vocab token ids -> the sliced embedding rows, applied in
-    /// [`runtime::OnnxRedactor::run_window`].
+    /// `v52_multilingual_sensitive_int8`: 6-layer H=384 XLM-R 27-tag BIO
+    /// student (42.88 MiB QInt8, 6.4x-8.0x faster CPU than v50_distilled6l,
+    /// 0 heuristics): 1,001-case bench strict zero-leak 80.9% (+5.9 pp vs v50),
+    /// oversmash 8.2% (18/220 vs v50 9.5%), secret_bare 20/20 (0 FP),
+    /// secret_in_prose 6/6, sensitive_positive 14/15 (0/15 sensitive_negative
+    /// FP), HIPAA 91.2% / GDPR 91.4% / SOC 2 91.3% / PCI DSS 93.4%.
     pub const FILES: &'static [(&'static str, &'static str)] = &[
-        // Mixed int4/int8, vocab-pruned 6-layer model. ~116 MB.
+        // QInt8 vocab-pruned 6-layer H=384 model (~42.9 MiB).
         (
             "model_quantized.onnx",
-            "e67efa3a511108b6864db3cb19be37853524e6ed4f0f26cc041ecb822ba12e6e",
+            "c9e198972d97d8bbeb53ef57b8afb43cdb1607f36a01eda8abd55cfad6eafe4a",
         ),
-        // SentencePiece tokenizer (HF fast format), unchanged arch/vocab. ~17 MB.
+        // SentencePiece tokenizer (HF fast format). ~17 MB.
         (
             "tokenizer.json",
             "14c7e8bf7d9b58ca061fcda93bc8d0eedd1a51ffc3af01a1ba1ef54e2154887e",
         ),
-        // id2label + model config (6 hidden layers). ~2 KB.
+        // 27-tag BIO id2label + model config (6 layers, H=384). ~2 KB.
         (
             "config.json",
-            "ab11d9f79693e29c0d9f11de185e48d80462e95799030c37bfa08c14379a9244",
+            "dd71e14a04f1e0f84c76fa5f77e1d4db026b1b7b15192b41b255ca806cefe40f",
         ),
-        // full-vocab-id -> pruned-row remap (+ unk_new). ~1.8 MB.
+        // full-vocab-id -> 88k pruned-row remap (+ unk_new). ~1.4 MB.
         (
             "remap.json",
-            "334df93eb6843ecc7ea0939ab6450df4df203e21d5227bbcb9f7c2af19f98827",
+            "ab4f18f221e9e36ad2a94172e8360a0d163fa4ae3ee8a917df6e49c9df983d5f",
         ),
     ];
 
