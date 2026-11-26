@@ -489,7 +489,9 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                 eprintln!("  ffmpeg: ok");
             } else {
                 eprintln!("  ffmpeg: missing");
-                eprintln!("    install with: brew install ffmpeg");
+                eprintln!("    install FFmpeg and FFprobe from a trusted package manager and add them to PATH");
+                #[cfg(target_os = "macos")]
+                eprintln!("    for example: brew install ffmpeg");
             }
             eprintln!();
 
@@ -891,25 +893,18 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                 && config.hd_recording_default
                     == screenpipe_engine::high_fps_controller::DefaultMode::Always),
     );
-    // Only require ffmpeg when audio recording is enabled. Vision-only recording
-    // should not attempt network installs (important for offline / locked-down
-    // Windows environments).
+    // Only require FFmpeg at startup when audio recording is enabled.
     if !config.disable_audio {
-        let ffmpeg_path = find_ffmpeg_path();
-        if ffmpeg_path.is_none() {
-            // Try one more time, which might trigger the installation
-            let ffmpeg_path = find_ffmpeg_path();
-            if ffmpeg_path.is_none() {
-                eprintln!(
-                    "ffmpeg not found and installation failed. please install ffmpeg manually."
-                );
-                screenpipe_core::health_diagnostics::startup_failure(
-                    "ffmpeg_missing",
-                    "ffmpeg not found and installation failed",
-                    Some(1),
-                );
-                std::process::exit(1);
-            }
+        if find_ffmpeg_path().is_none() {
+            let message =
+                "FFmpeg or FFprobe missing. Install both from a trusted package manager and add them to PATH.";
+            eprintln!("{message}");
+            screenpipe_core::health_diagnostics::startup_failure(
+                "ffmpeg_missing",
+                message,
+                Some(1),
+            );
+            std::process::exit(1);
         }
         screenpipe_core::health_diagnostics::preflight("ffmpeg", "ok", None, None);
     } else {

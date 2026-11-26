@@ -355,6 +355,75 @@ fn is_allowed_local_origin(origin: &axum::http::HeaderValue) -> bool {
     )
 }
 
+fn is_allowed_websocket_origin(path: &str, origin: &axum::http::HeaderValue) -> bool {
+    if is_allowed_local_origin(origin) {
+        return true;
+    }
+    // The paired browser extension needs its own origin only on the bridge.
+    if !matches!(path, "/connections/browser/ws" | "/browser/ws") {
+        return false;
+    }
+    let Some(uri) = origin
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<axum::http::Uri>().ok())
+    else {
+        return false;
+    };
+    matches!(uri.scheme_str(), Some("chrome-extension" | "moz-extension"))
+        && uri.host().is_some()
+}
+
+fn is_loopback_authority(authority: &axum::http::uri::Authority) -> bool {
+    let host = authority.host();
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn request_boundary_allows(req: &axum::extract::Request, loopback_only: bool) -> bool {
+    use axum::http::{header, uri::Authority, Method};
+
+    let headers = req.headers();
+    if loopback_only {
+        let mut hosts = headers.get_all(header::HOST).iter();
+        if let Some(host) = hosts.next() {
+            let authority = host
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<Authority>().ok());
+            if !authority.as_ref().is_some_and(is_loopback_authority) || hosts.next().is_some() {
+                return false;
+            }
+        }
+        if req
+            .uri()
+            .authority()
+            .is_some_and(|host| !is_loopback_authority(host))
+        {
+            return false;
+        }
+    }
+
+    let websocket = req.method() == Method::CONNECT
+        || headers.get_all(header::UPGRADE).iter().any(|value| {
+            value
+                .to_str()
+                .is_ok_and(|s| s.eq_ignore_ascii_case("websocket"))
+        });
+    if !websocket {
+        return true;
+    }
+
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    origins.next().is_none_or(|origin| {
+        origins.next().is_none() && is_allowed_websocket_origin(req.uri().path(), origin)
+    })
+}
+
 fn is_api_auth_exempt_path(path: &str) -> bool {
     path == "/health"
         || path == "/ws/health"
@@ -1571,6 +1640,7 @@ impl SCServer {
             router
         };
 
+        let loopback_only = self.addr.ip().is_loopback();
         // NOTE: websockets and sse is not supported by openapi so we move it down here
         router
             .route("/stream/frames", get(stream_frames_handler))
@@ -1769,6 +1839,16 @@ impl SCServer {
                 )
             })
             .layer(cors)
+            .layer(axum::middleware::from_fn(
+                move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                    if !request_boundary_allows(&req, loopback_only) {
+                        return axum::response::IntoResponse::into_response(
+                            axum::http::StatusCode::FORBIDDEN,
+                        );
+                    }
+                    next.run(req).await
+                },
+            ))
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
     }
 }
@@ -1794,8 +1874,8 @@ where
 mod tests {
     use super::{
         catch_router_build_panic, is_allowed_local_origin, is_api_auth_exempt_path,
-        is_api_auth_token_authorized, search_query_concurrency, should_advertise_mdns,
-        CORS_EXPOSED_HEADERS,
+        is_api_auth_token_authorized, request_boundary_allows, search_query_concurrency,
+        should_advertise_mdns, CORS_EXPOSED_HEADERS,
     };
     use axum::http::{header, HeaderValue};
     use dashmap::DashMap;
@@ -1998,6 +2078,53 @@ mod tests {
             IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             3030,
         )));
+    }
+
+    #[test]
+    fn request_boundary_limits_browser_origins_on_websocket_routes() {
+        use axum::{body::Body, http::Request};
+
+        let cases = [
+            ("/ws/health", Some("https://untrusted.example"), false),
+            ("/ws/health", Some("null"), false),
+            ("/ws/health", Some("tauri://localhost"), true),
+            ("/ws/health", Some("chrome-extension://test"), false),
+            ("/connections/browser/ws", Some("chrome-extension://test"), true),
+            ("/browser/ws", Some("moz-extension://test"), true),
+            ("/ws/health", None, true),
+        ];
+        for (path, origin, allowed) in cases {
+            let mut builder = Request::builder().uri(path).header(header::UPGRADE, "websocket");
+            if let Some(origin) = origin {
+                builder = builder.header(header::ORIGIN, origin);
+            }
+            assert_eq!(
+                request_boundary_allows(&builder.body(Body::empty()).unwrap(), true),
+                allowed,
+                "{path} {origin:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_boundary_checks_loopback_host_without_restricting_lan_hosts() {
+        use axum::{body::Body, http::Request};
+
+        for (host, allowed) in [
+            ("localhost:3030", true),
+            ("127.0.0.1:3030", true),
+            ("[::1]:3030", true),
+            ("localhost.example:3030", false),
+            ("192.168.1.10:3030", false),
+        ] {
+            let req = Request::builder()
+                .uri("/health")
+                .header(header::HOST, host)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(request_boundary_allows(&req, true), allowed, "{host}");
+            assert!(request_boundary_allows(&req, false), "{host}");
+        }
     }
 
     #[test]
