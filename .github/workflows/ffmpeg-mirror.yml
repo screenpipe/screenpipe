@@ -1,0 +1,51 @@
+name: Build FFmpeg mirror archives
+
+on:
+  push:
+    branches: [release/ffmpeg-mirror]
+    paths:
+      - scripts/ffmpeg-mirror/**
+      - .github/workflows/ffmpeg-mirror.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned sources and build
+        run: |
+          bash scripts/ffmpeg-mirror/fetch-sources.sh
+          bash scripts/ffmpeg-mirror/build-macos.sh ${{ matrix.arch }}
+      - name: Smoke test encoding and frame extraction
+        run: bash scripts/ffmpeg-mirror/smoke-macos.sh scripts/ffmpeg-mirror/artifacts/${{ matrix.arch }} ${{ matrix.arch }}
+      - name: Sign and notarize
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          mkdir -p mirror-output
+          bash scripts/ffmpeg-mirror/sign-macos.sh scripts/ffmpeg-mirror/artifacts/${{ matrix.arch }} "mirror-output/ffmpeg-8.1.3-macos-${{ matrix.arch }}.zip"
+          cd mirror-output
+          shasum -a 256 *.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-8.1.3-macos-${{ matrix.arch }}
+          path: mirror-output/
+          if-no-files-found: error
