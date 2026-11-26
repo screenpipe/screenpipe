@@ -164,6 +164,115 @@ fn apply_policy(
     }
 }
 
+/// Merge a post-regex `current` output with an `ai_out` produced on
+/// `current.redacted`.
+///
+/// - Span-less adapters (e.g. Tinfoil enclave) return `ai_out.spans.is_empty()`
+///   and keep `ai_out.redacted` verbatim alongside `current.spans`.
+/// - Span-aware adapters (e.g. `OnnxRedactor`, `OpfAdapter`) filter `ai_out`
+///   through `policy`, re-anchor surviving spans from `current.redacted` byte
+///   offsets back to `current.input` byte offsets across unchanged segments,
+///   merge them with `current.spans`, and render `redacted` from `current.input`
+///   so `RedactionMap`, `tree_json`, and `ocr_json` receive every AI detection.
+fn merge_post_regex_ai_output(
+    current: RedactionOutput,
+    ai_out: RedactionOutput,
+    policy: &TextRedactionPolicy,
+    pseudonyms: Option<&Pseudonymizer>,
+) -> RedactionOutput {
+    if ai_out.spans.is_empty() {
+        return RedactionOutput {
+            input: current.input,
+            redacted: ai_out.redacted,
+            spans: current.spans,
+        };
+    }
+
+    let kept_ai: Vec<RedactedSpan> = ai_out
+        .spans
+        .into_iter()
+        .filter(|s| policy.allows(s.label, s.subtype.as_deref()))
+        .collect();
+    if kept_ai.is_empty() {
+        return current;
+    }
+
+    // Build `(orig_seg_start, red_seg_start, seg_len)` for every unchanged
+    // slice between the regex spans in `current.spans`.
+    let mut segments: Vec<(usize, usize, usize)> = Vec::with_capacity(current.spans.len() + 1);
+    let mut orig_cursor = 0usize;
+    let mut red_cursor = 0usize;
+    for span in &current.spans {
+        if span.start < orig_cursor {
+            continue;
+        }
+        let seg_len = span.start - orig_cursor;
+        if seg_len > 0 {
+            segments.push((orig_cursor, red_cursor, seg_len));
+        }
+        let repl_len = span_replacement(span, pseudonyms).len();
+        red_cursor += seg_len + repl_len;
+        orig_cursor = span.end;
+    }
+    if orig_cursor < current.input.len() {
+        segments.push((orig_cursor, red_cursor, current.input.len() - orig_cursor));
+    }
+
+    let mut merged_spans = current.spans;
+    for ai_span in kept_ai {
+        for &(orig_seg_start, red_seg_start, seg_len) in &segments {
+            let red_seg_end = red_seg_start + seg_len;
+            if ai_span.end <= red_seg_start {
+                break;
+            }
+            if ai_span.start >= red_seg_end {
+                continue;
+            }
+            let inter_start = ai_span.start.max(red_seg_start);
+            let inter_end = ai_span.end.min(red_seg_end);
+            if inter_end <= inter_start {
+                continue;
+            }
+            let orig_start = orig_seg_start + (inter_start - red_seg_start);
+            let orig_end = orig_seg_start + (inter_end - red_seg_start);
+            if current.input.is_char_boundary(orig_start)
+                && current.input.is_char_boundary(orig_end)
+            {
+                let raw_slice = &current.input[orig_start..orig_end];
+                let trimmed = raw_slice.trim();
+                if !trimmed.is_empty() {
+                    let lead = raw_slice.len() - raw_slice.trim_start().len();
+                    let s_start = orig_start + lead;
+                    let s_end = s_start + trimmed.len();
+                    merged_spans.push(RedactedSpan {
+                        start: s_start,
+                        end: s_end,
+                        label: ai_span.label,
+                        subtype: ai_span.subtype.clone(),
+                        text: current.input[s_start..s_end].to_string(),
+                    });
+                }
+            }
+        }
+    }
+    merged_spans.sort_by_key(|s| (s.start, s.end));
+    let mut non_overlapping: Vec<RedactedSpan> = Vec::with_capacity(merged_spans.len());
+    for span in merged_spans {
+        if let Some(prev) = non_overlapping.last() {
+            if span.start < prev.end {
+                continue;
+            }
+        }
+        non_overlapping.push(span);
+    }
+    let redacted = render_with_spans(&current.input, &non_overlapping, pseudonyms);
+    RedactionOutput {
+        input: current.input,
+        redacted,
+        spans: non_overlapping,
+    }
+}
+
 /// The replacement string for one span — a stable pseudonym token when
 /// enabled (`[PERSON_1a2b3c4d5e6f]`), otherwise the static `[PERSON]`
 /// placeholder. Shared by the renderer and the [`RedactionMap`] builder
@@ -306,7 +415,8 @@ impl Pipeline {
             let regex_out = regex_adapter::redact_one_with_policy(text, &self.cfg.policy);
             let current = apply_policy(regex_out, &self.cfg.policy, self.pseudonyms.as_deref());
             let want_ai = current.input.chars().count() >= self.cfg.ai_min_chars
-                && current.spans.len() < self.cfg.ai_skip_if_regex_spans;
+                && (self.cfg.policy.requires_ner_pass()
+                    || current.spans.len() < self.cfg.ai_skip_if_regex_spans);
 
             if !want_ai {
                 self.cache.insert(key, current.clone()).await;
@@ -349,17 +459,20 @@ impl Pipeline {
             match ai_result {
                 Ok(ai_outputs) => {
                     for (item, ai_out) in chunk.iter_mut().zip(ai_outputs) {
-                        let redacted = if ai_out.spans.is_empty() {
-                            ai_out.redacted
-                        } else {
-                            apply_policy(ai_out, &self.cfg.policy, self.pseudonyms.as_deref())
-                                .redacted
-                        };
-                        item.current = RedactionOutput {
-                            input: std::mem::take(&mut item.current.input),
-                            redacted,
-                            spans: std::mem::take(&mut item.current.spans),
-                        };
+                        let prev = std::mem::replace(
+                            &mut item.current,
+                            RedactionOutput {
+                                input: String::new(),
+                                redacted: String::new(),
+                                spans: Vec::new(),
+                            },
+                        );
+                        item.current = merge_post_regex_ai_output(
+                            prev,
+                            ai_out,
+                            &self.cfg.policy,
+                            self.pseudonyms.as_deref(),
+                        );
                     }
                 }
                 Err(RedactError::Unavailable(_)) => {
@@ -448,7 +561,7 @@ impl<P: std::borrow::Borrow<Pipeline> + Send> crate::RequiredRedaction for Requi
                 return Ok(Some((*hit).clone()));
             }
             let current = apply_policy(
-                regex_adapter::redact_one(&self.text),
+                regex_adapter::redact_one_with_policy(&self.text, &p.cfg.policy),
                 &p.cfg.policy,
                 p.pseudonyms.as_deref(),
             );
@@ -476,12 +589,12 @@ impl<P: std::borrow::Borrow<Pipeline> + Send> crate::RequiredRedaction for Requi
         let Some(detected) = result? else {
             return Ok(None);
         };
-        let mut current = self.current.take().unwrap();
-        current.redacted = if detected.spans.is_empty() {
-            detected.redacted
-        } else {
-            apply_policy(detected, &p.cfg.policy, p.pseudonyms.as_deref()).redacted
-        };
+        let current = merge_post_regex_ai_output(
+            self.current.take().unwrap(),
+            detected,
+            &p.cfg.policy,
+            p.pseudonyms.as_deref(),
+        );
         p.cache.insert(self.key, current.clone()).await;
         Ok(Some(current))
     }
@@ -541,7 +654,8 @@ impl Redactor for Pipeline {
         );
         if let Some(ai) = self.ai.as_ref().filter(|_| {
             current.input.chars().count() >= self.cfg.ai_min_chars
-                && current.spans.len() < self.cfg.ai_skip_if_regex_spans
+                && (self.cfg.policy.requires_ner_pass()
+                    || current.spans.len() < self.cfg.ai_skip_if_regex_spans)
         }) {
             let attempt = match &self.ai_failure_circuit {
                 Some(circuit) => Some(circuit.begin_attempt().await.ok_or_else(|| {
@@ -558,11 +672,12 @@ impl Redactor for Pipeline {
                 }
             }
             let detected = result?;
-            current.redacted = if detected.spans.is_empty() {
-                detected.redacted
-            } else {
-                apply_policy(detected, &self.cfg.policy, self.pseudonyms.as_deref()).redacted
-            };
+            current = merge_post_regex_ai_output(
+                current,
+                detected,
+                &self.cfg.policy,
+                self.pseudonyms.as_deref(),
+            );
         }
         self.cache.insert(key, current.clone()).await;
         Ok(current)
@@ -619,7 +734,8 @@ impl Redactor for Pipeline {
             // Decide whether to run the AI fallback.
             let want_ai = self.ai.is_some()
                 && current.input.chars().count() >= self.cfg.ai_min_chars
-                && current.spans.len() < self.cfg.ai_skip_if_regex_spans;
+                && (self.cfg.policy.requires_ner_pass()
+                    || current.spans.len() < self.cfg.ai_skip_if_regex_spans);
 
             // Regex-only fallbacks caused by a transient AI outage must not be
             // cached for the normal one-hour TTL. That lets the same input get
@@ -651,32 +767,12 @@ impl Redactor for Pipeline {
                                 );
                             }
                         }
-                        let redacted = if ai_out.spans.is_empty() {
-                            // Span-less adapter (the Tinfoil enclave
-                            // returns redacted text only, no spans). It
-                            // already applied the label policy we sent
-                            // it server-side, so trust its output
-                            // verbatim. Running apply_policy here would
-                            // be wrong — it rebuilds `redacted` from
-                            // spans, of which there are none, and would
-                            // therefore throw the enclave's redaction
-                            // away and hand back the text we sent.
-                            ai_out.redacted
-                        } else {
-                            // Span-aware adapter (regex / local ONNX):
-                            // filter to the allow-list client-side + re-
-                            // render from `input` (= the regex-redacted
-                            // text). Now the AI's redacted string carries
-                            // only allowed-class placeholders, alongside
-                            // the regex pass's already-allowed ones.
-                            apply_policy(ai_out, &self.cfg.policy, self.pseudonyms.as_deref())
-                                .redacted
-                        };
-                        current = RedactionOutput {
-                            input: current.input,
-                            redacted,
-                            spans: current.spans,
-                        };
+                        current = merge_post_regex_ai_output(
+                            current,
+                            ai_out,
+                            &self.cfg.policy,
+                            self.pseudonyms.as_deref(),
+                        );
                     }
                     Err(RedactError::Unavailable(_)) => {
                         // AI not available — keep regex output and avoid
@@ -1227,5 +1323,118 @@ mod tests {
             .spans
             .iter()
             .all(|s| s.label == crate::SpanLabel::Secret));
+    }
+
+    struct SpanAwareStubAi {
+        batch_pref: usize,
+    }
+
+    #[async_trait]
+    impl Redactor for SpanAwareStubAi {
+        fn name(&self) -> &str {
+            "v50_distilled6l_onnx"
+        }
+        fn version(&self) -> u32 {
+            7
+        }
+        fn provides_model_detection(&self) -> bool {
+            true
+        }
+        fn preferred_batch_size(&self) -> usize {
+            self.batch_pref
+        }
+        async fn redact_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let mut spans = Vec::new();
+                    for (needle, label) in [
+                        ("Marcus Chen", crate::SpanLabel::Person),
+                        ("Acme Analytics", crate::SpanLabel::Company),
+                    ] {
+                        if let Some(pos) = t.find(needle) {
+                            spans.push(RedactedSpan {
+                                start: pos,
+                                end: pos + needle.len(),
+                                label,
+                                subtype: None,
+                                text: needle.to_string(),
+                            });
+                        }
+                    }
+                    spans.sort_by_key(|s| (s.start, s.end));
+                    let redacted = render_with_spans(t, &spans, None);
+                    RedactionOutput {
+                        input: t.clone(),
+                        redacted,
+                        spans,
+                    }
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn span_aware_ai_spans_reanchor_and_propagate_to_tree_and_ocr_json() {
+        let input =
+            "Mail alice@example.com and cc Marcus Chen from Acme Analytics about https://a.io/1 https://a.io/2 https://a.io/3 https://a.io/4 https://a.io/5";
+        for batch_pref in [1usize, 8] {
+            let ai = Arc::new(SpanAwareStubAi { batch_pref });
+            let p = Pipeline::regex_then_ai(
+                ai,
+                PipelineConfig {
+                    ai_skip_if_regex_spans: 3,
+                    policy: TextRedactionPolicy::from_labels(&[
+                        "email".into(),
+                        "url".into(),
+                        "person".into(),
+                        "company".into(),
+                    ]),
+                    ..Default::default()
+                },
+            );
+            let (out, map) = p
+                .redact_with_map(input)
+                .await
+                .unwrap()
+                .expect("span-aware ONNX pipeline must emit RedactionMap");
+            assert!(out.redacted.contains("[EMAIL]"));
+            assert!(out.redacted.contains("[PERSON]"));
+            assert!(out.redacted.contains("[COMPANY]"));
+            for s in &out.spans {
+                assert_eq!(
+                    &out.input[s.start..s.end],
+                    s.text.as_str(),
+                    "every span must re-anchor to original input bytes"
+                );
+            }
+
+            let strict = p.redact_complete(input).await.unwrap();
+            assert_eq!(strict.redacted, out.redacted);
+            assert_eq!(strict.spans, out.spans);
+            let req = p.redact_required(input).await.unwrap();
+            assert_eq!(req.redacted, out.redacted);
+            assert_eq!(req.spans, out.spans);
+
+            let tree = r#"[{"role":"AXStaticText","text":"Owner: Marcus Chen | Client: Acme Analytics","bounds":{"left":0.1,"top":0.2,"width":0.5,"height":0.03}}]"#;
+            let scrubbed_tree = crate::redact_tree_json(tree, &map).unwrap().unwrap();
+            assert!(!scrubbed_tree.contains("Marcus Chen"));
+            assert!(!scrubbed_tree.contains("Acme Analytics"));
+            assert!(scrubbed_tree.contains("[PERSON]"));
+            assert!(scrubbed_tree.contains("[COMPANY]"));
+
+            let ocr = r#"[
+                {"text":"Client:","left":"0.10","top":"0.20","width":"0.06","height":"0.02","line_num":"1","word_num":"1"},
+                {"text":"Acme","left":"0.17","top":"0.20","width":"0.05","height":"0.02","line_num":"1","word_num":"2"},
+                {"text":"Analytics","left":"0.23","top":"0.20","width":"0.08","height":"0.02","line_num":"1","word_num":"3"}
+            ]"#;
+            let scrubbed_ocr = crate::redact_ocr_text_json(ocr, &map).unwrap().unwrap();
+            assert!(!scrubbed_ocr.contains("Acme"));
+            assert!(!scrubbed_ocr.contains("Analytics"));
+            assert_eq!(scrubbed_ocr.matches("[COMPANY]").count(), 2);
+        }
     }
 }

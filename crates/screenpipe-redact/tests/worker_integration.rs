@@ -1883,3 +1883,277 @@ async fn ui_events_ancestors_json_scrubbed_structure_preserved() {
     assert_eq!(hops[0]["role"], "AXWindow");
     assert_eq!(hops[2]["name"], "Reply", "non-PII hop name untouched");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn end_to_end_text_to_image_cross_modal_projection_and_guards() {
+    use screenpipe_redact::{
+        image::worker::{ImageWorker, ImageWorkerConfig},
+        ImageRedactionPolicy, ImageRedactor, ImageRegion, PipelineConfig, RedactedSpan, SpanLabel,
+        TextRedactionPolicy,
+    };
+    use std::path::Path;
+
+    struct StubNerAi;
+    #[async_trait]
+    impl Redactor for StubNerAi {
+        fn name(&self) -> &str {
+            "v50_distilled6l_onnx"
+        }
+        fn version(&self) -> u32 {
+            7
+        }
+        async fn redact_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let mut spans = Vec::new();
+                    for (needle, label) in [
+                        ("Acme Analytics", SpanLabel::Company),
+                        ("Marcus Chen", SpanLabel::Person),
+                    ] {
+                        let mut search_from = 0usize;
+                        while let Some(rel) = t[search_from..].find(needle) {
+                            let start = search_from + rel;
+                            let end = start + needle.len();
+                            spans.push(RedactedSpan {
+                                start,
+                                end,
+                                label,
+                                subtype: None,
+                                text: needle.to_string(),
+                            });
+                            search_from = end;
+                        }
+                    }
+                    spans.sort_by_key(|s| (s.start, s.end));
+                    let mut out = String::with_capacity(t.len());
+                    let mut cur = 0usize;
+                    for s in &spans {
+                        out.push_str(&t[cur..s.start]);
+                        out.push_str(s.label.placeholder());
+                        cur = s.end;
+                    }
+                    out.push_str(&t[cur..]);
+                    RedactionOutput {
+                        input: t.clone(),
+                        redacted: out,
+                        spans,
+                    }
+                })
+                .collect())
+        }
+    }
+
+    struct ZeroVisionDetector;
+    #[async_trait]
+    impl ImageRedactor for ZeroVisionDetector {
+        fn name(&self) -> &str {
+            "zero-vision"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn detect(&self, _path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            Ok(Vec::new())
+        }
+    }
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("crossmodal-e2e.sqlite");
+    let options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        CREATE TABLE frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            name TEXT,
+            app_name TEXT,
+            window_name TEXT,
+            window_name_redacted_at INTEGER,
+            browser_url TEXT,
+            browser_url_redacted_at INTEGER,
+            full_text TEXT,
+            full_text_redacted_at INTEGER,
+            accessibility_text TEXT,
+            accessibility_redacted_at INTEGER,
+            accessibility_tree_json TEXT,
+            accessibility_tree_redacted_at INTEGER,
+            text_json TEXT,
+            text_json_redacted_at INTEGER,
+            elements_ref_frame_id INTEGER,
+            image_redacted_at INTEGER
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let img_path = temp_dir.path().join("screen.png");
+    image::RgbImage::from_pixel(1000, 1000, image::Rgb([255, 255, 255]))
+        .save(&img_path)
+        .unwrap();
+
+    // Giant container AXGroup + single-line AXStaticText with inline company + OCR words for Marcus Chen.
+    let tree_json = serde_json::json!([
+        {
+            "role": "AXGroup",
+            "text": "Status: green | Client: Acme Analytics | Active",
+            "bounds": {"left": 0.05, "top": 0.05, "width": 0.90, "height": 0.90},
+            "on_screen": true
+        },
+        {
+            "role": "AXStaticText",
+            "text": "Status: green | Client: Acme Analytics | Active",
+            "bounds": {"left": 0.10, "top": 0.20, "width": 0.80, "height": 0.03},
+            "on_screen": true
+        }
+    ])
+    .to_string();
+
+    let ocr_json = serde_json::json!([
+        {"text": "Reviewer:", "left": "0.10", "top": "0.40", "width": "0.09", "height": "0.03", "line_num": "1", "word_num": "1"},
+        {"text": "Marcus", "left": "0.20", "top": "0.40", "width": "0.07", "height": "0.03", "line_num": "1", "word_num": "2"},
+        {"text": "Chen", "left": "0.28", "top": "0.40", "width": "0.06", "height": "0.03", "line_num": "1", "word_num": "3"},
+        {"text": "alice@example.com", "left": "0.50", "top": "0.40", "width": "0.18", "height": "0.03", "line_num": "1", "word_num": "4"}
+    ])
+    .to_string();
+
+    let full_text =
+        "Status: green | Client: Acme Analytics | Active\nReviewer: Marcus Chen alice@example.com";
+
+    sqlx::query(
+        "INSERT INTO frames (id, timestamp, name, app_name, window_name, full_text, accessibility_tree_json, text_json) \
+         VALUES (1, datetime('now', '-2 hours'), ?1, 'Linear', 'Deal Review', ?2, ?3, ?4)",
+    )
+    .bind(img_path.to_string_lossy().into_owned())
+    .bind(full_text)
+    .bind(&tree_json)
+    .bind(&ocr_json)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 1. Run text Worker with regex + post-regex Span-aware AI (`email`, `company`, `person`).
+    let labels = vec![
+        "email".to_string(),
+        "company".to_string(),
+        "person".to_string(),
+    ];
+    let pipeline = Arc::new(Pipeline::regex_then_ai(
+        Arc::new(StubNerAi),
+        PipelineConfig {
+            policy: TextRedactionPolicy::from_labels(&labels),
+            ..Default::default()
+        },
+    )) as Arc<dyn Redactor>;
+    let text_worker = Worker::new(
+        pool.clone(),
+        pipeline,
+        WorkerConfig {
+            idle_between_batches: Duration::from_millis(1),
+            poll_interval: Duration::from_millis(10),
+            tables: vec![TargetTable::FullText],
+            columns: all_columns(),
+            ..test_worker_config()
+        },
+    );
+    let handle = text_worker.spawn();
+    wait_until("frame text & json redacted", || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM frames WHERE id = 1 \
+             AND full_text_redacted_at IS NOT NULL \
+             AND accessibility_tree_redacted_at IS NOT NULL \
+             AND text_json_redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 1
+    })
+    .await;
+    handle.abort();
+
+    // 2. Run ImageWorker with matching multi-label policy and zero vision detections:
+    //    cross-modal projection alone must mask `[COMPANY]` sub-slice + `[PERSON]` + `[EMAIL]` word boxes!
+    let img_worker = ImageWorker::new(
+        pool.clone(),
+        Arc::new(ZeroVisionDetector),
+        ImageWorkerConfig {
+            min_age_seconds: 0,
+            resource_governor: None,
+            policy: ImageRedactionPolicy::from_labels(&labels),
+            ..Default::default()
+        },
+    );
+    let handle = img_worker.clone().spawn();
+    wait_until("frame image redacted", || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM frames WHERE id = 1 AND image_redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 1
+    })
+    .await;
+    handle.abort();
+
+    let img = image::open(&img_path).unwrap().to_rgb8();
+    // AXStaticText after redaction: "Status: green | Client: [COMPANY] | Active" (42 chars).
+    // "[COMPANY]" sits at chars 24..33 -> x = 100 + 800*(24/42)..100 + 800*(33/42) = 557..729 -> center (640, 215) is black!
+    assert_eq!(
+        img.get_pixel(640, 215).0,
+        [0, 0, 0],
+        "[COMPANY] sub-slice must be black"
+    );
+    // Harmless words on the same AX line ("Status: green" at x=150, "Active" at x=850) stay white!
+    assert_eq!(
+        img.get_pixel(150, 215).0,
+        [255, 255, 255],
+        "left harmless words must survive"
+    );
+    assert_eq!(
+        img.get_pixel(850, 215).0,
+        [255, 255, 255],
+        "right harmless words must survive"
+    );
+    // Giant AXGroup container (0.05..0.95) was NEVER blacked out!
+    assert_eq!(
+        img.get_pixel(80, 80).0,
+        [255, 255, 255],
+        "AXGroup container must never be masked"
+    );
+    // OCR words: "Reviewer:" (x=100..190) stays white; "Marcus" (x=200..270), "Chen" (x=280..340), "alice@example.com" (x=500..680) are black!
+    assert_eq!(
+        img.get_pixel(140, 415).0,
+        [255, 255, 255],
+        "harmless OCR word Reviewer: must survive"
+    );
+    assert_eq!(
+        img.get_pixel(235, 415).0,
+        [0, 0, 0],
+        "Marcus word box must be black"
+    );
+    assert_eq!(
+        img.get_pixel(310, 415).0,
+        [0, 0, 0],
+        "Chen word box must be black"
+    );
+    assert_eq!(
+        img.get_pixel(590, 415).0,
+        [0, 0, 0],
+        "Email word box must be black"
+    );
+}

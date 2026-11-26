@@ -79,6 +79,11 @@ name = "work_slice_benchmark"
 path = "examples/work_slice_benchmark.rs"
 required-features = ["onnx-cpu"]
 
+[[example]]
+name = "crossmodal_eval"
+path = "examples/crossmodal_eval.rs"
+required-features = ["onnx-cpu"]
+
 # Optional model adapters. Off by default so the crate builds without
 # any heavy ML deps. Picks the platform-appropriate accelerator.
 #

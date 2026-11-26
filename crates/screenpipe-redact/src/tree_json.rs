@@ -138,14 +138,129 @@ fn redact_value(
     map: &RedactionMap,
     changed: &mut bool,
 ) {
-    redact_value_with(value, allowed_fields, changed, &mut |s| {
-        let redacted = map.apply(s);
-        if redacted == *s {
-            None
-        } else {
-            Some(redacted)
+    match value {
+        Value::Object(obj) => {
+            let mut text_char_edits: Option<Vec<(usize, usize, usize)>> = None;
+            for (key, child) in obj.iter_mut() {
+                if allowed_fields.contains(&key.as_str()) {
+                    if let Value::String(s) = child {
+                        let matches = map.find_matches(s);
+                        if !matches.is_empty() {
+                            if key == "text" {
+                                text_char_edits = Some(compute_char_edits(s, &matches));
+                            }
+                            let mut redacted = String::with_capacity(s.len());
+                            let mut last = 0usize;
+                            for (start, end, replacement) in matches {
+                                redacted.push_str(&s[last..start]);
+                                redacted.push_str(replacement);
+                                last = end;
+                            }
+                            redacted.push_str(&s[last..]);
+                            *s = redacted;
+                            *changed = true;
+                        }
+                    }
+                } else {
+                    redact_value(child, allowed_fields, map, changed);
+                }
+            }
+            if let Some(edits) = text_char_edits {
+                let reanchored = obj
+                    .get_mut("lines")
+                    .is_some_and(|lines| reanchor_line_spans(lines, &edits));
+                if !reanchored {
+                    obj.remove("lines");
+                }
+            }
         }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                redact_value(item, allowed_fields, map, changed);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Convert byte-offset matches `(byte_start, byte_end, replacement)` on `text`
+/// into Unicode scalar edits `(orig_char_start, orig_char_end, repl_char_len)`.
+fn compute_char_edits(text: &str, matches: &[(usize, usize, &str)]) -> Vec<(usize, usize, usize)> {
+    let mut edits = Vec::with_capacity(matches.len());
+    let mut byte_cursor = 0usize;
+    let mut char_cursor = 0usize;
+    for &(start, end, replacement) in matches {
+        char_cursor += text[byte_cursor..start].chars().count();
+        let span_chars = text[start..end].chars().count();
+        let repl_chars = replacement.chars().count();
+        edits.push((char_cursor, char_cursor + span_chars, repl_chars));
+        char_cursor += span_chars;
+        byte_cursor = end;
+    }
+    edits
+}
+
+fn map_char_offset_for_line(
+    pos: usize,
+    edits: &[(usize, usize, usize)],
+    prefer_end: bool,
+) -> usize {
+    let mut delta: isize = 0;
+    for &(orig_start, orig_end, repl_len) in edits {
+        if pos < orig_start {
+            break;
+        }
+        if pos >= orig_end {
+            delta += repl_len as isize - (orig_end - orig_start) as isize;
+        } else {
+            // `pos` falls inside a replaced span: snap line start to the
+            // replacement's start and line end to the replacement's end.
+            let mapped_start = (orig_start as isize + delta).max(0) as usize;
+            return if prefer_end {
+                mapped_start + repl_len
+            } else {
+                mapped_start
+            };
+        }
+    }
+    (pos as isize + delta).max(0) as usize
+}
+
+/// Update `LineSpan` entries (`{"char_start", "char_count", "bounds"}`) in place
+/// after `text` changes length under `edits`. Returns `false` if `lines_val` is
+/// not a non-empty array of valid `LineSpan` objects so legacy/partial fixtures
+/// fall back to removing `"lines"`.
+fn reanchor_line_spans(lines_val: &mut Value, edits: &[(usize, usize, usize)]) -> bool {
+    let Some(arr) = lines_val.as_array_mut() else {
+        return false;
+    };
+    if arr.is_empty() {
+        return false;
+    }
+    let all_valid = arr.iter().all(|item| {
+        item.as_object().is_some_and(|o| {
+            o.get("char_start").and_then(Value::as_u64).is_some()
+                && o.get("char_count").and_then(Value::as_u64).is_some()
+                && o.get("bounds").and_then(Value::as_object).is_some()
+        })
     });
+    if !all_valid {
+        return false;
+    }
+    for item in arr.iter_mut() {
+        let obj = item.as_object_mut().expect("validated above");
+        let old_start = obj["char_start"].as_u64().expect("validated above") as usize;
+        let old_count = obj["char_count"].as_u64().expect("validated above") as usize;
+        let old_end = old_start.saturating_add(old_count);
+        let new_start = map_char_offset_for_line(old_start, edits, false);
+        let new_end = map_char_offset_for_line(old_end, edits, true);
+        obj.insert("char_start".to_string(), Value::from(new_start as u64));
+        obj.insert(
+            "char_count".to_string(),
+            Value::from(new_end.saturating_sub(new_start) as u64),
+        );
+    }
+    true
 }
 
 /// Generic tree walker shared by the map-driven path ([`redact_tree_json`])
@@ -633,5 +748,38 @@ mod tests {
             .unwrap();
         assert!(!out.contains("alice@x.io"));
         assert_eq!(out.matches("[E]").count(), 2);
+    }
+
+    #[test]
+    fn reanchors_valid_line_spans_when_text_changes_length() {
+        let blob = r#"[{
+            "role":"AXStaticText",
+            "text":"Overview line\nClient: Acme Analytics signed\nFooter note",
+            "bounds":{"left":0.1,"top":0.1,"width":0.6,"height":0.15},
+            "lines":[
+                {"char_start":0,"char_count":13,"bounds":{"left":0.1,"top":0.10,"width":0.3,"height":0.03}},
+                {"char_start":14,"char_count":29,"bounds":{"left":0.1,"top":0.15,"width":0.5,"height":0.03}},
+                {"char_start":44,"char_count":11,"bounds":{"left":0.1,"top":0.20,"width":0.2,"height":0.03}}
+            ],
+            "depth":1
+        }]"#;
+        let m = map(&[("Acme Analytics", "[COMPANY]")]);
+        let out = redact_tree_json(blob, &m).unwrap().unwrap();
+        let arr: Value = serde_json::from_str(&out).unwrap();
+        let text = arr[0]["text"].as_str().unwrap();
+        assert_eq!(text, "Overview line\nClient: [COMPANY] signed\nFooter note");
+        let lines = arr[0]["lines"]
+            .as_array()
+            .expect("valid LineSpan[] must be re-anchored rather than dropped");
+        assert_eq!(lines.len(), 3);
+        let chars: Vec<char> = text.chars().collect();
+        let slice = |idx: usize| -> String {
+            let s = lines[idx]["char_start"].as_u64().unwrap() as usize;
+            let c = lines[idx]["char_count"].as_u64().unwrap() as usize;
+            chars[s..s + c].iter().collect()
+        };
+        assert_eq!(slice(0), "Overview line");
+        assert_eq!(slice(1), "Client: [COMPANY] signed");
+        assert_eq!(slice(2), "Footer note");
     }
 }

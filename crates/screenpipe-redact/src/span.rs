@@ -93,6 +93,98 @@ impl SpanLabel {
             _ => return None,
         })
     }
+
+    fn from_uppercase_tag(tag: &str) -> Option<Self> {
+        Some(match tag {
+            "PERSON" => Self::Person,
+            "EMAIL" => Self::Email,
+            "PHONE" => Self::Phone,
+            "ADDRESS" => Self::Address,
+            "URL" => Self::Url,
+            "COMPANY" => Self::Company,
+            "REPO" => Self::Repo,
+            "HANDLE" => Self::Handle,
+            "CHANNEL" => Self::Channel,
+            "ID" => Self::Id,
+            "DATE" => Self::Date,
+            "SECRET" => Self::Secret,
+            "SENSITIVE" => Self::Sensitive,
+            "DOLLAR_AMOUNT" => Self::DollarAmount,
+            _ => return None,
+        })
+    }
+
+    /// Parse a rendered placeholder token (`[COMPANY]`, `[PERSON]`, etc.) or
+    /// pseudonymized placeholder token (`[PERSON_1a2b]`, `[COMPANY_1a2b3c4d5e6f]`)
+    /// back into its canonical [`SpanLabel`].
+    ///
+    /// Strictly requires an ASCII-uppercase label prefix so Markdown links
+    /// (`[company](https://...)`) and ordinary code identifiers (`arr[ID_1]`)
+    /// never false-fire.
+    pub fn from_placeholder_token(token: &str) -> Option<Self> {
+        let inner = token.strip_prefix('[')?.strip_suffix(']')?;
+        if inner.is_empty() || inner.len() > 56 {
+            return None;
+        }
+        if let Some(label) = Self::from_uppercase_tag(inner) {
+            return Some(label);
+        }
+        let (prefix, suffix) = inner.rsplit_once('_')?;
+        if !(4..=32).contains(&suffix.len()) || !suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        Self::from_uppercase_tag(prefix)
+    }
+
+    /// Locate every rendered `[LABEL]` or `[LABEL_hex]` placeholder in `text`,
+    /// returning `(char_start, char_end, label)` in Unicode scalar offsets.
+    pub fn find_placeholder_char_spans(text: &str) -> Vec<(usize, usize, Self)> {
+        if !text.contains('[') {
+            return Vec::new();
+        }
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i < chars.len() {
+            if chars[i].1 != '[' {
+                i += 1;
+                continue;
+            }
+            let start_char = i;
+            let start_byte = chars[i].0;
+            let mut j = i + 1;
+            let mut nested_open = None;
+            let mut closed_at = None;
+            while j < chars.len() && (j - start_char) <= 58 {
+                match chars[j].1 {
+                    '[' => {
+                        nested_open = Some(j);
+                        break;
+                    }
+                    ']' => {
+                        closed_at = Some(j);
+                        break;
+                    }
+                    c if c.is_whitespace() => break,
+                    _ => j += 1,
+                }
+            }
+            if let Some(next_open) = nested_open {
+                i = next_open;
+                continue;
+            }
+            if let Some(end_idx) = closed_at {
+                let end_byte = chars[end_idx].0 + 1;
+                if let Some(label) = Self::from_placeholder_token(&text[start_byte..end_byte]) {
+                    out.push((start_char, end_idx + 1, label));
+                    i = end_idx + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
 }
 
 /// Fine-grained identifier sub-types carried on a [`RedactedSpan`]
@@ -419,6 +511,25 @@ impl TextRedactionPolicy {
             None => false,
         }
     }
+
+    /// True when the policy enables semantic NER classes (`person`, `company`,
+    /// `sensitive`, `address`, etc.) that deterministic regexes alone cannot
+    /// exhaustively detect on a multi-sentence screen capture.
+    pub fn requires_ner_pass(&self) -> bool {
+        self.allow.iter().any(|label| {
+            matches!(
+                label,
+                SpanLabel::Person
+                    | SpanLabel::Company
+                    | SpanLabel::Address
+                    | SpanLabel::Sensitive
+                    | SpanLabel::Channel
+                    | SpanLabel::Handle
+                    | SpanLabel::Repo
+                    | SpanLabel::Date
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -489,5 +600,40 @@ mod tests {
         // Unknown / typo sub-types are ignored, not silently allowed.
         let p2 = TextRedactionPolicy::from_labels(&["ibann".into()]);
         assert!(p2.allow_subtypes.is_empty());
+    }
+
+    #[test]
+    fn placeholder_token_and_char_span_parser_handles_static_and_pseudonyms() {
+        assert_eq!(
+            SpanLabel::from_placeholder_token("[COMPANY]"),
+            Some(SpanLabel::Company)
+        );
+        assert_eq!(
+            SpanLabel::from_placeholder_token("[DOLLAR_AMOUNT]"),
+            Some(SpanLabel::DollarAmount)
+        );
+        assert_eq!(
+            SpanLabel::from_placeholder_token("[PERSON_1a2b]"),
+            Some(SpanLabel::Person)
+        );
+        assert_eq!(
+            SpanLabel::from_placeholder_token("[SENSITIVE_abcdef012345]"),
+            Some(SpanLabel::Sensitive)
+        );
+        // Reject lowercase Markdown links and short non-hex suffixes.
+        assert_eq!(SpanLabel::from_placeholder_token("[company]"), None);
+        assert_eq!(SpanLabel::from_placeholder_token("[ID_1]"), None);
+        assert_eq!(SpanLabel::from_placeholder_token("[PERSON_zzzz]"), None);
+
+        let line = "Signed by [PERSON_1a2b] at [[COMPANY]] on [DATE]";
+        let spans = SpanLabel::find_placeholder_char_spans(line);
+        assert_eq!(
+            spans,
+            vec![
+                (10, 23, SpanLabel::Person),
+                (28, 37, SpanLabel::Company),
+                (42, 48, SpanLabel::Date),
+            ]
+        );
     }
 }

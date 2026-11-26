@@ -67,11 +67,17 @@
 //! over-redaction risk, or a direct redactor pass per frame) — tracked as a
 //! follow-up, deliberately out of scope here.
 
+use serde_json::Value;
+
+use crate::a11y_context::{
+    find_cross_modal_char_spans, merge_image_regions, project_spans_in_line_bounds,
+    NormalizedBounds,
+};
 use crate::redaction_map::RedactionMap;
 use crate::tree_json::{
     redact_tree_json_with_fields, redact_tree_json_with_redactor_fields, TreeRedactError,
 };
-use crate::Redactor;
+use crate::{ImageRegion, Redactor};
 
 /// The only free-text field in an OCR block. Everything else is geometry /
 /// structural metadata that overlay rendering needs verbatim and that the
@@ -80,6 +86,12 @@ pub const OCR_TEXT_FIELDS: &[&str] = &["text"];
 
 /// Apply `map` to the `text` field of every OCR block in `blob`, preserving
 /// geometry, and return the re-serialized JSON.
+///
+/// Matches both single-block tokens (`alice@example.com`) and multi-word
+/// same-line entities (`Marcus Chen`, `Acme Corp`, `Nov 25, 2026`) across
+/// consecutive OCR word blocks so multi-word `RedactionMap` entries do not
+/// leak word-by-word and downstream cross-modal image projection receives
+/// placeholders on every constituent word box.
 ///
 /// Returns `Ok(None)` when the map is empty (nothing detected on the frame) so
 /// the caller skips the write and leaves the watermark NULL; `Ok(Some(blob))`
@@ -90,7 +102,245 @@ pub fn redact_ocr_text_json(
     blob: &str,
     map: &RedactionMap,
 ) -> Result<Option<String>, serde_json::Error> {
-    redact_tree_json_with_fields(blob, map, OCR_TEXT_FIELDS)
+    if map.is_empty() {
+        return Ok(None);
+    }
+
+    let mut value: Value = serde_json::from_str(blob)?;
+    let Some(items) = value.as_array_mut() else {
+        return redact_tree_json_with_fields(blob, map, OCR_TEXT_FIELDS);
+    };
+    if items.is_empty() {
+        return Ok(Some(blob.to_string()));
+    }
+
+    // Reconstruct reading-order lines across OCR word blocks while recording
+    // exact byte spans `(item_idx, start_in_joined, end_in_joined)`.
+    struct WordSlice {
+        item_idx: usize,
+        start: usize,
+        end: usize,
+    }
+
+    let mut joined = String::new();
+    let mut slices: Vec<WordSlice> = Vec::with_capacity(items.len());
+    let mut prev_meta: Option<OcrLineMeta> = None;
+
+    for (idx, item) in items.iter().enumerate() {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let Some(text) = obj.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        let curr_meta = OcrLineMeta::from_object(obj);
+        if let Some(prev) = &prev_meta {
+            if curr_meta.same_line_as(prev) {
+                joined.push(' ');
+            } else {
+                joined.push('\n');
+            }
+        }
+        let start = joined.len();
+        joined.push_str(text);
+        let end = joined.len();
+        slices.push(WordSlice {
+            item_idx: idx,
+            start,
+            end,
+        });
+        prev_meta = Some(curr_meta);
+    }
+
+    if slices.is_empty() {
+        return Ok(Some(blob.to_string()));
+    }
+
+    let matches = map.find_matches(&joined);
+    if matches.is_empty() {
+        return Ok(Some(blob.to_string()));
+    }
+
+    let mut edits_by_item: Vec<Vec<(usize, usize, &str)>> = vec![Vec::new(); items.len()];
+    let mut slice_cursor = 0usize;
+    for (m_start, m_end, replacement) in matches {
+        while slice_cursor < slices.len() && slices[slice_cursor].end <= m_start {
+            slice_cursor += 1;
+        }
+        let mut k = slice_cursor;
+        while k < slices.len() && slices[k].start < m_end {
+            let ws = &slices[k];
+            let local_start = m_start.saturating_sub(ws.start);
+            let local_end = (m_end - ws.start).min(ws.end - ws.start);
+            if local_end > local_start {
+                edits_by_item[ws.item_idx].push((local_start, local_end, replacement));
+            }
+            k += 1;
+        }
+    }
+
+    let mut changed = false;
+    for (idx, edits) in edits_by_item.into_iter().enumerate() {
+        if edits.is_empty() {
+            continue;
+        }
+        if let Some(Value::String(s)) = items[idx].as_object_mut().and_then(|o| o.get_mut("text")) {
+            let mut out = String::with_capacity(s.len());
+            let mut last = 0usize;
+            for (start, end, replacement) in edits {
+                if start < last
+                    || end > s.len()
+                    || !s.is_char_boundary(start)
+                    || !s.is_char_boundary(end)
+                {
+                    continue;
+                }
+                out.push_str(&s[last..start]);
+                out.push_str(replacement);
+                last = end;
+            }
+            out.push_str(&s[last..]);
+            if out != *s {
+                *s = out;
+                changed = true;
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(Some(blob.to_string()));
+    }
+    Ok(Some(serde_json::to_string(&value)?))
+}
+
+#[derive(Clone)]
+struct OcrLineMeta {
+    explicit_line: Option<i64>,
+    line_num: Option<String>,
+    par_num: Option<String>,
+    word_num: Option<u64>,
+    top: Option<f32>,
+    height: Option<f32>,
+}
+
+impl OcrLineMeta {
+    fn from_object(obj: &serde_json::Map<String, Value>) -> Self {
+        let parse_f32 = |key: &str| {
+            obj.get(key)
+                .or_else(|| obj.get("bounds").and_then(|b| b.get(key)))
+                .and_then(|v| {
+                    v.as_f64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+                })
+                .map(|v| v as f32)
+                .filter(|v| v.is_finite())
+        };
+        Self {
+            explicit_line: obj.get("line").and_then(Value::as_i64),
+            line_num: obj
+                .get("line_num")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            par_num: obj
+                .get("par_num")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            word_num: obj.get("word_num").and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+            }),
+            top: parse_f32("top"),
+            height: parse_f32("height"),
+        }
+    }
+
+    fn same_line_as(&self, prev: &Self) -> bool {
+        if let (Some(curr_l), Some(prev_l)) = (self.explicit_line, prev.explicit_line) {
+            return curr_l == prev_l;
+        }
+        if self.line_num != prev.line_num || self.par_num != prev.par_num {
+            return false;
+        }
+        if let (Some(curr_w), Some(prev_w)) = (self.word_num, prev.word_num) {
+            if prev_w >= 1 && curr_w <= prev_w {
+                return false;
+            }
+        }
+        if let (Some(ct), Some(pt), Some(ch), Some(ph)) =
+            (self.top, prev.top, self.height, prev.height)
+        {
+            let h = ch.max(ph);
+            if h > 0.0 && (ct - pt).abs() > h * 0.75 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Extract tight cross-modal [`ImageRegion`]s (`score = 0.99`, typed
+/// [`crate::SpanLabel`]) from redacted OCR word/line entries in `frames.text_json`.
+///
+/// Single-word OCR entries project their full word box (`±2px` pad); multi-word
+/// single-line entries (`height <= 0.045`) proportionally sub-slice horizontally
+/// so adjacent harmless words on the same line survive. Giant blocks (`area > 8%`
+/// or `height > 0.08`) are rejected.
+pub fn extract_ocr_cross_modal_regions(
+    blob: &str,
+    image_width: u32,
+    image_height: u32,
+) -> Vec<ImageRegion> {
+    if image_width == 0 || image_height == 0 || blob.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(blob) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let Some(text) = obj
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if !text.contains('[')
+            && !text
+                .chars()
+                .any(|c| matches!(c, '•' | '●' | '·' | '∙' | '＊' | '*'))
+        {
+            continue;
+        }
+        let spans = find_cross_modal_char_spans(text, false);
+        if spans.is_empty() {
+            continue;
+        }
+        let Some(bounds) = NormalizedBounds::from_ocr_object(obj) else {
+            continue;
+        };
+        let single_word = !text.chars().any(char::is_whitespace);
+        let projected = project_spans_in_line_bounds(
+            text,
+            &spans,
+            bounds,
+            image_width,
+            image_height,
+            single_word,
+        );
+        merge_image_regions(&mut out, projected);
+    }
+    out
 }
 
 /// Span-less (enclave) counterpart: drive the `redactor` over each block's
@@ -245,5 +495,39 @@ mod tests {
         assert_eq!(arr[0]["text"], "send to [EMAIL]");
         assert_eq!(arr[0]["left"], "10");
         assert!(!out.contains("bob@x.io"));
+    }
+
+    #[test]
+    fn multiword_map_scrubs_consecutive_same_line_ocr_words_and_projects_tight_boxes() {
+        let blob = r#"[
+            {"block_num":"0","par_num":"0","line_num":"0","word_num":"1","left":"0.10","top":"0.20","width":"0.08","height":"0.025","conf":"98","text":"Client:"},
+            {"block_num":"0","par_num":"0","line_num":"0","word_num":"2","left":"0.20","top":"0.20","width":"0.07","height":"0.025","conf":"98","text":"(Acme"},
+            {"block_num":"0","par_num":"0","line_num":"0","word_num":"3","left":"0.28","top":"0.20","width":"0.09","height":"0.025","conf":"98","text":"Analytics),"},
+            {"block_num":"0","par_num":"0","line_num":"0","word_num":"4","left":"0.39","top":"0.20","width":"0.08","height":"0.025","conf":"98","text":"status"},
+            {"block_num":"0","par_num":"0","line_num":"0","word_num":"1","left":"0.10","top":"0.30","width":"0.60","height":"0.25","conf":"90","text":"[COMPANY]"}
+        ]"#;
+        let m = map(&[("Acme Analytics", "[COMPANY]")]);
+        let scrubbed = redact_ocr_text_json(blob, &m).unwrap().unwrap();
+        let arr: Value = serde_json::from_str(&scrubbed).unwrap();
+        assert_eq!(arr[0]["text"], "Client:");
+        assert_eq!(arr[1]["text"], "([COMPANY]");
+        assert_eq!(arr[2]["text"], "[COMPANY]),");
+        assert_eq!(arr[3]["text"], "status");
+
+        let regions = extract_ocr_cross_modal_regions(&scrubbed, 1000, 1000);
+        // Word 1 (x=200..270) and Word 2 (x=280..370) are projected; giant block 4 (height 0.25) is rejected!
+        assert_eq!(regions.len(), 2);
+        assert!(regions
+            .iter()
+            .all(|r| r.label == crate::SpanLabel::Company && (r.score - 0.99).abs() < 1e-5));
+        // Harmless "Client:" (x=100..180) and "status" (x=390..470) are untouched.
+        for r in &regions {
+            let rx1 = r.bbox[0];
+            let rx2 = r.bbox[0] + r.bbox[2];
+            assert!(
+                rx1 >= 195 && rx2 <= 375,
+                "projected box {r:?} bled into harmless words"
+            );
+        }
     }
 }

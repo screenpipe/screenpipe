@@ -308,7 +308,8 @@ impl ImageWorker {
                       AND f.window_name = ctx.window_name
                        THEN COALESCE(ctx.accessibility_tree_json, f.accessibility_tree_json)
                      ELSE f.accessibility_tree_json
-                   END AS accessibility_tree_json
+                   END AS accessibility_tree_json,
+                   f.text_json
               FROM frames f
               LEFT JOIN frames ctx ON ctx.id = f.elements_ref_frame_id
              WHERE f.name IS NOT NULL
@@ -327,6 +328,7 @@ impl ImageWorker {
         let id: i64 = row.get("id");
         let name: String = row.get("name");
         let accessibility_tree_json: Option<String> = row.get("accessibility_tree_json");
+        let text_json: Option<String> = row.get("text_json");
 
         let path = std::path::Path::new(&name);
         if !path.exists() {
@@ -372,17 +374,24 @@ impl ImageWorker {
             .redactor
             .detect_with_a11y(path, ax_nodes.as_deref())
             .await?;
-        if let Some(tree) = accessibility_tree_json.as_deref() {
+        if accessibility_tree_json.is_some() || text_json.is_some() {
             let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
                 anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
             })?;
 
-            // Parse once and add only deterministic high-confidence fields.
-            // Generic inputs remain RF-DETR-confirmed. If text redaction ran
-            // first, values it marked `[SECRET]` are also force-masked here.
-            let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
-            let a11y_regions = context.forced_image_regions(image_width, image_height);
-            crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+            if let Some(tree) = accessibility_tree_json.as_deref() {
+                let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
+                let a11y_regions = context.forced_image_regions(image_width, image_height);
+                crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+            }
+            if let Some(ocr) = text_json.as_deref() {
+                let ocr_regions = crate::ocr_json::extract_ocr_cross_modal_regions(
+                    ocr,
+                    image_width,
+                    image_height,
+                );
+                crate::a11y_context::merge_image_regions(&mut regions, ocr_regions);
+            }
         }
         let outcome =
             redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
@@ -458,6 +467,7 @@ impl ImageWorker {
                 let tree_json = payloads
                     .get(&id)
                     .and_then(|p| p.accessibility_tree_json.as_deref());
+                let ocr_json = payloads.get(&id).and_then(|p| p.text_json.as_deref());
                 let ax_nodes = tree_json
                     .map(crate::a11y_context::extract_text_free_ax_nodes)
                     .filter(|nodes| !nodes.is_empty());
@@ -465,13 +475,22 @@ impl ImageWorker {
                     .redactor
                     .detect_with_a11y(path, ax_nodes.as_deref())
                     .await?;
-                if let Some(tree) = tree_json {
+                if tree_json.is_some() || ocr_json.is_some() {
                     let (width, height) = image::image_dimensions(path)?;
-                    let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
-                    crate::a11y_context::merge_image_regions(
-                        &mut regions,
-                        context.forced_image_regions(width, height),
-                    );
+                    if let Some(tree) = tree_json {
+                        let context =
+                            crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
+                        crate::a11y_context::merge_image_regions(
+                            &mut regions,
+                            context.forced_image_regions(width, height),
+                        );
+                    }
+                    if let Some(ocr) = ocr_json {
+                        crate::a11y_context::merge_image_regions(
+                            &mut regions,
+                            crate::ocr_json::extract_ocr_cross_modal_regions(ocr, width, height),
+                        );
+                    }
                 }
                 let after = tokio::fs::metadata(path).await?;
                 if before.len() != after.len() || before.modified()? != after.modified()? {
@@ -541,6 +560,7 @@ mod tests {
                 app_name TEXT,
                 window_name TEXT,
                 accessibility_tree_json TEXT,
+                text_json TEXT,
                 elements_ref_frame_id INTEGER,
                 image_redacted_at INTEGER
             );
@@ -1021,5 +1041,72 @@ mod tests {
         assert_eq!(captured[1].landmark, "toolbar");
         let json = serde_json::to_string(&captured).unwrap();
         assert!(!json.contains("SCR-1183"));
+    }
+
+    struct EmptyDetector;
+    #[async_trait]
+    impl ImageRedactor for EmptyDetector {
+        fn name(&self) -> &str {
+            "empty"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn detect(&self, _path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn secrets_only_default_policy_ignores_non_secret_cross_modal_projections() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        image::RgbImage::from_pixel(200, 200, image::Rgb([255, 255, 255]))
+            .save(&image_path)
+            .unwrap();
+        let tree = r#"[
+            {"role":"AXStaticText","text":"Client: [COMPANY]","bounds":{"left":0.10,"top":0.10,"width":0.40,"height":0.03},"on_screen":true},
+            {"role":"AXStaticText","text":"Key: sk-proj-****abcd","bounds":{"left":0.10,"top":0.50,"width":0.50,"height":0.03},"on_screen":true}
+        ]"#;
+        let ocr = r#"[
+            {"text":"[PERSON]","left":"0.60","top":"0.10","width":"0.20","height":"0.03","line_num":"1","word_num":"1"}
+        ]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, accessibility_tree_json, text_json) VALUES (1, datetime('now','-1 hour'), ?1, 'Linear', 'Issues', ?2, ?3)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .bind(tree)
+        .bind(ocr)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let worker = ImageWorker::new(
+            pool,
+            Arc::new(EmptyDetector),
+            ImageWorkerConfig {
+                min_age_seconds: 0,
+                resource_governor: None,
+                policy: ImageRedactionPolicy::secrets_only(),
+                ..Default::default()
+            },
+        );
+        let outcome = worker.process_one().await.unwrap().unwrap();
+        assert_eq!(
+            outcome.regions_redacted, 1,
+            "only the masked secret must be blacked out under secrets-only"
+        );
+        assert_eq!(
+            outcome.regions_dropped, 2,
+            "[COMPANY] and [PERSON] must be filtered out by secrets-only policy"
+        );
+        let img = image::open(&image_path).unwrap().to_rgb8();
+        // [COMPANY] at y=20..26 and [PERSON] at x=120..160, y=20..26 remain untouched white!
+        assert_eq!(img.get_pixel(75, 23).0, [255, 255, 255]);
+        assert_eq!(img.get_pixel(140, 23).0, [255, 255, 255]);
+        // Masked secret `sk-proj-****abcd` inside `Key: sk-proj-****abcd` (chars 5..21 of 21 -> x=20+100*(5/21)..120 = 43..120, y=100..106) is blacked out, while "Key:" at x=24 stays white!
+        assert_eq!(img.get_pixel(24, 103).0, [255, 255, 255]);
+        assert_eq!(img.get_pixel(80, 103).0, [0, 0, 0]);
     }
 }

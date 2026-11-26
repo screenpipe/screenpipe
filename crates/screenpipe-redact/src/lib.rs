@@ -86,9 +86,15 @@ mod cache;
 mod error;
 mod span;
 
-pub use a11y_context::{extract_text_free_ax_nodes, AxNode, NormalizedBounds};
+pub use a11y_context::{
+    extract_text_free_ax_nodes, looks_like_masked_secret, merge_image_regions, A11yContext, AxNode,
+    NormalizedBounds,
+};
 pub use error::RedactError;
 pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
+pub use ocr_json::{
+    extract_ocr_cross_modal_regions, redact_ocr_text_json, redact_ocr_text_json_with_redactor,
+};
 pub use pipeline::{Pipeline, PipelineConfig};
 pub use pseudonym::Pseudonymizer;
 pub use redaction_map::RedactionMap;

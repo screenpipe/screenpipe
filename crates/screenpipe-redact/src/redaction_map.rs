@@ -113,25 +113,44 @@ impl RedactionMap {
         self.ac.is_none()
     }
 
-    /// Replace every boundary-safe occurrence of a known value in `text`
-    /// with its replacement. Non-matching text is preserved verbatim.
-    pub fn apply(&self, text: &str) -> String {
+    /// Return all non-overlapping, leftmost-longest, boundary-safe matches
+    /// `(byte_start, byte_end, replacement)` in `text`.
+    pub(crate) fn find_matches<'a>(&'a self, text: &str) -> Vec<(usize, usize, &'a str)> {
         let Some(ac) = self.ac.as_ref() else {
-            return text.to_string();
+            return Vec::new();
         };
-        let mut out = String::with_capacity(text.len());
+        let mut out = Vec::new();
         let mut last = 0;
         for m in ac.find_iter(text) {
             let (start, end) = (m.start(), m.end());
-            // leftmost-longest never overlaps, but guard defensively.
             if start < last {
                 continue;
             }
             if !boundary_ok(text, start, end) {
                 continue;
             }
+            out.push((
+                start,
+                end,
+                self.replacements[m.pattern().as_usize()].as_str(),
+            ));
+            last = end;
+        }
+        out
+    }
+
+    /// Replace every boundary-safe occurrence of a known value in `text`
+    /// with its replacement. Non-matching text is preserved verbatim.
+    pub fn apply(&self, text: &str) -> String {
+        let matches = self.find_matches(text);
+        if matches.is_empty() {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0;
+        for (start, end, replacement) in matches {
             out.push_str(&text[last..start]);
-            out.push_str(&self.replacements[m.pattern().as_usize()]);
+            out.push_str(replacement);
             last = end;
         }
         out.push_str(&text[last..]);
