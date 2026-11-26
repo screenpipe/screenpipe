@@ -182,6 +182,88 @@ mod tests {
         assert!(!notification_belongs_to_overlay(None));
     }
 
+    #[test]
+    fn personal_account_switch_only_removes_requested_sign_in_enrollment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("enterprise.json");
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"local history").unwrap();
+        let mut fields = serde_json::json!({"license_key": "test-key"});
+        fields["leave_workspace_on_restart"] = true.into();
+        let check = |fields: &serde_json::Value, allowed: bool, remains: bool| {
+            std::fs::write(&path, serde_json::to_vec(fields).unwrap()).unwrap();
+            super::finish_workspace_switch_at(&path, || allowed).unwrap();
+            assert_eq!(path.exists(), remains);
+        };
+        check(&fields, true, true); // Unattributed legacy or provisioned configuration.
+        fields["sign_in_enrollment"] = enterprise_license_key_sha256("old-key").into();
+        check(&fields, true, true);
+        fields["sign_in_enrollment"] = enterprise_license_key_sha256("test-key").into();
+        check(&fields, false, true); // A deployment source was added after sign-out.
+        fields["leave_workspace_on_restart"] = false.into();
+        check(&fields, true, true);
+        fields["leave_workspace_on_restart"] = true.into();
+        check(&fields, true, false);
+        super::finish_workspace_switch_at(&path, || true).unwrap();
+        assert_eq!(std::fs::read(db).unwrap(), b"local history");
+    }
+
+    #[cfg(not(feature = "enterprise-build"))]
+    #[test]
+    fn personal_account_switch_survives_a_process_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        for step in ["enroll", "protected", "restart", "again", "url-only"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "commands::tests::personal_account_switch_process_probe", "--ignored"])
+                .env("SCREENPIPE_DATA_DIR", dir.path())
+                .env("SCREENPIPE_SWITCH_TEST_STEP", step)
+                .env_remove("SCREENPIPE_ENTERPRISE_INGEST_URL")
+                .env_remove("SCREENPIPE_ENTERPRISE_LICENSE_KEY");
+            if step == "protected" {
+                command.env("SCREENPIPE_ENTERPRISE_LICENSE_KEY", "fixture-deployment-key");
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{step}: {}", String::from_utf8_lossy(&output.stdout));
+        }
+    }
+
+    #[test]
+    #[ignore = "driven by personal_account_switch_survives_a_process_restart"]
+    fn personal_account_switch_process_probe() {
+        let Ok(step) = std::env::var("SCREENPIPE_SWITCH_TEST_STEP") else { return; };
+        let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+        match step.as_str() {
+            "enroll" => {
+                super::persist_sign_in_enrollment("fixture-workspace-key", None).unwrap();
+                assert!(super::can_switch_to_personal_account());
+                super::finish_workspace_switch().unwrap();
+                assert!(path.is_file());
+                crate::enterprise_config_file::update(&path, |fields| {
+                    fields.insert("leave_workspace_on_restart".into(), true.into());
+                    Ok(())
+                }).unwrap();
+            }
+            "protected" => {
+                assert!(!super::can_switch_to_personal_account());
+                super::finish_workspace_switch().unwrap();
+                assert!(path.is_file());
+            }
+            "restart" | "again" => {
+                super::finish_workspace_switch().unwrap();
+                assert!(!path.exists());
+                assert!(!crate::app_mode::for_settings(&Default::default()));
+            }
+            "url-only" => {
+                std::fs::write(&path, r#"{"ingest_url":"https://example.test/ingest"}"#).unwrap();
+                super::persist_sign_in_enrollment("test-mdm-key", None).unwrap();
+                assert_eq!(super::get_enterprise_license_key().as_deref(), Some("test-mdm-key"));
+                assert!(!super::can_switch_to_personal_account());
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// The whole point of SCR-300: `gateway_url` is the ONE name the server,
     /// this file, and all three readers use, and this is its only writer.
     /// Assert the writer actually sets the key, that a changed URL overwrites
@@ -979,10 +1061,39 @@ fn persist_enterprise_device_config_inner(
     license_key: Option<&str>,
     ingest_url: Option<&str>,
     replaces_license_key: Option<&str>,
+    from_sign_in: bool,
 ) -> Result<(), String> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let path = dir.join("enterprise.json");
     crate::enterprise_config_file::update(&path, |json| {
+        if from_sign_in
+            && json
+                .get("license_key")
+                .and_then(|v| v.as_str())
+                .is_some_and(|old| Some(old) != license_key)
+        {
+            return Err("Workspace enrollment changed during sign-in".into());
+        }
+        // A URL-only provisioned device can still obtain its key by signing in.
+        // Keep that enrollment administrator-owned. Only a fresh account
+        // enrollment (or rotation of its original key) can be removed in-app.
+        let new_sign_in = from_sign_in
+            && !json.contains_key("license_key")
+            && !json.contains_key("ingest_url")
+            && user_controls_enrollment();
+        let account_rotation = replaces_license_key.is_some()
+            && sign_in_enrollment(json)
+            && json.get("license_key").and_then(|v| v.as_str()) == replaces_license_key;
+        if new_sign_in || account_rotation {
+            let key = license_key.ok_or("Missing workspace credential")?;
+            json.insert(
+                "sign_in_enrollment".into(),
+                enterprise_license_key_sha256(key).into(),
+            );
+        } else if !from_sign_in && license_key.is_some() {
+            json.remove("sign_in_enrollment");
+            json.remove("leave_workspace_on_restart");
+        }
         if let Some(key) = license_key {
             json.insert(
                 "license_key".to_string(),
@@ -1018,7 +1129,128 @@ pub fn persist_enterprise_device_config(
     license_key: Option<&str>,
     ingest_url: Option<&str>,
 ) -> Result<(), String> {
-    persist_enterprise_device_config_inner(license_key, ingest_url, None)
+    persist_enterprise_device_config_inner(license_key, ingest_url, None, false)
+}
+
+pub(crate) fn persist_sign_in_enrollment(
+    key: &str,
+    ingest_url: Option<&str>,
+) -> Result<(), String> {
+    persist_enterprise_device_config_inner(Some(key), ingest_url, None, true)
+}
+
+fn sign_in_enrollment(fields: &serde_json::Map<String, serde_json::Value>) -> bool {
+    fields
+        .get("license_key")
+        .and_then(|v| v.as_str())
+        .filter(|key| !key.is_empty())
+        .is_some_and(|key| {
+            fields.get("sign_in_enrollment").and_then(|v| v.as_str())
+                == Some(enterprise_license_key_sha256(key).as_str())
+        })
+}
+
+fn user_controls_enrollment() -> bool {
+    if crate::app_mode::is_enterprise_package()
+        || read_enterprise_config_from_windows_registry().is_some()
+        || [
+            "SCREENPIPE_ENTERPRISE_LICENSE_KEY",
+            "SCREENPIPE_ENTERPRISE_INGEST_URL",
+        ]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some())
+    {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
+    #[cfg(target_os = "macos")]
+    if !matches!(
+        dir.join("../Resources/enterprise.json").try_exists(),
+        Ok(false)
+    ) {
+        return false;
+    }
+    matches!(dir.join("enterprise.json").try_exists(), Ok(false))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn can_switch_to_personal_account() -> bool {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    std::fs::read(path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .is_some_and(|fields| sign_in_enrollment(&fields))
+        && user_controls_enrollment()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn switch_to_personal_account(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if !can_switch_to_personal_account() {
+        return Err("This workspace enrollment is managed by your administrator.".into());
+    }
+    crate::search_only::prepare_restart()?;
+    set_cloud_token(None, app.clone(), app.state()).await?;
+    crate::store::SettingsStore::clear_workspace_session(&app)?;
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    let changed = crate::enterprise_config_file::update(&path, |fields| {
+        if !sign_in_enrollment(fields) {
+            return Err("Workspace enrollment changed. Please try again.".into());
+        }
+        fields.insert(
+            "leave_workspace_on_restart".into(),
+            serde_json::Value::Bool(true),
+        );
+        Ok(())
+    })?;
+    if !changed {
+        return Ok(()); // Another window already requested this restart.
+    }
+    crate::process_exit::request_prepared_app_relaunch(
+        app,
+        "switch to personal account",
+        std::time::Duration::ZERO,
+    );
+    Ok(())
+}
+
+// Consume the request on the next launch, before policy or upload workers start.
+// All workers in the departing process continue to see the original workspace.
+pub(crate) fn finish_workspace_switch() -> Result<(), String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    finish_workspace_switch_at(&path, user_controls_enrollment)
+}
+
+fn finish_workspace_switch_at(
+    path: &std::path::Path,
+    allowed: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let Ok(fields) = serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&raw)
+    else {
+        return Ok(());
+    };
+    if fields
+        .get("leave_workspace_on_restart")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+        && sign_in_enrollment(&fields)
+        && allowed()
+    {
+        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn persist_recovered_enterprise_device_config(
@@ -1033,7 +1265,12 @@ pub fn persist_recovered_enterprise_device_config(
         read_enterprise_config_from_deployment().and_then(|cfg| cfg.license_key);
     let recovery_anchor =
         recovery_anchor_license_key(bundled_license_key.as_deref(), replaced_license_key);
-    persist_enterprise_device_config_inner(Some(license_key), ingest_url, Some(recovery_anchor))
+    persist_enterprise_device_config_inner(
+        Some(license_key),
+        ingest_url,
+        Some(recovery_anchor),
+        false,
+    )
 }
 
 /// Save the enterprise license key to `~/.screenpipe/enterprise.json`.

@@ -34,6 +34,7 @@ import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { invalidateEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 import { commands } from "@/lib/utils/tauri";
+import { SwitchToPersonalAccount } from "@/components/switch-to-personal-account";
 import { StartupLoader } from "@/components/startup-loader";
 import { useGT } from "gt-react";
 
@@ -810,6 +811,7 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             Sign in
           </Button>
+          <SwitchToPersonalAccount />
         </div>
         {devLoginBlock}
       </EntitlementShell>
@@ -834,6 +836,7 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             {signedIn ? ui("Use different account") : ui("Sign in")}
           </Button>
+          <SwitchToPersonalAccount />
         </div>
         {devLoginBlock}
       </EntitlementShell>
@@ -992,6 +995,9 @@ export function AppEntitlementGate({
           <Button onClick={openLogin} className="w-full gap-2">
             <LogIn className="h-4 w-4" />
             Sign in
+          </Button>
+          <Button variant="outline" onClick={() => commands.openLoginWindow(true, null)}>
+            {ui("Use a different account")}
           </Button>
         </div>
         {devLoginBlock}
