@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 "use client"
 
 import * as React from "react"
@@ -23,8 +25,8 @@ const Checkbox = React.forwardRef<
       className={cn(
         "flex items-center justify-center text-current",
         "[&>svg]:h-4 [&>svg]:w-4",
-        "data-[state=indeterminate]:[&>.sp-check]:hidden",
-        "data-[state=indeterminate]:[&>.sp-minus]:block"
+        "[&[data-state=indeterminate]>.sp-check]:hidden",
+        "[&[data-state=indeterminate]>.sp-minus]:block"
       )}
     >
       <Check className="sp-check" />
