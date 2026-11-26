@@ -197,7 +197,7 @@ function AccountSessionHeader({ sessionOnly = false }: { sessionOnly?: boolean }
           <Button
             variant="outline"
             size="sm"
-            onClick={() => commands.openLoginWindow(isManagedDeployment ? true : null, null)}
+            onClick={() => commands.openLoginWindow(null, null)}
           >
             Login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
           </Button>

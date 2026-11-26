@@ -47,7 +47,6 @@ const NOOP_COMMANDS = new Set([
   "request_permission",
   "resume_global_shortcuts",
   "set_browser_cookie_access_state",
-  "set_cloud_token",
   "set_native_theme",
   "show_window_activated",
   "spawn_screenpipe",
@@ -287,6 +286,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
   const warned = new Set<string>();
   let grokBotConnected = true;
   let enterpriseLicenseKey: string | null = null;
+  let cloudToken: string | null = null;
   let nextResourceId = 1;
   let piExtensionPackages: PiExtensionPackage[] = [];
   let importedSkills = BROWSER_DEV_IMPORTED_SKILLS.map((skill) => ({ ...skill }));
@@ -692,7 +692,11 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
         return null;
       case "get_enterprise_license_key":
         return enterpriseLicenseKey;
+      case "set_cloud_token":
+        cloudToken = typeof input.token === "string" ? input.token : null;
+        return null;
       case "get_cloud_token":
+        return cloudToken;
       case "get_enterprise_team_api_token":
       case "get_pending_update":
         return null;

@@ -235,8 +235,13 @@ export function AppEntitlementGate({
   // read failure, getCloudToken() may return nothing while verified plan truth
   // remains in store.bin. Keep retrying locally, but gate unknown evidence
   // immediately so restarting the webview cannot reset an access grace period.
+  // A device key can authorize managed recording independently of the
+  // person using the desktop. Opening the desktop still requires a session.
+  const needsManagedAccountSession =
+    isManagedDeployment && isManagedAuthenticated && !user?.token;
   const shouldGateForEnterpriseLogin =
-    isManagedDeployment && authenticationState === "account";
+    isManagedDeployment &&
+    (authenticationState === "account" || needsManagedAccountSession);
   const shouldGateForConsumerLogin =
     !devBypass &&
     !devLoginSkip &&
@@ -283,7 +288,7 @@ export function AppEntitlementGate({
     : !isManagedDeploymentResolved
       ? true
       : isManagedDeployment
-        ? !isManagedAuthenticated
+        ? !isManagedAuthenticated || needsManagedAccountSession
         : shouldGateForEnterpriseApp ||
           shouldGateForOrgSeat ||
           shouldGateForDeviceLimit ||
@@ -864,7 +869,7 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             {signedIn ? ui("Use different account") : ui("Sign in")}
           </Button>
-          {licenseKeyAllowed && (
+          {licenseKeyAllowed && !needsManagedAccountSession && (
             <Button
               onClick={() => selectAuthenticationMethod("license_key")}
               variant="outline"

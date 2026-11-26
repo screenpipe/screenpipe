@@ -435,6 +435,7 @@ describe("AppEntitlementGate", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
 
+    mocks.state.user = baseUser();
     mocks.enterprise.authenticationState = "authenticated";
     mocks.enterprise.isManagedAuthenticated = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -523,8 +524,7 @@ describe("AppEntitlementGate", () => {
     expect(mocks.openLoginWindow).toHaveBeenCalled();
   });
 
-  it("does not force enterprise sign-in after key authentication", () => {
-    vi.stubEnv("TAURI_ENV_DEBUG", "true");
+  it("locks the app after account logout even when the enterprise key is still valid", () => {
     mocks.enterprise = {
       isManagedDeployment: true,
       isManagedDeploymentResolved: true,
@@ -532,12 +532,23 @@ describe("AppEntitlementGate", () => {
       authenticationError: null,
       isManagedAuthenticated: true,
     };
-    mocks.state.user = null;
+    mocks.state.user = baseUser();
 
-    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
-
+    const { rerender } = render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+
+    mocks.state.user = null;
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in required" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use enterprise key" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, null);
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+
+    mocks.state.user = baseUser();
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
   });
 
   it("opens the app for a signed-in free account", () => {
