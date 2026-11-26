@@ -5,36 +5,10 @@
 set -e
 
 check_ffmpeg() {
-    if command -v ffmpeg >/dev/null 2>&1; then
+    if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
         return 0
     fi
     return 1
-}
-
-install_ffmpeg_macos() {
-    arch=$(uname -m)
-    if [ "$arch" = "arm64" ]; then
-        FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
-    else
-        FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip"
-    fi
-
-    echo "screenpipe: downloading ffmpeg..."
-    TMP_DIR=$(mktemp -d)
-    if curl -sL "$FFMPEG_URL" -o "$TMP_DIR/ffmpeg.zip"; then
-        cd "$TMP_DIR"
-        unzip -q ffmpeg.zip
-        mkdir -p "$HOME/.local/bin"
-        mv ffmpeg "$HOME/.local/bin/"
-        chmod +x "$HOME/.local/bin/ffmpeg"
-        xattr -d com.apple.quarantine "$HOME/.local/bin/ffmpeg" 2>/dev/null || true
-        cd - >/dev/null
-        rm -rf "$TMP_DIR"
-        echo "screenpipe: ffmpeg installed to ~/.local/bin/ffmpeg"
-    else
-        echo "screenpipe: warning: failed to download ffmpeg"
-        echo "screenpipe: install it manually: brew install ffmpeg"
-    fi
 }
 
 install_ffmpeg_linux() {
@@ -66,28 +40,14 @@ install_linux_deps() {
     fi
 }
 
-# Remove macOS quarantine from the binary
-remove_quarantine() {
-    if [ "$(uname)" = "Darwin" ]; then
-        # Find the platform package binary
-        SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-        PKG_DIR=$(dirname "$SCRIPT_DIR")
-        NODE_MODULES=$(dirname "$PKG_DIR")
-        for pkg in "@screenpipe/cli-darwin-arm64" "@screenpipe/cli-darwin-x64"; do
-            BIN="$NODE_MODULES/$pkg/bin/screenpipe"
-            if [ -f "$BIN" ]; then
-                xattr -d com.apple.quarantine "$BIN" 2>/dev/null || true
-            fi
-        done
-    fi
-}
-
 # Main
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 if ! check_ffmpeg; then
     case "$OS" in
-        darwin) install_ffmpeg_macos ;;
+        darwin)
+            echo "screenpipe: install FFmpeg and FFprobe before recording (screenpipe setup --ffmpeg or brew install ffmpeg)."
+            ;;
         linux) install_ffmpeg_linux ;;
     esac
 fi
@@ -95,8 +55,6 @@ fi
 if [ "$OS" = "linux" ]; then
     install_linux_deps
 fi
-
-remove_quarantine
 
 sanitize_json_fallback() {
     printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._:-' '_'

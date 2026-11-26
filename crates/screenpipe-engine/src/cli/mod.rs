@@ -19,6 +19,7 @@ pub mod presets;
 pub mod profile;
 pub mod search;
 pub mod service;
+pub mod setup_ffmpeg;
 pub mod starred;
 pub mod status;
 pub(crate) mod store_file;
@@ -302,11 +303,14 @@ pub enum Command {
         subcommand: agent::AgentCommand,
     },
 
-    /// Connect screenpipe to every supported AI tool detected on this computer
+    /// Connect screenpipe to supported AI tools or install the macOS FFmpeg tools
     Setup {
         /// screenpipe REST API base URL the skills + MCP should target.
         #[arg(long, default_value = "http://localhost:3030")]
         api_url: String,
+        /// Install the verified Screenpipe FFmpeg and FFprobe pair on macOS.
+        #[arg(long)]
+        ffmpeg: bool,
     },
 
     /// Run screenpipe as a background service that starts at boot + stays up
@@ -3380,7 +3384,8 @@ mod tests {
     fn test_setup_command_parses_with_default_api_url() {
         let cli = Cli::try_parse_from(["screenpipe", "setup"]).unwrap();
         match cli.command {
-            Command::Setup { api_url } => {
+            Command::Setup { api_url, ffmpeg } => {
+                assert!(!ffmpeg);
                 assert_eq!(api_url, "http://localhost:3030");
             }
             _ => panic!("expected Setup command"),
@@ -3397,11 +3402,44 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Setup { api_url } => {
+            Command::Setup { api_url, ffmpeg } => {
+                assert!(!ffmpeg);
                 assert_eq!(api_url, "https://screenpipe.example");
             }
             _ => panic!("expected Setup command"),
         }
+    }
+
+    #[test]
+    fn test_setup_command_accepts_ffmpeg_install() {
+        let cli = Cli::try_parse_from(["screenpipe", "setup", "--ffmpeg"]).unwrap();
+        assert!(matches!(cli.command, Command::Setup { ffmpeg: true, .. }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_setup_rejects_download_with_wrong_digest() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let router = axum::Router::new().route("/", axum::routing::get(|| async { "abc" }));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let zip = temp.path().join("ffmpeg.zip");
+        let error = setup_ffmpeg::download_verified(&client, &url, &zip, &"0".repeat(64))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("SHA-256 verification"));
+        setup_ffmpeg::download_verified(
+            &client,
+            &url,
+            &zip,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(zip).unwrap(), b"abc");
+        server.abort();
     }
 
     #[test]
