@@ -1618,6 +1618,8 @@ mod imp {
         Unavailable(String),
     }
 
+    const POLICY_REFRESH_SUPERSEDED: &str = "enterprise_policy_refresh_superseded";
+
     #[derive(Deserialize)]
     struct EnterpriseErrorResponse {
         code: Option<String>,
@@ -1705,7 +1707,7 @@ mod imp {
         // enrollment. Paused and hidden devices must remain manageable.
         if !apply_runtime_policy(&mut policy) {
             return Err(NativePolicyFetchError::Unavailable(
-                "superseded enterprise policy response; latest refresh owns desired state".into(),
+                POLICY_REFRESH_SUPERSEDED.into(),
             ));
         }
         Ok(policy)
@@ -2072,7 +2074,7 @@ mod imp {
                 }
                 Ok(())
             })
-            .ok_or("enterprise authorization superseded by a newer policy refresh")?
+            .ok_or(POLICY_REFRESH_SUPERSEDED)?
     }
 
     fn revoke_current_policy(app: &tauri::AppHandle, request: u64, reason: &'static str) {
@@ -2263,6 +2265,9 @@ mod imp {
                 "enterprise credential was rejected".into(),
             ),
             Err(NativePolicyFetchError::Unavailable(error)) => {
+                if error == POLICY_REFRESH_SUPERSEDED {
+                    return Err(error);
+                }
                 return Err(format!("enterprise policy is unavailable: {error}"))
             }
         };
@@ -4366,6 +4371,32 @@ mod imp {
             assert!(old_result.is_ok());
             assert!(new_result.is_ok());
             assert!(!policy.snapshot().allowed);
+        }
+
+        #[tokio::test]
+        async fn superseded_policy_response_requests_an_authorization_retry() {
+            use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+            let server = MockServer::start().await;
+            Mock::given(path("/policy"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+                .mount(&server)
+                .await;
+            let refresh = crate::enterprise::managed_settings::PolicyRefresh::default();
+            let older = refresh.begin();
+            refresh.begin();
+            let result = super::fetch_and_apply_native_policy(
+                &reqwest::Client::new(),
+                &format!("{}/policy", server.uri()),
+                "fixture-device",
+                &super::EnterprisePolicyCredential::LicenseKey("fixture-key".into()),
+                |_| refresh.apply(older, || panic!("stale policy applied")).is_some(),
+            )
+            .await;
+            assert!(matches!(
+                result,
+                Err(NativePolicyFetchError::Unavailable(code))
+                    if code == super::POLICY_REFRESH_SUPERSEDED
+            ));
         }
 
         #[tokio::test]

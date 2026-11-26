@@ -683,6 +683,39 @@ describe("enterprise policy runtime manual activation", () => {
     );
   });
 
+  it("retries a superseded native grant during workspace sign-in", async () => {
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mockEnterpriseApi({});
+    mocks.commands.setEnterpriseRecordingAuthorized.mockResolvedValueOnce({
+      status: "error",
+      error: "enterprise_policy_refresh_superseded",
+    } as never);
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.isEnterpriseAuthenticated).toBe(true));
+    expect(result.current.authenticationError).toBeNull();
+    expect(mocks.commands.setEnterpriseRecordingAuthorized.mock.calls).toEqual([
+      [true, "account", "account-token"],
+      [true, "account", "account-token"],
+    ]);
+  });
+
+  it("does not retry a native seat rejection", async () => {
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mockEnterpriseApi({});
+    mocks.commands.setEnterpriseRecordingAuthorized.mockResolvedValueOnce({
+      status: "error",
+      error: "enterprise enrollment was rejected",
+    } as never);
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.authenticationError).toMatch(/recording could not be enabled/));
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(mocks.commands.setEnterpriseRecordingAuthorized).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a signed-in account when the API denies membership", async () => {
     Object.assign(mocks.settings, { user: { token: "unrelated-token" } });
     mockEnterpriseApi({ policyStatus: 401 });

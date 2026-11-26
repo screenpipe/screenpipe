@@ -75,6 +75,8 @@ const ACCOUNT_LOGIN_REQUIRED_ERROR =
 const NATIVE_RECORDING_AUTH_ERROR =
   "enterprise access was verified, but recording could not be enabled - check enrollment, seat availability, and your connection, then try again";
 const RECORDING_DISABLED_BY_ADMIN_CODE = "recording_disabled_by_admin";
+const POLICY_REFRESH_SUPERSEDED = "enterprise_policy_refresh_superseded";
+const MAX_NATIVE_AUTHORIZATION_ATTEMPTS = 3;
 
 // Sections always hidden in enterprise builds (regardless of policy).
 // "account" is deliberately NOT here: authentication is handled by onboarding
@@ -554,29 +556,39 @@ export function useEnterprisePolicyRuntime() {
   const setNativeRecordingAuthorized = useCallback(async (
     authorized: boolean,
     credential?: EnterpriseCredential,
+    shouldApply: () => boolean = () => true,
   ): Promise<boolean> => {
     if (!isEnterprise) return true;
+    const deadline = Date.now() + NATIVE_AUTHORIZATION_COMMAND_TIMEOUT_MS;
     try {
-      const result = await withTimeout(
-        `enterprise recording authorization ${authorized ? "grant" : "revoke"}`,
-        commands.setEnterpriseRecordingAuthorized(
-          authorized,
-          credential?.type ?? null,
-          credential?.value ?? null,
-        ),
-        NATIVE_AUTHORIZATION_COMMAND_TIMEOUT_MS,
-      );
-      if (result.status === "error") {
+      for (let attempt = 1; attempt <= MAX_NATIVE_AUTHORIZATION_ATTEMPTS; attempt += 1) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0 || !shouldApply()) return false;
+        const result = await withTimeout(
+          `enterprise recording authorization ${authorized ? "grant" : "revoke"}`,
+          commands.setEnterpriseRecordingAuthorized(
+            authorized,
+            credential?.type ?? null,
+            credential?.value ?? null,
+          ),
+          remaining,
+        );
+        if (result.status === "ok") return shouldApply();
+        if (authorized && result.error === POLICY_REFRESH_SUPERSEDED &&
+            attempt < MAX_NATIVE_AUTHORIZATION_ATTEMPTS) {
+          // Stagger retries from multiple windows competing with the native watcher.
+          await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 150));
+          continue;
+        }
         throw new Error(result.error);
       }
-      return true;
     } catch (error) {
       console.warn(
         `[enterprise] failed to ${authorized ? "grant" : "revoke"} native recording authorization:`,
         error,
       );
-      return false;
     }
+    return false;
   }, [isEnterprise]);
 
   const fetchPolicy = useCallback(async (
@@ -896,7 +908,11 @@ export function useEnterprisePolicyRuntime() {
         startPolling(credential);
         return { authenticated: true, retryable: false };
       }
-      if (!await setNativeRecordingAuthorized(true, credential)) {
+      const authorized = await setNativeRecordingAuthorized(true, credential, options.shouldApply);
+      if (options.shouldApply && !options.shouldApply()) {
+        return { authenticated: false, retryable: false };
+      }
+      if (!authorized) {
         setAuthenticationState(credential.type);
         setAuthenticationError(NATIVE_RECORDING_AUTH_ERROR);
         return { authenticated: false, retryable: false };
