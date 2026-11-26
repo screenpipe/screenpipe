@@ -5,18 +5,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { SettingsField } from "./settings-search";
 
-export const accountLogoutSearchField: SettingsField = {
-  label: msg("Logout", {}),
-  keywords: ["signout", "sign out", "log out"],
-};
+export const accountSessionSearchIndex: SettingsField[] = [
+  { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
+  { label: msg("Logout", {}), keywords: ["signout", "sign out", "log out"] },
+];
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   // Mirrors the labels actually rendered by AccountSection below. Keep in sync
   // when you add/remove a control — phantom entries route users to a page that
   // doesn't contain the field.
-  { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
-  accountLogoutSearchField,
+  ...accountSessionSearchIndex,
   { label: msg("Screenpipe Business", {}), keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
   { label: msg("Data sync", {}), keywords: ["allow data sync", "sync this device", "cloud", "account", "upload"] },
   { label: msg("AI connections", {}), keywords: ["codex", "claude", "connect"] },
@@ -144,7 +143,7 @@ function syncErrorDescription(e: unknown): string {
   return msg;
 }
 
-export function AccountSessionHeader({ sessionOnly = false }: { sessionOnly?: boolean }) {
+function AccountSessionHeader({ sessionOnly = false }: { sessionOnly?: boolean }) {
   const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const { isManagedDeployment, isManagedAuthenticated } = useManagedPolicy();
@@ -194,16 +193,52 @@ export function AccountSessionHeader({ sessionOnly = false }: { sessionOnly?: bo
               {ui("Logout")}
             </Button>
           </>
-        ) : !sessionOnly ? (
+        ) : (
           <Button
             variant="outline"
             size="sm"
-            onClick={() => commands.openLoginWindow(null, null)}
+            onClick={() => commands.openLoginWindow(isManagedDeployment ? true : null, null)}
           >
             Login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
           </Button>
-        ) : null}
+        )}
       </div>
+    </div>
+  );
+}
+
+function ManagedWorkspaceAccountCard() {
+  const ui = useGT();
+  const { isManagedAuthenticated, policy } = useManagedPolicy();
+
+  return (
+    <Card className="p-5" data-testid="account-enterprise-managed-card">
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="h-5 w-5 text-primary" />
+        <h3 className="text-lg font-semibold">Screenpipe Enterprise</h3>
+        <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">
+          {isManagedAuthenticated ? ui("Active") : ui("Verification required")}
+        </span>
+      </div>
+      <p className="text-sm text-muted-foreground mt-2">
+        {policy.orgName
+          ? ui("{value1} manages this deployment and its recording policy.", { value1: policy.orgName })
+          : ui("Your organization manages this deployment and its recording policy.")}
+      </p>
+      <p className="text-xs text-muted-foreground mt-3">
+        {isManagedAuthenticated
+          ? ui("Enterprise access has been verified for this session.")
+          : ui("Verify the enterprise key or sign in with an authorized organization account to enable recording.")}
+      </p>
+    </Card>
+  );
+}
+
+export function ManagedAccountSessionSection() {
+  return (
+    <div className="space-y-6">
+      <AccountSessionHeader sessionOnly />
+      <ManagedWorkspaceAccountCard />
     </div>
   );
 }
@@ -671,7 +706,7 @@ export function AccountSection() {
   // Consumer build collapses org/license-derived team/enterprise → "Business";
   // only the enterprise build shows the real org label. Mirrors plan_display_name
   // in src-tauri/src/tray.rs.
-  const { isManagedDeployment, isManagedAuthenticated, policy } = useManagedPolicy();
+  const { isManagedDeployment } = useManagedPolicy();
 
   const reportSyncFailure = (error: unknown) => {
     if (isLegacySyncKeyMismatch(error)) {
@@ -717,25 +752,7 @@ export function AccountSection() {
           so a token-hydration failure can't render this "active" card under a
           "not logged in" header (see isSignedInCloudSubscriber). */}
       {isManagedDeployment ? (
-        <Card className="p-5" data-testid="account-enterprise-managed-card">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-primary" />
-            <h3 className="text-lg font-semibold">Screenpipe Enterprise</h3>
-            <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">
-              {isManagedAuthenticated ? ui("Active") : ui("Verification required")}
-            </span>
-          </div>
-          <p className="text-sm text-muted-foreground mt-2">
-            {policy.orgName
-              ? ui("{value1} manages this deployment and its recording policy.", { value1: policy.orgName })
-              : ui("Your organization manages this deployment and its recording policy.")}
-          </p>
-          <p className="text-xs text-muted-foreground mt-3">
-            {isManagedAuthenticated
-              ? ui("Enterprise access has been verified for this session.")
-              : ui("Verify the enterprise key or sign in with an authorized organization account to enable recording.")}
-          </p>
-        </Card>
+        <ManagedWorkspaceAccountCard />
       ) : isSignedInBusinessSubscriber ? (
         <>
           <Card className="p-5" data-testid="account-cloud-active-card">
