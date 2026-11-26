@@ -14,9 +14,10 @@ The app release pipeline deliberately separates artifact preparation from public
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
 One `Release App` dispatch validates the commit and version, builds the frontend
-snapshot, and signs one Screenpipe installer per platform target. Each new
-target publishes to `releases/<version>/<target>/`. The versioned
-`unified-installer.json` marker lets the dashboard distinguish the new layout
+snapshot and links one executable per platform target. The default Screenpipe
+installer is uploaded to `releases/<version>/<target>/`. Legacy Enterprise
+packages reuse the linked executable and keep their installed package identity.
+The versioned `unified-installer.json` marker lets the dashboard distinguish the new layout
 from historical builds. Deploy the release-artifact-uploader change before
 the first non-dry run with that marker.
 
@@ -28,14 +29,12 @@ Organization policy and authorization still govern recording, ingestion, and
 automatic updates.
 
 Existing managed installations keep their legacy bundle identifiers,
-deployment packages, and update feed. Do not serve the new default app as an
-in-place updater for an old managed bundle. macOS permissions are bound to
-application identity, and managed deployments can have separate app data and
-supervisors. Migrate a test device through its deployment tooling before
-replacing a fleet package. Check sign-in, enrollment, local history, platform
-permissions, updater policy, and a fresh successful upload in Workspace →
-Devices before calling the migration ready. Enterprise-only recovery inputs are
-accepted only for historical revisions with two installer sets.
+deployment packages, and updater URL. The stable manifest advertises the same
+release to the legacy updater once signed Enterprise-compatible artifacts exist.
+Workspace update policy still applies. Check sign-in, enrollment, local history,
+platform permissions, updater policy, and a fresh successful upload in Workspace
+→ Devices on a test device before rolling out to a fleet. Enterprise-only
+recovery inputs still apply to historical revisions.
 
 Test a signed dry run before uploading the first unified version. Verify an
 upgrade from the current standard app and a clean install with workspace
