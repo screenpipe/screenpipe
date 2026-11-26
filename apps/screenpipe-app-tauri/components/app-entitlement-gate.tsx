@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Building2, CreditCard, KeyRound, LogIn, RefreshCw } from "lucide-react";
+import { Building2, CreditCard, LogIn, RefreshCw } from "lucide-react";
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,6 @@ import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { invalidateEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 import { commands } from "@/lib/utils/tauri";
-import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { StartupLoader } from "@/components/startup-loader";
 import { useGT } from "gt-react";
 
@@ -103,13 +102,7 @@ export function AppEntitlementGate({
     authenticationError,
     isManagedAuthenticated,
     selectAuthenticationMethod,
-    submitLicenseKey,
-    policy: managedPolicy,
   } = useManagedPolicy();
-  // When the org policy requires account sign-in, the license key can't
-  // authenticate — don't offer it. Best-effort: known from the last fetched
-  // or cached policy, and always known right after a key was refused.
-  const licenseKeyAllowed = !managedPolicy?.requireAccountLogin;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [seatRequestSubmitting, setSeatRequestSubmitting] = useState(false);
@@ -800,11 +793,11 @@ export function AppEntitlementGate({
     );
   }
 
-  if (isManagedDeployment && authenticationState === "choice") {
+  if (isManagedDeployment && (authenticationState === "choice" || authenticationState === "license_key")) {
     return (
       <EntitlementShell
         title={ui("Enterprise access")}
-        description={ui("Use your organization account or the enterprise key provided by your administrator.")}
+        description={ui("Sign in with your workspace account.")}
       >
         <div className="flex flex-col gap-3">
           <Button
@@ -815,38 +808,10 @@ export function AppEntitlementGate({
             className="w-full gap-2"
           >
             <LogIn className="h-4 w-4" />
-            Sign in with enterprise account
+            Sign in
           </Button>
-          {licenseKeyAllowed && (
-            <Button
-              onClick={() => selectAuthenticationMethod("license_key")}
-              variant="outline"
-              className="w-full gap-2"
-            >
-              <KeyRound className="h-4 w-4" />
-              Use enterprise key
-            </Button>
-          )}
         </div>
         {devLoginBlock}
-      </EntitlementShell>
-    );
-  }
-
-  if (isManagedDeployment && authenticationState === "license_key") {
-    return (
-      <EntitlementShell
-        title={ui("Enterprise key")}
-        description={authenticationError || ui("Enter the key provided by your administrator.")}
-      >
-        <EnterpriseLicensePrompt
-          embedded
-          onSubmit={submitLicenseKey}
-          onSignIn={() => {
-            selectAuthenticationMethod("account");
-            openLogin();
-          }}
-        />
       </EntitlementShell>
     );
   }
@@ -869,16 +834,6 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             {signedIn ? ui("Use different account") : ui("Sign in")}
           </Button>
-          {licenseKeyAllowed && !needsManagedAccountSession && (
-            <Button
-              onClick={() => selectAuthenticationMethod("license_key")}
-              variant="outline"
-              className="w-full gap-2"
-            >
-              <KeyRound className="h-4 w-4" />
-              Use enterprise key
-            </Button>
-          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>

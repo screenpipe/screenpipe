@@ -481,7 +481,7 @@ describe("AppEntitlementGate", () => {
     },
   );
 
-  it("offers account and enterprise-key routes in the fallback gate", () => {
+  it("offers browser sign-in in the managed fallback gate", () => {
     mocks.enterprise = {
       isManagedDeployment: true,
       isManagedDeploymentResolved: true,
@@ -492,11 +492,10 @@ describe("AppEntitlementGate", () => {
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
-    fireEvent.click(screen.getByRole("button", { name: /use enterprise key/i }));
-    expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith("license_key");
+    expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: /sign in with enterprise account/i })
+      screen.getByRole("button", { name: /^sign in$/i })
     );
     expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith("account");
     expect(mocks.openLoginWindow).toHaveBeenCalled();

@@ -281,26 +281,12 @@ describe("enterprise onboarding authentication", () => {
     expect(screen.queryByText("regular sign in")).not.toBeInTheDocument();
   });
 
-  it("offers regular sign-in and Enterprise Key on the login step", () => {
+  it.each(["choice", "license_key"])("shows regular sign-in for managed state %s", (state) => {
+    mocks.enterprisePolicy.authenticationState = state;
     render(<OnboardingPage />);
-
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: /use enterprise key/i }),
-    );
-    expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith(
-      "license_key",
-    );
-  });
-
-  it("renders Enterprise Key entry on the onboarding login step", () => {
-    mocks.enterprisePolicy.authenticationState = "license_key";
-    render(<OnboardingPage />);
-
-    expect(screen.getByText("enterprise key form")).toBeInTheDocument();
-    expect(screen.queryByText("regular sign in")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /sign in instead/i }));
-    expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith("account");
+    expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("enterprise key form")).not.toBeInTheDocument();
   });
 
   it("keeps non-enterprise onboarding on regular sign-in", () => {
@@ -1281,7 +1267,7 @@ describe("enterprise onboarding authentication", () => {
     );
   });
 
-  it("keeps a rejected enterprise account on login with the key alternative", () => {
+  it("keeps a rejected enterprise account on the account sign-in screen", () => {
     mocks.enterprisePolicy.authenticationState = "account";
     mocks.enterprisePolicy.authenticationError =
       "this account is not associated with the enterprise organization";
@@ -1293,8 +1279,8 @@ describe("enterprise onboarding authentication", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /use enterprise key/i }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /use enterprise key/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("completes onboarding after permissions when enterprise app UI is hidden", async () => {

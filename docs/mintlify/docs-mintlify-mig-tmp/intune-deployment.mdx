@@ -122,13 +122,11 @@ Assign as **Required** to the Microsoft Entra security group containing your Scr
 Also assign **Uninstall** to a "screenpipe-revoke" group if you want a kill switch — moving a user there triggers an automatic uninstall at next check-in.
 </Tip>
 
-## Step 9 — activate the enterprise license
-
-Screenpipe needs the license key to enable enterprise mode (centralized telemetry, policy enforcement, dashboard access).
+## Step 9 — workspace sign-in
 
 <Tabs>
-  <Tab title="Users paste it once">
-    After Intune installs Screenpipe, users open the app, choose **use enterprise key**, and paste the license key. The key is saved in the device's local Screenpipe configuration. If your organization requires account login, users choose **sign in with enterprise account** instead; the key-only route is disabled by that policy.
+  <Tab title="Sign in">
+    After Intune installs Screenpipe, open the app and select **Sign in**. Use the account your organization assigned to the workspace.
   </Tab>
   <Tab title="pre-stage via registry (zero-touch)">
     Add a **PowerShell script** to your Intune device-configuration profile, assigned to the same group, that writes the key before Screenpipe first launches:
@@ -139,7 +137,7 @@ Screenpipe needs the license key to enable enterprise mode (centralized telemetr
     Set-ItemProperty -Path "HKLM:\SOFTWARE\screenpipe" -Name "EnterpriseLicenseKey" -Value $key -Type String
     ```
 
-    Screenpipe reads `HKLM\SOFTWARE\screenpipe\EnterpriseLicenseKey` on launch and self-activates without user interaction. The 64-bit registry view is preferred; the 32-bit view is also read for compatibility with older deployment scripts.
+    Screenpipe reads `HKLM\SOFTWARE\screenpipe\EnterpriseLicenseKey` on launch for device provisioning. Users sign in to open the desktop app. The 64-bit registry view is preferred; the 32-bit view is also read for compatibility with older deployment scripts.
   </Tab>
 </Tabs>
 

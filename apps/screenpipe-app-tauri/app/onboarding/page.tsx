@@ -19,7 +19,6 @@ import FinalSetupStep from "@/components/onboarding/final-setup-step";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
@@ -369,9 +368,6 @@ export default function OnboardingPage() {
     authenticationState,
     authenticationError,
     isManagedAuthenticated,
-    selectAuthenticationMethod,
-    submitLicenseKey,
-    policy: managedPolicy,
     isSettingLocked,
   } = useManagedPolicy();
 
@@ -905,21 +901,8 @@ export default function OnboardingPage() {
           )}
           {currentSlide === "login" &&
             (isManagedDeployment ? (
-              authenticationState === "license_key" ? (
-                <div className="mx-auto w-full max-w-sm">
-                  <h2 className="mb-1 text-lg font-semibold">
-                    Activate this device
-                  </h2>
-                  <p className="mb-4 text-sm text-muted-foreground">
-                    Enter the enterprise key provided by your administrator
-                  </p>
-                  <EnterpriseLicensePrompt
-                    embedded
-                    onSubmit={submitLicenseKey}
-                    onSignIn={() => selectAuthenticationMethod("account")}
-                  />
-                </div>
-              ) : authenticationState === "choice" ||
+              authenticationState === "license_key" ||
+                authenticationState === "choice" ||
                 authenticationState === "account" ? (
                 <div className="flex flex-col items-center">
                   {authenticationError && (
@@ -931,15 +914,6 @@ export default function OnboardingPage() {
                     handleNextSlide={handleNextSlide}
                     suppressAutoAdvance
                   />
-                  {!managedPolicy?.requireAccountLogin && (
-                    <button
-                      type="button"
-                      onClick={() => selectAuthenticationMethod("license_key")}
-                      className="mt-3 font-mono text-xs text-muted-foreground/70 underline underline-offset-4 decoration-muted-foreground/40 transition-colors hover:text-foreground hover:decoration-foreground"
-                    >
-                      Use enterprise key
-                    </button>
-                  )}
                 </div>
               ) : (
                 <div className="flex min-h-[400px] items-center justify-center">
