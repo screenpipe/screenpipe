@@ -14,9 +14,9 @@ check_ffmpeg() {
 install_ffmpeg_macos() {
     arch=$(uname -m)
     if [ "$arch" = "arm64" ]; then
-        FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
+        FFMPEG_URL="https://downloads.screenpipe.com/ffmpeg/8.1.3-screenpipe.1/ffmpeg-8.1.3-macos-arm64.zip"
     else
-        FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip"
+        FFMPEG_URL="https://downloads.screenpipe.com/ffmpeg/8.1.3-screenpipe.1/ffmpeg-8.1.3-macos-x86_64.zip"
     fi
 
     echo "screenpipe: downloading ffmpeg..."
