@@ -97,15 +97,17 @@ pub fn normalize_role_id(role_str: &str) -> usize {
         "checkbox" | "axcheckbox" => ROLE_CHECK_BOX,
         "radiobutton" | "axradiobutton" => ROLE_RADIO_BUTTON,
         "heading" | "axheading" => ROLE_HEADING,
-        "table" | "axtable" => ROLE_TABLE,
-        "row" | "listitem" | "axrow" => ROLE_ROW,
-        "columnheader" | "axcolumnheader" => ROLE_COLUMN_HEADER,
+        "table" | "datagrid" | "axtable" => ROLE_TABLE,
+        "row" | "listitem" | "treeitem" | "axrow" => ROLE_ROW,
+        "columnheader" | "header" | "headeritem" | "axcolumnheader" => ROLE_COLUMN_HEADER,
         "cell" | "dataitem" | "gridcell" | "axcell" => ROLE_CELL,
         "text" | "statictext" | "axstatictext" => ROLE_STATIC_TEXT,
         "code" | "axcodeblock" => ROLE_CODE_BLOCK,
         "navigation" | "axnavigation" => ROLE_NAVIGATION,
-        "toolbar" | "axtoolbar" => ROLE_TOOLBAR,
-        "complementary" | "axcomplementary" => ROLE_COMPLEMENTARY,
+        "toolbar" | "menubar" | "axmenubar" | "titlebar" | "statusbar" | "appbar" | "axtoolbar" => {
+            ROLE_TOOLBAR
+        }
+        "complementary" | "tree" | "axcomplementary" => ROLE_COMPLEMENTARY,
         "main" | "document" | "axmain" => ROLE_MAIN,
         "article" | "axarticle" => ROLE_ARTICLE,
         _ => ROLE_GROUP,

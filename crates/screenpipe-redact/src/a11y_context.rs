@@ -70,26 +70,47 @@ impl NormalizedBounds {
                 .and_then(Value::as_f64)
                 .map(|v| v as f32)
         };
-        let bounds = Self {
-            left: get("left", "x")?,
-            top: get("top", "y")?,
-            width: get("width", "w")?,
-            height: get("height", "h")?,
-        };
-        let finite = [bounds.left, bounds.top, bounds.width, bounds.height]
+        let raw_left = get("left", "x")?;
+        let raw_top = get("top", "y")?;
+        let raw_width = get("width", "w")?;
+        let raw_height = get("height", "h")?;
+        let finite = [raw_left, raw_top, raw_width, raw_height]
             .into_iter()
             .all(f32::is_finite);
-        if !finite
-            || bounds.left < 0.0
-            || bounds.top < 0.0
-            || bounds.width <= 0.0
-            || bounds.height <= 0.0
-            || bounds.left + bounds.width > 1.001
-            || bounds.top + bounds.height > 1.001
-        {
+        if !finite || raw_width <= 0.0 || raw_height <= 0.0 {
             return None;
         }
-        Some(bounds)
+        // Intersect with the [0, 1] monitor viewport. macOS clamps partially
+        // visible elements in `tree/macos.rs`, whereas Windows UIA (`tree/windows.rs`)
+        // emits unclamped monitor-relative coordinates (e.g. `left = -0.004,
+        // width = 1.008` for Windows 10/11's `-8px` maximized window border, or
+        // partially off-screen / scrolled controls). Reject only elements with
+        // zero visible intersection on this monitor.
+        if raw_left >= 0.0
+            && raw_top >= 0.0
+            && raw_left + raw_width <= 1.001
+            && raw_top + raw_height <= 1.001
+        {
+            return Some(Self {
+                left: raw_left,
+                top: raw_top,
+                width: raw_width.min(1.0 - raw_left),
+                height: raw_height.min(1.0 - raw_top),
+            });
+        }
+        let x1 = raw_left.clamp(0.0, 1.0);
+        let y1 = raw_top.clamp(0.0, 1.0);
+        let x2 = (raw_left + raw_width).clamp(0.0, 1.0);
+        let y2 = (raw_top + raw_height).clamp(0.0, 1.0);
+        if x2 <= x1 || y2 <= y1 {
+            return None;
+        }
+        Some(Self {
+            left: x1,
+            top: y1,
+            width: x2 - x1,
+            height: y2 - y1,
+        })
     }
 
     pub fn to_image_region(self, image_width: u32, image_height: u32) -> Option<ImageRegion> {
@@ -508,22 +529,29 @@ fn infer_landmark_tag(role: &str, subrole: &str) -> Option<&'static str> {
         Some("nav")
     } else if sr.contains("toolbar")
         || sr.contains("banner")
-        || matches!(rl.as_str(), "toolbar" | "axtoolbar")
+        || matches!(
+            rl.as_str(),
+            "toolbar" | "axtoolbar" | "menubar" | "axmenubar" | "titlebar" | "statusbar" | "appbar"
+        )
     {
         Some("toolbar")
     } else if sr.contains("complementary")
         || sr.contains("sidebar")
-        || matches!(rl.as_str(), "complementary" | "axcomplementary")
+        || matches!(rl.as_str(), "complementary" | "axcomplementary" | "tree")
     {
         Some("sidebar")
     } else if matches!(
         rl.as_str(),
         "table"
+            | "datagrid"
             | "axtable"
             | "row"
             | "listitem"
+            | "treeitem"
             | "axrow"
             | "columnheader"
+            | "header"
+            | "headeritem"
             | "axcolumnheader"
             | "cell"
             | "dataitem"
@@ -776,6 +804,45 @@ mod tests {
             value == "hunter2" && replacement == SpanLabel::Secret.placeholder()
         }));
         assert!(!pairs.iter().any(|(value, _)| value.contains("password=")));
+    }
+
+    #[test]
+    fn windows_uia_maximized_and_partially_offscreen_bounds_clamp_instead_of_dropping() {
+        let tree = r#"[
+            {"role":"Pane","depth":0,"bounds":{"left":-0.0042,"top":-0.0074,"width":1.0084,"height":1.0148}},
+            {"role":"TitleBar","depth":1,"bounds":{"left":-0.0042,"top":0.0,"width":1.0084,"height":0.04}},
+            {"role":"DataGrid","depth":1,"bounds":{"left":0.1,"top":0.1,"width":0.95,"height":0.8}},
+            {"role":"PasswordBox","depth":2,"is_password":true,"bounds":{"left":-0.05,"top":0.3,"width":0.25,"height":0.04}},
+            {"role":"Text","depth":2,"bounds":{"left":1.15,"top":0.3,"width":0.2,"height":0.03}}
+        ]"#;
+        let nodes = extract_text_free_ax_nodes(tree);
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(
+            nodes[0].bounds,
+            Some(NormalizedBounds {
+                left: 0.0,
+                top: 0.0,
+                width: 1.0,
+                height: 1.0
+            })
+        );
+        assert_eq!(nodes[1].landmark, "toolbar");
+        assert_eq!(nodes[2].landmark, "table");
+        let pw_bounds = nodes[3]
+            .bounds
+            .expect("partially visible PasswordBox must retain clamped bounds");
+        assert_eq!(pw_bounds.left, 0.0);
+        assert!((pw_bounds.width - 0.20).abs() < 1e-5);
+        assert_eq!(
+            nodes[4].bounds, None,
+            "wholly off-monitor node must have None bounds"
+        );
+
+        let forced = A11yContext::parse(tree)
+            .unwrap()
+            .forced_image_regions(1920, 1080);
+        assert_eq!(forced.len(), 1);
+        assert_eq!(forced[0].bbox[0], 0);
     }
 
     #[test]
