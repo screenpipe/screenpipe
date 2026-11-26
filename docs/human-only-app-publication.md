@@ -13,13 +13,34 @@ The app release pipeline deliberately separates artifact preparation from public
 
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
-One `Release App` dispatch validates the commit and version, then builds the static frontend alongside the finalized translation snapshot. Consumer and enterprise targets package that same export. Historical source revisions use their original build hooks.
+One `Release App` dispatch validates the commit and version, builds the frontend
+snapshot, and signs one Screenpipe installer per platform target. Each new
+target publishes to `releases/<version>/<target>/`. The versioned
+`unified-installer.json` marker lets the dashboard distinguish the new layout
+from historical builds. Deploy the release-artifact-uploader change before
+the first non-dry run with that marker.
 
-The consumer matrix compiles each target once. Enterprise packaging takes the matching executable from that run and preserves the platform package identity before signing. macOS gets its identity from the app bundle, Windows from the executable's product metadata, and Linux from an edition marker in the linked executable. Package identity drives updater routing and operating system integration. Account and deployment policy still control managed access.
+The public download page and workspace download page use the same signed
+installer after stable publication. Workspace sign-in and deployment
+configuration select managed policy at runtime. Employees who also have a
+personal plan can choose **Use workspace on this device** in account settings.
+Organization policy and authorization still govern recording, ingestion, and
+automatic updates.
 
-The `Enterprise artifacts` commit status tracks enterprise readiness, with a separate status for dry runs. To retry enterprise, rerun the failed jobs or dispatch `release-app.yml` for the same commit and version with `enterprise_only=true` and `native_run_id` set to the original run. Native artifacts are retained for seven days. When the native artifacts expire, rerun the complete workflow.
+Existing managed installations keep their legacy bundle identifiers,
+deployment packages, and update feed. Do not serve the new default app as an
+in-place updater for an old managed bundle. macOS permissions are bound to
+application identity, and managed deployments can have separate app data and
+supervisors. Migrate a test device through its deployment tooling before
+replacing a fleet package. Check sign-in, enrollment, local history, platform
+permissions, updater policy, and a fresh successful upload in Workspace →
+Devices before calling the migration ready. Enterprise-only recovery inputs are
+accepted only for historical revisions with two installer sets.
 
-Before the first shared executable is published, test signed clean installs and upgrades from both previous packages. Verify the correct sign-in callback and updater channel, Mac permissions and login items, standard and persistent Enterprise installers, and managed policy before recording starts.
+Test a signed dry run before uploading the first unified version. Verify an
+upgrade from the current standard app and a clean install with workspace
+sign-in on the same installer. Use the internal dashboard to inspect staged
+files. The unified artifacts are not offered by the legacy pre-release updater.
 
 ## Only a human may publish
 

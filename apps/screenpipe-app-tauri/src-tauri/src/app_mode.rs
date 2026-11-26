@@ -238,6 +238,12 @@ mod tests {
             false,
             &settings
         ));
+        settings.extra.insert("workspaceModeAccountId".into(), json!("another-account"));
+        assert!(!resolve_mode(&AtomicBool::new(false), false, false, &settings));
+        settings.extra.insert("workspaceModeAccountId".into(), json!("personal-subscriber"));
+        assert!(resolve_mode(&AtomicBool::new(false), false, false, &settings));
+        settings.extra.remove("workspaceModeAccountId");
+
         settings.user.enterprise_account = Some(json!({
             "requires_enterprise_app": true, "restrict_consumer_build_access": true
         }));

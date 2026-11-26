@@ -62,7 +62,8 @@ export function artifactKey(scope, version, target, filename) {
 	if (!TARGETS.has(target)) throw new Error("unsupported target");
 	const windowsTarget = target.endsWith("-pc-windows-msvc");
 	const reservedWindowsCarrier = ["screenpipe-attribution-windows.exe", "screenpipe-attribution-windows.json"].includes(filename);
-	const carrierArtifact = scope === "consumer" && (
+	const scopedMetadata = scope === "consumer" && (
+		filename === "unified-installer.json" ||
 		((target.endsWith("-apple-darwin") || windowsTarget) &&
 			filename === "screenpipe-attribution.json") ||
 		(target === "x86_64-unknown-linux-gnu" &&
@@ -77,7 +78,7 @@ export function artifactKey(scope, version, target, filename) {
 		filename.includes("/") ||
 		filename.includes("\\") ||
 		filename.includes("\0") ||
-		(!carrierArtifact && (reservedWindowsCarrier || !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix))))
+		(!scopedMetadata && (reservedWindowsCarrier || !ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix))))
 	) {
 		throw new Error("invalid artifact filename");
 	}

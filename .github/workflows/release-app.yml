@@ -61,6 +61,7 @@ jobs:
       release_sha: ${{ steps.resolve-release.outputs.sha }}
       release_version: ${{ steps.resolve-release.outputs.version }}
       shared_native: ${{ steps.resolve-release.outputs.shared_native }}
+      unified_installer: ${{ steps.resolve-release.outputs.unified_installer }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,6 +72,7 @@ jobs:
         env:
           REQUESTED_SHA: ${{ github.event.inputs.commit_hash || github.sha }}
           REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          ENTERPRISE_ONLY: ${{ inputs.enterprise_only }}
         run: |
           set -euo pipefail
 
@@ -102,6 +104,13 @@ jobs:
 
           echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+          if git cat-file -e "$RELEASE_SHA:apps/screenpipe-app-tauri/unified-installer.json"; then
+            if [[ "$ENTERPRISE_ONLY" == true ]]; then
+              echo "::error::This version has one Screenpipe installer. Rerun its failed platform jobs."
+              exit 1
+            fi
+            echo "unified_installer=true" >> "$GITHUB_OUTPUT"
+          fi
           if git show "${RELEASE_SHA}:apps/screenpipe-app-tauri/src-tauri/src/main.rs" |
               grep -F -- '--release-package-smoke' >/dev/null; then
             echo "shared_native=true" >> "$GITHUB_OUTPUT"
@@ -1742,7 +1751,7 @@ jobs:
           }
 
       - name: Collect linked executable and generated resources
-        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        if: needs.check_commit.outputs.unified_installer != 'true' && needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
         shell: bash
         working-directory: apps/screenpipe-app-tauri/src-tauri
         env:
@@ -1774,7 +1783,7 @@ jobs:
           tar -cf "$artifact_dir/screenpipe-native.tar" -C "$stage" .
 
       - name: Share linked executable with enterprise packaging
-        if: needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
+        if: needs.check_commit.outputs.unified_installer != 'true' && needs.check_commit.outputs.shared_native == 'true' && matrix.target != 'aarch64-pc-windows-msvc'
         uses: actions/upload-artifact@v4
         with:
           name: desktop-native-${{ needs.check_commit.outputs.release_sha }}-${{ matrix.target }}
@@ -1787,7 +1796,7 @@ jobs:
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: consumer-linux-${{ matrix.target }}
+          name: screenpipe-linux-${{ matrix.target }}
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
@@ -1798,7 +1807,7 @@ jobs:
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: consumer-macos-${{ matrix.target }}
+          name: screenpipe-macos-${{ matrix.target }}
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
@@ -1811,7 +1820,7 @@ jobs:
         if: matrix.os_type == 'windows' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: consumer-windows-${{ matrix.target }}
+          name: screenpipe-windows-${{ matrix.target }}
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
@@ -1830,6 +1839,7 @@ jobs:
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           .release-workflow/.github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            apps/screenpipe-app-tauri/unified-installer.json \
             "${BUNDLE_DIR}"/dmg/*.dmg \
             "${BUNDLE_DIR}"/attribution/* \
             "${BUNDLE_DIR}"/macos/*.tar.gz \
@@ -1846,6 +1856,7 @@ jobs:
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           .release-workflow/.github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            apps/screenpipe-app-tauri/unified-installer.json \
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
             "${BUNDLE_DIR}"/nsis/*.sig \
@@ -1862,6 +1873,7 @@ jobs:
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           .release-workflow/.github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            apps/screenpipe-app-tauri/unified-installer.json \
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.sig \
@@ -1918,6 +1930,7 @@ jobs:
     # Enterprise build gates on this job instead of implicit ancestor success.
     if: >-
       !cancelled() && needs.check_commit.result == 'success' &&
+      needs.check_commit.outputs.unified_installer != 'true' &&
       needs.localization.result == 'success' &&
       (needs.publish-tauri.result == 'success' ||
       (inputs.enterprise_only && needs.publish-tauri.result == 'skipped'))

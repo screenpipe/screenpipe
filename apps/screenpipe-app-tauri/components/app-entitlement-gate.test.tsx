@@ -233,7 +233,7 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(
-      screen.queryByText(/enterprise app required/i),
+      screen.queryByText(/workspace access required/i),
     ).not.toBeInTheDocument();
   });
 
@@ -273,7 +273,7 @@ describe("AppEntitlementGate", () => {
       </AppEntitlementGate>,
     );
 
-    expect(screen.getByText(/enterprise app required/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace access required/i)).toBeInTheDocument();
     expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
   });
 
@@ -297,7 +297,7 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(
-      screen.queryByText(/enterprise app required/i),
+      screen.queryByText(/workspace access required/i),
     ).not.toBeInTheDocument();
 
     mocks.enterprise = {
@@ -315,7 +315,7 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(
-      screen.queryByText(/enterprise app required/i),
+      screen.queryByText(/workspace access required/i),
     ).not.toBeInTheDocument();
   });
 
@@ -953,12 +953,12 @@ describe("AppEntitlementGate", () => {
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
-    expect(screen.getByText(/enterprise app required/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace access required/i)).toBeInTheDocument();
     expect(screen.getByText(/belongs to Bungalow/i)).toBeInTheDocument();
     expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: /download enterprise app/i }),
+      screen.getByRole("button", { name: /download screenpipe/i }),
     );
 
     const downloadUrl = String(mocks.open.mock.calls.at(-1)?.[0] ?? "");
@@ -1023,7 +1023,7 @@ describe("AppEntitlementGate", () => {
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
     expect(
-      screen.queryByText(/enterprise app required/i),
+      screen.queryByText(/workspace access required/i),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
@@ -1051,7 +1051,7 @@ describe("AppEntitlementGate", () => {
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
-    expect(screen.getByText(/enterprise app required/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace access required/i)).toBeInTheDocument();
     expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
   });
 
@@ -1079,7 +1079,7 @@ describe("AppEntitlementGate", () => {
       render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
       expect(
-        screen.queryByText(/enterprise app required/i),
+        screen.queryByText(/workspace access required/i),
       ).not.toBeInTheDocument();
       expect(screen.getByTestId("protected-app")).toBeInTheDocument();
       expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
@@ -1109,7 +1109,7 @@ describe("AppEntitlementGate", () => {
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
     expect(
-      screen.queryByText(/enterprise app required/i),
+      screen.queryByText(/workspace access required/i),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
   });

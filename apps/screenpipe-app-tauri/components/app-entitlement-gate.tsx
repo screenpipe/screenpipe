@@ -552,7 +552,7 @@ export function AppEntitlementGate({
     commands.openLoginWindow(true, null);
   }, [updateSettings]);
 
-  const downloadEnterpriseApp = useCallback(() => {
+  const downloadScreenpipe = useCallback(() => {
     const url = getEnterpriseDownloadUrl();
     posthog.capture("app_entitlement_enterprise_download_clicked", {
       org_name: enterpriseAccount?.org_name ?? null,
@@ -925,13 +925,13 @@ export function AppEntitlementGate({
   if (shouldGateForEnterpriseApp) {
     return (
       <EntitlementShell
-        title={ui("Enterprise app required")}
-        description={ui("{value1} belongs to {value2}. download the screenpipe enterprise app so this device follows workspace policy and uploads to your org storage.", { value1: email, value2: enterpriseOrgName })}
+        title={ui("Workspace access required")}
+        description={ui("{value1} belongs to {value2}. Install the latest Screenpipe and sign in to apply your workspace’s recording and upload policies.", { value1: email, value2: enterpriseOrgName })}
       >
         <div className="flex flex-col gap-3">
-          <Button onClick={downloadEnterpriseApp} className="w-full gap-2">
+          <Button onClick={downloadScreenpipe} className="w-full gap-2">
             <Download className="h-4 w-4" />
-            Download enterprise app
+            Download Screenpipe
           </Button>
           <Button
             onClick={() =>
@@ -943,7 +943,7 @@ export function AppEntitlementGate({
             className="w-full gap-2"
           >
             <Building2 className="h-4 w-4" />
-            Open enterprise builds
+            Open workspace downloads
           </Button>
           <Button
             onClick={useDifferentAccount}

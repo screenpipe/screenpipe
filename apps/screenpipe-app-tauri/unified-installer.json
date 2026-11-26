@@ -1,0 +1,4 @@
+{
+  "$comment": "Screenpipe release metadata for the shared installer. The pipeline uploads this only from revisions that ship the unified app.",
+  "schema": 1
+}

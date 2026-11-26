@@ -142,3 +142,12 @@ describe("release artifact capability boundary", () => {
 		expect(response.status).toBe(401);
 	});
 });
+
+
+test("allows the unified metadata only inside versioned Screenpipe target folders", () => {
+	const target = "aarch64-apple-darwin";
+	expect(artifactKey("consumer", "2.7.162", target, "unified-installer.json"))
+		.toBe(`releases/2.7.162/${target}/unified-installer.json`);
+	expect(() => artifactKey("enterprise", "2.7.162", target, "unified-installer.json")).toThrow();
+	expect(() => artifactKey("consumer", "2.7.162", target, "../unified-installer.json")).toThrow();
+});
