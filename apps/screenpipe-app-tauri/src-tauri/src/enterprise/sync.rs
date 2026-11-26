@@ -280,6 +280,9 @@ pub struct Cursor {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 struct CursorBoundary {
+    // Retain the account enrollment boundary across source and process changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_enrolled_at: Option<String>,
     #[serde(default)]
     starred_sequence: i64,
     #[serde(default)]
@@ -305,6 +308,34 @@ struct CursorBoundary {
 }
 
 impl Cursor {
+    pub(crate) fn for_account_enrollment(at: chrono::DateTime<chrono::Utc>) -> Self {
+        Self {
+            boundary: CursorBoundary {
+                account_enrolled_at: Some(at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+                ..CursorBoundary::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    fn reset_upload_source(&self, source_id: Option<String>) -> Self {
+        Self {
+            source_id,
+            boundary: CursorBoundary {
+                account_enrolled_at: self.boundary.account_enrolled_at.clone(),
+                ..CursorBoundary::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    fn first_upload_cutoff(&self) -> String {
+        self.boundary.account_enrolled_at.clone().unwrap_or_else(|| {
+            (chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap())
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+    }
+
     /// Load cursor from disk. Returns default (empty) cursor on any error so a
     /// corrupted file can never wedge the task.
     pub fn load(path: &std::path::Path) -> Self {
@@ -999,7 +1030,7 @@ async fn migrate_device_identity(
     let mut next = cursor.clone();
     if next.source_id.as_deref() != Some(&source_id) {
         if next.source_id.is_some() || source_id != cfg.device_id {
-            next = Cursor::default();
+            next = next.reset_upload_source(None);
         }
         next.source_id = Some(source_id);
     }
@@ -1174,49 +1205,39 @@ async fn run_one_sync_page(
                 cursor.save(&cfg.cursor_path)?;
             }
         } else {
-            *cursor = Cursor {
-                source_id: Some(cfg.device_id.clone()),
-                ..Cursor::default()
-            };
+            *cursor = cursor.reset_upload_source(Some(cfg.device_id.clone()));
         }
     }
 
-    // First-run safeguard: if cursor is empty, backfill SAFE_BACKFILL only —
-    // not the entire DB. An enterprise customer enrolling a long-running
-    // device shouldn't dump 6 months of personal history upstream.
+    // Account enrollment starts forward from enrollment. Existing deployments
+    // without that boundary keep their bounded initial catch-up window.
+    let first_upload_cutoff = cursor.first_upload_cutoff();
     if cursor.last_frame_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_frame_ts = Some(cutoff.to_rfc3339());
+        cursor.last_frame_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.frames = 0;
     }
     if cursor.last_audio_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_audio_ts = Some(cutoff.to_rfc3339());
+        cursor.last_audio_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.audio = 0;
     }
     if cursor.last_ui_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_ui_ts = Some(cutoff.to_rfc3339());
+        cursor.last_ui_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.ui = 0;
     }
     if cursor.last_memory_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_memory_ts = Some(cutoff.to_rfc3339());
+        cursor.last_memory_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.memories = 0;
     }
     if cursor.last_feedback_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_feedback_ts = Some(cutoff.to_rfc3339());
+        cursor.last_feedback_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.feedback_id = None;
     }
     if cursor.last_parsed_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.last_parsed_ts = Some(cutoff.to_rfc3339());
+        cursor.last_parsed_ts = Some(first_upload_cutoff.clone());
         cursor.boundary.parsed = 0;
     }
     if cursor.boundary.activity_ts.is_none() {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
-        cursor.boundary.activity_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.activity_ts = Some(first_upload_cutoff.clone());
     }
 
     // Per-stream sync policy is fetched fresh on every tick — the admin can
@@ -1257,11 +1278,7 @@ async fn run_one_sync_page(
                     sequence: 0,
                     cutoff: backfill
                         .map(|r| r.start_at.to_rfc3339())
-                        .unwrap_or_else(|| {
-                            (chrono::Utc::now()
-                                - chrono::Duration::from_std(SAFE_BACKFILL).unwrap())
-                            .to_rfc3339()
-                        }),
+                        .unwrap_or_else(|| first_upload_cutoff.clone()),
                 });
         }
         // Enrollment survives preparation/detector/transport failures. Delivery
@@ -1328,10 +1345,11 @@ async fn run_one_sync_page(
         }
     }
     let mut pending_read = false;
-    let starred_since = cursor.boundary.starred_since.clone().unwrap_or_else(|| {
-        (chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap())
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    });
+    let starred_since = cursor
+        .boundary
+        .starred_since
+        .clone()
+        .unwrap_or(first_upload_cutoff);
     let mut starred = if streams.starred {
         match local
             .fetch_starred_since(cursor.boundary.starred_sequence, &starred_since, PAGE_LIMIT)
@@ -6682,6 +6700,27 @@ pub(crate) mod tests {
         // Should be within SAFE_BACKFILL ± a generous buffer.
         assert!(age.num_seconds() >= 14 * 60);
         assert!(age.num_seconds() <= 16 * 60);
+    }
+
+    #[tokio::test]
+    async fn account_enrollment_does_not_read_pre_enrollment_frames_after_source_reset() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, "http://does-not-matter".into());
+        let at = chrono::Utc::now();
+        Cursor::for_account_enrollment(at)
+            .save(&cfg.cursor_path)
+            .unwrap();
+        let mut cursor = Cursor::load(&cfg.cursor_path).reset_upload_source(None);
+        let local = MockLocal::new(vec![vec![]], vec![vec![]]);
+        run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            local.last_frames_since.lock().unwrap().as_deref(),
+            Some(at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true).as_str())
+        );
     }
 
     #[tokio::test]

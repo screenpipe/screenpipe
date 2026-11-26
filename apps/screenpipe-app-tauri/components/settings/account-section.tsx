@@ -35,7 +35,6 @@ import { commands } from "@/lib/utils/tauri";
 import { openExternalUrl } from "@/lib/open-external-url";
 import {
   planDisplayName,
-  getEnterpriseAccount,
   canUseDataSync,
   isSignedInCloudSubscriber,
   isBusinessSubscriptionPlan,
@@ -147,7 +146,6 @@ export function AccountSection() {
   const { isServerDown } = useHealthCheck();
   const [showSyncKeyRecovery, setShowSyncKeyRecovery] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
-  const [workspaceModeSaving, setWorkspaceModeSaving] = useState(false);
   const [dataSyncSaving, setDataSyncSaving] = useState(false);
   const [dataSyncError, setDataSyncError] = useState<string | null>(null);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -605,19 +603,6 @@ export function AccountSection() {
   // only the enterprise build shows the real org label. Mirrors plan_display_name
   // in src-tauri/src/tray.rs.
   const { isManagedDeployment, isManagedAuthenticated, policy } = useManagedPolicy();
-  const workspace = getEnterpriseAccount(appUser);
-
-  const useWorkspaceOnDevice = async () => {
-    if (!appUser?.id || !appUser.token || !workspace?.requires_enterprise_app) return;
-    setWorkspaceModeSaving(true);
-    try {
-      await updateSettings({ workspaceModeAccountId: appUser.id });
-    } catch {
-      toast({ title: ui("Could not enable workspace mode"), variant: "destructive" });
-    } finally {
-      setWorkspaceModeSaving(false);
-    }
-  };
 
   const reportSyncFailure = (error: unknown) => {
     if (isLegacySyncKeyMismatch(error)) {
@@ -712,24 +697,6 @@ export function AccountSection() {
           )}
         </div>
       </div>
-
-      {!isManagedDeployment && appUser?.id && appUser?.token && workspace?.requires_enterprise_app && (
-        <Card className="p-5">
-          <h3 className="font-semibold">{ui("Workspace on this device")}</h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {ui("Your organization’s recording, upload, and update policies will apply to this device.")}
-          </p>
-          <Button
-            className="mt-3"
-            variant="outline"
-            size="sm"
-            disabled={workspaceModeSaving}
-            onClick={useWorkspaceOnDevice}
-          >
-            {ui("Use workspace on this device")}
-          </Button>
-        </Card>
-      )}
 
       {/* Subscribed view — requires a session token, not just cloud_subscribed,
           so a token-hydration failure can't render this "active" card under a

@@ -158,6 +158,9 @@ mod imp {
     }
 
     fn current_config(app: &tauri::AppHandle) -> Option<SyncConfig> {
+        if crate::app_mode::is_managed(app) {
+            return None;
+        }
         let settings = crate::store::SettingsStore::get(app).ok().flatten()?;
         if settings
             .extra
@@ -842,6 +845,9 @@ mod imp {
         }
 
         for chunk in split_jsonl(body) {
+            if crate::app_mode::is_managed(app) {
+                return Ok(false);
+            }
             let admission = read
                 .admit(&db.pool)
                 .await
@@ -976,6 +982,9 @@ mod imp {
     }
 
     async fn sync_once(app: &tauri::AppHandle, local: &LocalClient, http: &reqwest::Client) {
+        if crate::app_mode::is_managed(app) {
+            return;
+        }
         let Some(config) = current_config(app) else {
             if let Ok(path) = app.path().app_data_dir() {
                 let mut cursor = Cursor::load(&path.join(CURSOR_FILENAME));

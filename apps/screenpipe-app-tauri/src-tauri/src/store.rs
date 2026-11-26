@@ -2697,59 +2697,14 @@ impl SettingsStore {
         self.has_verified_paid_plan()
     }
 
-    /// Consumer binaries must not record behind an org's mandatory-enterprise-
-    /// app screen. A separate consumer subscription remains a valid opt-out,
-    /// matching the frontend account-routing policy.
+    /// Workspace membership selects managed mode independently of personal billing.
     pub(crate) fn requires_enterprise_app_for_consumer(&self) -> bool {
-        let requires_enterprise_app = self
-            .user
+        self.user
             .enterprise_account
             .as_ref()
             .and_then(|account| account.get("requires_enterprise_app"))
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if !requires_enterprise_app {
-            return false;
-        }
-        if self.user.enterprise_account.as_ref()
-            .and_then(|account| account.get("restrict_consumer_build_access"))
-            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
-        {
-            return true;
-        }
-
-        // A signed-in member can choose the workspace from the same installer
-        // even when they also have a personal plan. Bind the choice to their
-        // account. The managed recording gate still verifies policy and seat.
-        let workspace_account = self
-            .extra
-            .get("workspaceModeAccountId")
-            .and_then(serde_json::Value::as_str);
-        if self
-            .user
-            .id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty() && workspace_account == Some(id))
-        {
-            return true;
-        }
-
-        let has_consumer_entitlement = self
-            .user
-            .entitlement
-            .as_ref()
-            .and_then(|entitlement| entitlement.get("source"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|source| {
-                matches!(
-                    source.to_ascii_lowercase().as_str(),
-                    "subscription" | "manual" | "lifetime"
-                )
-            })
-            && self.has_current_app_entitlement();
-
-        !has_consumer_entitlement
     }
 
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
@@ -4290,7 +4245,7 @@ mod tests {
             "checked_at": chrono::Utc::now().to_rfc3339(),
             "features": { "app": true }
         }));
-        assert!(!store.requires_enterprise_app_for_consumer());
+        assert!(store.requires_enterprise_app_for_consumer());
         store.user.enterprise_account = Some(json!({
             "requires_enterprise_app": true,
             "restrict_consumer_build_access": true,
@@ -4299,7 +4254,7 @@ mod tests {
     }
 
     #[test]
-    fn business_capacity_plans_override_enterprise_app_requirement() {
+    fn personal_capacity_plans_do_not_override_workspace_mode() {
         for plan in ["pro_max", "pro_ultra"] {
             let mut store = SettingsStore::default();
             store.user.id = Some("consumer_capacity_paid".to_string());
@@ -4317,7 +4272,7 @@ mod tests {
 
             assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
             assert!(!store.restricts_paid_local_features());
-            assert!(!store.requires_enterprise_app_for_consumer());
+            assert!(store.requires_enterprise_app_for_consumer());
             let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
             assert_eq!(config.max_non_template_pipes, None);
         }

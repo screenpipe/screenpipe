@@ -2613,20 +2613,11 @@ mod imp {
                         .await
                     {
                         Ok(remote) => {
-                            info!(
-                                "enterprise sync: device auto-configured from {} (org={})",
-                                url,
-                                remote.org_name.as_deref().unwrap_or("?")
-                            );
-                            if let Err(e) = crate::commands::persist_enterprise_device_config(
-                                Some(&remote.license_key),
-                                remote.ingest_url.as_deref(),
-                            ) {
-                                warn!("enterprise sync: failed to persist device config: {e}");
+                            if crate::commands::get_cloud_token().as_deref()
+                                != Some(token.as_str())
+                            {
+                                continue;
                             }
-                            // Loop around immediately: the file (or the
-                            // in-memory values on persist failure) now
-                            // satisfies from_env_with_fallback.
                             if let Some(cfg) = EnterpriseSyncConfig::from_env_with_fallback(
                                 app_data_dir.clone(),
                                 device_id.clone(),
@@ -2634,7 +2625,24 @@ mod imp {
                                 Some(remote.license_key.clone()),
                                 remote.ingest_url.clone(),
                             ) {
-                                break cfg;
+                                // Record the boundary before persisting enrollment credentials.
+                                // Personal capture may already exist on a device switching modes.
+                                let cursor = ee_sync::Cursor::for_account_enrollment(chrono::Utc::now());
+                                match cursor.save(&cfg.cursor_path) {
+                                    Ok(()) => {
+                                        if let Err(error) = crate::commands::persist_enterprise_device_config(
+                                            Some(&remote.license_key),
+                                            remote.ingest_url.as_deref(),
+                                        ) {
+                                            warn!("enterprise sync: failed to persist device config: {error}");
+                                        }
+                                        info!("enterprise sync: device auto-configured from verified workspace sign-in");
+                                        break cfg;
+                                    }
+                                    Err(error) => {
+                                        warn!("enterprise sync: could not persist the workspace upload boundary: {error}");
+                                    }
+                                }
                             }
                         }
                         Err(e) => {

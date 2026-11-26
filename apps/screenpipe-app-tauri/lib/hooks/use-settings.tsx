@@ -309,7 +309,6 @@ export type Settings = SettingsStore & {
 	workflowSharing?: { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" } | null;
 	/** Enable account data sync for this device. Default false. */
 	dataSyncEnabled?: boolean;
-	workspaceModeAccountId?: string;
 	/** Friendly name used to partition this device's synced data. */
 	dataSyncDeviceName?: string;
 	/** Start boundary for this device's current explicit opt-in. */
@@ -1646,18 +1645,18 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 		// Native mode follows persisted account truth, including changes from
 		// another window. Invalidate before managed settings can be edited.
-		const modeKey = ({ user, workspaceModeAccountId }: Settings) => {
+		const modeKey = (user: Settings["user"]) => {
 			const entitlement = user?.entitlement;
 			const source = entitlement && typeof entitlement === "object" && !Array.isArray(entitlement)
 				? entitlement.source : null;
 			return JSON.stringify([
-				user?.id, user?.enterprise_account, workspaceModeAccountId,
+				user?.id, user?.enterprise_account,
 				getLocalPlanPolicy(user as any), source,
 			]);
 		};
-		let previousUser = modeKey(settings);
+		let previousUser = modeKey(settings.user);
 		const unsubscribe = settingsStore.listen((newSettings) => {
-			const nextUser = modeKey(newSettings);
+			const nextUser = modeKey(newSettings.user);
 			if (nextUser !== previousUser) {
 				previousUser = nextUser;
 				invalidateEnterpriseBuildStatus();
@@ -2083,6 +2082,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 					// tracking and eviction enforcement on the server.
 					body: JSON.stringify({
 						token,
+						prefer_workspace: true,
 						...(verify ? { verify: true } : {}),
 						...(settingsRef.current.deviceId
 							? { device_id: settingsRef.current.deviceId }
