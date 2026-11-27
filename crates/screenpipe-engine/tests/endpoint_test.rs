@@ -39,6 +39,15 @@ mod tests {
     }
 
     async fn setup_test_app() -> (Router, Arc<DatabaseManager>) {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        (test_router(Arc::clone(&db)).await, db)
+    }
+
+    async fn test_router(db: Arc<DatabaseManager>) -> Router {
         let unique_suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -47,12 +56,6 @@ mod tests {
             "screenpipe-endpoint-test-{}-{unique_suffix}",
             std::process::id()
         ));
-
-        let db = Arc::new(
-            DatabaseManager::new("sqlite::memory:", Default::default())
-                .await
-                .unwrap(),
-        );
 
         let audio_manager = Arc::new(
             AudioManagerBuilder::new()
@@ -76,7 +79,7 @@ mod tests {
 
         let router = app.create_router().await;
         init();
-        (router, db)
+        router
     }
 
     #[tokio::test]
@@ -493,6 +496,98 @@ mod tests {
         assert_eq!(fallback.status(), StatusCode::OK);
         let bytes = to_bytes(fallback.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), std::fs::read(&other).unwrap());
+    }
+
+    #[tokio::test]
+    async fn exact_frame_distinguishes_retention_missing_video_and_still_present_media() {
+        let (app, db) = setup_test_app().await;
+        let dir = tempfile::tempdir().unwrap();
+        let timestamp = Utc::now() - Duration::days(5);
+        let mut ids = Vec::new();
+        for (device, name, contents) in [
+            ("evicted", "evicted.mp4", None),
+            ("missing", "missing.mp4", None),
+            ("present", "present.mp4", Some(&b"still here"[..])),
+        ] {
+            let video = dir.path().join(name);
+            if let Some(contents) = contents {
+                std::fs::write(&video, contents).unwrap();
+            }
+            db.insert_video_chunk(video.to_str().unwrap(), device)
+                .await
+                .unwrap();
+            let frame_time = if device == "evicted" {
+                timestamp - Duration::hours(1)
+            } else {
+                timestamp
+            };
+            ids.push(
+                db.insert_frame(device, Some(frame_time), None, None, None, false, Some(0))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let result = db
+            .evict_media_in_range(
+                timestamp - Duration::hours(2),
+                timestamp - Duration::minutes(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.video_chunks_evicted, 1);
+        for (id, status, reason) in [
+            (ids[0], StatusCode::NOT_FOUND, "frame_media_unavailable"),
+            (ids[1], StatusCode::GONE, "video_file_missing"),
+            (ids[2], StatusCode::GONE, "video_corrupted"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/frames/{id}?fallback=false"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["frame_id"], id);
+            assert_eq!(body["error_type"], reason);
+        }
+        db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
+            identity: "retention-exact-frame-test".into(),
+            images: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let protected = test_router(db).await;
+        for (id, status, code) in [
+            (ids[0], StatusCode::NOT_FOUND, "frame_media_unavailable"),
+            (ids[2], StatusCode::SERVICE_UNAVAILABLE, "privacy_pending"),
+        ] {
+            let response = protected
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/frames/{id}?fallback=false"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body["error_type"].as_str().or(body["code"].as_str()),
+                Some(code)
+            );
+        }
     }
 
     #[tokio::test]

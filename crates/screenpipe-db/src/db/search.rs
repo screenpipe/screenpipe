@@ -1545,6 +1545,20 @@ impl DatabaseManager {
         }
     }
 
+    /// Check whether an exact frame lacks a local media location. The privacy
+    /// read adapter can hide the locations of images awaiting release, so
+    /// use the recording owner for this boolean and never expose its paths.
+    pub async fn exact_frame_media_location_absent(
+        &self,
+        frame_id: i64,
+    ) -> Result<bool, sqlx::Error> {
+        let owner = self.release_owner.as_deref().unwrap_or(self);
+        Ok(owner
+            .get_frame(frame_id)
+            .await?
+            .is_none_or(|(path, _, _)| path.is_empty()))
+    }
+
     /// Get timestamp for a frame. Used for deep link navigation (screenpipe://frame/123).
     pub async fn get_frame_timestamp(
         &self,
