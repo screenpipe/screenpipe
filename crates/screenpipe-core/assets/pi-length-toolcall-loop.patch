@@ -1,0 +1,88 @@
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -281,21 +281,74 @@
+             (this.agent.prepareNextTurn
+                 ? async (_turn, signal) => await this.agent.prepareNextTurn?.(signal)
+                 : undefined);
++        const previousShouldStopAfterTurn = this.agent.shouldStopAfterTurn;
++        // screenpipe-length-toolcall-loop-v1
++        // Truncated tool calls fail with synthetic error tool results and keep
++        // Pi's inner loop running (hasMoreToolCalls = true), bypassing both
++        // agent_end overflow recovery and the toolUse-only compaction check.
++        // Compact once here; stop the run if context still cannot fit output or
++        // consecutive truncated tool-call turns repeat without recovery.
++        const MIN_RETRY_OUTPUT_TOKENS = 256;
++        const CONTEXT_SAFETY_TOKENS = 4096;
++        this._truncatedToolTurns = 0;
++        this._compactedMessagesForNextTurn = undefined;
++        this.agent.shouldStopAfterTurn = async (turn, signal) => {
++            if (await previousShouldStopAfterTurn?.(turn, signal)) {
++                return true;
++            }
++            if (signal?.aborted) {
++                return false;
++            }
++            if (turn.message.stopReason !== "length" || turn.toolResults.length === 0) {
++                this._truncatedToolTurns = 0;
++                return false;
++            }
++            this._truncatedToolTurns += 1;
++            const messagesBefore = this.agent.state.messages;
++            if (this._truncatedToolTurns === 1) {
++                await this._checkCompaction(turn.message);
++                if (this.agent.state.messages !== messagesBefore) {
++                    this._compactedMessagesForNextTurn = this.agent.state.messages;
++                    return false;
++                }
++            }
++            else if (this._overflowRecoveryAttempted && this.model &&
++                turn.message.provider === this.model.provider && turn.message.model === this.model.id &&
++                (isContextOverflow(turn.message, this.model.contextWindow ?? 0) ||
++                    isRecoverableLength(turn.message, this.model.maxTokens ?? 0))) {
++                await this._checkCompaction(turn.message);
++            }
++            const window = this.model?.contextWindow ?? 0;
++            const estimate = estimateContextTokens(this.agent.state.messages);
++            const promptTokens = estimate.lastUsageIndex === null
++                ? Math.ceil((this.systemPrompt?.length ?? 0) / 4) : 0;
++            const availableOutput = window > 0
++                ? window - (estimate.tokens + promptTokens) - CONTEXT_SAFETY_TOKENS
++                : Number.POSITIVE_INFINITY;
++            if (signal?.aborted || availableOutput < MIN_RETRY_OUTPUT_TOKENS || this._truncatedToolTurns >= 2) {
++                // Prevent _handlePostAgentRun from re-running _checkCompaction on the same message.
++                this._lastAssistantMessage = undefined;
++                return true;
++            }
++            return false;
++        };
+         this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+             const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+             const previousContext = previousSnapshot?.context ?? turn.context;
++            const compactedMessages = this._compactedMessagesForNextTurn;
++            this._compactedMessagesForNextTurn = undefined;
+             const messagesBefore = this.agent.state.messages;
+             // All tools in this step have finished. Compact here without aborting
+             // the agent, then hand the rebuilt context to the next model call.
+-            if (!signal?.aborted && turn.message.stopReason === "toolUse") {
++            if (!signal?.aborted && !compactedMessages && turn.message.stopReason === "toolUse") {
+                 await this._checkCompaction(turn.message);
+             }
+             return {
+                 ...previousSnapshot,
+                 context: {
+                     ...previousContext,
+-                    messages: this.agent.state.messages !== messagesBefore
+-                        ? this.agent.state.messages : previousContext.messages,
++                    messages: compactedMessages ?? (this.agent.state.messages !== messagesBefore
++                        ? this.agent.state.messages : previousContext.messages),
+                     systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+                     tools: this.agent.state.tools.slice(),
+                 },
+@@ -355,6 +408,7 @@
+         // This ensures the UI sees the updated queue state
+         if (event.type === "message_start" && event.message.role === "user") {
+             this._overflowRecoveryAttempted = false;
++            this._truncatedToolTurns = 0;
+             const messageText = contentText(event.message.content, "");
+             if (messageText) {
+                 // Check steering queue first

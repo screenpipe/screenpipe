@@ -28,6 +28,8 @@ const CHUNKS_PATCH: &str = include_str!("../../assets/pi-summary-chunks.patch");
 const CHUNKS_MARKER: &str = "// screenpipe-summary-chunks-v1\n";
 const BUDGET_PATCH: &str = include_str!("../../assets/pi-summary-budget.patch");
 const BUDGET_MARKER: &str = "// screenpipe-summary-budget-v1\n";
+const LENGTH_LOOP_PATCH: &str = include_str!("../../assets/pi-length-toolcall-loop.patch");
+const LENGTH_LOOP_MARKER: &str = "// screenpipe-length-toolcall-loop-v1\n";
 static PATCH_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn ensure_for_entrypoint(entrypoint: &Path) -> Result<()> {
@@ -73,6 +75,7 @@ pub fn ensure(install_dir: &Path) -> Result<()> {
                 (PATCH, MARKER),
                 (FAILURE_PATCH, FAILURE_MARKER),
                 (BUDGET_PATCH, BUDGET_MARKER),
+                (LENGTH_LOOP_PATCH, LENGTH_LOOP_MARKER),
             ][..],
         ),
         (
@@ -142,6 +145,7 @@ mod tests {
             CLAUDE_THINKING_PATCH,
             CHUNKS_PATCH,
             BUDGET_PATCH,
+            LENGTH_LOOP_PATCH,
         ] {
             let lf = asset.replace("\r\n", "\n");
             for patch in [&lf, &lf.replace('\n', "\r\n")] {
@@ -175,6 +179,10 @@ mod tests {
         );
         assert!(patched_source_with_marker(MARKER, FAILURE_PATCH, FAILURE_MARKER).is_err());
         assert!(
+            patched_source_with_marker(BUDGET_MARKER, LENGTH_LOOP_PATCH, LENGTH_LOOP_MARKER)
+                .is_err()
+        );
+        assert!(
             patched_source_with_marker(CONTRACT_MARKER, CONTRACT_PATCH, CONTRACT_MARKER)
                 .unwrap()
                 .is_none()
@@ -184,6 +192,13 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        assert!(patched_source_with_marker(
+            LENGTH_LOOP_MARKER,
+            LENGTH_LOOP_PATCH,
+            LENGTH_LOOP_MARKER
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
