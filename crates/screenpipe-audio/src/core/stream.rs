@@ -340,6 +340,13 @@ impl AudioStream {
         let _ = macos_input_vpio;
         let input_vpio = false;
 
+        #[cfg(target_os = "windows")]
+        let config = if input_aec {
+            super::device::with_aec_call_format(&cpal_audio_device, config)
+        } else {
+            config
+        };
+
         let audio_config = AudioStreamConfig::from(&config);
         let channels = config.channels();
 
@@ -374,10 +381,10 @@ impl AudioStream {
         macos_input_vpio: bool,
     ) -> Result<tokio::task::JoinHandle<()>> {
         let device_name = device.name()?;
-        #[cfg(target_os = "windows")]
-        let use_aec = windows_input_aec;
 
         Ok(tokio::task::spawn_blocking(move || {
+            #[cfg(target_os = "windows")]
+            let mut aec_on = windows_input_aec;
             // Primary attempt: the "best" config get_cpal_device_and_config
             // picked (highest sample rate × most channels from
             // supported_input_configs). On Windows 11 24H2 WASAPI sometimes
@@ -429,8 +436,8 @@ impl AudioStream {
                                 Ok(s) => Some(s),
                                 Err(fallback_err) => {
                                     // Last resort: disable Windows AEC and try again.
-                                    // Some USB mics (e.g. Logitech C922) reject AEC even
-                                    // at the shared-mode format — fall back to plain capture.
+                                    // A mic that rejects AEC even in its call-mode
+                                    // format falls back to plain capture.
                                     #[cfg(target_os = "windows")]
                                     if windows_input_aec {
                                         warn!(
@@ -453,6 +460,7 @@ impl AudioStream {
                                             macos_input_vpio,
                                         ) {
                                             Ok(s) => {
+                                                aec_on = false;
                                                 warn!(
                                                     "AEC disabled as last resort for {} — mic works but echo cancellation is off",
                                                     device_name
@@ -516,10 +524,10 @@ impl AudioStream {
                 }
 
                 #[cfg(target_os = "windows")]
-                if use_aec {
+                if aec_on {
                     info!(
                         device = %device_name,
-                        "screenpipe-audio: WASAPI microphone capture running with AEC enabled"
+                        "screenpipe-audio: WASAPI microphone capture running with AEC (communications mode)"
                     );
                 }
 
@@ -783,9 +791,9 @@ fn is_wasapi_unsupported_format(err: &anyhow::Error) -> bool {
         // device's current shared-mode mix format is the safe retry.
         || s.to_ascii_lowercase().contains("0x887c001e")
         || s.to_lowercase().contains("unsupported format")
-        // WASAPI with AEC enabled rejects non-default configs with this message
-        // (seen on Logitech C922 and other USB mics). The existing fallback to
-        // default_input_config() already handles this correctly once we match it.
+        // WASAPI with AEC enabled rejects a config that is not the endpoint's
+        // call-mode format with this message (seen on Logitech C922 and other
+        // USB mics).
         || s.to_lowercase().contains("not supported by the device")
 }
 
@@ -1300,5 +1308,48 @@ mod wasapi_format_tests {
         assert!(is_wasapi_unsupported_format(&err(
             "A backend-specific error has occurred: 0x887C001E"
         )));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_aec_hardware_tests {
+    use super::*;
+
+    /// Live: the default mic must keep Windows AEC. Some USB webcam mics
+    /// change their mix format in the Communications category and reject
+    /// the 2ch default, so the build fails.
+    ///
+    ///   cargo test -p screenpipe-audio --lib aec_stream_opens_on_default_input \
+    ///     -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires real Windows audio hardware; run manually"]
+    async fn aec_stream_opens_on_default_input() {
+        let device = super::super::device::default_input_device().expect("default input");
+        let (cpal_device, config) = get_cpal_device_and_config(&device).await.expect("config");
+        let config = super::super::device::with_aec_call_format(&cpal_device, config);
+        let (tx, mut rx) = broadcast::channel(1024);
+        let stream = build_input_stream(
+            &cpal_device,
+            &config,
+            config.channels(),
+            tx,
+            |e| eprintln!("stream error: {e}"),
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("AEC build failed for {device}: {e}"));
+        stream.play().expect("play");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        drop(stream);
+        let mut samples = 0;
+        while let Ok(chunk) = rx.try_recv() {
+            samples += chunk.len();
+        }
+        println!(
+            "{device}: {}ch {}Hz, {samples} samples in 1s",
+            config.channels(),
+            config.sample_rate().0
+        );
+        assert!(samples > 0, "no samples arrived from {device}");
     }
 }

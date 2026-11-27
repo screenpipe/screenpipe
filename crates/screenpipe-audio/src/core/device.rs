@@ -197,6 +197,70 @@ pub fn input_device_is_bluetooth(bare_name: &str) -> Option<bool> {
         .flatten()
 }
 
+/// `config` reshaped for a Windows AEC capture stream. Windows endpoint AEC
+/// needs the Communications audio category, and some mics change their mix
+/// format in it (USB webcam mics: 2ch -> 1ch at 48 kHz) and reject their default
+/// shape. Returns `config` unchanged when the endpoint can't be queried, the
+/// shapes match, or the call-mode rate differs (see `aec_channels`).
+#[cfg(target_os = "windows")]
+pub(crate) fn with_aec_call_format(
+    device: &cpal::Device,
+    config: cpal::SupportedStreamConfig,
+) -> cpal::SupportedStreamConfig {
+    let Ok(name) = device.name() else {
+        return config;
+    };
+    let call_mode = match unsafe { windows_com_audio::communications_mix_shape(&name) } {
+        Ok(shape) => shape,
+        Err(e) => {
+            tracing::warn!("AEC call-mode format query failed for '{}': {}", name, e);
+            return config;
+        }
+    };
+    let default = (config.channels(), config.sample_rate().0);
+    match aec_channels(default, call_mode) {
+        Some(channels) => {
+            tracing::info!(
+                "AEC: opening {} in call-mode format {}ch {}Hz (default {}ch)",
+                name,
+                channels,
+                default.1,
+                default.0
+            );
+            cpal::SupportedStreamConfig::new(
+                channels,
+                config.sample_rate(),
+                *config.buffer_size(),
+                config.sample_format(),
+            )
+        }
+        None => {
+            if call_mode != default {
+                tracing::warn!(
+                    "AEC: {} call-mode format {}ch {}Hz can't be used (default {}ch {}Hz), keeping default; AEC may be dropped",
+                    name,
+                    call_mode.0,
+                    call_mode.1,
+                    default.0,
+                    default.1
+                );
+            }
+            config
+        }
+    }
+}
+
+/// Channel count to request so a Windows AEC stream opens, or `None` to keep
+/// the default. Shapes are `(channels, sample_rate)`. The rate never changes:
+/// `AudioStreamConfig` is fixed before the capture thread starts and the
+/// fallback rungs reopen at the default rate, so another rate would reach the
+/// resampler unannounced.
+#[cfg(any(target_os = "windows", test))]
+fn aec_channels(default: (u16, u32), call_mode: (u16, u32)) -> Option<u16> {
+    let (channels, rate) = call_mode;
+    (channels > 0 && rate == default.1 && channels != default.0).then_some(channels)
+}
+
 /// PipeWire and PulseAudio expose the source's actual device bus in the
 /// `device.bus` property. Unlike a display name, this distinguishes a USB
 /// 2.4 GHz receiver from Bluetooth.
@@ -1580,6 +1644,50 @@ mod windows_com_audio {
         Err(anyhow!("capture endpoint '{}' not found", bare_name))
     }
 
+    /// Mix format `(channels, sample_rate)` of capture endpoint `bare_name`
+    /// after `SetClientProperties(Communications)`. Mirrors the cpal fork's
+    /// `maybe_set_input_aec_properties`; keep the properties identical, since
+    /// cpal's `IsFormatSupported` check runs against this format. No `Initialize`.
+    pub unsafe fn communications_mix_shape(bare_name: &str) -> Result<(u16, u32)> {
+        use windows::core::Interface;
+        use windows::Win32::Foundation::FALSE;
+        use windows::Win32::Media::Audio::{
+            eCapture, AudioCategory_Communications, AudioClientProperties, IAudioClient,
+            IAudioClient2, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_STREAMOPTIONS_NONE,
+            DEVICE_STATE_ACTIVE,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        let _com = ComApartment::enter();
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let captures = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
+
+        for i in 0..captures.GetCount()? {
+            let Ok(device) = captures.Item(i) else {
+                continue;
+            };
+            if endpoint_friendly_name(&device).ok().as_deref() != Some(bare_name) {
+                continue;
+            }
+            let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+            client
+                .cast::<IAudioClient2>()?
+                .SetClientProperties(&AudioClientProperties {
+                    cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
+                    bIsOffload: FALSE,
+                    eCategory: AudioCategory_Communications,
+                    Options: AUDCLNT_STREAMOPTIONS_NONE,
+                })?;
+            let format = client.GetMixFormat()?;
+            let shape = ((*format).nChannels, (*format).nSamplesPerSec);
+            CoTaskMemFree(Some(format as _));
+            return Ok(shape);
+        }
+
+        Err(anyhow!("capture endpoint '{}' not found", bare_name))
+    }
+
     /// True when the endpoint has at least one Active audio session owned by
     /// a process other than ours. An Active session means an app holds an
     /// open render stream — the reliable "something plays (or is about to
@@ -1954,6 +2062,36 @@ mod windows_com_audio {
                 println!("device '{name}': is_combo_headset={is_combo}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod aec_channels_tests {
+    use super::aec_channels;
+
+    #[test]
+    fn webcam_call_mode_drops_to_mono() {
+        assert_eq!(aec_channels((2, 48_000), (1, 48_000)), Some(1));
+    }
+
+    #[test]
+    fn same_shape_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (2, 48_000)), None);
+    }
+
+    #[test]
+    fn different_rate_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (1, 16_000)), None);
+    }
+
+    #[test]
+    fn zero_channels_keeps_default() {
+        assert_eq!(aec_channels((2, 48_000), (0, 48_000)), None);
+    }
+
+    #[test]
+    fn mono_default_follows_stereo_call_mode() {
+        assert_eq!(aec_channels((1, 48_000), (2, 48_000)), Some(2));
     }
 }
 
