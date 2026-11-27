@@ -2003,14 +2003,17 @@ mod imp {
         NativeAuthorizationResult::Unavailable("enterprise policy could not be verified".into())
     }
 
+    // Called only after a current Enterprise policy grant. Package branding is
+    // not the authorization boundary for an account-managed install.
     fn raw_capture_scope(
+        managed: bool,
         policy: &NativeEnterprisePolicy,
         policy_url: &str,
         device_id: &str,
     ) -> Option<crate::enterprise::raw_upload::Scope> {
         use crate::enterprise::{raw_upload, raw_upload_attestation};
         if !raw_upload_attestation::startup_allowed(
-            crate::app_mode::is_enterprise_package(),
+            managed,
             policy.locked_settings.get("cloudProcessing"),
         ) {
             return None;
@@ -2063,7 +2066,12 @@ mod imp {
                 }
                 let (policy_url, _) = authorization_endpoint_urls();
                 let device_id = settings_device_id(app).unwrap_or_else(|| "unknown".to_string());
-                if let Some(scope) = raw_capture_scope(policy, &policy_url, &device_id) {
+                if let Some(scope) = raw_capture_scope(
+                    crate::app_mode::is_managed(app),
+                    policy,
+                    &policy_url,
+                    &device_id,
+                ) {
                     configure_raw_spool(&scope);
                 } else {
                     screenpipe_core::raw_capture_ledger::disable();
@@ -2379,7 +2387,14 @@ mod imp {
                             next_poll = NATIVE_POLICY_RETRY_INTERVAL;
                         }
                         let scope = settings_prepared
-                            .then(|| raw_capture_scope(&policy, &policy_url, &device_id))
+                            .then(|| {
+                                raw_capture_scope(
+                                    crate::app_mode::is_managed(&app),
+                                    &policy,
+                                    &policy_url,
+                                    &device_id,
+                                )
+                            })
                             .flatten()
                             .map(Arc::new);
                         if scope != raw_upload_scope {
@@ -4511,6 +4526,23 @@ mod imp {
             let response: NativePolicyResponse =
                 serde_json::from_value(serde_json::json!({})).unwrap();
             assert!(response.into_native_policy().auto_connect_ai_tools);
+        }
+
+        #[test]
+        fn raw_capture_scope_requires_managed_mode_and_explicit_policy() {
+            let policy_url = "https://screenpipe.com/api/enterprise/policy";
+            let device_id = "sp_device_v1_0123456789abcdef0123456789abcdef";
+            let mut policy = serde_json::from_value::<NativePolicyResponse>(serde_json::json!({
+                "licenseId": "10000000-0000-4000-8000-000000000001",
+                "lockedSettings": { "cloudProcessing": true },
+            }))
+            .unwrap()
+            .into_native_policy();
+
+            assert!(raw_capture_scope(true, &policy, policy_url, device_id).is_some());
+            assert!(raw_capture_scope(false, &policy, policy_url, device_id).is_none());
+            policy.locked_settings.remove("cloudProcessing");
+            assert!(raw_capture_scope(true, &policy, policy_url, device_id).is_none());
         }
 
         #[test]

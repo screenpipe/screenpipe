@@ -12,10 +12,10 @@ use tokio::sync::OnceCell;
 const ENDPOINT: &str = "https://screenpipe.com/api/enterprise/raw-uploads/attestation";
 
 pub(crate) fn startup_allowed(
-    enterprise_edition: bool,
+    managed: bool,
     policy: Option<&serde_json::Value>,
 ) -> bool {
-    enterprise_edition && policy == Some(&serde_json::Value::Bool(true))
+    managed && policy == Some(&serde_json::Value::Bool(true))
 }
 
 #[derive(Debug)]
@@ -142,7 +142,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
-    fn startup_requires_enterprise_edition_and_explicit_cloud_processing_consent() {
+    fn startup_requires_managed_mode_and_explicit_cloud_processing_consent() {
         assert!(startup_allowed(true, Some(&json!(true))));
         assert!(!startup_allowed(false, Some(&json!(true))));
         assert!(!startup_allowed(true, Some(&json!(false))));
