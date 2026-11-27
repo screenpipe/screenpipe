@@ -5,7 +5,7 @@
 //! OUT MODE MONITOR FRAMES INTERVAL_MS [FPS]; MODE=exclude/include/none/empty/policy-cycle.
 //! INTERVAL_MS schedules request starts; slow runs still finish every request.
 //! Windows `cadence` mode uses the configured FPS instead of INTERVAL_MS and
-//! checks that each slot yields a fresh, useful, redacted frame on one stream.
+//! checks that each slot yields a fresh, useful, redacted screenshot.
 use screenpipe_screen::{
     capture_screenshot_by_window::{ExclusionSources, WindowFilters},
     monitor::{get_default_monitor, get_monitor_by_id},
@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         snapshot_width,
     );
     #[cfg(target_os = "windows")]
-    let mut previous_frame = if cadence {
+    let mut previous_observation = if cadence {
         let warmup = capture_monitor_frame_for_snapshot(
             &monitor,
             &filters,
@@ -113,11 +113,7 @@ async fn main() -> anyhow::Result<()> {
             snapshot_width,
         )
         .await?;
-        Some((
-            warmup.session_id,
-            warmup.sequence,
-            warmup.system_relative_time,
-        ))
+        Some(warmup.captured_at)
     } else {
         None
     };
@@ -168,15 +164,11 @@ async fn main() -> anyhow::Result<()> {
                 let native_sequence = frame.sequence;
                 let session_id = frame.session_id;
                 #[cfg(target_os = "windows")]
-                if let Some(previous) = &mut previous_frame {
-                    if session_id.is_none()
-                        || previous.0 != session_id
-                        || !matches!((previous.1, native_sequence), (Some(last), Some(current)) if current > last)
-                        || !matches!((previous.2, system_relative_time), (Some(last), Some(current)) if current > last)
-                    {
+                if let Some(previous) = &mut previous_observation {
+                    if frame.captured_at <= *previous {
                         cadence_violations += 1;
                     }
-                    *previous = (session_id, native_sequence, system_relative_time);
+                    *previous = frame.captured_at;
                 }
                 let gpu_resized = frame.snapshot_image.is_some();
                 let image = frame.image;
@@ -270,7 +262,7 @@ async fn main() -> anyhow::Result<()> {
                 && cadence_violations == 0
                 && missed_deadlines == 0
                 && elapsed <= budget,
-            "{target_fps} fps verification failed: {saved}/{count} stored, {usable}/{count} useful, {leaked} leaked, {cadence_violations} repeated/missing/changed source frames, {missed_deadlines} missed deadlines, elapsed {elapsed:?}, budget {budget:?}"
+            "{target_fps} fps verification failed: {saved}/{count} stored, {usable}/{count} useful, {leaked} leaked, {cadence_violations} nonadvancing observations, {missed_deadlines} missed deadlines, elapsed {elapsed:?}, budget {budget:?}"
         );
     }
     #[cfg(target_os = "windows")]

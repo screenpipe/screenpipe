@@ -262,6 +262,7 @@ mod tests {
             raw_ocr.contains("EXCLUDED") && raw_ocr.contains("VIOLET"),
             "{raw_ocr}"
         );
+        monitor.release_capture_stream();
 
         let filters = WindowFilters::new(&["::PrivacyBlocked".into()], &[], &[]);
         let (preview, _) = bounded_visual_probe(
@@ -360,7 +361,9 @@ mod tests {
         )
         .await
         .expect("repeated frame");
-        assert_eq!(before_stop.session_id, repeated.session_id);
+        assert!(before_stop.session_id.is_none());
+        assert!(repeated.session_id.is_none());
+        assert!(repeated.captured_at > before_stop.captured_at);
         monitor.release_capture_stream();
         let restarted = capture_monitor_frame_filtered(
             &monitor,
@@ -371,7 +374,8 @@ mod tests {
         )
         .await
         .expect("frame after restart");
-        assert_ne!(before_stop.session_id, restarted.session_id);
+        assert!(restarted.session_id.is_none());
+        assert!(restarted.captured_at > repeated.captured_at);
         println!(
             "{}",
             serde_json::json!({
@@ -385,8 +389,7 @@ mod tests {
                 "stored_allowed_pixels": reopened_allowed,
                 "stored_excluded_pixels": reopened_blocked,
                 "frame_id": stored.frame_id,
-                "repeated_session_id": repeated.session_id,
-                "restarted_session_id": restarted.session_id,
+                "strict_capture_without_display_session": restarted.session_id.is_none(),
             })
         );
 

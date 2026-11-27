@@ -1138,7 +1138,7 @@ pub async fn start_monitor_watcher(
 
             #[cfg(target_os = "windows")]
             for monitor in &current_monitors {
-                vision_manager.refresh_streaming_monitor_geometry(monitor);
+                vision_manager.refresh_windows_monitor_geometry(monitor);
             }
 
             // Get currently recording monitors

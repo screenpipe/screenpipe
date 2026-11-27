@@ -113,6 +113,7 @@ windows = { workspace = true, features = [
   "Storage",
   "Storage_Streams",
   "Foundation_Collections",
+  "Foundation_Metadata",
   # Direct WGC integration for wgc_capture.rs (bypasses xcap's persistent video
   # recorder, which CPU-converts every compositor frame — see issue #4840).
   "Graphics_Capture",

@@ -567,18 +567,14 @@ fn restore_opaque_witness_pixel(trusted: &[u8], target: &mut [u8]) {
     }
 }
 
-fn authorize_candidate(
+fn compose_window_screenshot(
     monitor: &MonitorData,
     filters: &WindowFilters,
     sources: ExclusionSources,
     excluded_ids: &[u32],
     scene: &[NativeWindow],
-    candidate: &RgbaImage,
     session: &mut PrivacySession,
 ) -> Result<DynamicImage> {
-    if (candidate.width(), candidate.height()) != (monitor.width, monitor.height) {
-        bail!("buffered display size does not match monitor");
-    }
     session.witnesses.retain(|identity, _| {
         scene.iter().any(|window| {
             window.policy == SurfacePolicy::Allowed && (window.id, window.pid) == *identity
@@ -737,52 +733,55 @@ pub(super) async fn capture_filtered(
         return capture_streaming_cpu(monitor, geometry, filters, sources, excluded_ids, permit)
             .await;
     }
-    let monitor_info = monitor.get_info();
-    let candidate = monitor.capture_native_frame_streaming().await?;
-    privacy
-        .inner
-        .lock()
-        .map_err(|_| anyhow!("privacy session mutex poisoned"))?
-        .streaming
-        .take();
+    // The strict screenshot is composed entirely from allowed window surfaces.
+    // It can be recorded even when a full-display WGC session has no usable frame.
+    let geometry = monitor.streaming_geometry();
+    let monitor_info = geometry.clone();
     let filters = filters.clone();
     let excluded_ids = excluded_ids.to_vec();
-    let before_info = monitor_info.clone();
-    let before_filters = filters.clone();
-    let before_ids = excluded_ids.clone();
-    let scene = tokio::task::spawn_blocking(move || {
-        snapshot(&before_info, &before_filters, sources, &before_ids)
-    })
-    .await
-    .context("Windows privacy scene worker failed")??;
-    let session_id = candidate.session_id;
-    let qpc = candidate.system_relative_time;
-    let sequence = candidate.sequence;
-    let captured_at = candidate.captured_at;
     let work = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        if monitor_info.width == 0 || monitor_info.height == 0 {
+            bail!("missing monitor pixel dimensions");
+        }
+        let captured_at = chrono::Utc::now();
+        let scene = snapshot(&monitor_info, &filters, sources, &excluded_ids)
+            .context("snapshot Windows scene before window capture")?;
         let mut session = privacy
             .inner
             .lock()
             .map_err(|_| anyhow!("privacy session mutex poisoned"))?;
-        authorize_candidate(
+        session.streaming.take();
+        let image = compose_window_screenshot(
             &monitor_info,
             &filters,
             sources,
             &excluded_ids,
             &scene,
-            candidate
-                .image
-                .as_rgba8()
-                .context("WGC display frame is not RGBA8")?,
             &mut session,
-        )
-        .map(|image| pixels(image, None, session_id, qpc, sequence, captured_at))
+        )?;
+        // The capture time describes a composite scene observation. There is
+        // no single native timestamp or stream sequence for its window surfaces.
+        Ok(super::CapturedPixels {
+            image,
+            snapshot_image: None,
+            captured_at,
+            native_timestamp: false,
+            system_relative_time: None,
+            sequence: None,
+            session_id: None,
+            streaming_mask_verified: false,
+        })
     });
-    tokio::time::timeout(Duration::from_secs(5), work)
+    let result = tokio::time::timeout(Duration::from_secs(5), work)
         .await
         .map_err(|_| anyhow!("window-filtered capture timed out"))?
-        .context("Windows privacy capture worker failed")?
+        .context("Windows privacy capture worker failed")??;
+    anyhow::ensure!(
+        std::sync::Arc::ptr_eq(&geometry, &monitor.streaming_geometry()),
+        "monitor geometry changed during Windows window capture"
+    );
+    Ok(result)
 }
 
 async fn capture_streaming_cpu(
@@ -1104,40 +1103,28 @@ mod tests {
         assert_eq!(target, [0, 0, 0, 255]);
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "requires a live unlocked Windows console"]
-    fn filtered_capture_keeps_full_monitor_dimensions() {
-        let monitor = xcap::Monitor::all()
-            .expect("enumerate monitors")
-            .into_iter()
-            .next()
-            .expect("monitor");
-        let info = MonitorData {
-            name: monitor.name().expect("monitor name"),
-            width: monitor.width().expect("monitor width"),
-            height: monitor.height().expect("monitor height"),
-            x: monitor.x().expect("monitor x"),
-            y: monitor.y().expect("monitor y"),
-            is_primary: monitor.is_primary().expect("monitor primary"),
-        };
+    async fn filtered_capture_keeps_full_monitor_dimensions() {
+        let monitors = xcap::Monitor::all().expect("enumerate monitors");
+        assert!(!monitors.is_empty());
         let filters = WindowFilters::new(&["__screenpipe_no_match__".into()], &[], &[]);
-        let candidate = PersistentCapture::new(monitor.id().expect("id"))
-            .expect("display session")
-            .get_latest_image_streaming(Duration::from_secs(2))
-            .expect("display frame")
-            .into_rgba8();
-        let scene =
-            snapshot(&info, &filters, ExclusionSources::default(), &[]).expect("scene snapshot");
-        let image = authorize_candidate(
-            &info,
-            &filters,
-            ExclusionSources::default(),
-            &[],
-            &scene,
-            &candidate,
-            &mut PrivacySession::default(),
-        )
-        .expect("filtered capture");
-        assert_eq!((image.width(), image.height()), (info.width, info.height));
+        for native in monitors {
+            let monitor = SafeMonitor::new(native);
+            let frame = crate::screenshot_privacy::capture_monitor_frame_filtered(
+                &monitor,
+                &filters,
+                ExclusionSources::default(),
+                &[],
+                false,
+            )
+            .await
+            .expect("filtered capture without a display stream");
+            assert_eq!(
+                (frame.image.width(), frame.image.height()),
+                (monitor.width(), monitor.height())
+            );
+            assert!(frame.session_id.is_none());
+        }
     }
 }
