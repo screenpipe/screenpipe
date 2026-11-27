@@ -26,21 +26,25 @@ try {
     const patcher = ["cargo", "run", "--locked", "-p", "screenpipe-core",
       "--example", "patch_pi_compaction", "--", root];
     await run(patcher, repo);
-    const runtime = join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js");
-    const patched = await readFile(runtime, "utf8");
-    const serializer = join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/utils.js");
-    const patchedSerializer = await readFile(serializer, "utf8");
-    const summarizer = join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js");
-    const patchedSummarizer = await readFile(summarizer, "utf8");
-    const transport = join(root, "node_modules/@earendil-works/pi-ai/dist/utils/error-body.js");
-    const patchedTransport = await readFile(transport, "utf8");
+    const files = [
+      "pi-coding-agent/dist/core/agent-session.js",
+      "pi-coding-agent/dist/core/compaction/utils.js",
+      "pi-coding-agent/dist/core/compaction/compaction.js",
+      "pi-ai/dist/utils/error-body.js",
+      "pi-ai/dist/api/anthropic-messages.js",
+    ].map(file => join(root, "node_modules/@earendil-works", file));
+    const patched = await Promise.all(files.map(file => readFile(file, "utf8")));
     await run(patcher, repo);
-    if (await readFile(runtime, "utf8") !== patched || await readFile(serializer, "utf8") !== patchedSerializer || await readFile(summarizer, "utf8") !== patchedSummarizer || await readFile(transport, "utf8") !== patchedTransport) {
-      throw new Error("Pi compaction patch changed an already-patched runtime");
+    for (const [index, file] of files.entries()) {
+      if (await readFile(file, "utf8") !== patched[index]) {
+        throw new Error(`Pi patch changed an already-patched file: ${file}`);
+      }
     }
   }
-  const testFile = process.argv.includes("--transport") ? "pi-transport-cause.test.ts" : "pi-context-compaction.test.ts";
-  await run([process.execPath, "test", join(repo, "crates/screenpipe-core/assets", testFile)], root,
+  const testFiles = process.argv.includes("--transport") ? ["pi-transport-cause.test.ts"]
+    : process.argv.includes("--thinking") ? ["pi-claude-thinking-binding.test.ts"]
+    : ["pi-context-compaction.test.ts", "pi-claude-thinking-binding.test.ts"];
+  await run([process.execPath, "test", ...testFiles.map(file => join(repo, "crates/screenpipe-core/assets", file))], root,
     { ...process.env, SCREENPIPE_TEST_PI_DIR: root });
 } finally {
   await rm(root, { recursive: true, force: true });
