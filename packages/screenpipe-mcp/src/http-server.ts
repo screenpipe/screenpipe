@@ -36,7 +36,7 @@ import { CHAT_SEARCH_TOOL, searchChats } from "./chat-search";
 import { PKG_VERSION } from "./version";
 import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { normalizeTimeFields } from "./time-normalization";
-import { createMcpQualifiedValueReporter, resolveMcpClient, type McpClient } from "./qualified-value";
+import { resolveMcpClient, type McpClient } from "./qualified-value";
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
@@ -241,7 +241,6 @@ function makeFetchAPI(screenpipePort: number, client: () => McpClient) {
 async function handleSearchContent(
   fetchAPI: ReturnType<typeof makeFetchAPI>,
   args: Record<string, unknown>,
-  qualifiedValue: ReturnType<typeof createMcpQualifiedValueReporter>,
 ) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(normalizeTimeFields(args))) {
@@ -280,8 +279,6 @@ async function handleSearchContent(
   const formattedResults = hits.map((hit: NonNullable<ReturnType<typeof formatSearchHit>>) => hit.text);
   const header = searchResultHeader(results.length, pagination);
 
-  if (formattedResults.length > 0) qualifiedValue.searchResult();
-
   return {
     content: [
       {
@@ -309,10 +306,6 @@ function createMcpServer(screenpipePort: number): Server {
   // never carry over to another connected client.
   const client = () => resolveMcpClient(process.env.SCREENPIPE_MCP_CLIENT, s.getClientVersion()?.name);
   const fetchAPI = makeFetchAPI(screenpipePort, client);
-  const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
-    fetchAPI("/internal/telemetry/mcp-value", { method: "POST", body: JSON.stringify(payload) }),
-    client,
-  );
 
   s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, CHAT_SEARCH_TOOL, BUNDLED_SKILLS_TOOL] }));
 
@@ -329,7 +322,7 @@ function createMcpServer(screenpipePort: number): Server {
     if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
     if (!args) throw Object.assign(new Error("Missing arguments"), { status: 400 });
     if (name === CHAT_SEARCH_TOOL.name) return searchChats(args, fetchAPI);
-    if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
+    if (name === "search_content") return handleSearchContent(fetchAPI, args);
     throw Object.assign(new Error(`Unknown tool: ${name}`), { status: 400 });
   }));
 

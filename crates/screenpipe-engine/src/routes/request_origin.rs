@@ -26,6 +26,7 @@ enum RequestSource {
     Api,
 }
 
+#[allow(dead_code)]
 impl ExplicitApiClient {
     pub(crate) fn is_direct_api(&self) -> bool {
         self.source == RequestSource::Api
@@ -127,59 +128,6 @@ mod tests {
         );
         assert!(!extract(None).await.is_direct_api());
         assert_eq!(extract(None).await.source_label(), "app");
-    }
-
-    #[tokio::test]
-    async fn every_request_origin_is_sampled_without_hiding_other_clients() {
-        let reports = crate::analytics::SearchReportLimiter::new();
-        for (source, agent) in [
-            (None, None),
-            (Some("api"), None),
-            (Some("mcp"), None),
-            (Some("api"), Some("codex")),
-            (Some("API"), Some("claude-code")),
-        ] {
-            let client = extract_agent(source, agent).await;
-            assert!(reports.should_report(
-                client.source_label(),
-                client.agent_client(),
-                false,
-                true,
-                1,
-            ));
-            for _ in 0..1000 {
-                assert!(!reports.should_report(
-                    client.source_label(),
-                    client.agent_client(),
-                    false,
-                    true,
-                    1,
-                ));
-            }
-            assert!(reports.should_report(
-                client.source_label(),
-                client.agent_client(),
-                false,
-                true,
-                2,
-            ));
-        }
-        // Missing and untrusted headers share existing buckets, not bypasses.
-        for (source, agent) in [
-            (Some("app"), None),
-            (Some("private-project"), None),
-            (Some("api"), Some("private-project")),
-            (Some("MCP"), Some("unknown")),
-        ] {
-            let client = extract_agent(source, agent).await;
-            assert!(!reports.should_report(
-                client.source_label(),
-                client.agent_client(),
-                false,
-                true,
-                2,
-            ));
-        }
     }
 
     #[tokio::test]

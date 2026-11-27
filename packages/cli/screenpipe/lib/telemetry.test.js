@@ -103,13 +103,13 @@ test("supportTelemetryContext accepts legacy env aliases", () => {
 });
 
 test("posthogPayload wraps event without adding private command args", () => {
-  const payload = posthogPayload("cli_command_started", {
+  const payload = posthogPayload("cli_command_completed", {
     distinct_id: "id",
     command_family: "connection",
     command_action: "set",
   });
 
-  assert.equal(payload.event, "cli_command_started");
+  assert.equal(payload.event, "cli_command_completed");
   assert.equal(payload.properties.command_family, "connection");
   assert.equal(payload.properties.command_action, "set");
   assert.equal(JSON.stringify(payload).includes("webhook_url"), false);

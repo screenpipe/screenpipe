@@ -26,10 +26,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::error;
 
-use super::request_origin::ExplicitApiClient;
 use crate::history_access::HistoryAccessPolicy;
 use crate::server::AppState;
-use crate::{analytics, qualified_value::ApiOutcomeKind};
 use screenpipe_db::{DatabaseManager, Order, SemanticContextQuery};
 
 /// Frames more than this many seconds apart are treated as idle (screen
@@ -322,7 +320,6 @@ pub struct ActivitySummaryResponse {
 pub(crate) async fn get_activity_summary(
     State(state): State<Arc<AppState>>,
     Query(mut query): Query<ActivitySummaryQuery>,
-    api_client: ExplicitApiClient,
     super::search::OptionalPipePerms(perms): super::search::OptionalPipePerms,
 ) -> Result<JsonResponse<ActivitySummaryResponse>, (StatusCode, JsonResponse<Value>)> {
     if query.start_time >= query.end_time {
@@ -448,16 +445,6 @@ pub(crate) async fn get_activity_summary(
         "privacy_processing".into()
     };
     let query_status = compute_query_status(memory_query, memories_for_status, snippets_for_status);
-
-    if api_client.is_direct_api() && data_status == "ok" {
-        analytics::capture_event_nonblocking(
-            "qualified_value_event",
-            crate::qualified_value::api_outcome_properties(
-                ApiOutcomeKind::ActivitySummary,
-                api_client.agent_client(),
-            ),
-        );
-    }
 
     let guidance = if query.include_guidance {
         Some(build_guidance(

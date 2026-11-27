@@ -125,14 +125,6 @@ describe("NotificationFeedback", () => {
       "notification_feedback_submitted",
       expect.objectContaining({ feedback_rating: "up" }),
     );
-    expect(capture).toHaveBeenCalledWith(
-      "qualified_value_event",
-      expect.objectContaining({
-        action: "artifact",
-        surface: "pipe",
-        value_strength: "accepted",
-      }),
-    );
   });
 
   it("does not rate non-AI system notifications", () => {

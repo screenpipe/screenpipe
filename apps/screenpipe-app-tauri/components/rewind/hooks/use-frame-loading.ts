@@ -4,7 +4,6 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
-import posthog from "posthog-js";
 import { getApiBaseUrl, appendAuthToken } from "@/lib/api";
 
 // Debounce delay for frame loading (ms) — reduced for arrow keys
@@ -107,9 +106,6 @@ export function useFrameLoading(opts: {
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const frameLoadStartTimeRef = useRef<number | null>(null);
-	const framesSkippedRef = useRef<number>(0);
-	const lastFrameIdRef = useRef<string | null>(null);
 	// Track currently loaded video chunk to avoid reloading same file
 	const loadedChunkRef = useRef<string | null>(null);
 	// Generation counter to discard stale events
@@ -120,16 +116,6 @@ export function useFrameLoading(opts: {
 	const filePath = device?.metadata?.file_path;
 	const offsetIndex = device?.offset_index ?? 0;
 	const fpsFromServer = device?.fps ?? 0.5;
-
-	// Track skipped frames for analytics
-	useEffect(() => {
-		if (frameId && lastFrameIdRef.current && frameId !== lastFrameIdRef.current) {
-			if (frameLoadStartTimeRef.current !== null) {
-				framesSkippedRef.current += 1;
-			}
-		}
-		lastFrameIdRef.current = frameId;
-	}, [frameId]);
 
 	// Debounce frame changes — skip debounce for arrow key navigation
 	useEffect(() => {
@@ -236,7 +222,6 @@ export function useFrameLoading(opts: {
 		}
 
 		const gen = ++seekGenRef.current;
-		frameLoadStartTimeRef.current = performance.now();
 
 		const doSeek = async () => {
 			const video = videoRef.current;
@@ -341,24 +326,6 @@ export function useFrameLoading(opts: {
 				height: video.videoHeight,
 			});
 			onFrameLoadSuccess?.({ frameId: fid, mode: "video_seek" });
-
-			// Analytics
-			if (frameLoadStartTimeRef.current !== null) {
-				const loadTime = performance.now() - frameLoadStartTimeRef.current;
-				posthog.capture("timeline_frame_load_time", {
-					duration_ms: Math.round(loadTime),
-					frame_id: fid,
-					success: true,
-					mode: "video_seek",
-					fps_source: calibratedFpsCache.has(path) ? "calibrated" : "server",
-					effective_fps: effectiveFps,
-					frames_skipped: framesSkippedRef.current,
-					image_width: video.videoWidth,
-					image_height: video.videoHeight,
-				});
-				frameLoadStartTimeRef.current = null;
-				framesSkippedRef.current = 0;
-			}
 		};
 
 		doSeek().catch((err) => {
@@ -393,7 +360,6 @@ export function useFrameLoading(opts: {
 	useEffect(() => {
 		if (!isSnapshotFrame || snapshotFailed || !debouncedFrame?.filePath) return;
 		let cancelled = false;
-		frameLoadStartTimeRef.current = performance.now();
 
 		getVideoUrl(debouncedFrame.filePath).then((url) => {
 			if (cancelled || !url) return;
@@ -409,18 +375,6 @@ export function useFrameLoading(opts: {
 					frameId: debouncedFrame.frameId,
 					mode: "snapshot_direct",
 				});
-				if (frameLoadStartTimeRef.current !== null) {
-					const loadTime = performance.now() - frameLoadStartTimeRef.current;
-					posthog.capture("timeline_frame_load_time", {
-						duration_ms: Math.round(loadTime),
-						frame_id: debouncedFrame.frameId,
-						success: true,
-						mode: "snapshot_direct",
-						frames_skipped: framesSkippedRef.current,
-					});
-					frameLoadStartTimeRef.current = null;
-					framesSkippedRef.current = 0;
-				}
 			};
 			img.onerror = () => {
 				if (cancelled) return;
@@ -453,7 +407,6 @@ export function useFrameLoading(opts: {
 	// Preload fallback image — only swap displayed URL when the new image loads successfully
 	useEffect(() => {
 		if (!fallbackImageUrl) return;
-		frameLoadStartTimeRef.current = performance.now();
 		const img = new Image();
 		img.onload = () => {
 
@@ -466,18 +419,6 @@ export function useFrameLoading(opts: {
 					frameId: debouncedFrame.frameId,
 					mode: searchNavFrame ? "search_nav_fallback" : "ffmpeg_fallback",
 				});
-			}
-			if (frameLoadStartTimeRef.current !== null) {
-				const loadTime = performance.now() - frameLoadStartTimeRef.current;
-				posthog.capture("timeline_frame_load_time", {
-					duration_ms: Math.round(loadTime),
-					frame_id: debouncedFrame?.frameId,
-					success: true,
-					mode: searchNavFrame ? "search_nav_fallback" : "ffmpeg_fallback",
-					frames_skipped: framesSkippedRef.current,
-				});
-				frameLoadStartTimeRef.current = null;
-				framesSkippedRef.current = 0;
 			}
 			// Clear search nav mode after first frame loads so subsequent scrolling uses video seek
 			if (searchNavFrame) {

@@ -231,7 +231,8 @@ describe("buildHttpServer", () => {
         expect(result.content).toEqual([expect.objectContaining({
           type: "text", text: expect.stringContaining("synthetic authenticated result"),
         })]);
-        await vi.waitFor(() => expect(requests.some(request => request.path === "/internal/telemetry/mcp-value")).toBe(true));
+        await vi.waitFor(() => expect(requests.some(request => request.path === "/internal/telemetry/mcp-call")).toBe(true));
+        expect(requests.some(request => request.path === "/internal/telemetry/mcp-value")).toBe(false);
         expect(requests.every(request => request.authorization === "Bearer upstream-secret")).toBe(true);
       } else {
         await expect(call).rejects.toThrow("HTTP error: 403");
@@ -248,9 +249,9 @@ describe("buildHttpServer", () => {
     }
   });
 
-  it("attributes retrievals per HTTP session and excludes empty or failed searches", async () => {
+  it("attributes search headers per HTTP session and does not emit legacy mcp-value events", async () => {
     const searches: Array<{ source: unknown; agent: unknown }> = [];
-    const outcomes: unknown[] = [];
+    const legacyValueRequests: unknown[] = [];
     const api = createServer(async (request, response) => {
       response.setHeader("content-type", "application/json");
       if (request.url?.startsWith("/search?")) {
@@ -264,9 +265,9 @@ describe("buildHttpServer", () => {
         if (q === "failed") response.statusCode = 500;
         response.end(JSON.stringify({ data: q === "empty" ? [] : [{ type: "OCR", content: { text: "fixture result" } }] }));
       } else if (request.url === "/internal/telemetry/mcp-value") {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        outcomes.push(JSON.parse(Buffer.concat(chunks).toString()));
+        legacyValueRequests.push(request.url);
+        response.end("{}");
+      } else if (request.url === "/internal/telemetry/mcp-call") {
         response.end("{}");
       } else {
         response.statusCode = 404;
@@ -297,16 +298,10 @@ describe("buildHttpServer", () => {
         { source: "mcp", agent: "cursor" },
         { source: "mcp", agent: "unknown" },
       ]));
-      await vi.waitFor(() => expect(outcomes).toHaveLength(3));
-      expect(outcomes).toEqual(expect.arrayContaining([
-        { outcome: "search_result", client: "chatgpt" },
-        { outcome: "search_result", client: "cursor" },
-        { outcome: "search_result", client: "unknown" },
-      ]));
       await clients[0].callTool({ name: "search_content", arguments: { q: "empty" } });
       await expect(clients[0].callTool({ name: "search_content", arguments: { q: "failed" } })).rejects.toThrow();
       await expect(clients[0].callTool({ name: "search_content", arguments: { q: "broad", starred_only: true } })).rejects.toThrow("narrow start_time/end_time");
-      expect(outcomes).toHaveLength(3);
+      expect(legacyValueRequests).toHaveLength(0);
     } finally {
       await Promise.all(clients.map(client => client.close()));
       server.closeAllConnections();

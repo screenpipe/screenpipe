@@ -4,76 +4,49 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { capture } = vi.hoisted(() => ({ capture: vi.fn() }));
+const { capture, emitCardAskTrigger } = vi.hoisted(() => ({
+  capture: vi.fn(),
+  emitCardAskTrigger: vi.fn(),
+}));
 
 vi.mock("posthog-js", () => ({
   default: { capture },
 }));
 
+vi.mock("@/lib/card-ask/trigger-bus", () => ({
+  emitCardAskTrigger,
+}));
+
 import { qualifiedValue } from "./qualified-value";
 
 describe("qualifiedValue", () => {
-  beforeEach(() => capture.mockReset());
+  beforeEach(() => {
+    capture.mockReset();
+    emitCardAskTrigger.mockReset();
+  });
 
-  it("owns the fixed privacy-safe contract", () => {
+  it("emits first_value card-ask trigger without sending legacy PostHog qualified_value_event", () => {
     qualifiedValue.chatResponseCopied();
-
-    expect(capture).toHaveBeenCalledWith("qualified_value_event", {
-      metric_version: "repeat_value_d7_v1",
-      surface: "app",
-      action: "chat",
-      value_strength: "accepted",
-      user_initiated: true,
-      success: true,
-      result_non_empty: true,
-    });
-  });
-
-  it("classifies pipe artifacts without accepting content", () => {
     qualifiedValue.artifactOpened(true);
-
-    expect(capture).toHaveBeenCalledWith(
-      "qualified_value_event",
-      expect.objectContaining({
-        surface: "pipe",
-        action: "artifact",
-        value_strength: "consumed",
-      }),
-    );
-  });
-
-  it("classifies accepted Live View results without accepting content", () => {
     qualifiedValue.liveViewResultAccepted();
 
-    expect(capture).toHaveBeenCalledWith("qualified_value_event", {
-      metric_version: "repeat_value_d7_v1",
-      surface: "app",
-      action: "artifact",
-      value_strength: "accepted",
-      user_initiated: true,
-      success: true,
-      result_non_empty: true,
-    });
+    expect(emitCardAskTrigger).toHaveBeenCalledTimes(3);
+    expect(emitCardAskTrigger).toHaveBeenCalledWith("first_value");
+    expect(capture).not.toHaveBeenCalled();
   });
 
-  it("classifies persisted Live View item actions as accepted value", () => {
+  it("triggers first_value for persisted Live View item actions", () => {
     expect(qualifiedValue.liveViewItemActionCompleted("resolve")).toBe(true);
 
-    expect(capture).toHaveBeenCalledWith("qualified_value_event", {
-      metric_version: "repeat_value_d7_v1",
-      surface: "app",
-      action: "artifact",
-      value_strength: "accepted",
-      user_initiated: true,
-      success: true,
-      result_non_empty: true,
-    });
+    expect(emitCardAskTrigger).toHaveBeenCalledWith("first_value");
+    expect(capture).not.toHaveBeenCalled();
   });
 
   it("does not treat dismissing or reopening an item as accepted value", () => {
     expect(qualifiedValue.liveViewItemActionCompleted("dismiss")).toBe(false);
     expect(qualifiedValue.liveViewItemActionCompleted("reopen")).toBe(false);
 
+    expect(emitCardAskTrigger).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
   });
 });
