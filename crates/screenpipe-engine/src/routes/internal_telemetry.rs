@@ -4,12 +4,11 @@
 
 use axum::{extract::Json, http::StatusCode};
 
-use crate::{analytics, qualified_value::McpOutcome};
+use crate::analytics;
 
-/// Private transport adapter for the out-of-process Screenpipe MCP server.
-pub(crate) async fn record_mcp_value(Json(outcome): Json<McpOutcome>) -> StatusCode {
-    analytics::capture_event_nonblocking("qualified_value_event", outcome.into_properties());
-    StatusCode::ACCEPTED
+/// Retired no-op endpoint kept for backwards compatibility with older MCP servers.
+pub(crate) async fn record_mcp_value() -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 /// Uses the engine's existing telemetry consent and authenticated API boundary.

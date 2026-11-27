@@ -64,12 +64,6 @@ if (!bin) {
     completionProperties("missing_binary", { exit_code: 1 }),
   );
   return;
-} else if (!telemetryOff) {
-  trackCliEvent(
-    "cli_command_started",
-    baseProperties({ args, binPackage }),
-    { timeoutMs: 800 },
-  ).finally(() => {});
 }
 
 // Tag engine telemetry as the npm/bunx CLI (vs desktop-app / source) so WAU can

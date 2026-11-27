@@ -5,11 +5,9 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, trace};
 
-use crate::qualified_value::AgentClient;
 use crate::telemetry_context::TelemetryContext;
 
 #[cfg(target_os = "macos")]
@@ -23,114 +21,6 @@ const POSTHOG_HOST: &str = "https://us.i.posthog.com";
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
-
-pub(crate) const SEARCH_REPORT_INTERVAL: Duration = Duration::from_secs(60);
-
-static SEARCH_REPORT_START: Lazy<Instant> = Lazy::new(Instant::now);
-static SEARCH_REPORTS: SearchReportLimiter = SearchReportLimiter::new();
-static VALUE_REPORTS: ValueReportLimiter = ValueReportLimiter::new();
-
-/// Each source/client/result kind gets its first report per minute. No request
-/// headers can bypass sampling or create unbounded limiter keys.
-pub(crate) struct SearchReportLimiter {
-    windows: [AtomicU64; 3 * AgentClient::COUNT * 4],
-}
-
-impl SearchReportLimiter {
-    pub(crate) const fn new() -> Self {
-        Self {
-            windows: [const { AtomicU64::new(0) }; 3 * AgentClient::COUNT * 4],
-        }
-    }
-
-    pub(crate) fn should_report(
-        &self,
-        source: &str,
-        client: AgentClient,
-        parsed: bool,
-        non_empty: bool,
-        window: u64,
-    ) -> bool {
-        let source = match source {
-            "API" => 0,
-            "MCP" => 1,
-            _ => 2,
-        };
-        let slot = (source * AgentClient::COUNT + client as usize) * 4
-            + usize::from(parsed) * 2
-            + usize::from(non_empty);
-        claim_search_window(&self.windows[slot], window)
-    }
-}
-
-/// Independent budgets preserve the first successful outcome even if search
-/// diagnostics or a different retrieval type already exhausted their window.
-struct ValueReportLimiter {
-    windows: [AtomicU64; 2 * AgentClient::COUNT * 4],
-}
-
-impl ValueReportLimiter {
-    const fn new() -> Self {
-        Self {
-            windows: [const { AtomicU64::new(0) }; 2 * AgentClient::COUNT * 4],
-        }
-    }
-
-    fn should_report(&self, properties: &Value, window: u64) -> bool {
-        let surface = match properties["surface"].as_str() {
-            Some("api") => 0,
-            Some("mcp") => 1,
-            _ => return true,
-        };
-        let action = match properties["action"].as_str() {
-            Some("search") => 0,
-            Some("meeting") => 1,
-            _ if properties["value_strength"] == "completed" => 3,
-            _ => 2,
-        };
-        let client =
-            AgentClient::from_name(properties["agent_client"].as_str().unwrap_or_default());
-        let slot = (surface * AgentClient::COUNT + client as usize) * 4 + action;
-        claim_search_window(&self.windows[slot], window)
-    }
-}
-
-fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
-    last_window
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
-            (window > last).then_some(window)
-        })
-        .is_ok()
-}
-
-/// Let the first request after UTC midnight report even when it shares the
-/// previous day's monotonic minute. This preserves daily activity presence.
-/// The high bits keep progress monotonic if the wall clock moves backwards;
-/// the low bits distinguish days within a minute. Both fields fit for thousands
-/// of years, and one atomic claim still arbitrates concurrent requests.
-fn search_report_window(elapsed: Duration, utc_timestamp: i64) -> u64 {
-    let minute = elapsed.as_secs() / SEARCH_REPORT_INTERVAL.as_secs();
-    let utc_day = utc_timestamp.div_euclid(86_400).max(0) as u64 + 1;
-    (minute << 32) | (utc_day & u64::from(u32::MAX))
-}
-
-fn current_report_window() -> u64 {
-    search_report_window(
-        SEARCH_REPORT_START.elapsed(),
-        chrono::Utc::now().timestamp(),
-    )
-}
-
-/// Consent is checked before claiming a slot or constructing a payload.
-pub(crate) fn should_capture_search(
-    source: &str,
-    client: AgentClient,
-    parsed: bool,
-    non_empty: bool,
-) -> bool {
-    is_enabled()
-        && SEARCH_REPORTS.should_report(source, client, parsed, non_empty, current_report_window())
-}
 
 pub struct Analytics {
     client: Client,
@@ -212,17 +102,6 @@ pub async fn capture_event(event: &str, properties: Value) {
     }
 
     let mut props = properties;
-    // Bound every engine API/MCP outcome here, including cached searches,
-    // activity summaries and the MCP adapter. Explicit frontend actions are
-    // separate and retain their full-fidelity events.
-    if event == "qualified_value_event" && matches!(props["surface"].as_str(), Some("api" | "mcp"))
-    {
-        if !VALUE_REPORTS.should_report(&props, current_report_window()) {
-            return;
-        }
-        props["telemetry_sample_interval_seconds"] = json!(SEARCH_REPORT_INTERVAL.as_secs());
-        props["telemetry_sampling"] = json!("first_per_interval_per_surface_client_value_kind");
-    }
     if let Some(obj) = props.as_object_mut() {
         obj.insert("distinct_id".to_string(), json!(ANALYTICS.distinct_id));
         obj.insert("$lib".to_string(), json!("screenpipe-engine"));
@@ -370,157 +249,6 @@ pub fn track_api_usage(request_count: usize) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-
-    #[test]
-    fn search_floods_are_bounded_for_every_source_client_and_result_kind() {
-        let reports = SearchReportLimiter::new();
-        for source in ["app", "API", "MCP"] {
-            for client in [
-                AgentClient::Unknown,
-                AgentClient::Claude,
-                AgentClient::Codex,
-            ] {
-                assert!(reports.should_report(source, client, false, false, 1));
-                for _ in 0..100_000 {
-                    assert!(!reports.should_report(source, client, false, false, 1));
-                }
-                // Empty polling cannot hide successful or parsed retrievals.
-                assert!(reports.should_report(source, client, false, true, 1));
-                assert!(reports.should_report(source, client, true, false, 1));
-                assert!(reports.should_report(source, client, true, true, 1));
-                for parsed in [false, true] {
-                    for non_empty in [false, true] {
-                        assert!(!reports.should_report(source, client, parsed, non_empty, 1));
-                        assert!(reports.should_report(source, client, parsed, non_empty, 2));
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn qualified_outcomes_have_independent_bounded_budgets() {
-        use crate::qualified_value::{api_outcome_properties, ApiOutcomeKind, McpOutcome};
-
-        let searches = SearchReportLimiter::new();
-        let values = ValueReportLimiter::new();
-        assert!(searches.should_report("API", AgentClient::Unknown, false, true, 1));
-        let mut outcomes = Vec::new();
-        for client in [
-            AgentClient::Unknown,
-            AgentClient::Claude,
-            AgentClient::Codex,
-        ] {
-            for kind in [
-                ApiOutcomeKind::SearchResult,
-                ApiOutcomeKind::ActivitySummary,
-            ] {
-                outcomes.push(api_outcome_properties(kind, client));
-            }
-            for kind in [
-                "search_result",
-                "meeting_result",
-                "artifact_result",
-                "artifact_created",
-            ] {
-                let outcome: McpOutcome = serde_json::from_value(json!({
-                    "outcome": kind,
-                    "client": client.as_str(),
-                }))
-                .unwrap();
-                outcomes.push(outcome.into_properties());
-            }
-        }
-        for properties in outcomes {
-            assert!(values.should_report(&properties, 1));
-            for _ in 0..1000 {
-                assert!(!values.should_report(&properties, 1));
-            }
-            assert!(values.should_report(&properties, 2));
-        }
-    }
-
-    #[test]
-    fn unrecognized_value_clients_share_the_unknown_budget() {
-        let reports = ValueReportLimiter::new();
-        let mut properties = crate::qualified_value::api_outcome_properties(
-            crate::qualified_value::ApiOutcomeKind::SearchResult,
-            AgentClient::Unknown,
-        );
-        assert!(reports.should_report(&properties, 1));
-        for client in [
-            "unknown",
-            "direct_api",
-            "private-project",
-            "arbitrary-header",
-        ] {
-            properties["agent_client"] = json!(client);
-            assert!(!reports.should_report(&properties, 1));
-        }
-    }
-
-    #[test]
-    fn midnight_preserves_daily_presence_and_clock_rollback_does_not_stall_reporting() {
-        let reports = SearchReportLimiter::new();
-        let values = ValueReportLimiter::new();
-        let properties = crate::qualified_value::api_outcome_properties(
-            crate::qualified_value::ApiOutcomeKind::SearchResult,
-            AgentClient::Unknown,
-        );
-        let before_midnight = search_report_window(Duration::from_secs(10), 86_399);
-        let after_midnight = search_report_window(Duration::from_secs(11), 86_400);
-        for window in [before_midnight, after_midnight] {
-            assert!(reports.should_report("app", AgentClient::Unknown, false, true, window));
-            assert!(values.should_report(&properties, window));
-            assert!(!reports.should_report("app", AgentClient::Unknown, false, true, window));
-            assert!(!values.should_report(&properties, window));
-        }
-        // A delayed previous-day caller cannot reopen an already used slot.
-        assert!(!reports.should_report("app", AgentClient::Unknown, false, true, before_midnight));
-        assert!(!values.should_report(&properties, before_midnight));
-        // A clock correction cannot suppress reports beyond the current minute.
-        let rolled_back = search_report_window(Duration::from_secs(60), 86_000);
-        assert!(reports.should_report("app", AgentClient::Unknown, false, true, rolled_back));
-        assert!(values.should_report(&properties, rolled_back));
-        assert!(!reports.should_report("app", AgentClient::Unknown, false, true, rolled_back));
-        assert!(!values.should_report(&properties, rolled_back));
-    }
-
-    #[test]
-    fn search_reports_bound_a_flood_and_allow_the_next_window() {
-        let window = AtomicU64::new(0);
-        assert!(claim_search_window(&window, 1));
-        for _ in 0..100_000 {
-            assert!(!claim_search_window(&window, 1));
-        }
-        assert!(claim_search_window(&window, 2));
-        // A delayed concurrent caller must not move the window backwards.
-        assert!(!claim_search_window(&window, 1));
-        assert!(!claim_search_window(&window, 2));
-        assert!(claim_search_window(&window, 180));
-        assert!(!claim_search_window(&window, 180));
-    }
-
-    #[test]
-    fn concurrent_searches_share_one_report_budget() {
-        let window = AtomicU64::new(0);
-        let barrier = std::sync::Barrier::new(16);
-        let emitted = std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..16)
-                .map(|_| {
-                    scope.spawn(|| {
-                        barrier.wait();
-                        claim_search_window(&window, 1)
-                    })
-                })
-                .collect();
-            workers
-                .into_iter()
-                .map(|worker| usize::from(worker.join().unwrap()))
-                .sum::<usize>()
-        });
-        assert_eq!(emitted, 1);
-    }
 
     // The three vars telemetry_disabled_by_env inspects. CI runners set
     // CI/GITHUB_ACTIONS for real, so every test saves and restores them.

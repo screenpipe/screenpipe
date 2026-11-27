@@ -26,10 +26,7 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
-import {
-  createMcpQualifiedValueReporter,
-  resolveMcpClient,
-} from "./qualified-value";
+import { resolveMcpClient } from "./qualified-value";
 import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
 import { jpegImageContent } from "./frame-image";
@@ -1394,14 +1391,6 @@ async function callAPI(endpoint: string, options: RequestInit = {}): Promise<Res
   return response;
 }
 
-const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
-  callAPI("/internal/telemetry/mcp-value", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }),
-  currentMcpClient,
-);
-
 // Zone label for a timestamp's HH:MM slice. The server serializes timestamps in
 // its LOCAL timezone (e.g. "...T09:03:44+05:30"), so the HH:MM is already local —
 // derive the label from the string's own offset instead of hardcoding "UTC"
@@ -1642,8 +1631,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           };
         }
 
-        qualifiedValue.searchResult();
-
         const contentItems: Array<
           | { type: "text"; text: string }
           | { type: "image"; data: string; mimeType: string }
@@ -1725,8 +1712,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           };
         }
 
-        qualifiedValue.meetingResult();
-
         let meetingRefs: Awaited<ReturnType<typeof findMeetingScreenRefs>>[] | undefined;
         if (include_screen_refs === true) {
           meetingRefs = [];
@@ -1763,9 +1748,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
 
       case "activity-summary": {
         const result = await buildActivitySummaryResult(args, callAPI);
-        if (result.hasArtifact) {
-          qualifiedValue.artifactResult();
-        }
         return { content: [{ type: "text", text: result.text }] };
       }
 
@@ -1788,10 +1770,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
 
         const response = await callAPI(`/elements?${params.toString()}`);
         const text = (await response.text()).trim();
-
-        if (text.length && !text.startsWith("No elements")) {
-          qualifiedValue.searchResult();
-        }
 
         return {
           content: [
@@ -1821,7 +1799,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         if (frame?.frame_id !== frameId || typeof frame.timestamp !== "string" || !Number.isFinite(Date.parse(frame.timestamp))) {
           throw new Error("Screenshot metadata did not identify the requested frame and timestamp.");
         }
-        qualifiedValue.searchResult();
         return {
           content: [
             { type: "text", text: `Frame ${frameId} at ${frame.timestamp}. Source: screenpipe://frame/${frameId}` },
@@ -1841,10 +1818,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         const data = await response.json();
         if (args.purpose === "automation") return frameAutomationContent(data, args);
         const lines = [`Frame ${data.frame_id} (source: ${data.text_source})`];
-
-        if (data.text || data.nodes?.length || data.urls?.length) {
-          qualifiedValue.searchResult();
-        }
 
         if (data.urls?.length) {
           lines.push("", "URLs:", ...data.urls.map((u: string) => `  ${u}`));
@@ -1904,9 +1877,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           const sizeMb = data.file_size_bytes
             ? (data.file_size_bytes / (1024 * 1024)).toFixed(1)
             : null;
-          if ((data.frame_count ?? 0) > 0 || (data.audio_chunk_count ?? 0) > 0) {
-            qualifiedValue.artifactCreated();
-          }
           return {
             content: [
               {
@@ -2245,10 +2215,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           }
         }
 
-        if (meeting && Object.keys(meeting).length > 0) {
-          qualifiedValue.meetingResult();
-        }
-
         return {
           content: [{ type: "text", text }],
         };
@@ -2336,7 +2302,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
             ],
           };
         }
-        qualifiedValue.searchResult();
         const formatted = results.map((r) => {
           // Flat shape from search_with_text_positions: { app_name, frame_id,
           // timestamp, text, text_source, ... }. Truncate to keep responses
@@ -2373,9 +2338,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
         const format = formatForElementPurpose(args.purpose);
         const response = await callAPI(`/frames/${frameId}/elements?format=${format}`);
         const text = (await response.text()).trim();
-        if (text.length && !text.startsWith("No elements")) {
-          qualifiedValue.searchResult();
-        }
         return {
           content: [
             {

@@ -11,7 +11,6 @@ use axum::{
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::pipes::permissions::PipePermissions;
 
-use super::request_origin::ExplicitApiClient;
 use super::response_format::{
     is_passthrough, parse_fields, parse_format, render_list, rows_from, OutputFormat,
 };
@@ -67,7 +66,6 @@ use tokio::{
 };
 use tracing::{debug, error, warn};
 
-use crate::analytics;
 use crate::history_access::HistoryAccessPolicy;
 use crate::server::AppState;
 use crate::video_utils::extract_frame;
@@ -563,7 +561,6 @@ fn group_related_tags(rows: Vec<(String, i64)>) -> std::collections::HashMap<Str
 pub struct SearchCacheEntry {
     privacy_epoch: i64,
     json_body: Bytes,
-    result_count: usize,
 }
 
 const SEARCH_CACHE_MAX_ITEMS: usize = 200;
@@ -589,40 +586,7 @@ fn build_search_cache_entry(response: &SearchResponse) -> Option<SearchCacheEntr
     Some(SearchCacheEntry {
         privacy_epoch: 0,
         json_body: Bytes::from(json_body),
-        result_count: response.data.len(),
     })
-}
-
-fn capture_direct_api_search_value(client: &ExplicitApiClient, result_count: usize) {
-    if client.is_direct_api() && result_count > 0 {
-        analytics::capture_event_nonblocking(
-            "qualified_value_event",
-            crate::qualified_value::api_outcome_properties(
-                crate::qualified_value::ApiOutcomeKind::SearchResult,
-                client.agent_client(),
-            ),
-        );
-    }
-}
-
-fn parsed_parser_profiles(content_items: &[ContentItem]) -> Vec<String> {
-    let mut parser_ids = Vec::new();
-    for item in content_items {
-        let ContentItem::Parsed(content) = item else {
-            continue;
-        };
-        if parser_ids
-            .iter()
-            .any(|parser_id| parser_id == &content.parser_id)
-        {
-            continue;
-        }
-        parser_ids.push(content.parser_id.clone());
-        if parser_ids.len() == 16 {
-            break;
-        }
-    }
-    parser_ids
 }
 
 /// Middle-truncate a string to at most `max_chars` characters.
@@ -1079,7 +1043,6 @@ pub(crate) async fn search(
     Query(mut query): Query<SearchQuery>,
     State(state): State<Arc<AppState>>,
     OptionalPipePerms(pipe_perms): OptionalPipePerms,
-    api_client: ExplicitApiClient,
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<serde_json::Value>)> {
     // Presentation-only: parsed up front so a bad `format` 400s before any
     // DB work. Only the default JSON representation is cached; alternate
@@ -1243,7 +1206,6 @@ pub(crate) async fn search(
             .filter(|entry| entry.privacy_epoch == release_epoch)
         {
             debug!("search cache hit for key {}", cache_key);
-            capture_direct_api_search_value(&api_client, cached.result_count);
             let _admission = storage_read.admit(&state.db.pool).await.map_err(|e| {
                 (
                     StatusCode::CONFLICT,
@@ -1688,43 +1650,6 @@ pub(crate) async fn search(
 
     debug!("search completed: found {} results", total);
 
-    // Bound diagnostics for every source, including callers with no headers.
-    // All requests still contribute to api_usage_5min; qualified outcomes have
-    // their own budget. Decide before building the payload or spawning.
-    let response_non_empty = !content_items.is_empty();
-    if analytics::should_capture_search(
-        api_client.source_label(),
-        api_client.agent_client(),
-        parsed_search,
-        response_non_empty,
-    ) {
-        let parsed_parser_profiles = if parsed_search {
-            parsed_parser_profiles(&content_items)
-        } else {
-            Vec::new()
-        };
-
-        analytics::capture_event_nonblocking(
-            "search_performed",
-            serde_json::json!({
-                "telemetry_sample_interval_seconds": analytics::SEARCH_REPORT_INTERVAL.as_secs(),
-                "telemetry_sampling": "first_per_interval_per_source_client_result_kind",
-                "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
-                "content_type": format!("{:?}", query.content_type),
-                "request_source": api_client.source_label(),
-                "agent_client": api_client.agent_client().as_str(),
-                "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
-                "has_app_filter": query.app_name.is_some(),
-                "result_count": total,
-                "non_empty": response_non_empty,
-                "parsed_non_empty": parsed_search && response_non_empty,
-                "parsed_parser_profiles": parsed_parser_profiles,
-                "limit": query.pagination.limit,
-                "offset": query.pagination.offset,
-            }),
-        );
-    }
-
     // Get cloud search metadata
     let time_range = match (query.start_time, query.end_time) {
         (Some(start), Some(end)) => Some(crate::cloud_search::TimeRange { start, end }),
@@ -1781,8 +1706,6 @@ pub(crate) async fn search(
         cloud,
         related,
     };
-
-    capture_direct_api_search_value(&api_client, response.data.len());
 
     let cache_entry = if !history_restricted
         && starred_metadata_available

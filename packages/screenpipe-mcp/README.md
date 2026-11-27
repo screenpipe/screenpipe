@@ -10,77 +10,30 @@ MCP server for screenpipe - search your screen recordings, audio transcriptions,
 
 ## Usage attribution
 
-When Screenpipe analytics are enabled, successful nonempty retrievals produce
-`qualified_value_event` with `surface` (`api` or `mcp`) and `agent_client`.
-Supported app identifiers are `claude`, `chatgpt`, `codex`, `cursor`, `gemini`,
-`openclaw`, `hermes`, `runner`, `windsurf`, `vscode`, `grok`, and `grokbot`. Claude Desktop
-and Claude Code share the existing `claude` bucket. This identifies the caller,
-not the app appearing in a recording.
+When Screenpipe analytics are enabled, MCP tool calls report fixed client
+attribution on `mcp_tool_call_completed` (`claude`, `chatgpt`, `codex`,
+`cursor`, `gemini`, `openclaw`, `hermes`, `runner`, `windsurf`, `vscode`,
+`opencode`, `antigravity`, `cline`, `kiro`, `perplexity`, `grok`, `grokbot`, or
+`unknown`). Claude Desktop and Claude Code share the `claude` bucket. This
+identifies the caller, not the app appearing in a recording.
 
 MCP uses `SCREENPIPE_MCP_CLIENT` when it names a supported app, falling back to
 the initialization handshake's client name. HTTP sessions resolve independently.
 Only the fixed identifier is forwarded; raw client names are never analytics
 properties. Unrecognized MCP clients remain `unknown`.
 
-Installed REST skills send `X-Screenpipe-Client: api` and a fixed
-`X-Screenpipe-Agent` header for their target app. Other API clients can send the
-same headers. Missing or unrecognized app identifiers retain the legacy
-`direct_api` bucket on qualified-value events. `search_performed` also includes
-the fixed `agent_client` (`unknown` when unidentified), alongside `request_source`.
-These are self-reported identifiers, not verified app identities; copied skills
-and callers that omit the headers cannot be reliably attributed. Historical
-generic API events cannot be assigned an app retroactively.
-
-The engine samples `search_performed` for every source, including app, MCP,
-named agents and callers without attribution headers. Each fixed source/client
-pair gets its first event per 60-second monotonic window per engine process,
-separately for empty/non-empty and parsed/ordinary results (at most four events
-per pair per window). The first event in each category after UTC midnight is
-also preserved. One client's polling cannot consume another client's budget.
-
-API/MCP `qualified_value_event` emissions have an independent first-per-minute
-budget per surface, fixed client and value kind: search, meeting, artifact
-retrieved or artifact created. This covers cached API searches, activity
-summaries and MCP outcomes. Explicit frontend value actions are not sampled.
-
-Both event families carry `telemetry_sample_interval_seconds: 60` and
-`telemetry_sampling`: `"first_per_interval_per_source_client_result_kind"` for
-search diagnostics, or `"first_per_interval_per_surface_client_value_kind"` for
-qualified values. These are presence observations, not exact retrieval counts
-or unbiased samples of query properties. Counts and property breakdowns are not
-comparable to earlier releases. `api_usage_5min.request_count` still counts
-aggregate traffic across all routes. No search diagnostics are added for cache
-hits; actual searches, recording and local monitoring are unaffected.
-
-Resource events additionally report `telemetry_window_samples`,
-`window_cpu_percent_mean`, `window_cpu_percent_max`, `window_memory_gb_mean`,
-`window_memory_gb_max`, and `window_phys_footprint_gb_max` across local samples
-since the previous reporting attempt. These supplement the existing point-in-time
-properties. Weight window means by their sample counts when aggregating them.
-Transport remains best effort; these summaries are not a durable sample archive.
-
-Sampling preserves the first successful retrieval for daily presence and
-cohort-relative retention, not every occurrence. It reduces outgoing analytics
-volume after clients upgrade; actual billing savings depend on the account's
-pricing and usage tiers. Health/resource reporting is unchanged by retrieval
-sampling.
-
-Attribution adds fields to existing events and uses the existing analytics
-opt-out. It does not scan running apps or send prompts, search text, or raw
-client names. HTTP MCP now reports successful searches through the same
-best-effort local telemetry endpoint as stdio MCP; empty/failed searches do not
-produce qualified-value events.
+`api_usage_5min.request_count` tracks aggregate local API traffic across routes.
+Legacy `qualified_value_event` and `search_performed` events have been retired.
 
 ## Call diagnostics and source references
 
-New engine builds accept `POST /internal/telemetry/mcp-call` through the same
+Engine builds accept `POST /internal/telemetry/mcp-call` through the same
 local API authentication and analytics consent boundary as other private MCP
 telemetry. `mcp_tool_call_completed` records one best-effort observation per
 completed dispatcher call: schema version, random request ID, package version,
 fixed client/tool/transport names, `ok`/`empty`/`error`, normalized error category,
 duration, content bytes, optional search count/truncation and known report loss.
 No arguments, result text, error strings or raw client names are included.
-The existing `qualified_value_event` definition is unchanged.
 
 `ok` means the dispatcher returned without a protocol/tool error. It does not
 mean the answer was correct or the user completed their task. Search alone sets
