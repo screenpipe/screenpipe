@@ -554,6 +554,19 @@ fn mask_changed_regions(
     }
 }
 
+fn restore_opaque_witness_pixel(trusted: &[u8], target: &mut [u8]) {
+    // The display compositor adds effects outside DWMWA_EXTENDED_FRAME_BOUNDS
+    // (notably window shadows) and can apply theme composition differently from
+    // an isolated WGC window capture. Requiring display RGB to equal the isolated
+    // witness turns those ordinary differences into large opaque-black regions.
+    // The isolated pixel is already positive-selected from the allowed topmost
+    // owner, so restore it directly. Nonopaque witness pixels remain withheld:
+    // reconstructing those would require trusting unverified content underneath.
+    if trusted[3] == 255 {
+        target[..3].copy_from_slice(&trusted[..3]);
+    }
+}
+
 fn authorize_candidate(
     monitor: &MonitorData,
     filters: &WindowFilters,
@@ -601,19 +614,13 @@ fn authorize_candidate(
                     let witness_end = witness_start + right - left;
                     let trusted =
                         image.as_raw()[witness_start * 4..witness_end * 4].chunks_exact(4);
-                    let raw = candidate.as_raw()[start * 4..end * 4].chunks_exact(4);
                     let target = output.as_mut()[start * 4..end * 4].chunks_exact_mut(4);
-                    for (((pixel_owner, trusted), raw), target) in owners[start..end]
-                        .iter_mut()
-                        .zip(trusted)
-                        .zip(raw)
-                        .zip(target)
+                    for ((pixel_owner, trusted), target) in
+                        owners[start..end].iter_mut().zip(trusted).zip(target)
                     {
                         if *pixel_owner == usize::MAX {
                             *pixel_owner = owner;
-                            if trusted[3] == 255 && trusted[..3] == raw[..3] {
-                                target[..3].copy_from_slice(&raw[..3]);
-                            }
+                            restore_opaque_witness_pixel(trusted, target);
                         }
                     }
                 }
@@ -1081,6 +1088,20 @@ mod tests {
         assert_eq!(output.get_pixel(3, 0), &Rgba([0, 0, 0, 255]));
         assert_eq!(output.get_pixel(4, 0), &Rgba([0, 0, 0, 255]));
         assert!(!output.pixels().any(|pixel| *pixel == forbidden));
+    }
+
+    #[test]
+    fn opaque_allowed_witness_survives_compositor_rgb_difference() {
+        let mut target = [0, 0, 0, 255];
+        restore_opaque_witness_pixel(&[245, 245, 245, 255], &mut target);
+        assert_eq!(target, [245, 245, 245, 255]);
+    }
+
+    #[test]
+    fn nonopaque_witness_remains_withheld() {
+        let mut target = [0, 0, 0, 255];
+        restore_opaque_witness_pixel(&[120, 120, 120, 254], &mut target);
+        assert_eq!(target, [0, 0, 0, 255]);
     }
 
     #[test]
