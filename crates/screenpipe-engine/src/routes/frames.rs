@@ -34,7 +34,10 @@ use tokio::{
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error};
 
-use crate::{server::AppState, video_utils::extract_frame_from_video};
+use crate::{
+    server::AppState,
+    video_utils::{confirmed_missing_video, extract_frame_from_video},
+};
 
 use tokio::time::timeout;
 
@@ -926,7 +929,19 @@ pub async fn get_frame_data(
     Query(query): Query<FrameDataQuery>,
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<Value>)> {
     require_frame_history_access(&state, frame_id).await?;
-    require_image_release(&state, frame_id).await?;
+    if let Err(error) = require_image_release(&state, frame_id).await {
+        // Retention can remove the media and its release state together.
+        // Resolve exact missing media without ever serving unreleased pixels.
+        if !query.fallback
+            && matches!(
+                state.db.exact_frame_media_location_absent(frame_id).await,
+                Ok(true)
+            )
+        {
+            return Err(frame_media_unavailable(frame_id));
+        }
+        return Err(error);
+    }
     let start_time = Instant::now();
 
     match timeout(Duration::from_secs(5), async {
@@ -989,6 +1004,9 @@ pub async fn get_frame_data(
         for attempt in 0..2 {
             return match state.db.get_frame(frame_id).await {
                 Ok(Some((file_path, offset_index, is_snapshot))) => {
+                    if !query.fallback && file_path.is_empty() {
+                        return Err(frame_media_unavailable(frame_id));
+                    }
                     // Synced frame from another device — no local file exists.
                     // Return metadata (OCR text, app/window context) instead of 410.
                     if file_path.starts_with("cloud://") {
@@ -1074,6 +1092,19 @@ pub async fn get_frame_data(
                             Ok(response)
                         }
                         Err(e) => {
+                            if !query.fallback && confirmed_missing_video(&e) {
+                                if attempt == 0 {
+                                    continue;
+                                }
+                                return Err((
+                                    StatusCode::GONE,
+                                    JsonResponse(json!({
+                                        "error": "Exact video file is missing after rechecking its location",
+                                        "error_type": "video_file_missing",
+                                        "frame_id": frame_id
+                                    })),
+                                ));
+                            }
                             // Extraction failed — try the nearest valid frame as fallback
                             debug!(
                                 "Frame {} extraction failed ({}), trying nearest frame",
@@ -1126,14 +1157,28 @@ pub async fn get_frame_data(
                         }
                     }
                 }
-                Ok(None) => Err((
-                    StatusCode::NOT_FOUND,
-                    JsonResponse(json!({
-                        "error": "Frame has no available media location",
-                        "error_type": "frame_media_unavailable",
-                        "frame_id": frame_id
-                    })),
-                )),
+                Ok(None) => {
+                    // Text privacy can also hide a frame's row even after its
+                    // image is released. A protected lookup alone cannot prove
+                    // deletion.
+                    if !query.fallback
+                        && state.db.protected_reads_enabled()
+                        && !matches!(
+                            state.db.exact_frame_media_location_absent(frame_id).await,
+                            Ok(true)
+                        )
+                    {
+                        return Err((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            JsonResponse(json!({
+                                "error": "Exact frame location could not be verified",
+                                "code": "privacy_pending",
+                                "retryable": true
+                            })),
+                        ));
+                    }
+                    Err(frame_media_unavailable(frame_id))
+                }
                 Err(e) => Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     JsonResponse(json!({
@@ -1159,6 +1204,17 @@ pub async fn get_frame_data(
             ))
         }
     }
+}
+
+fn frame_media_unavailable(frame_id: i64) -> (StatusCode, JsonResponse<Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        JsonResponse(json!({
+            "error": "Frame has no available media location",
+            "error_type": "frame_media_unavailable",
+            "frame_id": frame_id
+        })),
+    )
 }
 
 /// Query parameters for finding the next valid frame

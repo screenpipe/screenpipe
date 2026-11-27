@@ -661,6 +661,7 @@ pub async fn fetch_exact_frame_jpeg(
     let reason = match detail["error_type"].as_str() {
         Some("snapshot_missing") => "snapshot_missing",
         Some("frame_media_unavailable") => "frame_media_unavailable",
+        Some("video_file_missing") => "video_file_missing",
         Some("snapshot_read_failed") => "snapshot_read_failed",
         Some("remote_device") => "remote_device",
         Some("video_corrupted") => "video_corrupted",
@@ -675,9 +676,14 @@ pub async fn fetch_exact_frame_jpeg(
         Some("TimedOut") => "TimedOut",
         _ => "unknown",
     };
-    let terminal = status == reqwest::StatusCode::NOT_FOUND
-        && detail["frame_id"].as_i64() == Some(frame_id)
-        && matches!(reason, "snapshot_missing" | "frame_media_unavailable");
+    let terminal = detail["frame_id"].as_i64() == Some(frame_id)
+        && matches!(
+            (status, reason),
+            (
+                reqwest::StatusCode::NOT_FOUND,
+                "snapshot_missing" | "frame_media_unavailable"
+            ) | (reqwest::StatusCode::GONE, "video_file_missing")
+        );
     let outcome = if terminal {
         "unavailable"
     } else {
@@ -8271,6 +8277,21 @@ pub(crate) mod tests {
                 404,
                 serde_json::json!({"frame_id": 1, "error_type": "frame_media_unavailable"}),
                 true,
+            ),
+            (
+                410,
+                serde_json::json!({"frame_id": 1, "error_type": "video_file_missing"}),
+                true,
+            ),
+            (
+                410,
+                serde_json::json!({"frame_id": 2, "error_type": "video_file_missing"}),
+                false,
+            ),
+            (
+                410,
+                serde_json::json!({"frame_id": 1, "error_type": "video_corrupted"}),
+                false,
             ),
             (
                 500,
