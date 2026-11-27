@@ -41,8 +41,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, O
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows::{
-    core::{factory, Error as WindowsError, IInspectable, Interface},
-    Foundation::{EventRegistrationToken, TimeSpan, TypedEventHandler},
+    core::{factory, Error as WindowsError, IInspectable, Interface, HSTRING},
+    Foundation::{EventRegistrationToken, Metadata::ApiInformation, TimeSpan, TypedEventHandler},
     Graphics::{
         Capture::{
             Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem,
@@ -155,8 +155,19 @@ fn native_interval_is_unavailable(error: &WindowsError) -> bool {
     )
 }
 
-fn should_attempt_fresh_override(capability: u8) -> bool {
+fn native_interval_may_be_set(capability: u8) -> bool {
     capability != NativeIntervalCapability::Unavailable as u8
+}
+
+fn native_interval_property_present() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        ApiInformation::IsPropertyPresent(
+            &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+            &HSTRING::from("MinUpdateInterval"),
+        )
+        .unwrap_or(true)
+    })
 }
 
 fn record_configured_interval_outcome(
@@ -813,21 +824,35 @@ impl PersistentCapture {
             );
         }
         let requested_fps = crate::screenshot_rate::current();
-        let interval_ticks = configured_interval_ticks(requested_fps, streaming_headroom);
         let native_interval_status = AtomicU8::new(NativeIntervalStatus::NotAttempted as u8);
         let native_interval_capability = AtomicU8::new(NativeIntervalCapability::Unknown as u8);
-        let interval_outcome = session.SetMinUpdateInterval(TimeSpan {
-            Duration: interval_ticks,
-        });
-        record_configured_interval_outcome(
-            &stats,
-            &native_interval_status,
-            &native_interval_capability,
-            requested_fps,
-            interval_ticks,
-            ConfiguredIntervalCause::InitialSetup,
-            &interval_outcome,
-        );
+        if native_interval_property_present() {
+            let interval_ticks = configured_interval_ticks(requested_fps, streaming_headroom);
+            let interval_outcome = session.SetMinUpdateInterval(TimeSpan {
+                Duration: interval_ticks,
+            });
+            record_configured_interval_outcome(
+                &stats,
+                &native_interval_status,
+                &native_interval_capability,
+                requested_fps,
+                interval_ticks,
+                ConfiguredIntervalCause::InitialSetup,
+                &interval_outcome,
+            );
+        } else {
+            native_interval_capability.store(
+                NativeIntervalCapability::Unavailable as u8,
+                Ordering::Relaxed,
+            );
+            native_interval_status.store(
+                NativeIntervalStatus::UnsupportedOrFailed as u8,
+                Ordering::Relaxed,
+            );
+            stats
+                .native_interval_requested_fps
+                .store(requested_fps, Ordering::Relaxed);
+        }
 
         if let Err(e) = session.StartCapture() {
             cleanup_init_failure(Some(&session));
@@ -1053,7 +1078,7 @@ impl PersistentCapture {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let capability = self.native_interval_capability.load(Ordering::Acquire);
-        let override_applied = if !should_attempt_fresh_override(capability) {
+        let override_applied = if !native_interval_may_be_set(capability) {
             false
         } else {
             match self.session.SetMinUpdateInterval(TimeSpan { Duration: 0 }) {
@@ -1331,6 +1356,12 @@ impl PersistentCapture {
             .load(Ordering::Acquire)
             == requested_fps
         {
+            return;
+        }
+        if !native_interval_may_be_set(self.native_interval_capability.load(Ordering::Acquire)) {
+            self.stats
+                .native_interval_requested_fps
+                .store(requested_fps, Ordering::Release);
             return;
         }
         let _update = self
@@ -1696,7 +1727,7 @@ mod tests {
             status.load(Ordering::Acquire),
             NativeIntervalStatus::UnsupportedOrFailed as u8
         );
-        assert!(!should_attempt_fresh_override(
+        assert!(!native_interval_may_be_set(
             capability.load(Ordering::Acquire)
         ));
 

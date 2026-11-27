@@ -130,7 +130,7 @@ pub struct SafeMonitor {
     /// desktops that do not implement the wlroots screencopy protocol.
     #[cfg(target_os = "linux")]
     portal_capture: Arc<linux_portal::PortalCaptureSession>,
-    /// Geometry refreshed by the monitor watcher for the active Streaming session.
+    /// Windows screenshot geometry refreshed by the monitor watcher.
     #[cfg(target_os = "windows")]
     streaming_geometry: Arc<RwLock<Arc<MonitorData>>>,
     /// Persistent WGC capture session to avoid orange border flash from per-frame session lifecycle.
@@ -323,6 +323,53 @@ mod tests {
         assert_eq!(current.bounds(), (-1024, 120, 1024, 768));
         assert!(!Arc::ptr_eq(&old_geometry, &current));
         assert_eq!(old_geometry.bounds(), (0, 0, 1024, 768));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    #[ignore = "requires a live unlocked Windows console"]
+    async fn filtered_screenshots_do_not_require_a_display_session() {
+        use crate::capture_screenshot_by_window::{ExclusionSources, WindowFilters};
+        use crate::screenshot_privacy::capture_monitor_frame_filtered;
+        use crate::snapshot_writer::SnapshotWriter;
+
+        let filters = WindowFilters::new(&[], &["::ScreenpipeMissingTestWindow".into()], &[]);
+        let monitors = [
+            make_test_monitor(0, "primary", 2560, 1440, 0, 0),
+            make_test_monitor(u32::MAX, "portrait", 1440, 2560, -1440, 0),
+        ];
+        for monitor in &monitors {
+            assert!(monitor.capture_image_streaming().await.is_err());
+        }
+
+        let output = tempfile::tempdir().expect("snapshot directory");
+        let writer = SnapshotWriter::new(output.path().to_path_buf(), 90, 0);
+        let capture = |monitor: SafeMonitor| {
+            let filters = filters.clone();
+            let writer = &writer;
+            async move {
+                let frame = capture_monitor_frame_filtered(
+                    &monitor,
+                    &filters,
+                    ExclusionSources::default(),
+                    &[],
+                    false,
+                )
+                .await
+                .expect("filtered screenshot without a display session");
+                assert!(frame.session_id.is_none());
+                let path = writer
+                    .write(&frame.image, frame.captured_at, monitor.id())
+                    .expect("save screenshot");
+                let stored = image::open(path).expect("reopen recorded screenshot");
+                assert_eq!(
+                    (stored.width(), stored.height()),
+                    (monitor.width(), monitor.height())
+                );
+            }
+        };
+        let [primary, portrait] = monitors;
+        tokio::join!(capture(primary), capture(portrait));
     }
 
     #[test]
