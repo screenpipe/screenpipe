@@ -847,6 +847,18 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    if (tool === "get_screenshot" || tool === "get-screenshot") {
+      const id = Number(event.input?.frame_id);
+      const pathname = Number.isSafeInteger(id) && id > 0 ? `/frames/${id}/thumbnail` : "/frames/0/thumbnail";
+      if (!isEndpointAllowed("GET", pathname)) {
+        return {
+          block: true,
+          reason: `Permission denied: GET ${pathname} is not permitted — configure \`permissions\` in pipe.md`,
+        };
+      }
+      return;
+    }
+
     if (tool !== "bash") return;
     const cmd: string = event.input?.command || "";
 

@@ -262,7 +262,7 @@ const MANAGED_PI_EXTENSION_FILES: [&str; 10] = [
     "live-views.ts",
     "connection-gate.ts",
     "context-pruning.ts",
-    "tinfoil.ts",
+    "frame-image.ts",
     "work-context.ts",
     "workflow-feedback.ts",
 ];
@@ -1820,6 +1820,12 @@ fn ensure_context_pruning_extension(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install context-pruning extension: {}", e))
 }
 
+fn ensure_frame_image_extension(project_dir: &str) -> Result<(), String> {
+    use screenpipe_core::agents::pi::PiExecutor;
+    PiExecutor::ensure_frame_image_extension(std::path::Path::new(project_dir))
+        .map_err(|e| format!("Failed to install frame-image extension: {}", e))
+}
+
 /// Every extension both Pi harnesses must load. Native Pi and pi-acp run the
 /// SAME pi binary against the same project dir, so an extension seeded on one
 /// path and not the other is always a bug — and the two lists drifted once
@@ -1839,6 +1845,7 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
     ensure_context_pruning_extension(project_dir)?;
+    ensure_frame_image_extension(project_dir)?;
     screenpipe_core::agents::pi::PiExecutor::ensure_tinfoil_extension(Path::new(project_dir))
         .map_err(|e| e.to_string())?;
     // MCP bridge: lets the agent reach user-registered MCP servers.
@@ -1863,7 +1870,7 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "chat-control.ts",
     "context-usage.ts",
     "context-pruning.ts",
-    "tinfoil.ts",
+    "frame-image.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
@@ -3014,6 +3021,10 @@ pub async fn pi_start_inner(
             std::path::Path::new(&project_dir),
         )
         .map_err(|e| format!("Failed to install context guard: {}", e))?;
+        screenpipe_core::agents::pi::PiExecutor::ensure_frame_image_extension(
+            std::path::Path::new(&project_dir),
+        )
+        .map_err(|e| format!("Failed to install frame-image extension: {}", e))?;
     }
 
     // ACP agents receive Screenpipe via MCP during session/new. Pi-only
@@ -8407,20 +8418,16 @@ error: InstallFailed extracting tarball"#;
         let ext_dir = project.path().join(".pi").join("extensions");
         std::fs::create_dir_all(&ext_dir).unwrap();
         std::fs::write(ext_dir.join("workflow-memory.ts"), "legacy override").unwrap();
+        std::fs::write(ext_dir.join("tinfoil.ts"), "legacy enclave override").unwrap();
         super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
         assert!(!ext_dir.join("workflow-memory.ts").exists());
+        assert!(!ext_dir.join("tinfoil.ts").exists());
         for file in super::SHARED_PI_EXTENSION_FILES {
             assert!(
                 ext_dir.join(file).is_file(),
                 "{file} must be seeded for every Pi harness, native and pi-acp"
             );
         }
-        let transport = std::fs::read_to_string(ext_dir.join("tinfoil.ts"))
-            .expect("read seeded Tinfoil extension");
-        assert!(!transport.contains("__SCREENPIPE_PI_PACKAGE_JSON__"));
-        assert!(transport.contains("package.json"));
-        assert!(ext_dir.join("lib/tinfoil-transport.ts").is_file());
-        assert!(ext_dir.join("lib/glm-protocol.ts").is_file());
         assert!(
             super::SHARED_PI_EXTENSION_FILES.contains(&"context-usage.ts"),
             "context-usage must stay in the shared set so pi-acp keeps the breakdown"
@@ -8429,6 +8436,14 @@ error: InstallFailed extracting tarball"#;
             super::SHARED_PI_EXTENSION_FILES.contains(&"context-pruning.ts"),
             "context-pruning must stay in the shared set for native Pi and pi-acp"
         );
+        assert!(
+            super::SHARED_PI_EXTENSION_FILES.contains(&"frame-image.ts"),
+            "frame-image must stay in the shared set for native Pi and pi-acp"
+        );
+        let frame_image = std::fs::read_to_string(ext_dir.join("frame-image.ts"))
+            .expect("read seeded frame-image extension");
+        assert!(frame_image.contains("name: \"frame_image\""));
+        assert!(frame_image.contains("/thumbnail?width="));
         let pruning = std::fs::read_to_string(ext_dir.join("context-pruning.ts"))
             .expect("read seeded context-pruning extension");
         assert!(pruning.contains("normalizeContextOverflowError"));
