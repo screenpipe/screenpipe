@@ -1,0 +1,55 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
+name: Recording safeguards
+
+on:
+  pull_request:
+    paths:
+      - 'crates/screenpipe-screen/**'
+      - 'crates/screenpipe-capture/**'
+      - 'crates/screenpipe-engine/src/event_driven_capture.rs'
+      - 'scripts/recording-regression/**'
+      - '.github/workflows/recording-safeguards.yml'
+      - '.github/workflows/release-app.yml'
+      - 'rust-toolchain.toml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/screenpipe-screen/**'
+      - 'crates/screenpipe-capture/**'
+      - 'crates/screenpipe-engine/src/event_driven_capture.rs'
+      - 'scripts/recording-regression/**'
+      - '.github/workflows/recording-safeguards.yml'
+      - '.github/workflows/release-app.yml'
+      - 'rust-toolchain.toml'
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recording-safeguards-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: Recording invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      # Hosted runners supply rustc. No Cargo/media dependencies or model calls.
+      - run: bun test ./scripts/recording-regression/
+      - name: Explain failure
+        if: failure()
+        run: |
+          echo '::error title=Recording safeguard failed::Do not prepare or publish this revision. Reproduce with bun test ./scripts/recording-regression/; see docs/recording-regression-safeguards.md. Native desktop validation is separate.'
+          echo 'Recording safeguards failed. Run `bun test ./scripts/recording-regression/` at this revision. Inspect the named invariant and negative controls before retrying. See docs/recording-regression-safeguards.md.' >> "$GITHUB_STEP_SUMMARY"

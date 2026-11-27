@@ -186,8 +186,34 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-  draft:
+  recording-safeguards:
     needs: [check_commit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    permissions:
+      contents: read
+    steps:
+      # Use the dispatch's verifier against the selected release source, so an
+      # older revision cannot silently omit the safeguard suite.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check_commit.outputs.release_sha }}
+          path: .recording-candidate
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - name: Check candidate recording invariants
+        env:
+          RECORDING_CANDIDATE_ROOT: .recording-candidate
+        run: bun test ./scripts/recording-regression/
+
+  draft:
+    needs: [check_commit, recording-safeguards]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -203,7 +229,7 @@ jobs:
         run: echo "R2-based releases - no CN draft needed"
 
   localization:
-    needs: [check_commit]
+    needs: [check_commit, recording-safeguards]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
