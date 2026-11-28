@@ -29,14 +29,22 @@ function createRealPostHog(
 }
 
 describe("syncPostHogIdentity (real posthog-js SDK)", () => {
-  it("switches distinct_id from machine uuid to clerk_id and bridges via $create_alias", () => {
-    const { sdk, captured } = createRealPostHog("ph-tok-fresh");
+  it("keeps signed-out machine uuid anonymous and merges cleanly into clerk_id on sign-in", () => {
+    const { sdk, captured } = createRealPostHog("ph-tok-fresh", {
+      distinctID: "machine-uuid-1",
+      isIdentifiedID: false,
+    });
 
+    // Signed-out sync must NOT call identify(machine-uuid-1), otherwise PostHog
+    // marks the machine uuid as a separate identified person and rejects
+    // merging it with the Clerk web person on login.
     syncPostHogIdentity(sdk, {
       analyticsId: "machine-uuid-1",
       properties: { machine_analytics_id: "machine-uuid-1" },
     });
     expect(sdk.get_distinct_id()).toBe("machine-uuid-1");
+    expect(sdk.get_property("$user_id")).toBeUndefined();
+    expect(captured.filter((c) => c.event === "$identify")).toHaveLength(0);
 
     syncPostHogIdentity(sdk, {
       analyticsId: "machine-uuid-1",
@@ -45,6 +53,14 @@ describe("syncPostHogIdentity (real posthog-js SDK)", () => {
     });
     expect(sdk.get_distinct_id()).toBe("user_clerk_1");
     expect(sdk.get_property("__alias")).toBe("machine-uuid-1");
+
+    const identifies = captured.filter((c) => c.event === "$identify");
+    expect(identifies).toHaveLength(1);
+    expect(identifies[0].properties).toEqual(
+      expect.objectContaining({
+        $anon_distinct_id: "machine-uuid-1",
+      }),
+    );
 
     const aliases = captured.filter((c) => c.event === "$create_alias");
     expect(aliases).toHaveLength(1);
@@ -65,10 +81,10 @@ describe("syncPostHogIdentity (real posthog-js SDK)", () => {
     expect(captured.filter((c) => c.event === "$create_alias")).toHaveLength(1);
   });
 
-  it("switches bootstrapped machine installs to clerk_id on sign-in", () => {
+  it("switches bootstrapped anonymous machine installs to clerk_id on sign-in", () => {
     const { sdk } = createRealPostHog("ph-tok-bootstrap", {
       distinctID: "machine-uuid-2",
-      isIdentifiedID: true,
+      isIdentifiedID: false,
     });
     expect(sdk.get_distinct_id()).toBe("machine-uuid-2");
 
@@ -100,15 +116,11 @@ describe("syncPostHogIdentity (real posthog-js SDK)", () => {
     expect(sdk.get_property("__alias")).toBe("machine-uuid-3");
   });
 
-  it("handles email alias before settings effect and sign-out back to machine uuid", () => {
-    const { sdk } = createRealPostHog("ph-tok-signout");
-
-    syncPostHogIdentity(sdk, {
-      analyticsId: "machine-uuid-4",
-      properties: {},
+  it("resets back to an anonymous session on sign-out without re-identifying machine uuid", () => {
+    const { sdk, captured } = createRealPostHog("ph-tok-signout", {
+      distinctID: "machine-uuid-4",
+      isIdentifiedID: false,
     });
-    // Mirrors loadUser() calling posthog.alias(email) right before updateSettings({ user }).
-    sdk.alias("user@example.invalid");
 
     syncPostHogIdentity(sdk, {
       analyticsId: "machine-uuid-4",
@@ -117,11 +129,14 @@ describe("syncPostHogIdentity (real posthog-js SDK)", () => {
     });
     expect(sdk.get_distinct_id()).toBe("user_clerk_4");
 
-    // Sign-out reverts to analyticsId cleanly despite __alias === machine-uuid-4.
+    // Sign-out resets out of user_clerk_4 without calling identify(machine-uuid-4).
+    const identifyCountBeforeSignOut = captured.filter((c) => c.event === "$identify").length;
     syncPostHogIdentity(sdk, {
       analyticsId: "machine-uuid-4",
       properties: {},
     });
-    expect(sdk.get_distinct_id()).toBe("machine-uuid-4");
+    expect(sdk.get_distinct_id()).not.toBe("user_clerk_4");
+    expect(sdk.get_property("$user_id")).toBeUndefined();
+    expect(captured.filter((c) => c.event === "$identify")).toHaveLength(identifyCountBeforeSignOut);
   });
 });

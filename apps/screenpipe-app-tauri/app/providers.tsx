@@ -122,18 +122,19 @@ export const Providers = forwardRef<
       // Bootstrap with the stable per-install id (mirrors settings.analyticsId,
       // cached by the identify() effect in use-settings) so EVERY event — incl.
       // ones fired by overlay windows like the floating search bar before the
-      // async settings/identify effect runs — attaches to one durable person.
-      // Without it, posthog mints a fresh anonymous id per webview/session and a
-      // single install fragments into many person_ids (~6-27x WAU overcount,
-      // ~0% week-over-week retention). isIdentifiedID lets the bootstrapped id
-      // create a person profile under `person_profiles: "identified_only"`.
+      // async settings/identify effect runs — attaches to one durable anonymous
+      // distinct_id. Keep isIdentifiedID: false so PostHog treats the machine id
+      // as anonymous until Clerk sign-in; marking it identified before login
+      // caused PostHog to reject merging the desktop machine id into the
+      // already-identified Clerk web person ("Cannot merge two identified users"),
+      // breaking website download -> desktop app_started attribution.
       const cachedAnalyticsId = readCachedAnalyticsId();
       posthog.init("phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb", {
         api_host: "https://us.i.posthog.com",
         person_profiles: "identified_only",
         capture_pageview: false,
         ...(cachedAnalyticsId
-          ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: true } }
+          ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: false } }
           : {}),
       });
       // Webview events carried no app version at all, so no webview funnel

@@ -114,6 +114,8 @@ pub struct AnalyticsManager {
     client: Client,
     posthog_api_key: String,
     distinct_id: String,
+    machine_id: String,
+    clerk_id: Option<String>,
     email: String,
     interval: Duration,
     enabled: Arc<AtomicBool>,
@@ -181,7 +183,8 @@ fn smart_pii_settings(settings: &serde_json::Value) -> serde_json::Value {
 impl AnalyticsManager {
     pub fn new(
         posthog_api_key: String,
-        distinct_id: String,
+        machine_id: String,
+        clerk_id: Option<String>,
         email: String,
         interval_hours: u64,
         local_api_base_url: String,
@@ -189,10 +192,18 @@ impl AnalyticsManager {
         screenpipe_dir_path: PathBuf,
         analytics_enabled: bool,
     ) -> Self {
+        let normalized_clerk_id = clerk_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        let distinct_id = normalized_clerk_id
+            .clone()
+            .unwrap_or_else(|| machine_id.clone());
         Self {
             client: Client::new(),
             posthog_api_key,
             distinct_id,
+            machine_id,
+            clerk_id: normalized_clerk_id,
             email,
             interval: Duration::from_secs(interval_hours * 3600),
             enabled: Arc::new(AtomicBool::new(analytics_enabled)),
@@ -277,20 +288,38 @@ impl AnalyticsManager {
         self.attribution.lock().await.clone()
     }
 
-    /// Send a $create_alias event so PostHog merges the email-based identity
-    /// (used by the website download endpoint) with this app's analytics UUID.
-    pub async fn send_alias(&self, alias: &str) {
-        if !self.enabled.load(Ordering::SeqCst) || alias.is_empty() {
+    /// Merge the anonymous machine analytics ID into the authenticated Clerk
+    /// person via `$identify` so desktop `app_started` events share the same
+    /// PostHog person as website downloads (`app_downloaded` / `download_selected`).
+    /// Never emits when signed out so `machine_id` stays anonymous until login.
+    pub async fn send_identify(&self) {
+        if !self.enabled.load(Ordering::SeqCst) {
             return;
         }
+        let Some(clerk_id) = self.clerk_id.as_deref() else {
+            return;
+        };
+        let mut set_props = serde_json::Map::new();
+        set_props.insert("clerk_id".to_string(), json!(clerk_id));
+        if !self.machine_id.is_empty() {
+            set_props.insert("machine_analytics_id".to_string(), json!(self.machine_id));
+        }
+        if !self.email.is_empty() {
+            set_props.insert("email".to_string(), json!(self.email));
+        }
+        let mut props = serde_json::Map::new();
+        props.insert("distinct_id".to_string(), json!(clerk_id));
+        props.insert("$lib".to_string(), json!("rust-reqwest"));
+        if !self.machine_id.is_empty() && self.machine_id != clerk_id {
+            props.insert("$anon_distinct_id".to_string(), json!(self.machine_id));
+        }
+        props.insert("$set".to_string(), serde_json::Value::Object(set_props));
+
         let url = format!("{}/capture/", self.api_host);
         let payload = json!({
             "api_key": self.posthog_api_key,
-            "event": "$create_alias",
-            "properties": {
-                "distinct_id": self.distinct_id,
-                "alias": alias,
-            },
+            "event": "$identify",
+            "properties": serde_json::Value::Object(props),
         });
         let _ = self.client.post(&url).json(&payload).send().await;
     }
@@ -341,6 +370,7 @@ impl AnalyticsManager {
             "event": event,
             "properties": {
                 "distinct_id": self.distinct_id,
+                "machine_analytics_id": self.machine_id,
                 "$lib": "rust-reqwest",
                 "$email": self.email,
                 "os_name": host.os_name,
@@ -759,6 +789,7 @@ impl AnalyticsManager {
 
 pub fn start_analytics(
     unique_id: String,
+    clerk_id: Option<String>,
     email: String,
     posthog_api_key: String,
     interval_hours: u64,
@@ -780,6 +811,7 @@ pub fn start_analytics(
     let analytics_manager = Arc::new(AnalyticsManager::new(
         posthog_api_key,
         unique_id,
+        clerk_id,
         email,
         interval_hours,
         local_api_base_url,
@@ -794,9 +826,7 @@ pub fn start_analytics(
         async move {
             // Respect the user's telemetry opt-out for network beacons too. The
             // `send_event` path already gates on `enabled`, but `fetch_attribution`
-            // and `send_alias` used to fire an outbound request to
-            // screenpipe.com regardless — so an opt-out user still leaked their
-            // IP + install-launch timing to the website every boot.
+            // and `send_identify` must not fire when opted out.
             if !should_enable_analytics {
                 return;
             }
@@ -804,13 +834,10 @@ pub fn start_analytics(
             // This must happen before app_started so the first event carries attribution
             analytics_manager.fetch_attribution().await;
 
-            // Link email identity (used by website) to analytics UUID (used by app)
-            // so PostHog can merge the person and build a real download→open funnel
-            if !analytics_manager.email.is_empty() {
-                analytics_manager
-                    .send_alias(&analytics_manager.email.clone())
-                    .await;
-            }
+            // If already signed in with Clerk, bridge anonymous machine_id -> clerk_id
+            // so PostHog merges pre-login desktop app_started with website downloads.
+            // Signed-out installs stay anonymous on machine_id until login.
+            analytics_manager.send_identify().await;
 
             // Include feature config in app_started event
             let feature_config = analytics_manager.read_feature_config();
@@ -930,6 +957,7 @@ mod tests {
         let mut manager = AnalyticsManager::new(
             "test-key".into(),
             "test-id".into(),
+            None,
             String::new(),
             6,
             "http://127.0.0.1:3030".into(),
@@ -1192,6 +1220,7 @@ mod tests {
         let manager = AnalyticsManager::new(
             "posthog-key".to_string(),
             "analytics-id".to_string(),
+            None,
             String::new(),
             1,
             "http://127.0.0.1:3030".to_string(),
@@ -1213,6 +1242,7 @@ mod tests {
         let manager = AnalyticsManager::new(
             "posthog-key".to_string(),
             "analytics-id".to_string(),
+            None,
             String::new(),
             1,
             "http://127.0.0.1:3030".to_string(),
@@ -1230,5 +1260,59 @@ mod tests {
         *manager.attribution.lock().await = Some(expected.clone());
 
         assert_eq!(manager.attribution_snapshot().await, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn signed_in_manager_identifies_clerk_id_from_machine_id_and_signed_out_stays_anonymous() {
+        let dir = tempfile::tempdir().unwrap();
+        let (api_host, mut rx, server) =
+            analytics_server(axum::http::StatusCode::OK, None).await;
+
+        let signed_out = test_manager(dir.path(), api_host.clone(), true);
+        assert_eq!(signed_out.distinct_id, "test-id");
+        signed_out.send_identify().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .is_err(),
+            "signed-out installs must not emit $identify before login"
+        );
+
+        let mut signed_in = AnalyticsManager::new(
+            "test-key".into(),
+            "machine-uuid-1".into(),
+            Some("user_clerk_1".into()),
+            "person@example.invalid".into(),
+            6,
+            "http://127.0.0.1:3030".into(),
+            None,
+            dir.path().to_path_buf(),
+            true,
+        );
+        signed_in.api_host = api_host;
+        signed_in.client = Client::builder().no_proxy().build().unwrap();
+        assert_eq!(signed_in.distinct_id, "user_clerk_1");
+
+        signed_in.send_identify().await;
+        let payload = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("identify request")
+            .expect("payload");
+        assert_eq!(payload["event"], "$identify");
+        assert_eq!(payload["properties"]["distinct_id"], "user_clerk_1");
+        assert_eq!(
+            payload["properties"]["$anon_distinct_id"],
+            "machine-uuid-1"
+        );
+        assert_eq!(
+            payload["properties"]["$set"]["email"],
+            "person@example.invalid"
+        );
+        assert_eq!(
+            payload["properties"]["$set"]["machine_analytics_id"],
+            "machine-uuid-1"
+        );
+
+        server.abort();
     }
 }

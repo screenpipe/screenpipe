@@ -2147,16 +2147,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				);
 			}
 
-			// if user was not logged in, send posthog event and bridge identity
+			// if user was not logged in, send posthog event (syncPostHogIdentity in
+			// the settings effect bridges analyticsId -> clerk_id without aliasing
+			// onto raw email, which previously conflicted with Clerk web identity)
 			if (!settings.user?.id) {
 				posthog.capture("app_login", {
 					email: userData.email,
 				});
-				// Bridge app identity → website identity via email alias
-				// This merges the anonymous app profile with any website profile
-				// that used the same email during checkout
 				if (userData.email) {
-					posthog.alias(userData.email);
 					posthog.people?.set({
 						email: userData.email,
 						app_user_id: userData.id,
