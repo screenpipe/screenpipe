@@ -840,4 +840,72 @@ mod timeline_live_meeting_tests {
         assert_eq!(mapped.unwrap(), 0);
         assert_eq!(written.unwrap().rows_affected(), 1);
     }
+
+    #[tokio::test]
+    async fn test_mirror_populates_bounded_non_overlapping_end_time() {
+        let db = setup_test_db().await;
+        let base = Utc::now();
+
+        let chunk_id = db
+            .insert_audio_chunk("System Audio (output)_turns.mp4", Some(base))
+            .await
+            .unwrap();
+        let meeting_id = db
+            .insert_meeting("zoom.us", "ui_scan", Some("timing test"), None)
+            .await
+            .unwrap();
+
+        // Turn 1 at T+2s with 20 words (word-rate estimate 8.0s), followed by
+        // Turn 2 at T+5s with 5 words (word-rate estimate 2.0s). Turn 1's end_time
+        // must be capped at T+5s so consecutive turns on the same track never overlap.
+        let twenty_words = (1..=20)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-1",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            &twenty_words,
+            base + Duration::seconds(2),
+        )
+        .await
+        .unwrap();
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-2",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            "one two three four five",
+            base + Duration::seconds(5),
+        )
+        .await
+        .unwrap();
+
+        let inserted = db
+            .mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+            .await
+            .unwrap();
+        assert_eq!(inserted, 2);
+
+        let rows: Vec<(Option<f64>, Option<f64>)> = sqlx::query_as(
+            "SELECT start_time, end_time FROM audio_transcriptions \
+             WHERE audio_chunk_id = ?1 ORDER BY start_time ASC",
+        )
+        .bind(chunk_id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (Some(2.0), Some(5.0)));
+        assert_eq!(rows[1], (Some(5.0), Some(7.0)));
+    }
 }

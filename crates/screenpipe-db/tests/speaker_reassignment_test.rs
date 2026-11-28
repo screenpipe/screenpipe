@@ -1142,4 +1142,51 @@ mod speaker_reassignment_tests {
                 .unwrap();
         assert_eq!(before, after);
     }
+
+    #[tokio::test]
+    async fn test_merge_speakers_adopts_and_blends_centroids() {
+        let db = setup_test_db().await;
+
+        // 1. Merging an embedded voice cluster into a name-only speaker (NULL centroid)
+        // must adopt the merged speaker's centroid and embedding_count.
+        let named_only = db.create_speaker_with_name("Alice").await.unwrap();
+        let mut emb_a = vec![0.0f32; 512];
+        emb_a[0] = 1.0;
+        let cluster_a = db.insert_speaker(&emb_a).await.unwrap();
+
+        db.merge_speakers(named_only.id, cluster_a.id)
+            .await
+            .unwrap();
+
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let alice_centroid = centroids
+            .iter()
+            .find(|(id, _, _)| *id == named_only.id)
+            .expect("merged name-only speaker must adopt centroid");
+        assert!((alice_centroid.2[0] - 1.0).abs() < 1e-5);
+
+        // 2. Merging a second embedded cluster blends both centroids and sums embedding_count.
+        let mut emb_b = vec![0.0f32; 512];
+        emb_b[1] = 1.0;
+        let cluster_b = db.insert_speaker(&emb_b).await.unwrap();
+
+        db.merge_speakers(named_only.id, cluster_b.id)
+            .await
+            .unwrap();
+
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let blended = centroids
+            .iter()
+            .find(|(id, _, _)| *id == named_only.id)
+            .expect("blended speaker must retain centroid");
+        assert!((blended.2[0] - 0.5).abs() < 1e-5);
+        assert!((blended.2[1] - 0.5).abs() < 1e-5);
+
+        let count: i64 = sqlx::query_scalar("SELECT embedding_count FROM speakers WHERE id = ?1")
+            .bind(named_only.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
 }

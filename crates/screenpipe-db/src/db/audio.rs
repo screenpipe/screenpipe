@@ -249,21 +249,82 @@ impl DatabaseManager {
         Ok(exists != 0)
     }
 
-    /// Returns recently transcribed chunks that still have no assigned speaker.
-    /// Used for speaker backfill after segmentation models become available.
+    /// Returns recently transcribed chunks that still have no assigned speaker
+    /// and are eligible for single-voice backfill via `update_transcriptions_speaker`.
+    ///
+    /// Deduplicates by `audio_chunks.id` (a multi-utterance chunk previously
+    /// filled the entire `LIMIT` with duplicate rows, decoding the same MP4 N
+    /// times) and skips chunks that `update_transcriptions_speaker` is already
+    /// guaranteed to reject (overlapping/multi-speaker diarization, conflicting
+    /// existing speakers, or live chunks without one unambiguous speaker
+    /// identity) so unbackfillable recent meeting chunks cannot starve older
+    /// single-speaker chunks behind them.
     pub async fn get_recent_transcriptions_without_speaker(
         &self,
         since: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<UntranscribedChunk>, sqlx::Error> {
         let rows = sqlx::query_as::<_, UntranscribedChunk>(
-            "SELECT ac.id, ac.file_path, ac.timestamp
-             FROM audio_transcriptions at
-             INNER JOIN audio_chunks ac ON ac.id = at.audio_chunk_id
-             WHERE at.speaker_id IS NULL
-               AND at.timestamp >= ?1
-             ORDER BY at.timestamp DESC
-             LIMIT ?2",
+            r#"
+            SELECT ac.id, ac.file_path, ac.timestamp
+            FROM audio_transcriptions at
+            INNER JOIN audio_chunks ac ON ac.id = at.audio_chunk_id
+            WHERE at.speaker_id IS NULL
+              AND at.timestamp >= ?1
+              AND NOT EXISTS (
+                  SELECT 1 FROM audio_transcriptions s
+                  WHERE s.audio_chunk_id = ac.id AND s.speaker_id IS NOT NULL
+                  GROUP BY s.audio_chunk_id
+                  HAVING COUNT(DISTINCT s.speaker_id) > 1
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM diarization_segments ds
+                  WHERE ds.audio_chunk_id = ac.id AND ds.overlap = 1
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM diarization_segments ds
+                  WHERE ds.audio_chunk_id = ac.id
+                  GROUP BY ds.diarization_run_id
+                  HAVING COUNT(DISTINCT ds.provider_speaker_label) > 1
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1 FROM audio_transcriptions l
+                      WHERE l.audio_chunk_id = ac.id AND l.transcription_engine = 'live'
+                  )
+                  OR (
+                      NOT EXISTS (
+                          SELECT 1 FROM audio_transcriptions l
+                          WHERE l.audio_chunk_id = ac.id
+                            AND l.transcription_engine = 'live'
+                            AND NOT EXISTS (
+                                SELECT 1 FROM meeting_transcript_segments m
+                                WHERE julianday(m.captured_at) = julianday(l.timestamp)
+                                  AND m.device_name = l.device
+                                  AND m.device_type = CASE WHEN l.is_input_device = 1 THEN 'input' ELSE 'output' END
+                                  AND m.transcript = l.transcription
+                                  AND TRIM(COALESCE(m.session_speaker_id, m.speaker_name, '')) != ''
+                            )
+                      )
+                      AND (
+                          SELECT COUNT(*) FROM (
+                              SELECT DISTINCT m.meeting_id, m.stream_id, m.device_name, m.device_type,
+                                     COALESCE(m.session_speaker_id, m.speaker_name) AS identity
+                              FROM audio_transcriptions l
+                              JOIN meeting_transcript_segments m
+                                ON julianday(m.captured_at) = julianday(l.timestamp)
+                               AND m.device_name = l.device
+                               AND m.device_type = CASE WHEN l.is_input_device = 1 THEN 'input' ELSE 'output' END
+                               AND m.transcript = l.transcription
+                              WHERE l.audio_chunk_id = ac.id AND l.transcription_engine = 'live'
+                          )
+                      ) = 1
+                  )
+              )
+            GROUP BY ac.id, ac.file_path, ac.timestamp
+            ORDER BY MAX(at.timestamp) DESC, ac.id DESC
+            LIMIT ?2
+            "#,
         )
         .bind(since)
         .bind(limit)

@@ -1018,8 +1018,18 @@ impl DatabaseManager {
         }
 
         let window_ms = (coverage_window_secs * 1000.0) as i64;
-        let mut tx = self.begin_immediate_with_retry().await?;
-        let mut inserted: u64 = 0;
+
+        // Resolve each segment's target chunk and start offset first so we can
+        // bound `end_time` against the next turn on the same (chunk_id, device)
+        // instead of inserting NULL `end_time` on every mirrored live row.
+        struct PlannedMirror<'a> {
+            seg: &'a Seg,
+            chunk_id: i64,
+            device_key: String,
+            start_time: Option<f64>,
+        }
+
+        let mut planned: Vec<PlannedMirror<'_>> = Vec::with_capacity(segs.len());
         for s in &segs {
             let seg_ms = s.captured_at.timestamp_millis();
             // Match the SAME physical device's chunk so an input (mic) segment can't
@@ -1057,21 +1067,65 @@ impl DatabaseManager {
             let Some(chunk) = pick else {
                 continue;
             };
-            let chunk_id = chunk.0;
+            let start_time = (seg_ms >= chunk.1).then_some((seg_ms - chunk.1) as f64 / 1000.0);
+            planned.push(PlannedMirror {
+                seg: s,
+                chunk_id: chunk.0,
+                device_key,
+                start_time,
+            });
+        }
+
+        // Group start times per (chunk_id, device_key) so each turn's estimated
+        // end_time never overlaps the following turn on the same track.
+        let mut starts_by_track: std::collections::HashMap<(i64, &str), Vec<f64>> =
+            std::collections::HashMap::new();
+        for item in &planned {
+            if let Some(st) = item.start_time {
+                starts_by_track
+                    .entry((item.chunk_id, item.device_key.as_str()))
+                    .or_default()
+                    .push(st);
+            }
+        }
+        for starts in starts_by_track.values_mut() {
+            starts.sort_by(|a, b| a.total_cmp(b));
+        }
+
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let mut inserted: u64 = 0;
+        for item in &planned {
+            let s = item.seg;
+            let end_time = item.start_time.map(|st| {
+                let words = s.transcript.split_whitespace().count().max(1) as f64;
+                // Conversational speech averages ~2.5 words/sec; clamp to a
+                // sensible turn range and never run past the next turn's start.
+                let estimated = (words / 2.5).clamp(0.5, 15.0);
+                let mut end = st + estimated;
+                if let Some(starts) =
+                    starts_by_track.get(&(item.chunk_id, item.device_key.as_str()))
+                {
+                    if let Some(&next_st) = starts.iter().find(|&&t| t > st) {
+                        end = end.min(next_st);
+                    }
+                }
+                end
+            });
             let text_length = s.transcript.len() as i64;
             let res = sqlx::query(
                 "INSERT OR IGNORE INTO audio_transcriptions \
                  (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, \
                   device, is_input_device, speaker_id, start_time, end_time, text_length) \
-                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, ?7, NULL, ?6)",
+                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, ?7, ?8, ?6)",
             )
-            .bind(chunk_id)
+            .bind(item.chunk_id)
             .bind(&s.transcript)
             .bind(s.captured_at)
             .bind(&s.device_name)
             .bind(s.is_input)
             .bind(text_length)
-            .bind((seg_ms >= chunk.1).then_some((seg_ms - chunk.1) as f64 / 1000.0))
+            .bind(item.start_time)
+            .bind(end_time)
             .execute(&mut **tx.conn())
             .await?;
             inserted += res.rows_affected();

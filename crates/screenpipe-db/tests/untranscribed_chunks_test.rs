@@ -712,6 +712,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_backfill_candidates_dedup_per_chunk_and_skip_unbackfillable_multi_speaker_chunks()
+    {
+        let db = setup_test_db().await;
+        let now = Utc::now();
+
+        // 1. Newer unbackfillable multi-speaker Deepgram chunk (3 rows on 1 chunk, 2 provider labels)
+        let multi_dg = db
+            .insert_audio_chunk("Meeting Tap (output)_multi_dg.mp4", Some(now))
+            .await
+            .unwrap();
+        for i in 0..3 {
+            db.insert_audio_transcription(
+                multi_dg,
+                &format!("turn {i}"),
+                i,
+                "Deepgram",
+                &test_device(),
+                None,
+                Some(i as f64),
+                Some(i as f64 + 1.0),
+                Some(now),
+            )
+            .await
+            .unwrap();
+        }
+        let run_id: i64 = sqlx::query(
+            "INSERT INTO diarization_runs (audio_chunk_id, mode, provider) VALUES (?1, 'background', 'deepgram')",
+        )
+        .bind(multi_dg)
+        .execute(&db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        for (idx, label) in [(0, "SPEAKER_00"), (1, "SPEAKER_01")] {
+            sqlx::query(
+                "INSERT INTO diarization_segments (diarization_run_id, audio_chunk_id, provider_speaker_label, start_time, end_time, overlap) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            )
+            .bind(run_id)
+            .bind(multi_dg)
+            .bind(label)
+            .bind(idx as f64)
+            .bind(idx as f64 + 1.0)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        // 2. Newer unbackfillable multi-speaker live chunk (2 distinct live speaker names)
+        let meeting_id = db
+            .insert_meeting("zoom.us", "test", None, None)
+            .await
+            .unwrap();
+        let multi_live = db
+            .insert_audio_chunk(
+                "System Audio (output)_multi_live.mp4",
+                Some(now - Duration::seconds(10)),
+            )
+            .await
+            .unwrap();
+        for (idx, (spk, txt)) in [("speaker 1", "hello from a"), ("speaker 2", "hello from b")]
+            .into_iter()
+            .enumerate()
+        {
+            let ts = now - Duration::seconds(10 - idx as i64);
+            db.insert_meeting_transcript_segment(
+                meeting_id,
+                "deepgram",
+                None,
+                &format!("ml-{idx}"),
+                "System Audio",
+                "output",
+                Some(spk),
+                txt,
+                ts,
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, is_input_device, speaker_id, transcription_engine) \
+                 VALUES (?1, 0, ?2, ?3, 'System Audio', 0, NULL, 'live')",
+            )
+            .bind(multi_live)
+            .bind(ts)
+            .bind(txt)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        // 3. Older eligible multi-row single-speaker Deepgram chunk (4 rows on 1 chunk)
+        let eligible_dg = db
+            .insert_audio_chunk(
+                "MacBook Mic (input)_eligible_dg.mp4",
+                Some(now - Duration::seconds(60)),
+            )
+            .await
+            .unwrap();
+        for i in 0..4 {
+            db.insert_audio_transcription(
+                eligible_dg,
+                &format!("solo utterance {i}"),
+                i,
+                "Deepgram",
+                &test_device(),
+                None,
+                Some(i as f64 * 2.0),
+                Some(i as f64 * 2.0 + 1.5),
+                Some(now - Duration::seconds(60 - i as i64)),
+            )
+            .await
+            .unwrap();
+        }
+
+        // 4. Older eligible single-speaker live chunk (2 rows, same live speaker identity)
+        let eligible_live = db
+            .insert_audio_chunk(
+                "MacBook Mic (input)_eligible_live.mp4",
+                Some(now - Duration::seconds(90)),
+            )
+            .await
+            .unwrap();
+        for (idx, txt) in ["live solo one", "live solo two"].into_iter().enumerate() {
+            let ts = now - Duration::seconds(90 - idx as i64);
+            db.insert_meeting_transcript_segment(
+                meeting_id,
+                "deepgram",
+                None,
+                &format!("el-{idx}"),
+                "MacBook Mic",
+                "input",
+                Some("speaker 0"),
+                txt,
+                ts,
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, is_input_device, speaker_id, transcription_engine) \
+                 VALUES (?1, 0, ?2, ?3, 'MacBook Mic', 1, NULL, 'live')",
+            )
+            .bind(eligible_live)
+            .bind(ts)
+            .bind(txt)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        let since = now - Duration::hours(1);
+        let rows = db
+            .get_recent_transcriptions_without_speaker(since, 10)
+            .await
+            .unwrap();
+        let ids: Vec<i64> = rows.iter().map(|c| c.id).collect();
+        assert_eq!(
+            ids,
+            vec![eligible_dg, eligible_live],
+            "must deduplicate per chunk and skip unbackfillable multi-speaker chunks"
+        );
+    }
+
+    #[tokio::test]
     async fn test_returns_empty_on_empty_db() {
         let db = setup_test_db().await;
 

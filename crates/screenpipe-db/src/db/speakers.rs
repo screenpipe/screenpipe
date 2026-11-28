@@ -51,6 +51,78 @@ fn classify_speaker_candidates(candidates: Vec<SpeakerMatchCandidate>) -> Speake
     SpeakerEmbeddingMatch::Matched(best)
 }
 
+/// Blend `from_speaker`'s voice centroid and sample count into `to_speaker`
+/// before `from_speaker` is merged/retired. Without this, merging a voice
+/// cluster into a name-only speaker (whose `centroid` is NULL) or combining
+/// two clusters drops `from_speaker`'s centroid, so startup seeding and
+/// centroid-fallback matching miss the merged profile and mint new clusters.
+async fn merge_speaker_centroids(
+    conn: &mut sqlx::SqliteConnection,
+    from_speaker: i64,
+    to_speaker: i64,
+) -> Result<(), SqlxError> {
+    if from_speaker == to_speaker {
+        return Ok(());
+    }
+    const EXPECTED_BYTES: usize = 512 * 4;
+    const MAX_EFFECTIVE_COUNT: i64 = 50;
+
+    let from_row: Option<(Option<Vec<u8>>, i64)> =
+        sqlx::query_as("SELECT centroid, COALESCE(embedding_count, 0) FROM speakers WHERE id = ?1")
+            .bind(from_speaker)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((Some(from_blob), from_count)) = from_row else {
+        return Ok(());
+    };
+    if from_blob.len() != EXPECTED_BYTES {
+        return Ok(());
+    }
+
+    let to_row: Option<(Option<Vec<u8>>, i64)> =
+        sqlx::query_as("SELECT centroid, COALESCE(embedding_count, 0) FROM speakers WHERE id = ?1")
+            .bind(to_speaker)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((to_blob_opt, to_count)) = to_row else {
+        return Ok(());
+    };
+
+    let from_vec: Vec<f32> = from_blob
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let from_n = from_count.max(1);
+
+    let (merged, merged_count) = match to_blob_opt {
+        Some(to_blob) if to_blob.len() == EXPECTED_BYTES => {
+            let to_vec: Vec<f32> = to_blob
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            let to_w = to_count.clamp(1, MAX_EFFECTIVE_COUNT) as f32;
+            let from_w = from_n.clamp(1, MAX_EFFECTIVE_COUNT) as f32;
+            let denom = to_w + from_w;
+            let blended: Vec<f32> = to_vec
+                .iter()
+                .zip(from_vec.iter())
+                .map(|(t, f)| (t * to_w + f * from_w) / denom)
+                .collect();
+            (blended, to_count.saturating_add(from_n))
+        }
+        _ => (from_vec, to_count.saturating_add(from_n)),
+    };
+
+    let bytes: &[u8] = merged.as_bytes();
+    sqlx::query("UPDATE speakers SET centroid = vec_f32(?1), embedding_count = ?2 WHERE id = ?3")
+        .bind(bytes)
+        .bind(merged_count)
+        .bind(to_speaker)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Point every reference to `from_speaker` at `to_speaker`.
 /// Returns how many `audio_transcriptions` rows moved.
 async fn repoint_speaker_refs(
@@ -58,6 +130,7 @@ async fn repoint_speaker_refs(
     from_speaker: i64,
     to_speaker: i64,
 ) -> Result<u64, SqlxError> {
+    merge_speaker_centroids(conn, from_speaker, to_speaker).await?;
     let mut transcriptions_moved = 0u64;
     for table in SPEAKER_REF_TABLES {
         let moved = sqlx::query(AssertSqlSafe(format!(
