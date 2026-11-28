@@ -1,5 +1,5 @@
 ---
-schedule: every 1h
+schedule: every 24h
 enabled: false
 title: Discover workflows
 description: Keep accurate workflows using shared evidence and review
