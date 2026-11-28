@@ -51,6 +51,104 @@ fn classify_speaker_candidates(candidates: Vec<SpeakerMatchCandidate>) -> Speake
     SpeakerEmbeddingMatch::Matched(best)
 }
 
+/// Decode and validate a 512-dim f32 centroid blob (finite values, non-zero norm).
+fn parse_valid_centroid(blob: &[u8]) -> Option<Vec<f32>> {
+    const EXPECTED_BYTES: usize = 512 * 4;
+    if blob.len() != EXPECTED_BYTES {
+        warn!(
+            "ignoring centroid with unexpected byte length {} (expected {})",
+            blob.len(),
+            EXPECTED_BYTES
+        );
+        return None;
+    }
+    let vec: Vec<f32> = blob
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let norm_sq: f64 = vec.iter().try_fold(0.0f64, |acc, &v| {
+        v.is_finite().then_some(acc + (v as f64) * (v as f64))
+    })?;
+    let norm = norm_sq.sqrt();
+    if !norm.is_finite() || norm <= 1e-6 {
+        return None;
+    }
+    Some(vec.into_iter().map(|v| (v as f64 / norm) as f32).collect())
+}
+
+/// Blend `from_speaker`'s voice centroid and sample count into `to_speaker`
+/// during an explicit, permanent `merge_speakers` call.
+///
+/// Validates both vectors (rejecting NaN/Inf/zero-norm blobs), L2-normalizes
+/// the blended centroid, and falls back safely if opposing vectors cancel to
+/// near-zero norm. Kept out of undoable `reassign_speaker` paths so
+/// `undo_speaker_reassign` cannot leave a mutated target centroid behind.
+async fn merge_speaker_centroids(
+    conn: &mut sqlx::SqliteConnection,
+    from_speaker: i64,
+    to_speaker: i64,
+) -> Result<(), SqlxError> {
+    if from_speaker == to_speaker {
+        return Ok(());
+    }
+    const MAX_EFFECTIVE_COUNT: i64 = 50;
+
+    let from_row: Option<(Option<Vec<u8>>, i64)> =
+        sqlx::query_as("SELECT centroid, COALESCE(embedding_count, 0) FROM speakers WHERE id = ?1")
+            .bind(from_speaker)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((Some(from_blob), from_count)) = from_row else {
+        return Ok(());
+    };
+    let Some(from_vec) = parse_valid_centroid(&from_blob) else {
+        return Ok(());
+    };
+
+    let to_row: Option<(Option<Vec<u8>>, i64)> =
+        sqlx::query_as("SELECT centroid, COALESCE(embedding_count, 0) FROM speakers WHERE id = ?1")
+            .bind(to_speaker)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((to_blob_opt, to_count)) = to_row else {
+        return Ok(());
+    };
+
+    let from_n = from_count.max(1);
+    let to_valid = to_blob_opt.as_deref().and_then(parse_valid_centroid);
+
+    let (merged, merged_count) = match to_valid {
+        Some(to_vec) => {
+            let to_w = to_count.clamp(1, MAX_EFFECTIVE_COUNT) as f64;
+            let from_w = from_n.clamp(1, MAX_EFFECTIVE_COUNT) as f64;
+            let denom = to_w + from_w;
+            let raw: Vec<f64> = to_vec
+                .iter()
+                .zip(from_vec.iter())
+                .map(|(&t, &f)| (t as f64 * to_w + f as f64 * from_w) / denom)
+                .collect();
+            let norm = raw.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if !norm.is_finite() || norm <= 1e-6 {
+                // Opposing vectors canceled out; keep the existing valid target centroid.
+                return Ok(());
+            }
+            let normalized: Vec<f32> = raw.into_iter().map(|v| (v / norm) as f32).collect();
+            (normalized, to_count.saturating_add(from_n))
+        }
+        // Adopting into a missing or malformed target centroid: reset stale target count.
+        None => (from_vec, from_n),
+    };
+
+    let bytes: &[u8] = merged.as_bytes();
+    sqlx::query("UPDATE speakers SET centroid = vec_f32(?1), embedding_count = ?2 WHERE id = ?3")
+        .bind(bytes)
+        .bind(merged_count)
+        .bind(to_speaker)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Point every reference to `from_speaker` at `to_speaker`.
 /// Returns how many `audio_transcriptions` rows moved.
 async fn repoint_speaker_refs(
@@ -363,7 +461,7 @@ impl DatabaseManager {
                     .zip(embedding.iter())
                     .map(|(o, e)| (o * effective_n + e) / (effective_n + 1.0))
                     .collect();
-                (new, count + 1)
+                (new, count.saturating_add(1))
             }
             _ => {
                 // First embedding — centroid IS the embedding
@@ -679,8 +777,9 @@ impl DatabaseManager {
         let mut tx = self.begin_immediate_with_retry().await?;
 
         // Move every reference — meeting segments and diarization rows too,
-        // not just transcriptions and embeddings — then retire the row only
-        // once nothing points at it.
+        // not just transcriptions and embeddings — blend the voice centroid,
+        // then retire the row only once nothing points at it.
+        merge_speaker_centroids(tx.conn(), speaker_to_merge_id, speaker_to_keep_id).await?;
         repoint_speaker_refs(tx.conn(), speaker_to_merge_id, speaker_to_keep_id).await?;
         delete_speaker_if_unreferenced(tx.conn(), speaker_to_merge_id).await?;
 

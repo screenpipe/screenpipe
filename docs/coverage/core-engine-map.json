@@ -318,6 +318,7 @@
         "src/meeting_summary/finalizer.rs",
         "src/meeting_summary/notes.rs",
         "src/pipe_stream.rs",
+        "src/recording_stream.rs",
         "src/routes/activity_summary.rs",
         "src/routes/activity_summary_key_text_tests.rs",
         "src/routes/activity_summary_hybrid_tests.rs",

@@ -840,4 +840,233 @@ mod timeline_live_meeting_tests {
         assert_eq!(mapped.unwrap(), 0);
         assert_eq!(written.unwrap().rows_affected(), 1);
     }
+
+    #[tokio::test]
+    async fn test_mirror_populates_bounded_non_overlapping_end_time() {
+        let db = setup_test_db().await;
+        let base = Utc::now();
+
+        let chunk_id = db
+            .insert_audio_chunk("System Audio (output)_turns.mp4", Some(base))
+            .await
+            .unwrap();
+        let meeting_id = db
+            .insert_meeting("zoom.us", "ui_scan", Some("timing test"), None)
+            .await
+            .unwrap();
+
+        // 1. Incremental mirroring: Turn 1 arrives alone at T+2s (20 words -> 8.0s -> end 10.0s).
+        let twenty_words = (1..=20)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-1",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            &twenty_words,
+            base + Duration::seconds(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+                .await
+                .unwrap(),
+            1
+        );
+        let initial_end: Option<f64> = sqlx::query_scalar(
+            "SELECT end_time FROM audio_transcriptions WHERE audio_chunk_id = ?1",
+        )
+        .bind(chunk_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(initial_end, Some(10.0));
+
+        // 2. Turn 2 arrives incrementally at T+5s (5 words -> 2.0s -> end 7.0s).
+        // Re-mirroring must insert Turn 2 AND tighten Turn 1's end_time to 5.0s!
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-2",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            "one two three four five",
+            base + Duration::seconds(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+                .await
+                .unwrap(),
+            1
+        );
+
+        // 3. Unspaced CJK turn at T+10s (21 chars -> 5.25s -> end 15.25s, not 0.5s).
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-cjk",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            "今天下午两点我们开会讨论一下这个项目的进度",
+            base + Duration::seconds(10),
+        )
+        .await
+        .unwrap();
+
+        // 4. Tied millisecond turns at T+18s: ambiguous ordering -> both leave end_time NULL.
+        for (item_id, txt) in [("tie-a", "first tied turn"), ("tie-b", "second tied turn")] {
+            db.insert_meeting_transcript_segment(
+                meeting_id,
+                "screenpipe-cloud",
+                None,
+                item_id,
+                "System Audio",
+                "output",
+                Some("Speaker 1"),
+                txt,
+                base + Duration::seconds(18),
+            )
+            .await
+            .unwrap();
+        }
+
+        // 5. Late turn at T+26s with 20 words -> capped at 30.0s chunk bound, not 34.0s.
+        let late_words = (1..=20)
+            .map(|i| format!("late{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "turn-late",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            &late_words,
+            base + Duration::seconds(26),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+                .await
+                .unwrap(),
+            4
+        );
+        // Idempotent when nothing new arrives.
+        assert_eq!(
+            db.mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let rows: Vec<(String, Option<f64>, Option<f64>)> = sqlx::query_as(
+            "SELECT transcription, start_time, end_time FROM audio_transcriptions \
+             WHERE audio_chunk_id = ?1 ORDER BY start_time ASC, transcription ASC",
+        )
+        .bind(chunk_id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 6);
+        assert_eq!((rows[0].1, rows[0].2), (Some(2.0), Some(5.0)));
+        assert_eq!((rows[1].1, rows[1].2), (Some(5.0), Some(7.0)));
+        assert_eq!((rows[2].1, rows[2].2), (Some(10.0), Some(15.25)));
+        assert_eq!((rows[3].1, rows[3].2), (Some(18.0), None));
+        assert_eq!((rows[4].1, rows[4].2), (Some(18.0), None));
+        assert_eq!((rows[5].1, rows[5].2), (Some(26.0), Some(30.0)));
+    }
+
+    /// Regression: mirrored live rows store `captured_at` in `timestamp` AND
+    /// chunk-relative `start_time`/`end_time`. Cross-device dedup must NOT add
+    /// `start_time` a second time and falsely discard a later utterance on
+    /// another device.
+    #[tokio::test]
+    async fn test_mirrored_live_interval_does_not_suppress_distinct_other_device_speech() {
+        let db = setup_test_db().await;
+        let base = Utc::now();
+
+        let out_chunk = db
+            .insert_audio_chunk("System Audio (output)_dedup.mp4", Some(base))
+            .await
+            .unwrap();
+        let meeting_id = db
+            .insert_meeting("zoom.us", "ui_scan", Some("dedup test"), None)
+            .await
+            .unwrap();
+        // Mirrored live turn at chunk+10s -> timestamp = base+10s, start_time = 10.0, end_time = 12.0.
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            None,
+            "live-10s",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            "ship the release on Friday",
+            base + Duration::seconds(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+                .await
+                .unwrap(),
+            1
+        );
+        let live_bounds: (Option<f64>, Option<f64>) = sqlx::query_as(
+            "SELECT start_time, end_time FROM audio_transcriptions WHERE audio_chunk_id = ?1",
+        )
+        .bind(out_chunk)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(live_bounds, (Some(10.0), Some(12.0)));
+
+        // Distinct repetition on the microphone at base+20s (chunk start = base,
+        // offsets [20.0, 22.0]). If dedup double-counted the live row's 10s
+        // offset onto base+10s -> [base+20s, base+22s], this insert would be dropped!
+        let in_chunk = db
+            .insert_audio_chunk("MacBook Mic (input)_dedup.mp4", Some(base))
+            .await
+            .unwrap();
+        let mic = screenpipe_db::AudioDevice {
+            name: "MacBook Mic".to_string(),
+            device_type: screenpipe_db::DeviceType::Input,
+        };
+        let inserted_id = db
+            .insert_audio_transcription(
+                in_chunk,
+                "ship the release on Friday",
+                0,
+                "Deepgram",
+                &mic,
+                None,
+                Some(20.0),
+                Some(22.0),
+                Some(base),
+            )
+            .await
+            .unwrap();
+        assert!(
+            inserted_id > 0,
+            "estimated live interval must not double-count offset and drop distinct mic speech"
+        );
+    }
 }

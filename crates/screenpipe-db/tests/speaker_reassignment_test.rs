@@ -1142,4 +1142,105 @@ mod speaker_reassignment_tests {
                 .unwrap();
         assert_eq!(before, after);
     }
+
+    #[tokio::test]
+    async fn test_merge_speakers_adopts_blends_and_validates_centroids() {
+        let db = setup_test_db().await;
+
+        // 1. Merging an embedded voice cluster into a name-only speaker (NULL centroid)
+        // must adopt the merged speaker's L2-normalized centroid and reset count.
+        let named_only = db.create_speaker_with_name("Alice").await.unwrap();
+        let mut emb_a = vec![0.0f32; 512];
+        emb_a[0] = 1.0;
+        let cluster_a = db.insert_speaker(&emb_a).await.unwrap();
+
+        db.merge_speakers(named_only.id, cluster_a.id)
+            .await
+            .unwrap();
+
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let alice_centroid = centroids
+            .iter()
+            .find(|(id, _, _)| *id == named_only.id)
+            .expect("merged name-only speaker must adopt centroid");
+        assert!((alice_centroid.2[0] - 1.0).abs() < 1e-5);
+
+        // 2. Merging a second embedded cluster blends both centroids, L2-normalizes,
+        // and sums embedding_count.
+        let mut emb_b = vec![0.0f32; 512];
+        emb_b[1] = 1.0;
+        let cluster_b = db.insert_speaker(&emb_b).await.unwrap();
+
+        db.merge_speakers(named_only.id, cluster_b.id)
+            .await
+            .unwrap();
+
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let blended = centroids
+            .iter()
+            .find(|(id, _, _)| *id == named_only.id)
+            .expect("blended speaker must retain centroid");
+        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((blended.2[0] - inv_sqrt2).abs() < 1e-5);
+        assert!((blended.2[1] - inv_sqrt2).abs() < 1e-5);
+        let norm: f32 = blended.2.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "blended centroid must be unit norm"
+        );
+
+        let count: i64 = sqlx::query_scalar("SELECT embedding_count FROM speakers WHERE id = ?1")
+            .bind(named_only.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // 3. Merging a speaker with an opposing vector (would cancel to zero norm)
+        // must preserve the existing valid target centroid instead of storing zeros.
+        let mut emb_c = vec![0.0f32; 512];
+        emb_c[2] = 1.0;
+        let keeper = db.insert_speaker(&emb_c).await.unwrap();
+        let mut emb_neg = vec![0.0f32; 512];
+        emb_neg[2] = -1.0;
+        let opposing = db.insert_speaker(&emb_neg).await.unwrap();
+        db.merge_speakers(keeper.id, opposing.id).await.unwrap();
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let preserved = centroids
+            .iter()
+            .find(|(id, _, _)| *id == keeper.id)
+            .expect("valid target centroid must survive opposing cancellation");
+        assert!((preserved.2[2] - 1.0).abs() < 1e-5);
+
+        // 4. Undoable `reassign_speaker` into an existing named speaker must NOT
+        // mutate the target's centroid, so `undo_speaker_reassign` stays lossless.
+        let mut emb_target = vec![0.0f32; 512];
+        emb_target[3] = 1.0;
+        let target = db.insert_speaker(&emb_target).await.unwrap();
+        db.update_speaker_name(target.id, "Bob").await.unwrap();
+
+        let mut emb_other = vec![0.0f32; 512];
+        emb_other[4] = 1.0;
+        let unnamed = db.insert_speaker(&emb_other).await.unwrap();
+        let chunk = create_audio_with_speaker(&db, unnamed.id, "undoable rename line").await;
+
+        let outcome = db
+            .reassign_speaker(chunk, "Bob", false, ReassignScope::Auto)
+            .await
+            .unwrap();
+        db.undo_speaker_reassign(&outcome.old_assignments, &outcome.old_segment_assignments)
+            .await
+            .unwrap();
+
+        let centroids = db.get_all_speakers_with_centroids(10).await.unwrap();
+        let bob = centroids
+            .iter()
+            .find(|(id, _, _)| *id == target.id)
+            .expect("target speaker must retain original centroid");
+        assert!((bob.2[3] - 1.0).abs() < 1e-5);
+        assert!(
+            bob.2[4].abs() < 1e-5,
+            "undoable reassign must not pollute target centroid"
+        );
+    }
 }

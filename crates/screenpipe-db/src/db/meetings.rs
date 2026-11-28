@@ -1018,8 +1018,48 @@ impl DatabaseManager {
         }
 
         let window_ms = (coverage_window_secs * 1000.0) as i64;
-        let mut tx = self.begin_immediate_with_retry().await?;
-        let mut inserted: u64 = 0;
+
+        // Precompute per-chunk max durations from the next chunk on the same
+        // device track (falling back to the typical 30s chunk length) so
+        // estimated `end_time` does not overshoot into the next chunk / past EOF.
+        let mut chunk_bounds_by_id: std::collections::HashMap<i64, f64> =
+            std::collections::HashMap::new();
+        {
+            let mut by_device_prefix: std::collections::HashMap<&str, Vec<(i64, i64)>> =
+                std::collections::HashMap::new();
+            for (id, ts_ms, lower_path) in &chunks {
+                // Prefix up to `)_` identifies `<device> (input|output)`.
+                let prefix = lower_path
+                    .rfind(")_")
+                    .map(|idx| &lower_path[..=idx])
+                    .unwrap_or(lower_path.as_str());
+                by_device_prefix
+                    .entry(prefix)
+                    .or_default()
+                    .push((*ts_ms, *id));
+            }
+            for list in by_device_prefix.values_mut() {
+                list.sort_by_key(|(ts_ms, id)| (*ts_ms, *id));
+                for pair in list.windows(2) {
+                    let span_secs = (pair[1].0 - pair[0].0) as f64 / 1000.0;
+                    if span_secs > 0.0 && span_secs <= 120.0 {
+                        chunk_bounds_by_id.insert(pair[0].1, span_secs);
+                    }
+                }
+            }
+        }
+
+        // Resolve each segment's target chunk and start offset BEFORE opening
+        // the IMMEDIATE write transaction so planning never holds the write lock.
+        struct PlannedMirror<'a> {
+            seg: &'a Seg,
+            chunk_id: i64,
+            device_key: String,
+            start_time: Option<f64>,
+            end_time: Option<f64>,
+        }
+
+        let mut planned: Vec<PlannedMirror<'_>> = Vec::with_capacity(segs.len());
         for s in &segs {
             let seg_ms = s.captured_at.timestamp_millis();
             // Match the SAME physical device's chunk so an input (mic) segment can't
@@ -1057,24 +1097,129 @@ impl DatabaseManager {
             let Some(chunk) = pick else {
                 continue;
             };
-            let chunk_id = chunk.0;
+            let start_time = (seg_ms >= chunk.1).then_some((seg_ms - chunk.1) as f64 / 1000.0);
+            planned.push(PlannedMirror {
+                seg: s,
+                chunk_id: chunk.0,
+                device_key,
+                start_time,
+                end_time: None,
+            });
+        }
+
+        // Group start times per (chunk_id, device_key) so each turn's estimated
+        // `end_time` never overlaps the following turn on the same track.
+        let mut starts_by_track: std::collections::HashMap<(i64, String), Vec<f64>> =
+            std::collections::HashMap::new();
+        for item in &planned {
+            if let Some(st) = item.start_time {
+                starts_by_track
+                    .entry((item.chunk_id, item.device_key.clone()))
+                    .or_default()
+                    .push(st);
+            }
+        }
+        for starts in starts_by_track.values_mut() {
+            starts.sort_by(|a, b| a.total_cmp(b));
+        }
+
+        // Compute bounded `end_time` completely outside the write transaction.
+        for item in &mut planned {
+            let Some(st) = item.start_time else {
+                continue;
+            };
+            let starts = starts_by_track
+                .get(&(item.chunk_id, item.device_key.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            // Check for tied start times on the same track; when two turns share
+            // the exact same millisecond timestamp their ordering is ambiguous,
+            // so leave `end_time` NULL rather than inventing overlapping spans.
+            let first_eq = starts.partition_point(|&t| t < st);
+            let after_eq = starts.partition_point(|&t| t <= st);
+            if after_eq - first_eq > 1 {
+                continue;
+            }
+
+            let words = item.seg.transcript.split_whitespace().count();
+            let non_ws_chars = item
+                .seg
+                .transcript
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count();
+            // Conversational speech averages ~2.5 words/sec for space-delimited
+            // scripts and ~4 chars/sec for unspaced scripts (e.g. CJK/Thai).
+            let estimated = if words <= 1 && non_ws_chars >= 6 {
+                (non_ws_chars as f64 / 4.0).clamp(0.5, 15.0)
+            } else {
+                (words.max(1) as f64 / 2.5).clamp(0.5, 15.0)
+            };
+
+            let mut end = st + estimated;
+            if let Some(&next_st) = starts.get(after_eq) {
+                end = end.min(next_st);
+            }
+            // Cap against known chunk span (or default 30s when inside chunk)
+            // so playback intervals do not run past EOF.
+            let chunk_cap = chunk_bounds_by_id
+                .get(&item.chunk_id)
+                .copied()
+                .or_else(|| (st < 30.0).then_some(30.0));
+            if let Some(cap) = chunk_cap {
+                if cap > st {
+                    end = end.min(cap);
+                }
+            }
+            if end > st {
+                item.end_time = Some(end);
+            }
+        }
+
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let mut inserted: u64 = 0;
+        for item in &planned {
+            let s = item.seg;
             let text_length = s.transcript.len() as i64;
             let res = sqlx::query(
                 "INSERT OR IGNORE INTO audio_transcriptions \
                  (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, \
                   device, is_input_device, speaker_id, start_time, end_time, text_length) \
-                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, ?7, NULL, ?6)",
+                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, ?7, ?8, ?6)",
             )
-            .bind(chunk_id)
+            .bind(item.chunk_id)
             .bind(&s.transcript)
             .bind(s.captured_at)
             .bind(&s.device_name)
             .bind(s.is_input)
             .bind(text_length)
-            .bind((seg_ms >= chunk.1).then_some((seg_ms - chunk.1) as f64 / 1000.0))
+            .bind(item.start_time)
+            .bind(item.end_time)
             .execute(&mut **tx.conn())
             .await?;
-            inserted += res.rows_affected();
+            let added = res.rows_affected();
+            inserted += added;
+            // When turns arrive incrementally, Turn 1 was inserted with no
+            // following turn to cap its `end_time`. Once Turn 2 arrives,
+            // tighten Turn 1's `end_time` in place (works on both SQLite and
+            // hybrid bulk storage where the unique index may be replaced).
+            if added == 0 {
+                if let Some(end_time) = item.end_time {
+                    sqlx::query(
+                        "UPDATE audio_transcriptions \
+                         SET end_time = ?1 \
+                         WHERE audio_chunk_id = ?2 \
+                           AND transcription = ?3 \
+                           AND transcription_engine = 'live' \
+                           AND (end_time IS NULL OR end_time > ?1)",
+                    )
+                    .bind(end_time)
+                    .bind(item.chunk_id)
+                    .bind(&s.transcript)
+                    .execute(&mut **tx.conn())
+                    .await?;
+                }
+            }
         }
         tx.commit().await?;
         Ok(inserted)
