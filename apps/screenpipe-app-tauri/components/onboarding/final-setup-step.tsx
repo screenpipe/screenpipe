@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SetupConnections } from "./setup-connections";
+import { SetupAiTools, type SetupAiToolsPreviewState } from "./setup-ai-tools";
 import { setupRequest as request, SetupRequestError, setupFailureProperties } from "@/lib/onboarding-setup-request";
 import { captureSetupEvent, completionFailureProperties } from "@/lib/onboarding-diagnostics";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -72,9 +73,11 @@ async function setupPipe(task: typeof DEFAULTS[number], preset: string | undefin
   if (verified?.data?.config?.enabled !== true) throw new SetupRequestError("verify", "verification_failed");
 }
 
-export default function FinalSetupStep({ userToken, handleNextSlide }: {
+export default function FinalSetupStep({ userToken, handleNextSlide, aiToolsPreviewState }: {
   userToken?: string | null;
   handleNextSlide: () => void | Promise<void>;
+  /** Preview-only fixture state used by `/dev/onboarding-mcp-ux`. */
+  aiToolsPreviewState?: SetupAiToolsPreviewState;
 }) {
 
   const uiMessages = useMessages();
@@ -169,6 +172,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
         </div>)}
       </div>
       <SetupConnections userToken={userToken} disabled={busy} onGmailChange={setGmailConnected} onBusyChange={setConnectionBusy} />
+      <SetupAiTools disabled={busy} onBusyChange={setConnectionBusy} previewState={aiToolsPreviewState} />
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
         {preset ? (preset.provider === "native-ollama" ? ui("Uses your local model ({value1}).", { value1: preset.model }) : ui("Work context goes to {value1} ({value2}).", { value1: preset.provider, value2: preset.model })) : ui("No compatible AI model available.")}
         {" "}Use your own AI provider anytime in Scheduled Tasks.

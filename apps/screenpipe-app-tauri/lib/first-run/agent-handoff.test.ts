@@ -194,6 +194,34 @@ describe("notification handoff recovery", () => {
       `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`,
     );
   });
+
+  it("falls back to claude.ai web URL when claude:// desktop scheme is not registered", async () => {
+    const claude = handoffTargetById("claude")!;
+    const copyText = vi.fn(async () => {});
+    const openUrl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("no scheme handler"))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await performAgentHandoff(claude, { copyText, openUrl });
+
+    expect(openUrl).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^claude:\/\/claude\.ai\/new\?q=/),
+    );
+    expect(openUrl).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^https:\/\/claude\.ai\/new\?q=/),
+    );
+    expect(result).toMatchObject({
+      copied: true,
+      launched: true,
+      prefilled: true,
+      replayed: false,
+      usedWebFallback: true,
+    });
+    expect(result.failedStage).toBeUndefined();
+  });
 });
 
 describe("preferredHandoffTargetForRecentApps", () => {
