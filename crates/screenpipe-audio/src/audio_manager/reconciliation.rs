@@ -252,6 +252,17 @@ fn is_account_standing_error(error: &anyhow::Error) -> bool {
         || message.contains("transcription_capacity_paused")
 }
 
+/// Provider-wide backpressure (persistent HTTP 429 rate limits after retries,
+/// or hosted cost-control 503 outage) applies to the whole sweep, not this
+/// specific audio chunk. Pause the sweep and leave chunks `pending` without
+/// burning `MAX_TRANSCRIPTION_ATTEMPTS`, so they auto-recover on the next sweep.
+fn is_provider_backpressure_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_lowercase();
+    message.contains("rate limit persisted")
+        || message.contains("cost_control_unavailable")
+        || message.contains("429 too many requests")
+}
+
 pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
@@ -498,6 +509,13 @@ pub async fn reconcile_untranscribed(
                     hit_candidate_limit = false;
                     warn!(
                         "reconciliation: transcription API rejected this account; pausing sweep until the next cycle"
+                    );
+                    break;
+                }
+                if is_provider_backpressure_error(&e) {
+                    hit_candidate_limit = false;
+                    warn!(
+                        "reconciliation: transcription provider rate-limited or temporarily unavailable; pausing sweep and keeping chunks pending for next cycle"
                     );
                     break;
                 }
@@ -1485,12 +1503,21 @@ fn assign_text_to_local_diarization(
         return segments;
     }
 
-    let total_duration = segments
+    // Distribute words proportionally across actual spoken segment durations,
+    // NOT the full chunk duration. Using `.max(duration_secs)` inflated the
+    // denominator with inter-segment silence, starving earlier segments to
+    // 0-1 words and dumping the remaining transcript onto the final segment
+    // (causing impossible speech rates like 156 chars in 0.19s and misattributing
+    // earlier speakers' words to the last speaker).
+    let speech_duration: f64 = segments
         .iter()
         .map(|segment| (segment.end_time - segment.start_time).max(0.0))
-        .sum::<f64>()
-        .max(duration_secs)
-        .max(0.001);
+        .sum();
+    let total_duration = if speech_duration > 0.0 {
+        speech_duration
+    } else {
+        duration_secs.max(0.001)
+    };
 
     let mut word_start = 0usize;
     let mut cumulative_duration = 0.0;
@@ -1922,6 +1949,28 @@ mod tests {
                 "Screenpipe hosted transcription paused ({code})"
             )));
         }
+    }
+
+    #[test]
+    fn provider_backpressure_errors_are_recognized_without_catching_chunk_errors() {
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "Failed to send request to Deepgram API: Deepgram API rate limit persisted after 3 attempts"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "screenpipe-cloud transcription rate limit persisted after 3 attempts"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 503 Service Unavailable): {{\"error\":\"{{\\\"error\\\":\\\"cost_control_unavailable\\\"}}\"}}"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "OpenAI-compatible transcription failed: HTTP 429 Too Many Requests"
+        )));
+        assert!(!is_provider_backpressure_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 400 Bad Request): corrupt audio"
+        )));
+        assert!(!is_provider_backpressure_error(&anyhow::anyhow!(
+            "connection reset by peer"
+        )));
     }
 
     #[test]
@@ -2791,6 +2840,53 @@ mod tests {
         assert_eq!(rows[1].speaker_id, Some(22));
         assert!(!rows[0].transcription.is_empty());
         assert!(!rows[1].transcription.is_empty());
+    }
+
+    #[test]
+    fn local_background_diarization_distributes_words_across_speech_not_silence() {
+        // 45s chunk containing 5.2s of actual speech across 3 turns, ending with
+        // a short 0.2s trailing segment. Previously `.max(duration_secs)` divided
+        // by 45.0s, giving seg0 1 word, seg1 2 words, and dumping 27 words (~150 chars)
+        // into the 0.2s final segment (>700 chars/sec).
+        let local_segments = vec![
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 2.0,
+                end_time: 4.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_1".to_string(),
+                speaker_id: Some(22),
+                transcription: String::new(),
+                start_time: 18.0,
+                end_time: 21.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 43.0,
+                end_time: 43.2,
+                confidence: None,
+                overlap: false,
+            },
+        ];
+        let words: Vec<String> = (1..=30).map(|i| format!("word{i}")).collect();
+        let diarized = assign_text_to_local_diarization(&words.join(" "), local_segments, 45.0);
+
+        let counts: Vec<usize> = diarized
+            .iter()
+            .map(|s| s.transcription.split_whitespace().count())
+            .collect();
+        assert_eq!(counts.iter().sum::<usize>(), 30);
+        // 2.0/5.2 * 30 ≈ 12, 3.0/5.2 * 30 ≈ 17, 0.2/5.2 * 30 ≈ 1
+        assert_eq!(counts, vec![12, 17, 1]);
     }
 
     #[test]
