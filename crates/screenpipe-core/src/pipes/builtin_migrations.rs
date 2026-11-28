@@ -823,7 +823,9 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     // Migrate shipped high-frequency workflow schedules off polling without
     // overriding user-customized schedules, enabled state, or custom prompts.
     let frontmatter = match name {
-        "workflow-discover" => parts[1].replace("\nschedule: every 1h\n", "\nschedule: every 24h\n"),
+        "workflow-discover" => {
+            parts[1].replace("\nschedule: every 1h\n", "\nschedule: every 24h\n")
+        }
         "workflow-deepen" | "workflow-review" | "workflow-maintain" => {
             parts[1].replace("\nschedule: every 5m\n", "\nschedule: manual\n")
         }
@@ -1097,7 +1099,12 @@ mod tests {
         )
         .unwrap();
 
-        let manager = super::super::PipeManager::new(pipes_dir.clone(), Default::default(), None, Default::default());
+        let manager = super::super::PipeManager::new(
+            pipes_dir.clone(),
+            Default::default(),
+            None,
+            Default::default(),
+        );
         manager.install_builtin_pipes().unwrap();
 
         for retired in [
