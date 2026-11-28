@@ -1098,7 +1098,9 @@ impl TranscriptionSession {
                 {
                     Ok(String::new())
                 } else {
-                    Ok(result.text)
+                    Ok(crate::transcription::text_utils::collapse_ngram_loops(
+                        &result.text,
+                    ))
                 }
             }
 
@@ -1143,9 +1145,7 @@ impl TranscriptionSession {
                             texts.push(text);
                         }
                     }
-                    Ok(crate::transcription::text_utils::collapse_ngram_loops(
-                        &texts.join(" "),
-                    ))
+                    Ok(texts.join(" "))
                 }
             }
 
@@ -1201,7 +1201,9 @@ impl TranscriptionSession {
                     match outcome {
                         Ok(Ok(result)) => {
                             had_success = true;
-                            let text = result.text.trim().to_string();
+                            let text = crate::transcription::text_utils::collapse_ngram_loops(
+                                result.text.trim(),
+                            );
                             if !text.is_empty() {
                                 texts.push(text);
                             }
@@ -1224,9 +1226,7 @@ impl TranscriptionSession {
                 // Any successful chunk yields a (possibly partial) transcript rather
                 // than discarding the whole batch. Only error if every chunk failed.
                 if had_success {
-                    Ok(crate::transcription::text_utils::collapse_ngram_loops(
-                        &texts.join(" "),
-                    ))
+                    Ok(texts.join(" "))
                 } else {
                     Err(last_err.unwrap_or_else(|| anyhow!("mlx transcription produced no output")))
                 }
