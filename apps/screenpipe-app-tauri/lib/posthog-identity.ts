@@ -7,7 +7,8 @@ import type { PostHog } from "posthog-js";
 export type PostHogIdentityClient = Pick<
   PostHog,
   "identify" | "alias" | "get_property" | "unregister"
->;
+> &
+  Partial<Pick<PostHog, "reset" | "register">>;
 
 export interface SyncPostHogIdentityParams {
   analyticsId: string;
@@ -16,36 +17,53 @@ export interface SyncPostHogIdentityParams {
 }
 
 /**
- * Synchronize PostHog's distinct_id with the signed-in Clerk user (or fall back
- * to the per-install machine analyticsId when signed out).
+ * Synchronize PostHog's distinct_id with the signed-in Clerk user without
+ * prematurely marking the per-install machine UUID as an identified person.
  *
- * Ordering matters in posthog-js: `alias(id)` persists `__alias = id`, and
- * `identify(id)` refuses to change `distinct_id` whenever
- * `id === get_property("__alias")`. Calling `alias(clerkId)` before
- * `identify(clerkId)` therefore trapped signed-in installs on `analyticsId`
- * forever and caused onboarding's `TrialActivationFlagAssignment` to time out
- * on `stage: "waiting_for_identity"`.
+ * Why signed-out installs must NOT call `identify(analyticsId)`:
+ * The website identifies users by Clerk `user_id` on `/login`, creating an
+ * identified PostHog person carrying `app_downloaded` / `download_selected` /
+ * UTM attribution. If the desktop app also calls `identify(analyticsId)` while
+ * signed out, PostHog marks `analyticsId` as a SECOND identified person and
+ * silently rejects merging `analyticsId` into `clerkId` after sign-in
+ * ("Cannot merge two identified users"), splitting website downloads and
+ * pre-login `app_started` events from the signed-in user forever.
  *
- * Always identify first, then alias the pre-login machine id onto the Clerk id.
- * Also clear a stale `__alias === distinctId` so installs polluted by older
- * builds recover automatically on boot.
+ * Keeping `analyticsId` anonymous (`isIdentifiedID: false` in providers.tsx
+ * and skipping `identify` while signed out) lets `identify(clerkId)` and
+ * `alias(analyticsId, clerkId)` cleanly merge pre-login desktop events into
+ * the Clerk person on sign-in.
  */
 export function syncPostHogIdentity(
   client: PostHogIdentityClient,
   { analyticsId, clerkId, properties }: SyncPostHogIdentityParams,
 ): void {
-  const distinctId = clerkId || analyticsId;
-  if (!distinctId) return;
+  if (analyticsId) {
+    try {
+      client.register?.({ machine_analytics_id: analyticsId });
+    } catch {}
+  }
+
+  if (!clerkId) {
+    // If transitioning from a signed-in Clerk session back to signed-out,
+    // reset so subsequent anonymous events don't stay attached to the old user.
+    try {
+      if (client.get_property?.("$user_id")) {
+        client.reset?.();
+      }
+    } catch {}
+    return;
+  }
 
   try {
-    if (client.get_property?.("__alias") === distinctId) {
+    if (client.get_property?.("__alias") === clerkId) {
       client.unregister?.("__alias");
     }
   } catch {}
 
-  client.identify(distinctId, properties);
+  client.identify(clerkId, properties);
 
-  if (clerkId && analyticsId && analyticsId !== clerkId) {
+  if (analyticsId && analyticsId !== clerkId) {
     try {
       if (client.get_property?.("__alias") !== analyticsId) {
         client.alias(analyticsId, clerkId);

@@ -2402,12 +2402,14 @@ async fn main() {
 
             // Use persistent analytics_id for PostHog (consistent across frontend and backend)
             let unique_id = store.recording.analytics_id.clone();
+            let clerk_id = store.user.clerk_id.clone();
             let email = store.user.email.unwrap_or_default();
             let local_api = crate::recording::local_api_context_from_app(&app_handle);
 
             {
                 match start_analytics(
                     unique_id,
+                    clerk_id,
                     email,
                     posthog_api_key,
                     interval_hours,

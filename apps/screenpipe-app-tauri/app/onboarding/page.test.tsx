@@ -1542,7 +1542,7 @@ describe("enterprise onboarding authentication", () => {
         properties: { machine_analytics_id: "machine-1" },
       });
       await act(async () => vi.advanceTimersByTimeAsync(5));
-      await respond(0, "control");
+      expect(requests).toHaveLength(0);
 
       syncPostHogIdentity(mocks.sdk!, {
         analyticsId: "machine-1",
@@ -1553,11 +1553,11 @@ describe("enterprise onboarding authentication", () => {
 
       render(<OnboardingPage />);
       await act(async () => vi.advanceTimersByTimeAsync(5));
+      expect(requests[0].data.distinct_id).toBe("clerk-1");
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
       expect(requests[1].data.distinct_id).toBe("clerk-1");
       await respond(1, "summary_first");
-      await act(async () => vi.advanceTimersByTimeAsync(5));
-      expect(requests[2].data.distinct_id).toBe("clerk-1");
-      await respond(2, "summary_first");
       expect(screen.getByText("engine")).toBeInTheDocument();
       expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("summary_first");
       expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
