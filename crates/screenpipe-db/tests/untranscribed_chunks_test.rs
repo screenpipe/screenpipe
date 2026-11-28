@@ -957,7 +957,7 @@ mod tests {
 
         // Guard query plan: outer scan must use idx_audio_transcriptions_speaker_id_timestamp
         // and never do a full SCAN of audio_chunks.
-        let plan_rows: Vec<(String,)> = sqlx::query_as(
+        let plan_rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(
             "EXPLAIN QUERY PLAN \
              WITH recent_rows AS ( \
                  SELECT at.audio_chunk_id, at.timestamp \
@@ -977,7 +977,7 @@ mod tests {
         .unwrap();
         let plan_text: String = plan_rows
             .into_iter()
-            .map(|(detail,)| detail)
+            .map(|(_, _, _, detail)| detail)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
