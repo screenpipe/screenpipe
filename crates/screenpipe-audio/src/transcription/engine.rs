@@ -1098,7 +1098,9 @@ impl TranscriptionSession {
                 {
                     Ok(String::new())
                 } else {
-                    Ok(result.text)
+                    Ok(crate::transcription::text_utils::collapse_ngram_loops(
+                        &result.text,
+                    ))
                 }
             }
 
@@ -1123,7 +1125,9 @@ impl TranscriptionSession {
                     let result = engine
                         .transcribe_with_sample_rate(audio, sample_rate, opts)
                         .map_err(|e| anyhow!("{}", e))?;
-                    Ok(result.text)
+                    Ok(crate::transcription::text_utils::collapse_ngram_loops(
+                        &result.text,
+                    ))
                 } else {
                     let mut texts = Vec::new();
                     for chunk in audio.chunks(chunk_samples) {
@@ -1134,7 +1138,9 @@ impl TranscriptionSession {
                         let result = engine
                             .transcribe_with_sample_rate(chunk, sample_rate, opts)
                             .map_err(|e| anyhow!("{}", e))?;
-                        let text = result.text.trim().to_string();
+                        let text = crate::transcription::text_utils::collapse_ngram_loops(
+                            result.text.trim(),
+                        );
                         if !text.is_empty() {
                             texts.push(text);
                         }
@@ -1195,7 +1201,9 @@ impl TranscriptionSession {
                     match outcome {
                         Ok(Ok(result)) => {
                             had_success = true;
-                            let text = result.text.trim().to_string();
+                            let text = crate::transcription::text_utils::collapse_ngram_loops(
+                                result.text.trim(),
+                            );
                             if !text.is_empty() {
                                 texts.push(text);
                             }

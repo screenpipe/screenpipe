@@ -241,17 +241,40 @@ fn install_merged_audio(pending: &PendingTranscription) -> std::io::Result<()> {
 ///
 /// Returns both the number of chunks processed and whether the candidate query
 /// hit its cap, which tells the scheduler to keep draining without a 120s nap.
-#[allow(clippy::too_many_arguments)]
 /// Account-standing or hosted allowance denials apply to the whole sweep,
 /// not this audio batch. Leave recordings pending until the account recovers.
 fn is_account_standing_error(error: &anyhow::Error) -> bool {
     let message = error.to_string();
+    let lower = message.to_lowercase();
     message.contains("account_not_in_good_standing")
         || message.contains("not in good standing")
         || message.contains("daily_cost_limit_exceeded")
         || message.contains("transcription_capacity_paused")
+        || lower.contains("insufficient_quota")
+        || lower.contains("quota_exceeded")
 }
 
+/// Provider-wide transient backpressure or outage (persistent HTTP 429 rate
+/// limits after retries, hosted cost-control 503 outage, or upstream 502/503/504
+/// gateway errors) applies to the whole sweep, not this specific audio chunk.
+/// Pause the sweep and leave chunks `pending` without burning
+/// `MAX_TRANSCRIPTION_ATTEMPTS`, so they auto-recover on the next sweep.
+fn is_provider_backpressure_error(error: &anyhow::Error) -> bool {
+    if is_account_standing_error(error) {
+        return false;
+    }
+    let message = error.to_string().to_lowercase();
+    message.contains("rate limit persisted")
+        || message.contains("cost_control_unavailable")
+        || message.contains("429 too many requests")
+        || message.contains("http 502")
+        || message.contains("http 503")
+        || message.contains("http 504")
+        || message.contains("service unavailable")
+        || message.contains("gateway timeout")
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
@@ -498,6 +521,13 @@ pub async fn reconcile_untranscribed(
                     hit_candidate_limit = false;
                     warn!(
                         "reconciliation: transcription API rejected this account; pausing sweep until the next cycle"
+                    );
+                    break;
+                }
+                if is_provider_backpressure_error(&e) {
+                    hit_candidate_limit = false;
+                    warn!(
+                        "reconciliation: transcription provider rate-limited or temporarily unavailable; pausing sweep and keeping chunks pending for next cycle"
                     );
                     break;
                 }
@@ -1475,22 +1505,68 @@ fn assign_text_to_local_diarization(
         return Vec::new();
     }
 
-    let words: Vec<&str> = text.split_whitespace().collect();
+    let trimmed = text.trim();
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
     if words.is_empty() {
         return segments;
     }
 
+    // Clamp intervals to the chunk bounds and drop invalid/zero-duration turns
+    // BEFORE allocating words, so words are never assigned to an out-of-range
+    // segment that `replacement_transcription_segments` would later discard.
+    let upper = if duration_secs.is_finite() && duration_secs > 0.0 {
+        Some(duration_secs)
+    } else {
+        None
+    };
+    segments.retain_mut(|segment| {
+        if !segment.start_time.is_finite() || !segment.end_time.is_finite() {
+            return false;
+        }
+        segment.start_time = segment.start_time.max(0.0);
+        if let Some(max_end) = upper {
+            segment.end_time = segment.end_time.min(max_end);
+        }
+        segment.end_time > segment.start_time
+    });
+    if segments.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort chronologically so sequential word slices align with actual turn order.
+    segments.sort_by(|a, b| {
+        a.start_time
+            .total_cmp(&b.start_time)
+            .then_with(|| a.end_time.total_cmp(&b.end_time))
+    });
+
     if segments.len() == 1 {
-        segments[0].transcription = text.trim().to_string();
+        let seg_dur = segments[0].end_time - segments[0].start_time;
+        // If local diarization detected only a tiny fragment (e.g. 0.2s) inside a
+        // longer chunk carrying a full sentence (>40 chars/sec), fall back to the
+        // chunk-level interval (`replacement_transcription_segments` preserves
+        // `pending.speaker_id` while avoiding impossible segment timestamps).
+        const MAX_SINGLE_SEGMENT_CHARS_PER_SEC: f64 = 40.0;
+        if upper.is_some_and(|max_end| seg_dur < max_end)
+            && (trimmed.len() as f64 / seg_dur) > MAX_SINGLE_SEGMENT_CHARS_PER_SEC
+        {
+            return Vec::new();
+        }
+        segments[0].transcription = trimmed.to_string();
         return segments;
     }
 
-    let total_duration = segments
+    // Distribute words proportionally across actual spoken segment durations,
+    // NOT the full chunk duration. Using `.max(duration_secs)` inflated the
+    // denominator with inter-segment silence, starving earlier segments to
+    // 0-1 words and dumping the remaining transcript onto the final segment
+    // (causing impossible speech rates like 156 chars in 0.19s and misattributing
+    // earlier speakers' words to the last speaker).
+    let speech_duration: f64 = segments
         .iter()
         .map(|segment| (segment.end_time - segment.start_time).max(0.0))
-        .sum::<f64>()
-        .max(duration_secs)
-        .max(0.001);
+        .sum();
+    let total_duration = speech_duration.max(0.001);
 
     let mut word_start = 0usize;
     let mut cumulative_duration = 0.0;
@@ -1922,6 +1998,40 @@ mod tests {
                 "Screenpipe hosted transcription paused ({code})"
             )));
         }
+    }
+
+    #[test]
+    fn provider_backpressure_errors_are_recognized_without_catching_chunk_errors() {
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "Failed to send request to Deepgram API: Deepgram API rate limit persisted after 3 attempts"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "screenpipe-cloud transcription rate limit persisted after 3 attempts"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 503 Service Unavailable): {{\"error\":\"{{\\\"error\\\":\\\"cost_control_unavailable\\\"}}\"}}"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 502 Bad Gateway): upstream error"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "OpenAI-compatible transcription failed: HTTP 504 Gateway Timeout"
+        )));
+        assert!(is_provider_backpressure_error(&anyhow::anyhow!(
+            "OpenAI-compatible transcription failed: HTTP 429 Too Many Requests"
+        )));
+        // Permanent quota exhaustion is classified as account-standing, not transient backpressure.
+        let quota_err = anyhow::anyhow!(
+            "OpenAI-compatible transcription failed: HTTP 429 Too Many Requests: insufficient_quota"
+        );
+        assert!(is_account_standing_error(&quota_err));
+        assert!(!is_provider_backpressure_error(&quota_err));
+        assert!(!is_provider_backpressure_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 400 Bad Request): corrupt audio"
+        )));
+        assert!(!is_provider_backpressure_error(&anyhow::anyhow!(
+            "connection reset by peer"
+        )));
     }
 
     #[test]
@@ -2791,6 +2901,147 @@ mod tests {
         assert_eq!(rows[1].speaker_id, Some(22));
         assert!(!rows[0].transcription.is_empty());
         assert!(!rows[1].transcription.is_empty());
+    }
+
+    #[test]
+    fn local_background_diarization_distributes_words_across_speech_not_silence() {
+        // 45s chunk containing 5.2s of actual speech across 3 turns, ending with
+        // a short 0.2s trailing segment. Previously `.max(duration_secs)` divided
+        // by 45.0s, giving seg0 1 word, seg1 2 words, and dumping 27 words (~150 chars)
+        // into the 0.2s final segment (>700 chars/sec).
+        let local_segments = vec![
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 2.0,
+                end_time: 4.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_1".to_string(),
+                speaker_id: Some(22),
+                transcription: String::new(),
+                start_time: 18.0,
+                end_time: 21.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 43.0,
+                end_time: 43.2,
+                confidence: None,
+                overlap: false,
+            },
+        ];
+        let words: Vec<String> = (1..=30).map(|i| format!("word{i}")).collect();
+        let diarized = assign_text_to_local_diarization(&words.join(" "), local_segments, 45.0);
+
+        let counts: Vec<usize> = diarized
+            .iter()
+            .map(|s| s.transcription.split_whitespace().count())
+            .collect();
+        assert_eq!(counts.iter().sum::<usize>(), 30);
+        // 2.0/5.2 * 30 ≈ 12, 3.0/5.2 * 30 ≈ 17, 0.2/5.2 * 30 ≈ 1
+        assert_eq!(counts, vec![12, 17, 1]);
+    }
+
+    #[test]
+    fn local_background_diarization_sorts_clamps_and_guards_single_tiny_segment() {
+        // 1. Out-of-order + out-of-range segments: must sort chronologically and
+        // drop out-of-range segments BEFORE word allocation so zero words are lost.
+        let unsorted_and_oob = vec![
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_1".to_string(),
+                speaker_id: Some(22),
+                transcription: String::new(),
+                start_time: 6.0,
+                end_time: 8.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_oob".to_string(),
+                speaker_id: Some(99),
+                transcription: String::new(),
+                start_time: 12.0,
+                end_time: 15.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 1.0,
+                end_time: 3.0,
+                confidence: None,
+                overlap: false,
+            },
+        ];
+        let diarized =
+            assign_text_to_local_diarization("one two three four five six", unsorted_and_oob, 10.0);
+        assert_eq!(diarized.len(), 2);
+        assert_eq!(diarized[0].speaker_id, Some(11));
+        assert_eq!(diarized[0].transcription, "one two three");
+        assert_eq!(diarized[1].speaker_id, Some(22));
+        assert_eq!(diarized[1].transcription, "four five six");
+
+        // 2. Single anomalously tiny segment (0.2s) for a full 150+ char sentence
+        // in a 30s chunk falls back to empty diarization so the chunk-level span
+        // carries the transcript cleanly instead of an impossible 750 chars/sec row.
+        let tiny_single = vec![TranscriptionDiarizationSegment {
+            provider_speaker_label: "local:speaker_0".to_string(),
+            speaker_id: Some(11),
+            transcription: String::new(),
+            start_time: 5.0,
+            end_time: 5.2,
+            confidence: None,
+            overlap: false,
+        }];
+        let long_sentence = "This is a full sentence with way too many characters to ever fit inside a two hundred millisecond diarization turn without creating impossible speech rates.";
+        assert!(assign_text_to_local_diarization(long_sentence, tiny_single, 30.0).is_empty());
+
+        // 3. Fewer words than segments: preserves every word without panicking.
+        let three_segs = vec![
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 0.0,
+                end_time: 2.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_1".to_string(),
+                speaker_id: Some(22),
+                transcription: String::new(),
+                start_time: 2.0,
+                end_time: 4.0,
+                confidence: None,
+                overlap: false,
+            },
+            TranscriptionDiarizationSegment {
+                provider_speaker_label: "local:speaker_0".to_string(),
+                speaker_id: Some(11),
+                transcription: String::new(),
+                start_time: 4.0,
+                end_time: 6.0,
+                confidence: None,
+                overlap: false,
+            },
+        ];
+        let short_out = assign_text_to_local_diarization("hello world", three_segs, 10.0);
+        let all_words: Vec<&str> = short_out
+            .iter()
+            .flat_map(|s| s.transcription.split_whitespace())
+            .collect();
+        assert_eq!(all_words, vec!["hello", "world"]);
     }
 
     #[test]

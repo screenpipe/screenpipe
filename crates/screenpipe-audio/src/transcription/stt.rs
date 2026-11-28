@@ -49,7 +49,9 @@ impl AlternateStt for audiopipe::Model {
         let result = self
             .transcribe_with_sample_rate(audio, sample_rate, opts)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        Ok(result.text)
+        Ok(crate::transcription::text_utils::collapse_ngram_loops(
+            &result.text,
+        ))
     }
 }
 
