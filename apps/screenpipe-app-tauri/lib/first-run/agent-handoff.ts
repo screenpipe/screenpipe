@@ -41,6 +41,11 @@ export type AgentHandoffTarget = {
    */
   deeplink?: string;
   /**
+   * Verified HTTPS fallback when the desktop URL scheme is not registered
+   * (e.g. CLI-only installs or older desktop builds without custom handlers).
+   */
+  fallbackWebUrl?: string;
+  /**
    * Replay the URL after this delay. Cursor can consume a prompt deeplink once
    * its UI is ready but lose the same event while cold-starting.
    */
@@ -50,12 +55,14 @@ export type AgentHandoffTarget = {
 };
 
 export type AgentHandoffOpenResult = {
-  /** The protocol handler accepted the initial open request. */
+  /** The protocol handler (or web fallback) accepted the initial open request. */
   launched: boolean;
   /** Every required open, including a cold-start replay, completed. */
   prefilled: boolean;
   /** A target-specific cold-start replay completed. */
   replayed: boolean;
+  /** True when the desktop scheme failed and the HTTPS fallback succeeded. */
+  usedWebFallback?: boolean;
   failedStage?: "open" | "replay";
 };
 
@@ -92,8 +99,10 @@ const HANDOFF_TARGETS: AgentHandoffTarget[] = [
     id: "claude",
     label: "Claude",
     // Claude Desktop handles this as a new Claude chat and maps `q` into the
-    // composer without submitting it.
+    // composer without submitting it. When the desktop URI scheme is missing
+    // (e.g. Claude Code CLI-only installs), fall back to claude.ai/new.
     deeplink: `claude://claude.ai/new?q=${ENCODED_HANDOFF_PROMPT}`,
+    fallbackWebUrl: `https://claude.ai/new?q=${ENCODED_HANDOFF_PROMPT}`,
     hint: "Question ready in Claude. Review and send it.",
   },
   {
@@ -130,10 +139,12 @@ export function agentHandoffTargetForPrompt(
 ): AgentHandoffTarget {
   const encodedPrompt = encodeURIComponent(prompt);
   let deeplink: string | undefined;
+  let fallbackWebUrl: string | undefined;
 
   switch (target.id) {
     case "claude":
       deeplink = `claude://claude.ai/new?q=${encodedPrompt}`;
+      fallbackWebUrl = `https://claude.ai/new?q=${encodedPrompt}`;
       break;
     case "cursor":
       deeplink = `cursor://anysphere.cursor-deeplink/prompt?text=${encodedPrompt}`;
@@ -145,7 +156,7 @@ export function agentHandoffTargetForPrompt(
       deeplink = undefined;
   }
 
-  return { ...target, deeplink };
+  return { ...target, deeplink, fallbackWebUrl };
 }
 
 const wait = (ms: number) =>
@@ -171,6 +182,19 @@ export async function openAgentHandoffDeeplink(
   try {
     await openUrl(target.deeplink);
   } catch {
+    if (target.fallbackWebUrl) {
+      try {
+        await openUrl(target.fallbackWebUrl);
+        return {
+          launched: true,
+          prefilled: true,
+          replayed: false,
+          usedWebFallback: true,
+        };
+      } catch {
+        // Both desktop scheme and web fallback failed; caller keeps clipboard fallback.
+      }
+    }
     return {
       launched: false,
       prefilled: false,

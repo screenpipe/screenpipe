@@ -174,7 +174,11 @@ export function useAgentHandoff(
     }
 
     if (result.prefilled) {
-      setHint(target.hint);
+      setHint(
+        result.usedWebFallback
+          ? `Opened ${target.label} in your browser. Review and send the question.`
+          : target.hint,
+      );
     } else if (result.copied) {
       setHint(`Question copied. Open ${target.label} and paste it.`);
     } else {
@@ -192,6 +196,7 @@ export function useAgentHandoff(
       opened: result.launched,
       prefilled: result.prefilled,
       replayed: result.replayed,
+      used_web_fallback: Boolean(result.usedWebFallback),
       copy_only: !result.prefilled,
       clipboard_copied: result.copied,
       ...(phaseRef.current ? { phase: phaseRef.current } : {}),
