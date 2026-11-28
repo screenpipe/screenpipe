@@ -820,12 +820,16 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     if !recognized {
         return None;
     }
-    // Upgrade only the shipped daily discovery cadence. Keep explicit custom
-    // schedules, disabled state and customized prompt bodies unchanged.
-    let frontmatter = if name == "workflow-discover" {
-        parts[1].replace("\nschedule: every 24h\n", "\nschedule: every 1h\n")
-    } else {
-        parts[1].to_owned()
+    // Migrate shipped high-frequency workflow schedules off polling without
+    // overriding user-customized schedules, enabled state, or custom prompts.
+    let frontmatter = match name {
+        "workflow-discover" => {
+            parts[1].replace("\nschedule: every 1h\n", "\nschedule: every 24h\n")
+        }
+        "workflow-deepen" | "workflow-review" | "workflow-maintain" => {
+            parts[1].replace("\nschedule: every 5m\n", "\nschedule: manual\n")
+        }
+        _ => parts[1].to_owned(),
     };
     if body == replacement && frontmatter == parts[1] {
         return None;
@@ -982,26 +986,43 @@ mod tests {
     }
 
     #[test]
-    fn default_discovery_cadence_upgrades_without_enabling_or_changing_custom_schedules() {
+    fn default_workflow_cadences_migrate_off_polling_without_changing_custom_schedules() {
         let bundled = super::bundled_prompt("workflow-discover").unwrap();
-        let daily = bundled.replace("schedule: every 1h", "schedule: every 24h");
+        let hourly = bundled.replace("schedule: every 24h", "schedule: every 1h");
         for enabled in ["false", "true"] {
-            let original = daily.replace("enabled: false", &format!("enabled: {enabled}"));
+            let original = hourly.replace("enabled: false", &format!("enabled: {enabled}"));
             let updated = super::migrate_builtin_pipe_text("workflow-discover", &original).unwrap();
-            assert!(updated.contains("schedule: every 1h"));
+            assert!(updated.contains("schedule: every 24h"));
             assert!(updated.contains(&format!("enabled: {enabled}")));
             assert!(super::migrate_builtin_pipe_text("workflow-discover", &updated).is_none());
         }
         assert!(super::migrate_builtin_pipe_text(
             "workflow-discover",
-            &daily.replace("every 24h", "every 48h")
+            &hourly.replace("every 1h", "every 48h")
         )
         .is_none());
         assert!(super::migrate_builtin_pipe_text(
             "workflow-discover",
-            &format!("{daily}\nOwner instructions")
+            &format!("{hourly}\nOwner instructions")
         )
         .is_none());
+
+        for name in ["workflow-deepen", "workflow-review", "workflow-maintain"] {
+            let bundled = super::bundled_prompt(name).unwrap();
+            let polling = bundled.replace("schedule: manual", "schedule: every 5m");
+            for enabled in ["false", "true"] {
+                let original = polling.replace("enabled: false", &format!("enabled: {enabled}"));
+                let updated = super::migrate_builtin_pipe_text(name, &original).unwrap();
+                assert!(updated.contains("schedule: manual"), "{name}");
+                assert!(updated.contains(&format!("enabled: {enabled}")), "{name}");
+                assert!(super::migrate_builtin_pipe_text(name, &updated).is_none());
+            }
+            assert!(super::migrate_builtin_pipe_text(
+                name,
+                &polling.replace("every 5m", "every 48h")
+            )
+            .is_none());
+        }
     }
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
@@ -1021,43 +1042,14 @@ mod tests {
             ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-deepen.md")),
             ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-review.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-maintain.md")),
-            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-shared-runtime-workflow-activity.md")),
-            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-resolved-exclusions-workflow-discovery.md")),
-            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-activity-workflow-activity.md")),
-            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-context-api-workflow-activity.md")),
-            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-discovery.md")),
-            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-timing.md")),
-            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-activity.md")),
-            ("workflow-patterns", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-patterns.md")),
-            ("workflow-procedures", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-procedures.md")),
-            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-timing.md")),
-            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-discovery.md")),
-            (
-                "workflow-activity",
-                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-activity.md"),
-            ),
-            (
-                "workflow-patterns",
-                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-patterns.md"),
-            ),
-            (
-                "workflow-procedures",
-                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-procedures.md"),
-            ),
-            (
-                "workflow-timing",
-                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-timing.md"),
-            ),
-            (
-                "workflow-discovery",
-                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-discovery.md"),
-            ),
         ];
         for (name, old) in fixtures {
             for enabled in ["true", "false"] {
                 let original = old
                     .replace("enabled: false", &format!("enabled: {enabled}"))
-                    .replace("every 24h", "every 48h");
+                    .replace("every 24h", "every 48h")
+                    .replace("every 1h", "every 48h")
+                    .replace("every 5m", "every 48h");
                 let updated = super::migrate_builtin_pipe_text(name, &original).unwrap();
                 let original_config: serde_yaml::Value =
                     serde_yaml::from_str(original.splitn(3, "---").nth(1).unwrap()).unwrap();
@@ -1093,53 +1085,42 @@ mod tests {
     }
 
     #[test]
-    fn workflow_migration_preserves_consent_and_customization() {
-        let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
-        let enabled = legacy
-            .replace("enabled: false", "enabled: true")
-            .replace("every 24h", "every 48h");
-        let migrated = super::migrate_builtin_pipe_text("workflow-discovery", &enabled).unwrap();
-        assert!(migrated.contains("enabled: true"));
-        assert!(migrated.contains("every 48h"));
-        assert!(migrated.contains("pipe_completed:workflow-timing"));
-        assert!(migrated.contains("Api(GET /workflows/pipeline)"));
-        assert!(super::migrate_builtin_pipe_text("workflow-discovery", &migrated).is_none());
-        assert!(super::migrate_builtin_pipe_text(
-            "workflow-discovery",
-            &format!("{legacy}\nMy custom instruction")
+    fn retired_legacy_workflow_pipes_are_not_bundled_and_existing_copies_are_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipes_dir = dir.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let legacy_dir = pipes_dir.join("workflow-discovery");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy_file = legacy_dir.join("pipe.md");
+        std::fs::write(
+            &legacy_file,
+            "---\nschedule: every 24h\nenabled: true\n---\nlegacy prompt\n",
         )
-        .is_none());
-    }
-    #[test]
-    fn workflow_notification_upgrade_preserves_settings_and_custom_prompts() {
-        let old =
-            include_str!("../../assets/pipes/workflow-discovery/legacy-before-notifications.md");
-        for enabled in ["false", "true"] {
-            let original = old
-                .replace("enabled: false", &format!("enabled: {enabled}"))
-                .replace("every 24h", "every 48h");
-            let updated =
-                super::migrate_builtin_pipe_text("workflow-discovery", &original).unwrap();
-            assert!(updated.contains(&format!("enabled: {enabled}")));
-            assert!(updated.contains("every 48h"));
-            assert!(updated.contains("Api(GET /feedback)"));
-            assert!(updated.contains("Api(POST /notify)"));
-            assert_eq!(
-                updated.splitn(3, "---").nth(2).unwrap().trim(),
-                super::bundled_prompt("workflow-discovery")
-                    .unwrap()
-                    .splitn(3, "---")
-                    .nth(2)
-                    .unwrap()
-                    .trim()
+        .unwrap();
+
+        let manager = super::super::PipeManager::new(
+            pipes_dir.clone(),
+            Default::default(),
+            None,
+            Default::default(),
+        );
+        manager.install_builtin_pipes().unwrap();
+
+        for retired in [
+            "workflow-activity",
+            "workflow-patterns",
+            "workflow-procedures",
+            "workflow-timing",
+        ] {
+            assert!(
+                !pipes_dir.join(retired).join("pipe.md").exists(),
+                "{retired} should not be installed on fresh setups"
             );
-            assert!(super::migrate_builtin_pipe_text("workflow-discovery", &updated).is_none());
-            assert!(super::migrate_builtin_pipe_text(
-                "workflow-discovery",
-                &format!("{original}\nMy custom instruction")
-            )
-            .is_none());
         }
+        let content = std::fs::read_to_string(&legacy_file).unwrap();
+        assert!(content.contains("\nenabled: false\n"));
+        assert!(!content.contains("\nenabled: true\n"));
     }
     #[test]
     fn retires_gemma_media_in_existing_builtin_without_changing_frontmatter() {

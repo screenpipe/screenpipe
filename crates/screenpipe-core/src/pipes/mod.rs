@@ -104,26 +104,6 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         include_str!("../../assets/pipes/workflow-maintain/pipe.md"),
     ),
     (
-        "workflow-activity",
-        include_str!("../../assets/pipes/workflow-activity/pipe.md"),
-    ),
-    (
-        "workflow-patterns",
-        include_str!("../../assets/pipes/workflow-patterns/pipe.md"),
-    ),
-    (
-        "workflow-procedures",
-        include_str!("../../assets/pipes/workflow-procedures/pipe.md"),
-    ),
-    (
-        "workflow-timing",
-        include_str!("../../assets/pipes/workflow-timing/pipe.md"),
-    ),
-    (
-        "workflow-discovery",
-        include_str!("../../assets/pipes/workflow-discovery/pipe.md"),
-    ),
-    (
         "skill-learning",
         include_str!("../../assets/pipes/skill-learning/pipe.md"),
     ),
@@ -7883,6 +7863,24 @@ impl PipeManager {
                         "migrated built-in pipe '{}' (fixed stale instructions)",
                         name
                     );
+                }
+            }
+        }
+
+        const RETIRED_WORKFLOW_PIPES: &[&str] = &[
+            "workflow-activity",
+            "workflow-patterns",
+            "workflow-procedures",
+            "workflow-timing",
+            "workflow-discovery",
+        ];
+        for name in RETIRED_WORKFLOW_PIPES {
+            let pipe_md = self.pipes_dir.join(name).join("pipe.md");
+            if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+                if local.contains("\nenabled: true\n") {
+                    let disabled = local.replacen("\nenabled: true\n", "\nenabled: false\n", 1);
+                    atomic_write(&pipe_md, &disabled)?;
+                    info!("disabled retired legacy workflow pipe '{}'", name);
                 }
             }
         }

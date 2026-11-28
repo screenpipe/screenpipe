@@ -1,5 +1,5 @@
 ---
-schedule: every 5m
+schedule: manual
 enabled: false
 title: Review workflow evidence
 description: Keep accurate workflows using shared evidence and review
