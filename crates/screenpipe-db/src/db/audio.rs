@@ -252,31 +252,63 @@ impl DatabaseManager {
     /// Returns recently transcribed chunks that still have no assigned speaker
     /// and are eligible for single-voice backfill via `update_transcriptions_speaker`.
     ///
-    /// Deduplicates by `audio_chunks.id` (a multi-utterance chunk previously
-    /// filled the entire `LIMIT` with duplicate rows, decoding the same MP4 N
-    /// times) and skips chunks that `update_transcriptions_speaker` is already
-    /// guaranteed to reject (overlapping/multi-speaker diarization, conflicting
-    /// existing speakers, or live chunks without one unambiguous speaker
-    /// identity) so unbackfillable recent meeting chunks cannot starve older
-    /// single-speaker chunks behind them.
+    /// Drives off `idx_audio_transcriptions_speaker_id_timestamp` with a bounded
+    /// descending scan (never scanning `audio_chunks`), deduplicates by
+    /// `audio_chunks.id`, and evaluates eligibility filters once per unique chunk
+    /// (excluding overlapping/multi-label diarization, cross-source conflicting
+    /// speaker IDs, and live chunks without one unambiguous speaker identity) so
+    /// unbackfillable recent meeting chunks cannot starve older single-speaker
+    /// chunks behind them.
     pub async fn get_recent_transcriptions_without_speaker(
         &self,
         since: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<UntranscribedChunk>, sqlx::Error> {
+        let bounded_limit = limit.clamp(1, 500);
+        // Over-fetch raw unassigned rows by a bounded factor so multi-utterance
+        // or filtered-out chunks still leave enough unique eligible chunks to
+        // fill `limit` without scanning the full 24h table.
+        let scan_limit = (bounded_limit * 40).min(4_000);
         let rows = sqlx::query_as::<_, UntranscribedChunk>(
             r#"
+            WITH recent_rows AS (
+                SELECT at.audio_chunk_id, at.timestamp
+                FROM audio_transcriptions at INDEXED BY idx_audio_transcriptions_speaker_id_timestamp
+                WHERE at.speaker_id IS NULL
+                  AND at.timestamp >= ?1
+                ORDER BY at.timestamp DESC
+                LIMIT ?3
+            ),
+            candidate_chunks AS (
+                SELECT audio_chunk_id, MAX(timestamp) AS latest_ts
+                FROM recent_rows
+                GROUP BY audio_chunk_id
+            )
             SELECT ac.id, ac.file_path, ac.timestamp
-            FROM audio_transcriptions at
-            INNER JOIN audio_chunks ac ON ac.id = at.audio_chunk_id
-            WHERE at.speaker_id IS NULL
-              AND at.timestamp >= ?1
-              AND NOT EXISTS (
-                  SELECT 1 FROM audio_transcriptions s
-                  WHERE s.audio_chunk_id = ac.id AND s.speaker_id IS NOT NULL
-                  GROUP BY s.audio_chunk_id
-                  HAVING COUNT(DISTINCT s.speaker_id) > 1
-              )
+            FROM candidate_chunks cc
+            INNER JOIN audio_chunks ac ON ac.id = cc.audio_chunk_id
+            WHERE (
+                  SELECT COUNT(DISTINCT sid) FROM (
+                      SELECT s.speaker_id AS sid
+                      FROM audio_transcriptions s
+                      WHERE s.audio_chunk_id = ac.id AND s.speaker_id IS NOT NULL
+                      UNION
+                      SELECT ds.speaker_id AS sid
+                      FROM diarization_segments ds
+                      WHERE ds.audio_chunk_id = ac.id AND ds.speaker_id IS NOT NULL
+                      UNION
+                      SELECT m.speaker_id AS sid
+                      FROM audio_transcriptions l
+                      JOIN meeting_transcript_segments m
+                        ON julianday(m.captured_at) = julianday(l.timestamp)
+                       AND m.device_name = l.device
+                       AND m.device_type = CASE WHEN l.is_input_device = 1 THEN 'input' ELSE 'output' END
+                       AND m.transcript = l.transcription
+                      WHERE l.audio_chunk_id = ac.id
+                        AND l.transcription_engine = 'live'
+                        AND m.speaker_id IS NOT NULL
+                  )
+              ) <= 1
               AND NOT EXISTS (
                   SELECT 1 FROM diarization_segments ds
                   WHERE ds.audio_chunk_id = ac.id AND ds.overlap = 1
@@ -321,13 +353,13 @@ impl DatabaseManager {
                       ) = 1
                   )
               )
-            GROUP BY ac.id, ac.file_path, ac.timestamp
-            ORDER BY MAX(at.timestamp) DESC, ac.id DESC
+            ORDER BY cc.latest_ts DESC, ac.id DESC
             LIMIT ?2
             "#,
         )
         .bind(since)
-        .bind(limit)
+        .bind(bounded_limit)
+        .bind(scan_limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -605,10 +637,16 @@ impl DatabaseManager {
         let window = chrono::Duration::seconds(DEDUP_TIME_WINDOW_SECS);
         // Bound by capture time, not processing time, so a deferred recording
         // cannot be discarded because similar speech happens to be live now.
+        // Mirrored `'live'` rows store `captured_at` (not chunk start) in
+        // `timestamp` while keeping chunk-relative `start_time`/`end_time` for
+        // player seeking. Exclude `'live'` here so `speech_interval` never
+        // double-counts `start_time` on top of `captured_at` and shifts the
+        // dedup window into the future.
         let recent: Vec<(String, DateTime<Utc>, Option<f64>, Option<f64>)> = sqlx::query_as(
             "SELECT transcription, timestamp, start_time, end_time FROM audio_transcriptions
              WHERE timestamp >= ?1 AND timestamp <= ?2
                AND (device != ?3 OR is_input_device != ?4)
+               AND transcription_engine != 'live'
              ORDER BY timestamp DESC
              LIMIT 50",
         )

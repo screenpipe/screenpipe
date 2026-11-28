@@ -874,6 +874,120 @@ mod tests {
             vec![eligible_dg, eligible_live],
             "must deduplicate per chunk and skip unbackfillable multi-speaker chunks"
         );
+
+        // Verify cross-source speaker conflict (row assigned to A + diarization
+        // segment assigned to B) is excluded even at LIMIT 1.
+        let spk_a = db.create_speaker_with_name("Speaker A").await.unwrap();
+        let spk_b = db.create_speaker_with_name("Speaker B").await.unwrap();
+        let cross_conflict = db
+            .insert_audio_chunk(
+                "MacBook Mic (input)_cross_conflict.mp4",
+                Some(now + Duration::seconds(5)),
+            )
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            cross_conflict,
+            "assigned row",
+            0,
+            "Deepgram",
+            &test_device(),
+            Some(spk_a.id),
+            Some(0.0),
+            Some(1.0),
+            Some(now + Duration::seconds(5)),
+        )
+        .await
+        .unwrap();
+        db.insert_audio_transcription(
+            cross_conflict,
+            "unassigned row",
+            1,
+            "Deepgram",
+            &test_device(),
+            None,
+            Some(1.0),
+            Some(2.0),
+            Some(now + Duration::seconds(6)),
+        )
+        .await
+        .unwrap();
+        let conflict_run: i64 = sqlx::query(
+            "INSERT INTO diarization_runs (audio_chunk_id, mode, provider) VALUES (?1, 'background', 'deepgram')",
+        )
+        .bind(cross_conflict)
+        .execute(&db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO diarization_segments (diarization_run_id, audio_chunk_id, provider_speaker_label, speaker_id, start_time, end_time, overlap) \
+             VALUES (?1, ?2, 'SPEAKER_00', ?3, 1.0, 2.0, 0)",
+        )
+        .bind(conflict_run)
+        .bind(cross_conflict)
+        .bind(spk_b.id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let top_one = db
+            .get_recent_transcriptions_without_speaker(since, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            top_one.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![eligible_dg],
+            "cross-source speaker conflict must be skipped at LIMIT 1"
+        );
+
+        // Every returned candidate must actually accept `update_transcriptions_speaker`.
+        let inferred = db.create_speaker_with_name("Inferred").await.unwrap();
+        for chunk in &rows {
+            let updated = db
+                .update_transcriptions_speaker(chunk.id, inferred.id)
+                .await
+                .unwrap();
+            assert!(
+                updated > 0,
+                "returned candidate chunk {} must be updatable",
+                chunk.id
+            );
+        }
+
+        // Guard query plan: outer scan must use idx_audio_transcriptions_speaker_id_timestamp
+        // and never do a full SCAN of audio_chunks.
+        let plan_rows: Vec<(String,)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN \
+             WITH recent_rows AS ( \
+                 SELECT at.audio_chunk_id, at.timestamp \
+                 FROM audio_transcriptions at INDEXED BY idx_audio_transcriptions_speaker_id_timestamp \
+                 WHERE at.speaker_id IS NULL AND at.timestamp >= ?1 \
+                 ORDER BY at.timestamp DESC LIMIT 400 \
+             ), candidate_chunks AS ( \
+                 SELECT audio_chunk_id, MAX(timestamp) AS latest_ts FROM recent_rows GROUP BY audio_chunk_id \
+             ) \
+             SELECT ac.id, ac.file_path, ac.timestamp \
+             FROM candidate_chunks cc INNER JOIN audio_chunks ac ON ac.id = cc.audio_chunk_id \
+             ORDER BY cc.latest_ts DESC, ac.id DESC LIMIT 10",
+        )
+        .bind(since)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let plan_text: String = plan_rows
+            .into_iter()
+            .map(|(detail,)| detail)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            plan_text.contains("idx_audio_transcriptions_speaker_id_timestamp"),
+            "expected composite speaker/timestamp index in plan:\n{plan_text}"
+        );
+        assert!(
+            !plan_text.contains("SCAN ac") && !plan_text.contains("SCAN audio_chunks"),
+            "must never full-scan audio_chunks:\n{plan_text}"
+        );
     }
 
     #[tokio::test]
